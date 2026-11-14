@@ -83,13 +83,14 @@
   onblur={blur}
   data-path={path}
 >
-  <!-- Fill and dot move by transform only, which changes no layout. -->
-  <div class="bar">
+  <!-- Fill and dot are background layers of fixed boxes: a new value
+       repaints them and changes no layout. Not transforms: each is a paint
+       property node, and one per strip adds to every frame's work. -->
+  <div class="bar" style:--a={`${Math.min(50, 50 + value * 50)}%`} style:--b={`${Math.max(50, 50 + value * 50)}%`}>
     <i class="centre"></i>
-    <i class="fill" style:transform={`scaleX(${value})`}></i>
-    <i class="travel" style:transform={`translateX(${value * 50}%)`}><b class="dot"></b></i>
+    <i class="dot" style:--f={value / 2 + 0.5}></i>
   </div>
-  <span class="num fixed">{fit(formatPan(value, left, right), 4)}</span>
+  <span class="readout"><span class="num fixed">{fit(formatPan(value, left, right), 4)}</span></span>
 </div>
 
 <style>
@@ -103,13 +104,7 @@
     touch-action: none;
     border-radius: 2px;
   }
-  .bar {
-    position: relative;
-    height: 8px;
-    background: var(--well);
-    border-radius: 4px;
-    border: 1px solid var(--line);
-  }
+
   .centre {
     position: absolute;
     left: 50%;
@@ -118,43 +113,48 @@
     width: 1px;
     background: var(--line-strong);
   }
-  /* Spans the right half from the centre; scaleX(-1..1) mirrors it to the left. */
-  .fill {
-    position: absolute;
-    top: 1px;
-    bottom: 1px;
-    left: 50%;
-    width: 50%;
-    transform-origin: left center;
-    background: color-mix(in srgb, var(--afl) 55%, transparent);
-    border-radius: 2px;
+  /* The fill runs from the centre to the value, as a gradient between --a and --b. */
+  .bar {
+    position: relative;
+    height: 8px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background-color: var(--well);
+    background-image: linear-gradient(
+      to right,
+      transparent var(--a),
+      color-mix(in srgb, var(--afl) 55%, transparent) var(--a),
+      color-mix(in srgb, var(--afl) 55%, transparent) var(--b),
+      transparent var(--b)
+    );
+    background-clip: padding-box;
   }
-  /* As wide as the bar: translateX(50%) puts its centre on the right end. */
-  .travel {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-  }
+  /* A 6 x 12 px cap image whose centre sits at the fraction --f of the
+     bar: a percentage position counts over the box minus the image. */
   .dot {
     position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 6px;
-    height: 12px;
-    margin: -6px 0 0 -3px;
-    background: var(--cap);
-    border-radius: 2px;
+    left: -1px;
+    right: -1px;
+    top: -3px;
+    bottom: -3px;
+    pointer-events: none;
+    background: linear-gradient(var(--cap), var(--cap)) no-repeat;
+    background-size: 6px 100%;
+    background-position-x: calc(var(--f) * 100% + (var(--f) * 6px - 3px));
   }
-  /* The readout changes with every update: a block of fixed size with
-     size and layout containment, so no text length lays out anything. */
-  span {
-    display: block;
+  /* The readout changes with every update. A grid item is not a relayout
+     boundary, so the text sits in a block child of fixed size with strict
+     containment, and is padded to one length, so no text moves anything. */
+  .readout {
     width: 30px;
-    height: 13px;
-    line-height: 13px;
-    contain: size layout style;
     font-size: 10px;
     color: var(--text-dim);
     text-align: right;
+  }
+  .readout span {
+    display: block;
+    height: 13px;
+    line-height: 13px;
+    contain: strict;
   }
 </style>

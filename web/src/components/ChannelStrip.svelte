@@ -118,7 +118,7 @@
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div class="vca" role="note" tabindex="0" aria-label={vcaText} use:tip={vcaText}>
         <span class="names">{vcas.map((v) => v.name).join(' ')}</span>
-        <span class="eff fixed" class:shown={effective !== fader}>{fit(formatDb(effective), 5)}</span>
+        <span class="eff" class:shown={effective !== fader}><span class="fixed">{fit(formatDb(effective), 5)}</span></span>
       </div>
     {:else}
       <div class="vca" aria-hidden="true"></div>
@@ -340,7 +340,7 @@
   .vca:focus-visible {
     outline: 2px solid var(--focus);
   }
-  .vca span {
+  .vca > span {
     font-size: 9px;
     font-weight: 600;
     padding: 0 3px;
@@ -357,13 +357,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Reserved: shown or not, the effective gain never resizes the names. */
+  /* Reserved: shown or not, the effective gain never resizes the names.
+     Its text changes with every fader move, so it sits in a block child
+     of fixed size with strict containment, as the fader value does. */
   .vca .eff {
     flex: none;
+    width: 36px;
+    box-sizing: border-box;
     font-size: 8.5px;
     color: var(--accent);
     visibility: hidden;
-    contain: layout style;
+  }
+  .vca .eff span {
+    display: block;
+    height: 14px;
+    contain: strict;
   }
   .vca .eff.shown {
     visibility: visible;
