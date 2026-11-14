@@ -6,12 +6,16 @@
   import Masters from './Masters.svelte';
   import { fit } from '../lib/format';
   import { tip } from '../lib/tip';
+  import Detail from './Detail.svelte';
 
   interface Props {
     selected: string | null;
+    /** Processing section to show first. */
+    section?: string | null;
     onselect: (id: string, section?: string) => void;
+    onclose: () => void;
   }
-  let { selected, onselect }: Props = $props();
+  let { selected, section = null, onselect, onclose }: Props = $props();
 
   const STRIP_W = 86;
   const BANK = 8;
@@ -188,6 +192,13 @@
       </div>
     </div>
   </div>
+  <!-- The processing panel lies over the right end of the strip area,
+       never over the masters and the monitor. -->
+  {#if selected}
+    {#key selected}
+      <Detail id={selected} {section} {onclose} onselect={(id) => onselect(id)} />
+    {/key}
+  {/if}
   <Masters id="mixer-masters" {selected} {onselect} open={mastersOpen} />
   <canvas class="meter-layer" bind:this={canvas} aria-hidden="true"></canvas>
 </div>
@@ -213,6 +224,8 @@
     min-height: 0;
   }
   .left {
+    grid-column: 1;
+    grid-row: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;

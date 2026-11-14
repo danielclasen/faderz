@@ -8,7 +8,6 @@
   import AfvView from './components/AfvView.svelte';
   import ScenesView from './components/ScenesView.svelte';
   import SetupView from './components/SetupView.svelte';
-  import Detail from './components/Detail.svelte';
   import StatusArea from './components/StatusArea.svelte';
   import Consoles from './components/Consoles.svelte';
   import StatusBar from './components/StatusBar.svelte';
@@ -67,6 +66,9 @@
     selected = id;
     section = to;
   }
+  function close(): void {
+    selected = null;
+  }
 </script>
 
 <div class="app">
@@ -117,7 +119,7 @@
     {#if !mixer.shape || !mixer.state}
       <div class="waiting" role="status">Connecting to the mixer...</div>
     {:else if view === 'mixer'}
-      <MixerView {selected} onselect={select} />
+      <MixerView {selected} {section} onselect={select} onclose={close} />
     {:else if view === 'routing'}
       <RoutingView />
     {:else if view === 'aux'}
@@ -137,11 +139,6 @@
       </div>
     {/snippet}
     </svelte:boundary>
-    {#if view === 'mixer' && selected && mixer.state}
-      {#key selected}
-        <Detail id={selected} {section} onclose={() => (selected = null)} onselect={(id) => select(id)} />
-      {/key}
-    {/if}
   </main>
 
 

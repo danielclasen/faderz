@@ -289,8 +289,13 @@
   /* A drawer over the right of the view: opening, closing or switching
      channels moves and resizes nothing under it, and every fader keeps
      its full travel. */
+  /* Placed in the strip area's grid cell of the mixer, so its right edge
+     is the strips' right edge and the masters stay reachable. */
   .detail {
     position: absolute;
+    /* Both lines named: an absolute item's auto line is the grid's edge. */
+    grid-column: 1 / 2;
+    grid-row: 1 / 2;
     top: 0;
     right: 0;
     bottom: 0;
