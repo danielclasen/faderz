@@ -8,7 +8,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { Cluster, type ClusterOptions } from '../../dev/mock/cluster';
+import { Cluster, READ_INDEX_HOLD_MS, type ClusterOptions } from '../../dev/mock/cluster';
 import { Contract } from '../../dev/mock/contract';
 import { MockServer } from '../../dev/mock/server';
 import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
@@ -388,6 +388,32 @@ describe('commands', () => {
     const answer = await sb.next<SnapshotMessage>((m) => m.type === 'snapshot', from);
     expect(answer.revision).toBeGreaterThanOrEqual(delta.revision);
     expect(answer.state.channels['ch7']!.fader).toBe(written);
+  });
+
+  it('answers a resync it cannot confirm within the hold with its own older state marked stale', async () => {
+    const a = await new Client().open(onReplica('r1'));
+    await a.hello();
+    const sb = await new Client(a.session).open(onReplica('r2'));
+    await sb.hello('standby');
+    expect((await control('POST', '/replicas/r2/lag?ms=5000')).status).toBe(200);
+    const delta = await a.answer<DeltaMessage>(a.set('/channels/ch7/trim', cluster.state.channels['ch7']!.trim === 1 ? 2 : 1));
+    const from = sb.messages.length;
+    const asked = Date.now();
+    sb.send({ type: 'resync', lastRevision: delta.revision, epoch: cluster.epoch, full: true });
+    const answer = await sb.next<SnapshotMessage>((m) => m.type === 'snapshot', from, READ_INDEX_HOLD_MS + 1000);
+    expect(Date.now() - asked).toBeGreaterThanOrEqual(READ_INDEX_HOLD_MS - 50);
+    expect(answer.stale).toBe(true);
+    expect(answer.revision).toBeLessThan(delta.revision);
+  }, 10_000);
+
+  it('answers a hello on a partitioned replica at once, marked stale', async () => {
+    expect((await control('POST', '/replicas/r3/partition')).status).toBe(200);
+    const c = await new Client().open(onReplica('r3'));
+    const answer = (await c.hello('primary', cluster.revision)) as SnapshotMessage;
+    expect(answer.type).toBe('resume');
+    expect(answer.stale).toBe(true);
+    const healthy = await new Client().open(onReplica('r1'));
+    expect(((await healthy.hello()) as SnapshotMessage).stale).toBeUndefined();
   });
 
   it('holds commands after a promote until the replica has applied its lastRevision', async () => {

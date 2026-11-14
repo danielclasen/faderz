@@ -81,6 +81,12 @@ export const STANDBY_RETRY_MS = 100;
 export const STANDBY_BACKOFF_MS = 2000;
 /** Delay before asking again after an answer older than the client's revision. */
 export const RESYNC_RETRY_MS = 250;
+/**
+ * A primary that has answered a hello, resync or promote with no state
+ * this client can apply by then is left for another endpoint. Above the
+ * 2 s a replica holds an answer for its read index.
+ */
+export const SYNC_TIMEOUT_MS = 3000;
 /** A command sent this long ago without an answer is sent again with its id. */
 export const ANSWER_TIMEOUT_MS = 1000;
 /** A command answered not applied is sent again with its id after this. */
@@ -155,6 +161,7 @@ export class SyncEngine {
   private cancelRetry: (() => void) | null = null;
   private cancelStandbyRetry: (() => void) | null = null;
   private cancelResyncRetry: (() => void) | null = null;
+  private cancelSyncTimeout: (() => void) | null = null;
 
   constructor(private readonly deps: EngineDeps) {
     if (deps.endpoints.length === 0) throw new Error('no endpoints');
@@ -337,6 +344,7 @@ export class SyncEngine {
     if (link.role === 'primary') {
       this.credits = 0;
       this.linkEvent('open');
+      this.awaitSync();
       this.send(link, {
         type: 'hello',
         session: this.deps.session,
@@ -379,7 +387,7 @@ export class SyncEngine {
     }, due);
   }
 
-  private closed(link: Link, why: 'lost' | 'dead'): void {
+  private closed(link: Link, why: 'lost' | 'dead' | 'noAnswer'): void {
     if (link !== this.primary && link !== this.standby) return;
     this.detach(link);
     if (link === this.standby) {
@@ -413,6 +421,20 @@ export class SyncEngine {
       return;
     }
     this.cancelRetry = this.clock.schedule(() => this.openPrimary(), PRIMARY_RETRY_MS[this.primaryAttempts] ?? 0);
+  }
+
+  /**
+   * Leaves the primary when it has given no state this client can apply
+   * SYNC_TIMEOUT_MS after now: a replica that holds its answer longer, or
+   * answers only with older state, is passed over.
+   */
+  private awaitSync(): void {
+    this.cancelSyncTimeout?.();
+    const p = this.primary;
+    this.cancelSyncTimeout = this.clock.schedule(() => {
+      this.cancelSyncTimeout = null;
+      if (p === this.primary && p && (this.link === 'Syncing' || this.link === 'Resyncing')) this.closed(p, 'noAnswer');
+    }, SYNC_TIMEOUT_MS);
   }
 
   private failover(reason: FailoverInfo['reason']): void {
@@ -612,6 +634,8 @@ export class SyncEngine {
    * no longer owns, send the queued commands and open a standby.
    */
   private primarySynced(kind: 'snapshot' | 'resume'): void {
+    this.cancelSyncTimeout?.();
+    this.cancelSyncTimeout = null;
     this.lastSync = kind;
     this.primaryAttempts = 0;
     this.linkEvent('synced');
@@ -673,6 +697,7 @@ export class SyncEngine {
     this.adopting = true;
     this.send(p, { type: 'resync' });
     this.linkEvent('adopt');
+    this.awaitSync();
     this.closeStandby();
   }
 
@@ -692,6 +717,7 @@ export class SyncEngine {
     if (!p) return;
     this.send(p, { type: 'resync', ...this.position(), ...(full && this.state ? { full: true as const } : {}) });
     this.linkEvent('resync');
+    this.awaitSync();
   }
 
   private delta(d: DeltaMessage, link: Link): void {

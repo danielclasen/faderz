@@ -20,7 +20,8 @@ export interface FailoverInfo {
   n: number;
   from: string | null;
   to: string | null;
-  reason: 'lost' | 'dead' | 'notCommitable';
+  /** noAnswer: no state it could apply within SYNC_TIMEOUT_MS of a resync or promote. */
+  reason: 'lost' | 'dead' | 'notCommitable' | 'noAnswer';
 }
 
 export interface SyncStatus {

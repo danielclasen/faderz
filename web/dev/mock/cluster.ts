@@ -48,6 +48,8 @@ import { ReplicaMeters, SourceModel } from './signals.ts';
 /** Commands arriving within one block share a log entry. */
 export const BLOCK_MS = 5;
 const LOG_LIMIT = 1000;
+/** Longest a replica holds a hello or resync for its read index before it answers stale. */
+export const READ_INDEX_HOLD_MS = 2000;
 const SAMPLES_PER_MS = 48;
 /** Scheduling margin between accepting a change and the sample it applies at. */
 const APPLY_MARGIN_SAMPLES = 480;
@@ -553,18 +555,38 @@ export class Cluster {
 
   /**
    * Answers hello and resync with the replica's own applied state, held
-   * until it has applied lastRevision (read index). A lastRevision above
-   * the cluster's revision is answered at once with ahead; one of another
-   * epoch arrives here as undefined and gets a snapshot.
+   * until it has applied lastRevision (read index), for at most
+   * READ_INDEX_HOLD_MS, after which it answers stale. A partitioned
+   * replica cannot confirm its state and answers stale at once. A
+   * lastRevision above the cluster's revision is answered at once with
+   * ahead; one of another epoch arrives here as undefined and gets a
+   * snapshot.
    */
-  private sync(conn: Conn, lastRevision: number | undefined, full = false): void {
+  private sync(conn: Conn, lastRevision: number | undefined, full = false, late = false): void {
     this.flush();
     const r = conn.replica;
     const floor = lastRevision !== undefined && lastRevision <= this.revision ? lastRevision : 0;
-    if (r.applied < floor) {
-      r.waiting.push({ floor, run: () => this.sync(conn, lastRevision, full) });
+    if (r.applied < floor && !r.partitioned && !late) {
+      const timer = setTimeout(() => {
+        this.lagTimers.delete(timer);
+        const i = r.waiting.indexOf(held);
+        if (i === -1) return;
+        r.waiting.splice(i, 1);
+        this.sync(conn, lastRevision, full, true);
+      }, READ_INDEX_HOLD_MS);
+      this.lagTimers.add(timer);
+      const held = {
+        floor,
+        run: () => {
+          clearTimeout(timer);
+          this.lagTimers.delete(timer);
+          this.sync(conn, lastRevision, full);
+        },
+      };
+      r.waiting.push(held);
       return;
     }
+    const stale = r.partitioned || r.applied < floor ? { stale: true as const } : {};
     const replica = this.ref(r);
     if (lastRevision !== undefined && lastRevision > this.revision) {
       // The client holds a revision this cluster never committed.
@@ -578,7 +600,7 @@ export class Cluster {
       const deltas = this.log
         .filter((e) => e.revision > lastRevision && e.revision <= revision)
         .map((e): DeltaMessage => ({ type: 'delta', replica, ...e }));
-      return this.emit(conn, { type: 'resume', you, replica, epoch: this.epoch, revision, deltas });
+      return this.emit(conn, { type: 'resume', you, replica, epoch: this.epoch, revision, deltas, ...stale });
     }
     this.emit(conn, {
       type: 'snapshot',
@@ -589,6 +611,7 @@ export class Cluster {
       shape: this.shape,
       state: r.view?.state ?? this.state,
       owners: r.view?.owners ?? this.owners,
+      ...stale,
     });
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANSWER_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import { ANSWER_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
 import { ownerHandle } from '../../src/lib/net/handle';
 import type { Patch } from '../../src/lib/sync/messages';
@@ -550,6 +550,54 @@ describe('sync engine: read index', () => {
     standby.deliver(resume(R2, 11));
     expect(engine.link).toBe('Live');
     expect(getAt(engine.state, F1)).toBe(-3);
+  });
+});
+
+describe('sync engine: answers that never come', () => {
+  it('leaves a primary that answers no hello within the sync timeout for the next endpoint', () => {
+    const t = setup(['ws://a/ws', 'ws://b/ws']);
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 3));
+    t.sockets[0]!.drop();
+    t.clock.advance(1000);
+    const again = t.sockets.find((s, i) => i > 0 && s.onopen && !s.closed)!;
+    again.open();
+    expect(t.engine.link).toBe('Syncing');
+    // Heartbeats flow, so only the missing answer can end the wait.
+    beats(t.clock, SYNC_TIMEOUT_MS - HEARTBEAT_MS, [again, R2]);
+    expect(again.closed).toBe(false);
+    beats(t.clock, 2 * HEARTBEAT_MS, [again, R2]);
+    expect(again.closed).toBe(true);
+    expect(t.engine.link).toBe('Connecting');
+  });
+
+  it('passes over a promoted standby that answers only with stale older state, and applies none of it', () => {
+    const { engine, primary, standby, clock, sockets } = live(['ws://a/ws', 'ws://b/ws', 'ws://c/ws']);
+    primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -3 }] }));
+    primary.drop();
+    expect(engine.link).toBe('Resyncing');
+    const stale = { ...snapshot(R2, 10), stale: true as const };
+    for (let left = SYNC_TIMEOUT_MS - HEARTBEAT_MS; left > 0; left -= RESYNC_RETRY_MS) {
+      standby.deliver(stale);
+      beats(clock, RESYNC_RETRY_MS, [standby, R2]);
+    }
+    expect(engine.revision).toBe(11);
+    expect(getAt(engine.state, F1)).toBe(-3);
+    expect(standby.closed).toBe(false);
+    beats(clock, 2 * HEARTBEAT_MS, [standby, R2]);
+    expect(standby.closed).toBe(true);
+    expect(engine.status().failover).toMatchObject({ n: 2, reason: 'noAnswer' });
+    expect(sockets.at(-1)).not.toBe(standby);
+  });
+
+  it('applies a stale answer that is not older than its own state', () => {
+    const t = setup();
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1, ['r1', 'r2', 'r3']));
+    t.sockets[0]!.deliver({ ...snapshot(R1, 4), stale: true });
+    expect(t.engine.link).toBe('Live');
+    expect(t.engine.revision).toBe(4);
   });
 });
 

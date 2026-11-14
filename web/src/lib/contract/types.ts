@@ -416,6 +416,8 @@ export interface SnapshotMessage {
   shape: Shape;
   state: State;
   owners: Owners;
+  /** The replica could not confirm this is the cluster's latest state; revision may be older than asked for. */
+  stale?: true;
 }
 export interface DeltaMessage {
   type: 'delta';
@@ -442,6 +444,8 @@ export interface ResumeMessage {
   epoch: Epoch;
   revision: Revision;
   deltas: DeltaMessage[];
+  /** As SnapshotMessage.stale. */
+  stale?: true;
 }
 export interface AckMessage {
   type: 'ack';

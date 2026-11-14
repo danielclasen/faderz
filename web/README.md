@@ -43,9 +43,9 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `POST /__mock/replicas/<id>/restart` | serves again: restarts a killed replica, closes the sockets of a hung one, heals a partition; `restore` is the same |
 | `POST /__mock/replicas/<id>/freeze` | stays connected, sends and applies nothing; `?mode=apply` still applies |
 | `POST /__mock/replicas/<id>/unfreeze` | resumes on the open sockets |
-| `POST /__mock/replicas/<id>/partition` | reports `commitable: false`, answers every command with error 503 (not applied), renews no lease |
+| `POST /__mock/replicas/<id>/partition` | reports `commitable: false`, answers every command with error 503 (not applied) and every hello or resync at once with its state marked `stale`, renews no lease |
 | `POST /__mock/replicas/<id>/heal` | ends the partition |
-| `POST /__mock/replicas/<id>/lag?ms=<n>` | log entries reach the replica `n` ms late; it answers a hello or resync carrying `lastRevision`, and runs commands after a promote, only once it has applied that revision; `ms=0` catches up |
+| `POST /__mock/replicas/<id>/lag?ms=<n>` | log entries reach the replica `n` ms late; it answers a hello or resync carrying `lastRevision`, and runs commands after a promote, only once it has applied that revision; a hello or resync it has held for 2 s it answers with its state marked `stale`; `ms=0` catches up |
 | `POST /__mock/blocks/hold` | keeps the current processing block open, so every WebSocket command joins one log entry until a REST request or a hello or resync ends it |
 | `POST /__mock/blocks/flush` | ends the hold and commits the open block |
 | `GET /__mock/stats` | per live connection: `connection, session, kind, mode, replica, meterFramesSent, metersSkippedNoCredit, creditsOutstanding, messagesIn, messagesOut, openedAt`; `totals` over all connections since start or reset |
@@ -84,7 +84,8 @@ standby on another replica, heartbeats both ways every 250 ms, failover
 to the standby when the primary closes, misses three beats or reports
 that it cannot commit (a stall of the worker itself is not counted as
 missed beats: a watch timer that fires late first runs the messages
-that arrived meanwhile), the command outbox, meter credits and decoding,
+that arrived meanwhile), or gives no state it can apply within 3 s of a
+hello, resync or promote, the command outbox, meter credits and decoding,
 and the replicated state. The page only renders: it sends a tick per
 animation frame while visible and applies the one patch the worker
 answers with, leaf by leaf, measured as the `faderz:patch` performance

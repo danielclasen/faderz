@@ -76,6 +76,10 @@
         },
         "owners": {
           "$ref": "model.schema.json#/$defs/Owners"
+        },
+        "stale": {
+          "description": "The replica could not confirm that this state is the cluster's latest (client-message.schema.json, read index): it is cut off from the quorum or could not catch up within 2 s. revision may be older than the lastRevision of the hello or resync.",
+          "const": true
         }
       }
     },
@@ -114,6 +118,10 @@
           "items": {
             "$ref": "#/$defs/Delta"
           }
+        },
+        "stale": {
+          "description": "The replica could not confirm that this state is the cluster's latest (client-message.schema.json, read index): it is cut off from the quorum or could not catch up within 2 s. revision may be older than the lastRevision of the hello or resync.",
+          "const": true
         }
       }
     },
