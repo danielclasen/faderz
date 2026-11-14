@@ -28,6 +28,9 @@
   const mute = $derived(mixer.value<boolean>(channelPath(channel.id, 'mute')));
   const solo = $derived(mixer.value<Solo>(channelPath(channel.id, 'solo')));
   const fader = $derived(mixer.value<number>(channelPath(channel.id, 'fader')));
+  const holder = $derived(mixer.ownerOf(channelPath(channel.id, 'fader')));
+  const holderMine = $derived(mixer.isMine(holder));
+  const holderName = $derived(holder ? (holderMine ? 'YOU' : mixer.ownerLabel(holder)) : '');
   const vcas = $derived(
     (mixer.shape?.vcas ?? []).filter((v) => mixer.state!.vcas[v.id]?.members.includes(channel.id)),
   );
@@ -69,9 +72,20 @@
     </span>
   </button>
 
-  <div class="afv" class:program={tally === 'program'} class:preview={tally === 'preview'} class:closed={afv?.enabled && !afv.open}>
+  <!-- Tally in words as well as colour: PGM and PVW name the bus of the
+       switcher, CLOSED says the AFV gate holds the channel down. PGM is a
+       filled band with a dot, mute a filled key: they differ in shape too. -->
+  <div
+    class="afv"
+    class:program={tally === 'program'}
+    class:preview={tally === 'preview'}
+    class:closed={afv?.enabled && !afv.open && tally !== 'program'}
+    data-testid={`tally-${channel.id}`}
+  >
     {#if afv?.enabled && afv.source}
-      <span title={`Audio follows video: ${afv.source} ${tally ?? 'no tally'}`}>AFV {afv.source}</span>
+      <span title={`Audio follows video: ${afv.source}, ${tally ?? 'no tally'}, ${afv.open ? 'open' : 'closed'}`}
+        >{tally === 'program' ? 'PGM' : tally === 'preview' ? 'PVW' : afv.open ? 'AFV' : 'CLOSED'} {afv.source}</span
+      >
     {:else}
       <span class="none">-</span>
     {/if}
@@ -148,6 +162,10 @@
 
   <div class="foot">
     <output class="num value" data-testid={`fader-value-${channel.id}`}><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
+    <!-- Who holds the fader, in words; the slot is there whether held or not. -->
+    <span class="holder" class:held={holder !== null} class:mine={holderMine} title={holder ? `Fader held by ${holderName === 'YOU' ? 'you' : holderName}` : undefined} data-testid={`holder-${channel.id}`}
+      ><span>{holderName}</span></span
+    >
     <!-- One fixed row, whatever the memberships: the full list and the
          effective gain are in its tooltip and its accessible name. -->
     {#if vcas.length > 0}
@@ -277,9 +295,16 @@
     letter-spacing: 0.04em;
     text-align: center;
     border-radius: 2px;
-    line-height: 16px;
     color: var(--text-faint);
     border: 1px solid var(--line);
+  }
+  /* The text changes with the tally; it sits in a block of fixed size
+     with strict containment, so it lays out nothing outside it. */
+  .afv span {
+    display: block;
+    height: 14px;
+    line-height: 14px;
+    contain: strict;
   }
   .afv .none {
     opacity: 0.6;
@@ -294,8 +319,19 @@
     border-color: var(--pvw);
     color: var(--pvw);
   }
-  .afv.closed:not(.program):not(.preview) {
-    text-decoration: line-through;
+  .afv.program span::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 4px;
+    border-radius: 50%;
+    background: #fff;
+    vertical-align: 1px;
+  }
+  .afv.closed:not(.preview) {
+    border-style: dashed;
+    color: var(--text-dim);
   }
   .proc,
   .routes {
@@ -425,6 +461,31 @@
     display: block;
     height: 18px;
     contain: strict;
+  }
+  .holder {
+    height: 14px;
+    border-radius: 2px;
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
+    color: #fff;
+  }
+  .holder span {
+    display: block;
+    height: 14px;
+    line-height: 14px;
+    padding: 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    contain: strict;
+  }
+  .holder.held {
+    background: var(--owned);
+  }
+  .holder.held.mine {
+    background: var(--on);
+    color: var(--on-ink);
   }
   .vca {
     display: flex;
