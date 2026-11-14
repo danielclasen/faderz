@@ -100,6 +100,7 @@
     ] as chip (chip.key)}
       <button
         class="chip"
+        tabindex="-1"
         class:on={chip.on}
         onclick={() => onselect(channel.id, chip.to)}
         title={`${chip.what} ${chip.on ? 'in' : 'out'}: open it in the processing panel`}
@@ -118,6 +119,7 @@
       {@const path = pointer('channels', channel.id, 'routes', bus.id)}
       <button
         class="chip"
+        tabindex="-1"
         class:on={st.routes[bus.id]}
         aria-pressed={st.routes[bus.id]}
         aria-disabled={mixer.locked}
@@ -131,7 +133,7 @@
 
   <div class="pan">
     {#if channel.width <= 2}
-      <Pan path={channelPath(channel.id, 'pan', 'lr')} label={`${channel.name} pan`} />
+      <Pan path={channelPath(channel.id, 'pan', 'lr')} label={`${channel.name} pan`} tabindex={-1} />
     {:else}
       <span class="fixed" title="Channels map by label">{channel.layout} direct</span>
     {/if}

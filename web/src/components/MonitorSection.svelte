@@ -39,7 +39,7 @@
   const flag = (key: 'dim' | 'cut' | 'mono' | 'talkbackDim') => mixer.value<boolean>(monitorPath(key));
 </script>
 
-<section class="monitor" aria-label="Monitor">
+<section class="monitor" id="monitor" tabindex="-1" aria-label="Monitor">
   <div class="panel-title" title={shape.monitorOutputs.map((o) => `${o.name} (${o.layout})`).join(', ')}>Monitor</div>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div

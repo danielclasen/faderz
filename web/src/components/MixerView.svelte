@@ -40,6 +40,12 @@
   const channelOvers = $derived(shape.channels.filter((c) => mixer.meters.overs.has(`channels/${c.id}`)));
   /** Narrow screens only: the masters lie over the strips while this is set. */
   let mastersOpen = $state(false);
+  // A skip link to the masters or the monitor opens them where they are an overlay.
+  onMount(() => {
+    const show = () => (mastersOpen = true);
+    document.addEventListener('faderz:show-masters', show);
+    return () => document.removeEventListener('faderz:show-masters', show);
+  });
 
   function goto(start: number): void {
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -89,7 +95,7 @@
         meters <b class="num">{mixer.meterReplica ?? '-'}</b>
       </span>
     </div>
-    <div class="scroller" bind:this={scroller} onscroll={() => (scrollLeft = scroller?.scrollLeft ?? 0)}>
+    <div class="scroller" role="region" aria-label="Channel strips" bind:this={scroller} onscroll={() => (scrollLeft = scroller?.scrollLeft ?? 0)}>
       <div class="surfaces" style:width={`${shape.channels.length * STRIP_W}px`} aria-hidden="true">
         {#each surfaces as s (s.id)}
           <span

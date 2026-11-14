@@ -8,8 +8,10 @@
     label: string;
     left?: string;
     right?: string;
+    /** -1 keeps it out of the tab order where another place edits the same pan. */
+    tabindex?: number;
   }
-  let { path, label, left = 'L', right = 'R' }: Props = $props();
+  let { path, label, left = 'L', right = 'R', tabindex = 0 }: Props = $props();
   const mixer = getMixer();
   const value = $derived(mixer.value<number>(path) ?? 0);
 
@@ -100,7 +102,7 @@
 <div
   class="pan"
   role="slider"
-  tabindex="0"
+  {tabindex}
   aria-disabled={mixer.locked}
   aria-label={label}
   aria-valuemin={-1}

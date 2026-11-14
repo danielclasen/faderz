@@ -31,7 +31,7 @@
   const kindTag: Record<string, string> = { program: 'PGM', me: 'M&E', cleanFeed: 'CF' };
 </script>
 
-<div class="masters" class:open {id} role="region" aria-label="Masters" data-testid="masters" bind:this={root}>
+<div class="masters" class:open {id} tabindex="-1" role="region" aria-label="Masters" data-testid="masters" bind:this={root}>
   <div class="row">
     {#each shape.vcas as vca (vca.id)}
       <VcaMaster {vca} />

@@ -181,6 +181,13 @@ A label cut off for lack of room, such as a long channel name, shows
 its full text in a tooltip: after a short hover, on keyboard focus (Tab
 to it) and on a touch held for 0.5 s; Escape closes it.
 
+A strip has five tab stops: its head (select), PFL, AFL, MUTE and the
+fader, and after them its VCA row while it is in a VCA, whose tooltip
+names the VCAs and the effective gain; its chips and pan are edited in
+the processing panel. The first
+tab stops of the mixer are the skip links to the masters and the
+monitor.
+
 Typed values (the readout of every processing parameter, delay, the
 Setup view) are written on Enter or when the field is left, and Escape
 restores the current value. Parameters take units: `2.5k` or `2.5 kHz`,

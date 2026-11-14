@@ -1177,3 +1177,34 @@ test('keeps replica detail out of the sightline behind one connection lamp', asy
   await page.getByRole('button', { name: /^Connection LIVE, details$/ }).click();
   await expect(details).toBeHidden();
 });
+
+test('keeps a strip to five tab stops and skips to the masters and the monitor', async ({ page }) => {
+  await live(page);
+  // The first tab stop of the page is the skip link, shown when focused.
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('link', { name: 'Skip to masters' })).toBeFocused();
+  await expect(page.getByRole('link', { name: 'Skip to masters' })).toBeInViewport();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Masters' })).toBeFocused();
+  await page.getByRole('link', { name: 'Skip to monitor' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Monitor' })).toBeFocused();
+
+  // Five controls, then the VCA row of a strip in a VCA: its tooltip
+  // names the VCAs and the effective gain, so it stays reachable. Pres 1
+  // is in VCA PRES.
+  await page.locator('[data-channel="ch1"] .head').focus();
+  const stops: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    stops.push(
+      await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        if (!el?.closest('[data-channel="ch1"]')) return 'outside';
+        return el.classList.contains('head') ? 'head' : el.classList.contains('vca') ? 'vca' : (el.getAttribute('aria-label') ?? '');
+      }),
+    );
+    await page.keyboard.press('Tab');
+  }
+  expect(stops.filter((s) => s !== 'outside')).toEqual(['head', 'Pres 1 PFL', 'Pres 1 AFL', 'Pres 1 mute', 'Pres 1 fader', 'vca']);
+  await expect(page.getByRole('region', { name: 'Channel strips' })).toBeVisible();
+});

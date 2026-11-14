@@ -51,6 +51,12 @@
   let section = $state<string | null>(null);
   let theme = $state<Theme>((document.documentElement.dataset['theme'] as Theme) ?? 'dark');
 
+  /** Moves focus to a region; on a narrow screen the masters open first. */
+  function skip(e: MouseEvent, id: string): void {
+    e.preventDefault();
+    document.dispatchEvent(new CustomEvent('faderz:show-masters'));
+    requestAnimationFrame(() => document.getElementById(id)?.focus());
+  }
   function toggleTheme(): void {
     theme = theme === 'dark' ? 'light' : 'dark';
     setTheme(theme);
@@ -63,6 +69,13 @@
 </script>
 
 <div class="app">
+  <!-- Skip links: shown when focused, over the header, moving nothing. -->
+  {#if view === 'mixer'}
+    <div class="skip" role="navigation" aria-label="Skip links">
+      <a href="#mixer-masters" onclick={(e) => skip(e, 'mixer-masters')}>Skip to masters</a>
+      <a href="#monitor" onclick={(e) => skip(e, 'monitor')}>Skip to monitor</a>
+    </div>
+  {/if}
   <header class="top">
     <div class="brand" aria-label="faderz"><i></i>faderz</div>
     <select class="view-menu" aria-label="View" value={view} onchange={(e) => (view = (e.currentTarget as HTMLSelectElement).value as View)}>
@@ -243,6 +256,23 @@
   }
   /* The right group fills the rest of the header and packs its items at
      its end: an item that appears or grows at its start moves nothing. */
+  .skip {
+    position: absolute;
+  }
+  .skip a {
+    position: absolute;
+    left: -10000px;
+    top: 4px;
+    z-index: 100;
+    padding: 6px 10px;
+    border-radius: 3px;
+    background: var(--panel);
+    color: var(--text);
+    border: 2px solid var(--focus);
+  }
+  .skip a:focus {
+    left: 8px;
+  }
   .mid {
     flex: 1 1 0;
     min-width: 0;
