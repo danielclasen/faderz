@@ -15,6 +15,7 @@ interface Shift {
 declare global {
   interface Window {
     __shifts?: Shift[];
+    __facesAtMount?: string[];
   }
 }
 
@@ -61,6 +62,27 @@ async function expectNoShift(page: Page, step: string): Promise<void> {
   const list = await shifts(page);
   expect(list, `${step}: ${JSON.stringify(list.slice(0, 6))}`).toEqual([]);
 }
+
+test('mounts only once the web fonts are in, however late they arrive, so no text moves', async ({ page }) => {
+  // Later than the app waited before it registered faces itself.
+  await page.route(/\.woff2(\?|$)/, async (route) => {
+    await new Promise((r) => setTimeout(r, 3000));
+    await route.continue();
+  });
+  await page.addInitScript(() => {
+    new MutationObserver((_, observer) => {
+      if (!document.getElementById('app')?.firstElementChild) return;
+      observer.disconnect();
+      window.__facesAtMount = [...document.fonts].filter((f) => f.status === 'loaded').map((f) => `${f.family.replace(/["']/g, '')} ${f.weight}`);
+    }).observe(document, { childList: true, subtree: true });
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 15_000 });
+  expect(await page.evaluate(() => window.__facesAtMount)).toEqual(
+    expect.arrayContaining(['IBM Plex Sans Condensed 400', 'IBM Plex Sans Condensed 500', 'IBM Plex Sans Condensed 600', 'JetBrains Mono 400', 'JetBrains Mono 600']),
+  );
+  await expectNoShift(page, 'load with late fonts');
+});
 
 test('nothing moves on load, live updates, failover and interaction', async ({ page, request }, info) => {
   const phone = (page.viewportSize()?.width ?? 1600) < 600;
