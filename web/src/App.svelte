@@ -50,8 +50,9 @@
     theme = theme === 'dark' ? 'light' : 'dark';
     setTheme(theme);
   }
+  /** Selecting never closes: a second press on the selected strip keeps it; CLOSE or Escape closes. */
   function select(id: string): void {
-    selected = selected === id ? null : id;
+    selected = id;
   }
 </script>
 
@@ -111,7 +112,7 @@
     </svelte:boundary>
     {#if view === 'mixer' && selected && mixer.state}
       {#key selected}
-        <Detail id={selected} onclose={() => (selected = null)} />
+        <Detail id={selected} onclose={() => (selected = null)} onselect={select} />
       {/key}
     {/if}
   </main>

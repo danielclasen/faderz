@@ -14,8 +14,10 @@
   interface Props {
     id: string;
     onclose: () => void;
+    /** Moves the selection to another element of the same kind. */
+    onselect: (id: string) => void;
   }
-  let { id, onclose }: Props = $props();
+  let { id, onclose, onselect }: Props = $props();
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
   const channel = $derived(shape.channels.find((c) => c.id === id));
@@ -37,6 +39,11 @@
   const typeLabel: Record<EqBandType, string> = { lowShelf: 'Low shelf', peak: 'Peak', highShelf: 'High shelf' };
 
   const legs = $derived(LAYOUT_LABELS[element.layout]);
+  /** Channels step through channels, buses and auxes through their own list. */
+  const siblings = $derived(group === 'channels' ? shape.channels : group === 'buses' ? shape.buses : shape.auxes);
+  const at = $derived(siblings.findIndex((e) => e.id === id));
+  const prev = $derived(at > 0 ? siblings[at - 1] : undefined);
+  const next = $derived(at >= 0 && at < siblings.length - 1 ? siblings[at + 1] : undefined);
   /** All legs inverted, or all back to normal when every leg already is. */
   function invertAll(): void {
     const target = !st.polarity.every(Boolean);
@@ -66,6 +73,10 @@
   <header>
     <h2>{element.name}</h2>
     <span class="meta">{element.layout} - {group === 'channels' ? 'input channel' : group === 'buses' ? 'bus' : 'aux'}</span>
+    <span class="step">
+      <button class="key" disabled={!prev} onclick={() => prev && onselect(prev.id)} aria-label="Previous channel" title={prev ? `Previous: ${prev.name}` : undefined}>&lt; PREV</button>
+      <button class="key" disabled={!next} onclick={() => next && onselect(next.id)} aria-label="Next channel" title={next ? `Next: ${next.name}` : undefined}>NEXT &gt;</button>
+    </span>
     <button class="key close" onclick={onclose} aria-label="Close processing">CLOSE</button>
   </header>
   <div class="cols">
@@ -283,8 +294,10 @@
     color: var(--text-dim);
     font-size: 11px;
   }
-  .close {
+  .step {
     margin-left: auto;
+    display: flex;
+    gap: 3px;
   }
   .cols {
     display: flex;

@@ -886,3 +886,23 @@ test('Escape in a typed field restores its value and leaves the processing panel
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
 });
+
+test('keeps the processing panel open on a second press and steps to the next and previous channel', async ({ page }) => {
+  await live(page);
+  const head = (id: string) => page.locator(`[data-channel="${id}"] .head`);
+  const panel = (name: string) => page.getByRole('region', { name: `${name} processing` });
+  await head('ch1').click();
+  await expect(panel('Pres 1')).toBeVisible();
+  await head('ch1').click();
+  await expect(panel('Pres 1')).toBeVisible();
+  await expect(head('ch1')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Next channel' }).click();
+  await expect(panel('Pres 2')).toBeVisible();
+  await expect(head('ch2')).toHaveAttribute('aria-pressed', 'true');
+  await expect(head('ch1')).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name: 'Previous channel' }).click();
+  await expect(panel('Pres 1')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Previous channel' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Close processing' }).click();
+  await expect(panel('Pres 1')).toHaveCount(0);
+});
