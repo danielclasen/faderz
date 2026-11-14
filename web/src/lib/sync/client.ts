@@ -13,6 +13,10 @@ export interface FaderzDebug {
   readonly standby: string;
   readonly primaryReplica: string | null;
   readonly standbyReplica: string | null;
+  /**
+   * Dev builds only: the session id is a credential, and a production
+   * build gives no script on the page a way to read it.
+   */
   readonly session: string;
   readonly revision: number;
   readonly outbox: number;
@@ -59,12 +63,11 @@ export function startSync(store: MixerStore, endpoints: string[]): void {
 
 function exposeDebug(store: MixerStore, ticking: () => boolean): void {
   const s = () => store.status;
-  const view: FaderzDebug = Object.freeze({
+  const view: Omit<FaderzDebug, 'session'> = {
     get connection() { return s().link; },
     get standby() { return s().standby; },
     get primaryReplica() { return s().primaryReplica; },
     get standbyReplica() { return s().standbyReplica; },
-    get session() { return s().session; },
     get revision() { return s().revision; },
     get outbox() { return s().outbox; },
     get failovers() { return s().failover?.n ?? 0; },
@@ -80,6 +83,7 @@ function exposeDebug(store: MixerStore, ticking: () => boolean): void {
     get lastPatchMs() { return store.patchStats.last; },
     get maxPatchMs() { return store.patchStats.max; },
     get patches() { return store.patchStats.count; },
-  });
-  Object.defineProperty(window, '__faderz', { value: view, enumerable: true });
+  };
+  if (import.meta.env.DEV) Object.defineProperty(view, 'session', { get: () => s().session, enumerable: true });
+  Object.defineProperty(window, '__faderz', { value: Object.freeze(view) as FaderzDebug, enumerable: true });
 }

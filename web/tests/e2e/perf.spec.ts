@@ -85,3 +85,11 @@ test('three clients moving faders with meters on stay under 50 ms tasks and 4 ms
     await Promise.all(contexts.map((c) => c.close()));
   }
 });
+
+test('a production build gives page scripts no session id in window.__faderz', async ({ page }) => {
+  await live(page);
+  const view = await page.evaluate(() => ({ keys: Object.keys(window.__faderz!), session: (window.__faderz as unknown as Record<string, unknown>)['session'] }));
+  expect(view.keys).toContain('connection');
+  expect(view.keys).not.toContain('session');
+  expect(view.session).toBeUndefined();
+});
