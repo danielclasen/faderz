@@ -21,6 +21,7 @@ const el = (id: string, width: Width) => ({ id, name: id, width, layout: LAYOUT_
 function shape(channels: Width[], buses: Width[], auxes: Width[], mixMinus: Width[]): Shape {
   return {
     sampleRate: 48000,
+    frameRate: { numerator: 25, denominator: 1 },
     channels: channels.map((w, i) => el(`ch${i + 1}`, w)),
     buses: buses.map((w, i) => ({ ...el(`bus${i + 1}`, w), kind: 'program' as const })),
     auxes: auxes.map((w, i) => el(`aux${i + 1}`, w)),

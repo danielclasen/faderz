@@ -75,6 +75,7 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
   }));
   return {
     sampleRate: 48000,
+    frameRate: { numerator: 25, denominator: 1 },
     channels,
     buses,
     auxes,

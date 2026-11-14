@@ -58,8 +58,13 @@ export interface VcaShape {
   id: Id;
   name: string;
 }
+export interface FrameRate {
+  numerator: number;
+  denominator: number;
+}
 export interface Shape {
   sampleRate: 48000;
+  frameRate: FrameRate;
   channels: ChannelShape[];
   buses: BusShape[];
   auxes: ElementShape[];

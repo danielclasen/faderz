@@ -162,3 +162,21 @@ test('sets the LFE send and the stereo image of a channel from the processing pa
   await expect(page.locator('input[data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuetext', '-12.0');
   await patch(request, '/channels/ch1/pan/lfe', -90);
 });
+
+test('enters a channel delay in frames and shows it in ms', async ({ page, request }) => {
+  await live(page);
+  await page.locator('[data-channel="ch2"] .head').click();
+  await page.getByRole('radio', { name: 'frames' }).click();
+  const entry = page.locator('input[data-path="/channels/ch2/delay"]');
+  await entry.fill('3');
+  await entry.press('Enter');
+  await settled(page);
+  expect((await serverState(request)).state.channels['ch2']!.delay).toBe(5760);
+  await page.getByRole('radio', { name: 'milliseconds' }).click();
+  await expect(entry).toHaveValue('120.0');
+  await entry.fill('2.5 s');
+  await entry.press('Enter');
+  await settled(page);
+  expect((await serverState(request)).state.channels['ch2']!.delay).toBe(120000);
+  await patch(request, '/channels/ch2/delay', 0);
+});

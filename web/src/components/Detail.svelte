@@ -7,6 +7,7 @@
   import { recallSafePath } from '../lib/state/paths';
   import { formatDb, formatFreq } from '../lib/audio/db';
   import Param from './Param.svelte';
+  import DelayEntry from './DelayEntry.svelte';
   import Pan from './Pan.svelte';
   import EqCurve from './EqCurve.svelte';
 
@@ -26,7 +27,6 @@
   const flag = (...rest: Array<string | number>) => mixer.value<boolean>(p(...rest));
   const toggle = (...rest: Array<string | number>) => mixer.set(p(...rest), !flag(...rest));
   const safe = $derived(mixer.state!.recallSafe[id] ?? []);
-  const ms = (samples: number) => `${(samples / 48).toFixed(1)} ms`;
   const IMAGES: Array<{ id: StereoImage; key: string; label: string }> = [
     { id: 'normal', key: 'L R', label: 'Normal' },
     { id: 'leftToBoth', key: 'L>B', label: 'Left to both' },
@@ -93,7 +93,7 @@
       {#if ch}
         <Param path={p('hpf', 'freq')} label="HPF" min={20} max={500} step={1} log format={(v) => `${formatFreq(v)} Hz`} />
       {/if}
-      <Param path={p('delay')} label="Delay" min={0} max={48000} step={1} format={ms} />
+      <DelayEntry path={p('delay')} label="Delay" />
       {#if ch}
         {#each [['meterTap', 'Meter'], ['directOut', 'Direct']] as const as [key, caption] (key)}
           {@const path = key === 'meterTap' ? p('meterTap') : p('directOut', 'tap')}

@@ -316,10 +316,31 @@
       "maximum": 24
     },
     "DelaySamples": {
-      "description": "Integer delay in samples at the shape sample rate.",
+      "description": "Integer delay in samples at the shape sample rate, up to 5 s, for lip-sync against video processing chains.",
       "type": "integer",
       "minimum": 0,
-      "maximum": 48000
+      "maximum": 240000
+    },
+    "FrameRate": {
+      "description": "Video frame rate of the facility as a rational number, e.g. 25/1, 50/1 or 30000/1001. Clients use it to enter and show delays in frames.",
+      "type": "object",
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 240000
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1001
+        }
+      }
     },
     "TallySource": {
       "description": "Name of a tally source as sent by the vision switcher.",
@@ -523,6 +544,7 @@
       "type": "object",
       "required": [
         "sampleRate",
+        "frameRate",
         "channels",
         "buses",
         "auxes",
@@ -538,6 +560,9 @@
           "enum": [
             48000
           ]
+        },
+        "frameRate": {
+          "$ref": "#/$defs/FrameRate"
         },
         "channels": {
           "type": "array",

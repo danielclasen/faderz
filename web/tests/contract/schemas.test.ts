@@ -106,6 +106,7 @@ describe('Change values are constrained by path', () => {
     ['/channels/ch1/pan/divergence', 0.4],
     ['/channels/ch1/pan/lfe', -10],
     ['/channels/st1/image', 'leftToBoth'],
+    ['/channels/ch1/delay', 240000],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -141,6 +142,8 @@ describe('Change values are constrained by path', () => {
     ['/channels/ch1/pan/lfe', 12],
     ['/channels/st1/image', 'mono'],
     ['/buses/pgm20/image', 'swap'],
+    ['/channels/ch1/delay', 240001],
+    ['/channels/ch1/delay', 1.5],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });
