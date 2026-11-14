@@ -478,6 +478,38 @@ describe('sync engine: unanswered commands', () => {
     expect(engine.outbox.size).toBe(0);
   });
 
+  it('touches again when its touch, resent after not applied, is refused as stale behind a later set', () => {
+    const { engine, primary, standby, clock } = live();
+    engine.input({ type: 'touch', path: F1 });
+    const [touch] = primary.ofType('touch');
+    primary.deliver({ type: 'error', replica: R1, code: 503, message: 'not applied', commandId: touch!.id, path: F1 });
+    engine.input({ type: 'set', path: F1, value: -5 });
+    const [set] = primary.ofType('set');
+    primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -5 }], origins: [{ owner: YOU, commandId: set!.id, seq: set!.seq }] }));
+    beats(clock, NOT_APPLIED_RETRY_MS + HEARTBEAT_MS, [primary, R1], [standby, R2]);
+    expect(primary.ofType('touch')).toEqual([touch, touch]);
+    primary.deliver({ type: 'ack', replica: R1, commandId: touch!.id, result: 'stale', revision: 11 });
+    // Still holding the fader and owning nothing: a new touch above the set.
+    expect(engine.touches.get(F1)).toBe('Touching');
+    const fresh = primary.ofType('touch').filter((m) => m.id !== touch!.id);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]!.seq).toBeGreaterThan(set!.seq);
+  });
+
+  it('releases again when its release is answered stale while the session still owns the control', () => {
+    const { engine, primary } = live();
+    engine.input({ type: 'touch', path: F1 });
+    const [touch] = primary.ofType('touch');
+    primary.deliver(delta(R1, 11, { owners: [{ path: F1, owner: YOU }], origins: [{ owner: YOU, commandId: touch!.id, seq: touch!.seq }] }));
+    engine.input({ type: 'release', path: F1 });
+    const [release] = primary.ofType('release');
+    primary.deliver({ type: 'ack', replica: R1, commandId: release!.id, result: 'stale', revision: 11 });
+    expect(engine.touches.has(F1)).toBe(false);
+    const fresh = primary.ofType('release').filter((m) => m.id !== release!.id);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]!.seq).toBeGreaterThan(release!.seq);
+  });
+
   it('keeps at most 64 commands in flight on a connection and sends the next as answers come', () => {
     const { engine, primary } = live();
     for (let i = 0; i < 100; i++) engine.input({ type: 'set', path: `/channels/ch${(i % 20) + 1}/mute`, value: i % 2 === 0 });

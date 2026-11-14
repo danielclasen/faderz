@@ -243,6 +243,10 @@ export class SyncEngine {
     if (m.type === 'touch' && event === 'reject') this.touchStep(m.path, 'refused');
     if (m.type === 'release' && !this.outbox.has('release', m.path)) this.touchStep(m.path, 'released');
     this.settled(m);
+    // A touch or release refused as stale changed nothing: a later command
+    // of this control decided its ownership, which may not be what the
+    // touch wants now.
+    if (m.type !== 'set' && event === 'stale') this.reconcile(m.path);
     this.transmit();
   }
 
