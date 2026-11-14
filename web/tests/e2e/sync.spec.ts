@@ -304,3 +304,27 @@ test('mute toggles within 20 ms are each sent and applied in order', async ({ pa
   }
   expect((await serverState(request)).state.channels['ch1']!.mute).toBe(!before);
 });
+
+test('a promote onto a lagging replica never shows an older value', async ({ page, request, baseURL }) => {
+  const ws = baseURL!.replace(/^http/, 'ws');
+  await live(page, `/?endpoints=${ws}/__mock/replicas/r1/api/v1/ws,${ws}/__mock/replicas/r2/api/v1/ws`);
+  expect(await debug(page, 'primaryReplica')).toBe('r1');
+  expect(await debug(page, 'standbyReplica')).toBe('r2');
+  expect((await request.post('/__mock/replicas/r2/lag?ms=1500')).ok()).toBe(true);
+  const before = await fader(request, 'ch1');
+  const target = before === -7 ? -8 : -7;
+  const readout = page.getByTestId('fader-value-ch1');
+  await page.evaluate(() => {
+    const w = window as unknown as { __seen: string[] };
+    w.__seen = [];
+    const el = document.querySelector('[data-testid="fader-value-ch1"]')!;
+    new MutationObserver(() => w.__seen.push(el.textContent ?? '')).observe(el, { subtree: true, characterData: true, childList: true });
+  });
+  await patch(request, '/channels/ch1/fader', target);
+  await expect(readout).toHaveText(formatDb(target));
+  expect((await request.post('/__mock/replicas/r1/kill')).ok()).toBe(true);
+  await page.waitForFunction(() => window.__faderz?.primaryReplica === 'r2' && window.__faderz.connection === 'Live', null, { timeout: 10_000 });
+  await expect(readout).toHaveText(formatDb(target));
+  const seen = await page.evaluate(() => (window as unknown as { __seen: string[] }).__seen);
+  expect(seen.slice(seen.indexOf(formatDb(target)))).not.toContain(formatDb(before));
+});

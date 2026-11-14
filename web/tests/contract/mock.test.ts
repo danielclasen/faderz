@@ -71,6 +71,7 @@ afterAll(() => main.stop());
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()));
+  cluster.holdBlock(false);
   for (const id of ['r1', 'r2', 'r3']) await control('POST', `/replicas/${id}/restore`);
   expect(failures.splice(0)).toEqual([]);
 });
@@ -294,7 +295,7 @@ describe('hello', () => {
     await sleep(300);
     expect(c.frames).toHaveLength(0);
     expect((await statsOf(c)).creditsOutstanding).toBe(5);
-    c.send({ type: 'promote' });
+    c.send({ type: 'promote', lastRevision: cluster.revision });
     await sleep(500);
     expect(c.frames).toHaveLength(5);
     await c.next((m) => m.type === 'counters', 0, 1500);
@@ -335,16 +336,60 @@ describe('commands', () => {
     await a.hello();
     const b = await new Client().open(onReplica('r2'));
     await b.hello();
+    // The block stays open until every command is applied, then ends.
+    await control('POST', '/blocks/hold');
     const ids = [a.set('/channels/ch4/fader', -10), a.set('/channels/ch5/fader', -11), b.set('/channels/ch4/fader', -12)];
+    const applied = () => cluster.applies.filter((e) => ids.includes(e.commandId));
+    while (applied().length < ids.length) await new Promise((r) => setTimeout(r, 1));
+    await control('POST', '/blocks/flush');
     const delta = await a.answer<DeltaMessage>(ids[0]!);
     const origins = delta.origins!;
     expect(origins.map((o) => o.commandId).sort()).toEqual([...ids].sort());
     expect(new Set(origins.map((o) => o.owner.session))).toEqual(new Set([a.session, b.session]));
+    expect(new Set(applied().map((e) => e.revision))).toEqual(new Set([delta.revision]));
     const fader4 = delta.changes!.filter((c) => c.path === '/channels/ch4/fader');
     expect(fader4).toHaveLength(1);
-    const lastWriter = origins.filter((o) => o.commandId !== ids[1]).at(-1)!.commandId;
-    expect(fader4[0]!.value).toBe(lastWriter === ids[0] ? -10 : -12);
+    const lastWriter = applied().filter((e) => e.path === '/channels/ch4/fader').at(-1)!;
+    expect(fader4[0]!.value).toBe(lastWriter.value);
     expect(cluster.state.channels['ch4']!.fader).toBe(fader4[0]!.value);
+  });
+
+  it('answers a resync on a lagging replica only once it has applied lastRevision (read index)', async () => {
+    const a = await new Client().open(onReplica('r1'));
+    await a.hello();
+    const sb = await new Client(a.session).open(onReplica('r2'));
+    await sb.hello('standby');
+    expect((await control('POST', '/replicas/r2/lag?ms=300')).status).toBe(200);
+    const before = cluster.state.channels['ch7']!.fader;
+    const id = a.set('/channels/ch7/fader', before === -33 ? -34 : -33);
+    const delta = await a.answer<DeltaMessage>(id);
+    const written = cluster.state.channels['ch7']!.fader;
+    // Without lastRevision the lagging replica answers at once, older.
+    const fresh = await new Client().open(onReplica('r2'));
+    const old = (await fresh.hello()) as SnapshotMessage;
+    expect(old.revision).toBeLessThan(delta.revision);
+    expect(old.state.channels['ch7']!.fader).toBe(before);
+    const from = sb.messages.length;
+    sb.send({ type: 'promote', lastRevision: delta.revision });
+    sb.send({ type: 'resync', lastRevision: delta.revision, full: true });
+    const answer = await sb.next<SnapshotMessage>((m) => m.type === 'snapshot', from);
+    expect(answer.revision).toBeGreaterThanOrEqual(delta.revision);
+    expect(answer.state.channels['ch7']!.fader).toBe(written);
+  });
+
+  it('holds commands after a promote until the replica has applied its lastRevision', async () => {
+    const a = await new Client().open(onReplica('r1'));
+    await a.hello();
+    const sb = await new Client(a.session).open(onReplica('r2'));
+    await sb.hello('standby');
+    expect((await control('POST', '/replicas/r2/lag?ms=300')).status).toBe(200);
+    const delta = await a.answer<DeltaMessage>(a.set('/channels/ch8/fader', -40 - Math.random()));
+    sb.send({ type: 'promote', lastRevision: delta.revision });
+    const id = sb.set('/channels/ch8/mute', !cluster.state.channels['ch8']!.mute);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cluster.applies.some((e) => e.commandId === id)).toBe(false);
+    const answer = await sb.answer<DeltaMessage>(id);
+    expect(answer.revision).toBeGreaterThan(delta.revision);
   });
 
   it('applies a resent command id once and acks every resend as duplicate', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import { RESYNC_RETRY_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import { getAt } from '../../src/lib/state/pointer';
 import type { Patch } from '../../src/lib/sync/messages';
 import { deriveMeterLayout, encodeMeterFrame, type MeterLayout, type MeterValues } from '../../src/lib/contract/meterFrame';
 import { DEAD_MS, HEARTBEAT_MS, METER_CREDIT_CAP, SUSPECT_MS } from '../../src/lib/contract/protocol';
@@ -380,6 +381,27 @@ describe('sync engine: commands', () => {
   });
 });
 
+describe('sync engine: read index', () => {
+  it('sends its revision on promote and resync and never applies an older snapshot or resume', () => {
+    const { engine, primary, standby, clock } = live();
+    primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -3 }] }));
+    primary.drop();
+    expect(standby.ofType('promote')).toEqual([{ type: 'promote', lastRevision: 11 }]);
+    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 11 }]);
+    standby.deliver(snapshot(R2, 10));
+    standby.deliver(resume(R2, 10));
+    expect(engine.revision).toBe(11);
+    expect(getAt(engine.state, F1)).toBe(-3);
+    expect(engine.link).toBe('Resyncing');
+    clock.advance(RESYNC_RETRY_MS);
+    expect(standby.ofType('resync')).toHaveLength(2);
+    expect(standby.ofType('resync')[1]).toEqual({ type: 'resync', lastRevision: 11 });
+    standby.deliver(resume(R2, 11));
+    expect(engine.link).toBe('Live');
+    expect(getAt(engine.state, F1)).toBe(-3);
+  });
+});
+
 describe('sync engine: ownership', () => {
   it('releases on resync every control the session owns but is not touching', () => {
     const t = setup();
@@ -511,11 +533,11 @@ describe('sync engine: meters', () => {
     expect(tick()?.meters).toBeUndefined();
   });
 
-  it('sends resync without lastRevision once on a layout fingerprint mismatch', () => {
+  it('sends a full resync with its revision once on a layout fingerprint mismatch', () => {
     const { primary } = live();
     const other = deriveMeterLayout(exampleShape(3));
     primary.deliver(frame(1, other));
     primary.deliver(frame(2, other));
-    expect(primary.ofType('resync')).toEqual([{ type: 'resync' }]);
+    expect(primary.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10, full: true }]);
   });
 });

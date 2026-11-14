@@ -274,13 +274,13 @@ export class MockServer {
     if (method === 'GET' && path === '/__mock/replicas') {
       return send(
         200,
-        c.replicas.map((r) => ({ id: r.id, role: r.role, healthy: r.healthy, frozen: r.frozen, partitioned: r.partitioned, clients: r.conns.size })),
+        c.replicas.map((r) => ({ id: r.id, role: r.role, healthy: r.healthy, frozen: r.frozen, partitioned: r.partitioned, lagMs: r.lagMs, applied: r.applied, clients: r.conns.size })),
       );
     }
     if (method === 'GET' && path === '/__mock/commands') return send(200, c.audit);
     if (method === 'GET' && path === '/__mock/audit') return send(200, this.auditReport());
     if (method === 'GET' && path === '/__mock/stats') return send(200, this.statsReport());
-    const m = /^\/__mock\/replicas\/([a-z0-9-]+)\/(kill|restart|restore|freeze|unfreeze|partition|heal)$/.exec(path);
+    const m = /^\/__mock\/replicas\/([a-z0-9-]+)\/(kill|restart|restore|freeze|unfreeze|partition|heal|lag)$/.exec(path);
     if (method === 'POST' && m) {
       const id = m[1]!;
       const mode = url.searchParams.get('mode') === 'apply' ? 'apply' : 'drop';
@@ -292,9 +292,17 @@ export class MockServer {
         unfreeze: () => c.unfreeze(id),
         partition: () => c.partition(id),
         heal: () => c.heal(id),
+        lag: () => {
+          const ms = Number(url.searchParams.get('ms') ?? '0');
+          return Number.isFinite(ms) && ms >= 0 && c.lag(id, ms);
+        },
       };
       const ok = actions[m[2]!]!();
       return send(ok ? 200 : c.replica(id) ? 409 : 404, { ok });
+    }
+    if (method === 'POST' && (path === '/__mock/blocks/hold' || path === '/__mock/blocks/flush')) {
+      c.holdBlock(path.endsWith('/hold'));
+      return send(200, { ok: true, revision: c.revision });
     }
     if (method === 'POST' && path === '/__mock/stats/reset') {
       c.resetStats();

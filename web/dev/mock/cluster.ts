@@ -69,6 +69,8 @@ export interface Conn {
   credit: number;
   /** Date.now() of the last message received on the connection. */
   lastSeen: number;
+  /** lastRevision of the promote: later commands wait until the replica applied it. */
+  floor: number;
   openedAt: number;
   stats: ConnStats;
   send(data: string | Uint8Array): void;
@@ -83,6 +85,14 @@ export interface Replica {
   frozen: 'none' | 'drop' | 'apply';
   /** Cut off from the quorum: serves reads and heartbeats but cannot commit. */
   partitioned: boolean;
+  /** Log entries reach this replica lagMs late; 0 applies them at once. */
+  lagMs: number;
+  /** Revision this replica has applied. */
+  applied: number;
+  /** State and owners at `applied` while lagging; null when they are the cluster's. */
+  view: { state: State; owners: Record<string, Owner> } | null;
+  /** Answers and commands held until `applied` reaches their floor (read index). */
+  waiting: Array<{ floor: number; run: () => void }>;
   conns: Set<Conn>;
   meters: ReplicaMeters;
   /** Meter period counter, uint32, sent as the frame sequence. */
@@ -208,6 +218,9 @@ export class Cluster {
   private logStart = 1;
   private batch: Batch | null = null;
   private batchTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Blocks end only on flush(), a hello or a resync: dev control for batching tests. */
+  private holdBlocks = false;
+  private lagTimers = new Set<ReturnType<typeof setTimeout>>();
   private applied = new Map<string, number>();
   private lastSeq = new Map<string, number>();
   private leases = new Map<string, number>();
@@ -231,6 +244,10 @@ export class Cluster {
       healthy: true,
       frozen: 'none',
       partitioned: false,
+      lagMs: 0,
+      applied: 0,
+      view: null,
+      waiting: [],
       conns: new Set<Conn>(),
       meters: new ReplicaMeters(this.shape),
       meterSequence: 0,
@@ -275,6 +292,7 @@ export class Cluster {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     if (this.batchTimer) clearTimeout(this.batchTimer);
+    for (const t of this.lagTimers) clearTimeout(t);
     for (const r of this.replicas) for (const c of r.conns) c.close();
   }
 
@@ -364,6 +382,7 @@ export class Cluster {
     r.healthy = true;
     r.frozen = 'none';
     r.partitioned = false;
+    this.lag(id, 0);
     this.elect();
     this.broadcastReplicas();
     return true;
@@ -390,6 +409,7 @@ export class Cluster {
       synced: false,
       credit: 0,
       lastSeen: now,
+      floor: 0,
       openedAt: now,
       stats: emptyStats(),
       send,
@@ -482,39 +502,95 @@ export class Cluster {
         return;
       case 'promote':
         conn.mode = 'primary';
+        conn.floor = msg.lastRevision;
         return;
       case 'credit':
         conn.credit = Math.min(METER_CREDIT_CAP, conn.credit + msg.n);
         return;
       case 'resync':
-        return this.sync(conn, msg.lastRevision);
+        return this.sync(conn, msg.lastRevision, msg.full === true);
     }
     // A partitioned replica cannot commit; commands sent to it go unanswered.
     if (r.partitioned) return;
-    const reply = this.command(conn.owner, msg, r.id);
-    if (reply) this.emit(conn, { ...reply, replica: this.ref(r) } as ServerMessage);
+    const owner = conn.owner;
+    const run = () => {
+      const reply = this.command(owner, msg, r.id);
+      if (reply) this.emit(conn, { ...reply, replica: this.ref(r) } as ServerMessage);
+    };
+    if (r.applied < conn.floor || r.waiting.length > 0) r.waiting.push({ floor: conn.floor, run });
+    else run();
   }
 
-  private sync(conn: Conn, lastRevision: number | undefined): void {
+  /**
+   * Answers hello and resync with the replica's own applied state, held
+   * until it has applied lastRevision (read index). A lastRevision above
+   * the cluster's revision is answered at once with a snapshot.
+   */
+  private sync(conn: Conn, lastRevision: number | undefined, full = false): void {
     this.flush();
-    const replica = this.ref(conn.replica);
+    const r = conn.replica;
+    const floor = lastRevision !== undefined && lastRevision <= this.revision ? lastRevision : 0;
+    if (r.applied < floor) {
+      r.waiting.push({ floor, run: () => this.sync(conn, lastRevision, full) });
+      return;
+    }
+    const replica = this.ref(r);
     const you = conn.owner!;
+    const revision = r.applied;
     conn.synced = true;
-    if (lastRevision !== undefined && lastRevision <= this.revision && lastRevision + 1 >= this.logStart) {
+    if (!full && lastRevision !== undefined && lastRevision <= revision && lastRevision + 1 >= this.logStart) {
       const deltas = this.log
-        .filter((e) => e.revision > lastRevision)
+        .filter((e) => e.revision > lastRevision && e.revision <= revision)
         .map((e): DeltaMessage => ({ type: 'delta', replica, ...e }));
-      return this.emit(conn, { type: 'resume', you, replica, revision: this.revision, deltas });
+      return this.emit(conn, { type: 'resume', you, replica, revision, deltas });
     }
     this.emit(conn, {
       type: 'snapshot',
       you,
       replica,
-      revision: this.revision,
+      revision,
       shape: this.shape,
-      state: this.state,
-      owners: this.owners,
+      state: r.view?.state ?? this.state,
+      owners: r.view?.owners ?? this.owners,
     });
+  }
+
+  /**
+   * Log entries reach the replica `ms` late from now on; 0 catches it up at
+   * once. Dev control for read-index tests.
+   */
+  lag(id: string, ms: number): boolean {
+    const r = this.replica(id);
+    if (!r) return false;
+    this.flush();
+    if (ms > 0 && r.lagMs === 0) r.view = structuredClone({ state: this.state, owners: this.owners });
+    r.lagMs = ms;
+    if (ms === 0) {
+      for (const e of this.log) if (e.revision > r.applied) this.deliver(r, e);
+      r.applied = this.revision;
+      r.view = null;
+      this.drain(r);
+    }
+    return true;
+  }
+
+  /** One log entry reaches a replica: it applies it and sends it to its synced connections. */
+  private deliver(r: Replica, e: LogEntry): void {
+    if (e.revision <= r.applied) return;
+    if (r.view) {
+      for (const c of e.changes ?? []) setAt(r.view.state as unknown as Record<string, unknown>, c.path, structuredClone(c.value));
+      for (const o of e.owners ?? []) {
+        if (o.owner === null) delete r.view.owners[o.path];
+        else r.view.owners[o.path] = o.owner;
+      }
+    }
+    r.applied = e.revision;
+    if (!r.partitioned) for (const c of r.conns) if (c.synced) this.emit(c, { type: 'delta', replica: this.ref(r), ...e });
+    this.drain(r);
+  }
+
+  private drain(r: Replica): void {
+    while (r.waiting.length > 0 && r.waiting[0]!.floor <= r.applied) r.waiting.shift()!.run();
   }
 
   // ---- commands -----------------------------------------------------------
@@ -660,7 +736,7 @@ export class Cluster {
   stage(entry: { changes?: Change[]; owners?: OwnershipChange[]; origins?: Origin[] }, atIndex?: number): { revision: number; atIndex?: number } {
     if (!this.batch) {
       this.batch = { revision: this.revision + 1, changes: [], owners: [], origins: [] };
-      this.batchTimer = setTimeout(() => this.flush(), BLOCK_MS);
+      if (!this.holdBlocks) this.batchTimer = setTimeout(() => this.flush(), BLOCK_MS);
     }
     const b = this.batch;
     for (const c of entry.changes ?? []) {
@@ -711,15 +787,32 @@ export class Cluster {
       this.logStart++;
     }
     for (const r of this.replicas) {
-      if (r.partitioned) continue;
-      for (const c of r.conns) if (c.synced) this.emit(c, { type: 'delta', replica: this.ref(r), ...e });
+      if (r.lagMs === 0) {
+        this.deliver(r, e);
+        continue;
+      }
+      const t = setTimeout(() => {
+        this.lagTimers.delete(t);
+        if (r.lagMs > 0) this.deliver(r, e);
+      }, r.lagMs);
+      this.lagTimers.add(t);
     }
+  }
+
+  /** true holds every processing block open; false ends the hold and flushes the open block. */
+  holdBlock(hold: boolean): void {
+    this.holdBlocks = hold;
+    if (!hold) this.flush();
   }
 
   /** Advance the revision without telling clients; dev control for gap tests. */
   skipRevision(): void {
     this.flush();
     this.revision++;
+    for (const r of this.replicas) {
+      r.applied = this.revision;
+      this.drain(r);
+    }
     this.log = [];
     this.logStart = this.revision + 1;
   }

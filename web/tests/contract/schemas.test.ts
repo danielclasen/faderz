@@ -132,7 +132,8 @@ describe('WebSocket messages', () => {
   it.each([
     { type: 'hello', session: 'tab-1', kind: 'ui', mode: 'primary' },
     { type: 'hello', session: 'console:mcu-1', kind: 'console', mode: 'standby', lastRevision: 12 },
-    { type: 'promote' },
+    { type: 'promote', lastRevision: 4 },
+    { type: 'resync', lastRevision: 4, full: true },
     { type: 'credit', n: 1 },
     { type: 'credit', n: 8 },
     { type: 'credit', n: 100 },
@@ -153,6 +154,8 @@ describe('WebSocket messages', () => {
     { type: 'hello', session: 'tab-1', kind: 'ui', mode: 'backup' },
     { type: 'hello', session: 'tab 1', kind: 'ui', mode: 'primary' },
     { type: 'promote', mode: 'primary' },
+    { type: 'promote' },
+    { type: 'resync', lastRevision: 4, full: false },
     { type: 'credit' },
     { type: 'credit', n: 0 },
     { type: 'credit', n: -1 },

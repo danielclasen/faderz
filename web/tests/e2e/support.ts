@@ -75,6 +75,7 @@ export async function stats(request: APIRequestContext): Promise<ConnStats[]> {
 /** Every replica serving, both command logs and the counters empty. */
 export async function resetMock(request: APIRequestContext): Promise<void> {
   for (const id of REPLICAS) expect((await request.post(`/__mock/replicas/${id}/restore`)).ok()).toBe(true);
+  expect((await request.post('/__mock/blocks/flush')).ok()).toBe(true);
   await request.post('/__mock/audit/reset');
   await request.post('/__mock/stats/reset');
 }

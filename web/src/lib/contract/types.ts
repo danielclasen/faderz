@@ -254,6 +254,8 @@ export interface HelloMessage {
 }
 export interface PromoteMessage {
   type: 'promote';
+  /** Highest revision the client has applied; commands wait until the replica has applied it. */
+  lastRevision: Revision;
 }
 export interface CreditMessage {
   type: 'credit';
@@ -286,7 +288,10 @@ export interface ReleaseMessage {
 }
 export interface ResyncMessage {
   type: 'resync';
+  /** Highest revision the client has applied; the answer waits until the replica has applied it. */
   lastRevision?: Revision;
+  /** Answer with a snapshot. */
+  full?: true;
 }
 export type CommandMessage = SetMessage | TouchMessage | ReleaseMessage;
 export type ClientMessage =

@@ -74,6 +74,8 @@ export const OFFLINE_RETRY_MS = 2000;
 export const STANDBY_TRIES = 4;
 export const STANDBY_RETRY_MS = 100;
 export const STANDBY_BACKOFF_MS = 2000;
+/** Delay before asking again after an answer older than the client's revision. */
+export const RESYNC_RETRY_MS = 250;
 /** Credits are topped up to the cap once this many or fewer are outstanding. */
 export const CREDIT_REFILL_AT = METER_CREDIT_CAP / 2;
 const NOTICE_LIMIT = 20;
@@ -136,6 +138,7 @@ export class SyncEngine {
   private inputs = 0;
   private cancelRetry: (() => void) | null = null;
   private cancelStandbyRetry: (() => void) | null = null;
+  private cancelResyncRetry: (() => void) | null = null;
 
   constructor(private readonly deps: EngineDeps) {
     if (deps.endpoints.length === 0) throw new Error('no endpoints');
@@ -358,7 +361,7 @@ export class SyncEngine {
       this.primaryIndex = sb.endpoint;
       this.primaryAttempts = 0;
       this.failoverInfo = { n, from, to: sb.replica?.id ?? null, reason };
-      this.send(sb, { type: 'promote' });
+      this.send(sb, { type: 'promote', lastRevision: this.revision });
       this.linkEvent('promoted');
       this.transmit();
       this.resync(false);
@@ -470,6 +473,7 @@ export class SyncEngine {
   }
 
   private primarySnapshot(msg: SnapshotMessage): void {
+    if (this.older(msg.revision)) return;
     this.you = msg.you;
     this.shape = msg.shape;
     this.state = msg.state;
@@ -488,6 +492,7 @@ export class SyncEngine {
   }
 
   private primaryResume(msg: ResumeMessage): void {
+    if (this.older(msg.revision)) return;
     this.you = msg.you;
     if (!this.state) return this.resync(true);
     for (const d of msg.deltas) {
@@ -538,10 +543,27 @@ export class SyncEngine {
     this.checkCommitable();
   }
 
+  /**
+   * State never moves backwards: an answer older than the applied revision
+   * is dropped and asked for again. Replicas answer only once they have
+   * applied the revision a client sends (read index), so this is a guard.
+   */
+  private older(revision: number): boolean {
+    if (!this.state || revision >= this.revision) return false;
+    this.cancelResyncRetry?.();
+    this.cancelResyncRetry = this.clock.schedule(() => {
+      this.cancelResyncRetry = null;
+      const p = this.primary;
+      if (p && (this.link === 'Resyncing' || this.link === 'Syncing')) this.send(p, { type: 'resync', lastRevision: this.revision });
+    }, RESYNC_RETRY_MS);
+    return true;
+  }
+
   private resync(full: boolean): void {
     const p = this.primary;
     if (!p) return;
-    this.send(p, full ? { type: 'resync' } : { type: 'resync', lastRevision: this.revision });
+    if (!this.state) this.send(p, { type: 'resync' });
+    else this.send(p, { type: 'resync', lastRevision: this.revision, ...(full ? { full: true as const } : {}) });
     this.linkEvent('resync');
   }
 
