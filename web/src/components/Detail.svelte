@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { BusState, ChannelState, EqBandType, RecallGroup, Solo, Tap } from '../lib/contract/types';
+  import type { BusState, ChannelState, EqBandType, RecallGroup, Solo, StereoImage, Tap } from '../lib/contract/types';
   import { TAPS, TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
   import { LAYOUT_LABELS, RECALL_GROUPS } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -27,6 +27,12 @@
   const toggle = (...rest: Array<string | number>) => mixer.set(p(...rest), !flag(...rest));
   const safe = $derived(mixer.state!.recallSafe[id] ?? []);
   const ms = (samples: number) => `${(samples / 48).toFixed(1)} ms`;
+  const IMAGES: Array<{ id: StereoImage; key: string; label: string }> = [
+    { id: 'normal', key: 'L R', label: 'Normal' },
+    { id: 'leftToBoth', key: 'L>B', label: 'Left to both' },
+    { id: 'rightToBoth', key: 'R>B', label: 'Right to both' },
+    { id: 'swap', key: 'SWP', label: 'Swap left and right' },
+  ];
   const BAND_TYPES: EqBandType[] = ['lowShelf', 'peak', 'highShelf'];
   const typeLabel: Record<EqBandType, string> = { lowShelf: 'Low shelf', peak: 'Peak', highShelf: 'High shelf' };
 
@@ -109,6 +115,18 @@
       {#if ch && element.width <= 2}
         <div class="pan-row"><span class="lbl">Pan</span><Pan path={p('pan', 'lr')} label={`${element.name} pan`} /></div>
         <div class="pan-row"><span class="lbl">F/R</span><Pan path={p('pan', 'fr')} label={`${element.name} front rear`} left="F" right="R" /></div>
+        <Param path={p('pan', 'divergence')} label="Diverg" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
+        <Param path={p('pan', 'lfe')} label="LFE" min={-90} max={10} format={(v) => formatDb(v)} />
+      {:else if ch}
+        <p class="note">{element.layout} maps leg to leg on {element.layout} buses and folds down (Lo/Ro) on narrower ones.</p>
+      {/if}
+      {#if ch && element.layout === 'stereo'}
+        <div class="taps" role="radiogroup" aria-label={`${element.name} stereo image`}>
+          <span class="lbl">Image</span>
+          {#each IMAGES as im (im.id)}
+            <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={ch.image === im.id} aria-label={im.label} title={im.label} onclick={() => mixer.set(p('image'), im.id)}>{im.key}</button>
+          {/each}
+        </div>
       {/if}
     </div>
 
@@ -278,9 +296,16 @@
     grid-template-columns: 1fr 1fr;
     gap: 3px;
   }
+  .note {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
   .taps {
     display: grid;
-    grid-template-columns: 52px repeat(3, 1fr);
+    grid-template-columns: 52px;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     gap: 3px;
     align-items: center;
   }

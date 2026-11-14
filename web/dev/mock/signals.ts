@@ -10,6 +10,7 @@ import type {
   ElementShape,
   Layout,
   Loudness,
+  StereoImage,
   Shape,
   State,
 } from '../../src/lib/contract/types.ts';
@@ -78,8 +79,15 @@ export class SourceModel {
   }
 }
 
+/** Surround panner settings of a mono source; defaults leave it front, discrete, without LFE. */
+export interface SurroundPan {
+  divergence?: number;
+  /** LFE send, dB; -90 is off. */
+  lfe?: number;
+}
+
 /** Power gain matrix [dst][src] from one layout into another. */
-export function legMatrix(src: Layout, dst: Layout, pan: number, front: number): number[][] {
+export function legMatrix(src: Layout, dst: Layout, pan: number, front: number, surround: SurroundPan = {}): number[][] {
   const s = LAYOUT_LABELS[src];
   const d = LAYOUT_LABELS[dst];
   const m = d.map(() => s.map(() => 0));
@@ -98,7 +106,12 @@ export function legMatrix(src: Layout, dst: Layout, pan: number, front: number):
       const rear = (front + 1) / 2;
       const fr = Math.cos((rear * Math.PI) / 2);
       const rr = Math.sin((rear * Math.PI) / 2);
-      set('L', 'M', l * fr); set('R', 'M', r * fr); set('Ls', 'M', l * rr); set('Rs', 'M', r * rr);
+      // A centred source goes to the centre leg as far as divergence allows.
+      const centre = (1 - (surround.divergence ?? 0)) * (1 - Math.abs(pan));
+      const side = Math.sqrt(1 - centre);
+      set('C', 'M', Math.sqrt(centre) * fr);
+      set('L', 'M', l * fr * side); set('R', 'M', r * fr * side); set('Ls', 'M', l * rr); set('Rs', 'M', r * rr);
+      if ((surround.lfe ?? -90) > -90) set('LFE', 'M', dbToGain(surround.lfe!));
     }
     return m;
   }
@@ -137,6 +150,17 @@ function correlationOf(layout: Layout, legs: readonly number[]): number | null {
   if (layout !== 'stereo' || legs.every((l) => l <= -70)) return null;
   const spread = Math.min(1, Math.abs(legs[0]! - legs[1]!) / 20);
   return Math.round((0.95 - 0.8 * spread + (Math.random() - 0.5) * 0.06) * 100) / 100;
+}
+
+/** Leg levels of a stereo channel after its image setting. */
+export function applyImage(image: StereoImage, legs: readonly number[]): number[] {
+  const [l, r] = legs as [number, number];
+  switch (image) {
+    case 'leftToBoth': return [l, l];
+    case 'rightToBoth': return [r, r];
+    case 'swap': return [r, l];
+    default: return [l, r];
+  }
 }
 
 class LoudnessMeter {
@@ -252,7 +276,8 @@ export class ReplicaMeters {
     const vcaMuted = (id: string) => Object.values(state.vcas).some((v) => v.mute && v.members.includes(id));
     for (const c of this.shape.channels) {
       const st = state.channels[c.id]!;
-      const input = sources.levels.get(c.id) ?? Array<number>(c.width).fill(SILENCE);
+      const raw = sources.levels.get(c.id) ?? Array<number>(c.width).fill(SILENCE);
+      const input = c.layout === 'stereo' ? applyImage(st.image, raw) : raw;
       const legs = input.map((l, i) => l + st.trim + (st.legTrim[i] ?? 0) + (st.comp.enabled ? st.comp.makeup - 2 : 0));
       channelLevels.set(c.id, legs);
       const fader = st.mute || vcaMuted(c.id) ? SILENCE : effectiveGainDb(st.fader, vcaOffsets(c.id));
@@ -277,14 +302,14 @@ export class ReplicaMeters {
       return gain;
     };
 
-    const mixInto = (layout: Layout, contributions: Array<{ id: string; gain: number; pan: number; fr: number }>): Mix => {
+    const mixInto = (layout: Layout, contributions: Array<{ id: string; gain: number; pan: number; fr: number; surround?: SurroundPan }>): Mix => {
       const width = LAYOUT_LABELS[layout].length;
       const p = Array<number>(width).fill(0);
       const peaks = Array<number>(width).fill(SILENCE);
       for (const k of contributions) {
         if (k.gain <= 0) continue;
         const shape = this.channelShapes.get(k.id)!;
-        const m = legMatrix(shape.layout, layout, k.pan, k.fr);
+        const m = legMatrix(shape.layout, layout, k.pan, k.fr, k.surround);
         const src = channelLevels.get(k.id)!;
         for (let d = 0; d < width; d++) {
           for (let s = 0; s < src.length; s++) {
@@ -327,7 +352,7 @@ export class ReplicaMeters {
     for (const b of this.shape.buses) {
       const contributions = this.shape.channels
         .filter((c) => state.channels[c.id]!.routes[b.id])
-        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr }));
+        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr, surround: state.channels[c.id]!.pan }));
       const st = state.buses[b.id]!;
       buses.push(busMeter(b.id, b.layout, mixInto(b.layout, contributions), st.fader, st.mute));
     }
@@ -347,7 +372,7 @@ export class ReplicaMeters {
       const st = state.mixMinus[mm.id]!;
       const contributions = this.shape.channels
         .filter((c) => state.channels[c.id]!.routes[mm.bus] && !st.exclude.includes(c.id))
-        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr }));
+        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr, surround: state.channels[c.id]!.pan }));
       mixMinus.push(busMeter(mm.id, mm.layout, mixInto(mm.layout, contributions), st.fader, st.mute));
     }
     return { channels, buses, auxes, mixMinus };

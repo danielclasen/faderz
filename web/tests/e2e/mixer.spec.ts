@@ -147,3 +147,18 @@ test('sets the loudness target from the setup view and judges integrated loudnes
   await expect(page.locator('[data-master="pgm20"]').getByTitle('Target -27 LUFS +/-2 LU')).toHaveText('-27.0');
   await patch(request, '/metering/loudness/preset', 'ebu');
 });
+
+test('sets the LFE send and the stereo image of a channel from the processing panel', async ({ page, request }) => {
+  await live(page);
+  await page.locator('[data-channel="st1"] .head').click();
+  await page.getByRole('radio', { name: 'Right to both' }).click();
+  await settled(page);
+  expect((await serverState(request)).state.channels['st1']!.image).toBe('rightToBoth');
+  await expect(page.getByRole('radio', { name: 'Right to both' })).toHaveAttribute('aria-checked', 'true');
+  await patch(request, '/channels/st1/image', 'normal');
+  await page.locator('[data-channel="ch1"] .head').click();
+  await expect(page.getByLabel('LFE', { exact: true })).toBeVisible();
+  await patch(request, '/channels/ch1/pan/lfe', -12);
+  await expect(page.locator('input[data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuetext', '-12.0');
+  await patch(request, '/channels/ch1/pan/lfe', -90);
+});

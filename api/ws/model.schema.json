@@ -199,6 +199,22 @@
       "minimum": -1,
       "maximum": 1
     },
+    "Divergence": {
+      "description": "Spread of the front image on surround buses: 0 feeds a centred source to the centre leg only, 1 to the left and right legs only (phantom centre); values between feed both.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "StereoImage": {
+      "description": "Leg use of a stereo channel: normal, leftToBoth feeds the left leg to both, rightToBoth the right leg to both, swap exchanges the legs. Ignored for other layouts.",
+      "type": "string",
+      "enum": [
+        "normal",
+        "leftToBoth",
+        "rightToBoth",
+        "swap"
+      ]
+    },
     "Solo": {
       "description": "Listen state of a channel on the monitor: pre-fader listen, after-fader listen (post-fader, before the AFV stage) or off.",
       "type": "string",
@@ -692,11 +708,13 @@
       }
     },
     "PanState": {
-      "description": "lr is the left/right position; fr the front/rear position, used by the 5.1 panner on surround buses. Ignored for channels whose width equals the bus width.",
+      "description": "lr is the left/right position; fr the front/rear position, divergence the front spread and lfe the send level into the LFE leg, used by the panner on surround buses. The LFE send is band-limited to 120 Hz (ITU-R BS.775-4); -90 is off. pan is ignored for channels whose width equals the bus width, which map leg to leg by label. A channel wider than the bus folds down: 5.1 and 7.1 to stereo by the ITU-R BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1 to 5.1 by summing each side and back surround pair at -3 dB.",
       "type": "object",
       "required": [
         "lr",
-        "fr"
+        "fr",
+        "divergence",
+        "lfe"
       ],
       "additionalProperties": false,
       "properties": {
@@ -705,6 +723,12 @@
         },
         "fr": {
           "$ref": "#/$defs/Pan"
+        },
+        "divergence": {
+          "$ref": "#/$defs/Divergence"
+        },
+        "lfe": {
+          "$ref": "#/$defs/FaderDb"
         }
       }
     },
@@ -745,6 +769,7 @@
         "comp",
         "delay",
         "pan",
+        "image",
         "fader",
         "mute",
         "solo",
@@ -781,6 +806,9 @@
         },
         "pan": {
           "$ref": "#/$defs/PanState"
+        },
+        "image": {
+          "$ref": "#/$defs/StereoImage"
         },
         "fader": {
           "$ref": "#/$defs/FaderDb"
@@ -1200,7 +1228,7 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|pan/(lr|fr)|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|pan/(lr|fr|divergence|lfe)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|fader|mute)$"
@@ -1233,7 +1261,7 @@
           "pattern": "^/(channels|buses|auxes|mixMinus)/[a-z][a-z0-9-]{0,31}/fader$"
         },
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|hpf/freq|pan/(lr|fr)|sends/[a-z][a-z0-9-]{0,31}/(level|pan))$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|hpf/freq|pan/(lr|fr|divergence|lfe)|sends/[a-z][a-z0-9-]{0,31}/(level|pan))$"
         },
         {
           "pattern": "^/(channels|buses|auxes)/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup)|delay)$"
@@ -1821,6 +1849,57 @@
             "properties": {
               "value": {
                 "$ref": "#/$defs/LoudnessScale"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "/pan/divergence$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/Divergence"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "/pan/lfe$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/FaderDb"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "/image$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/StereoImage"
               }
             }
           }

@@ -103,6 +103,9 @@ describe('Change values are constrained by path', () => {
     ['/metering/loudness/target', -24],
     ['/metering/loudness/tolerance', 0.5],
     ['/metering/scale', 'ebu18'],
+    ['/channels/ch1/pan/divergence', 0.4],
+    ['/channels/ch1/pan/lfe', -10],
+    ['/channels/st1/image', 'leftToBoth'],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -134,6 +137,10 @@ describe('Change values are constrained by path', () => {
     ['/metering/loudness/tolerance', 0],
     ['/metering/scale', 'ebu27'],
     ['/metering/zones', { alignment: -18, permittedMax: -9, truePeakMax: -1 }],
+    ['/channels/ch1/pan/divergence', 1.5],
+    ['/channels/ch1/pan/lfe', 12],
+    ['/channels/st1/image', 'mono'],
+    ['/buses/pgm20/image', 'swap'],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });
@@ -153,6 +160,7 @@ describe('ContinuousPath', () => {
     '/channels/ch1/fader',
     '/channels/sur1/legTrim/3',
     '/channels/ch1/sends/aux1/level',
+    '/channels/ch1/pan/lfe',
     '/channels/ch1/eq/bands/2/q',
     '/buses/pgm51/comp/makeup',
     '/auxes/aux1/delay',
@@ -168,6 +176,7 @@ describe('ContinuousPath', () => {
     '/channels/ch1/mute',
     '/channels/ch1/polarity/0',
     '/channels/ch1/eq/bands/0/type',
+    '/channels/st1/image',
     '/channels/ch1/sends/aux1/pre',
     '/monitor/source',
     '/vcas/vca1/members',

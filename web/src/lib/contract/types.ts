@@ -101,7 +101,12 @@ export interface Comp {
 export interface PanState {
   lr: number;
   fr: number;
+  /** 0 discrete centre .. 1 phantom centre. */
+  divergence: number;
+  /** LFE send, dB; -90 off. */
+  lfe: number;
 }
+export type StereoImage = 'normal' | 'leftToBoth' | 'rightToBoth' | 'swap';
 export interface Send {
   on: boolean;
   level: number;
@@ -120,6 +125,7 @@ export interface ChannelState {
   comp: Comp;
   delay: number;
   pan: PanState;
+  image: StereoImage;
   fader: number;
   mute: boolean;
   solo: Solo;
