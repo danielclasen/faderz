@@ -38,8 +38,9 @@
 </section>
 
 <style>
+  /* 52 px of fader (scale and track) inside the padding and border. */
   .vca {
-    width: 58px;
+    width: 62px;
     flex: none;
     display: flex;
     flex-direction: column;
