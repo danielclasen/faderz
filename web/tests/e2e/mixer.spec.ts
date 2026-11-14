@@ -965,3 +965,19 @@ test('labels the channel meter in dBFS on its outer side, apart from the fader s
     )
     .toEqual(['-18', '-40', '-9', '0']);
 });
+
+test('moves faders at a tenth of their travel while FINE is lit, without a modifier key', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch2/fader', 0);
+  await expect(page.getByTestId('fader-value-ch2')).toHaveText(formatDb(0));
+  await page.getByRole('button', { name: 'FINE' }).click();
+  await dragFader(page, '/channels/ch2/fader', 100);
+  await settled(page);
+  const fine = await fader(request, 'ch2');
+  expect(fine).toBeLessThan(0);
+  expect(fine).toBeGreaterThan(-1.5);
+  await page.getByRole('button', { name: 'FINE' }).click();
+  await dragFader(page, '/channels/ch2/fader', 100);
+  await settled(page);
+  expect(await fader(request, 'ch2')).toBeLessThan(fine - 3);
+});

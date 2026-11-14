@@ -68,6 +68,12 @@
         data-testid="channel-overs"><span class="fixed">TP{fit(String(channelOvers.length), 3)}</span></button
       >
       <button
+        class="key fine"
+        aria-pressed={mixer.fine}
+        onclick={() => (mixer.fine = !mixer.fine)}
+        title="Fine: faders, pans and parameters move at a tenth of their travel, as with Shift held">FINE</button
+      >
+      <button
         class="key masters-key"
         aria-pressed={mastersOpen}
         aria-controls="mixer-masters"

@@ -97,6 +97,8 @@ export class MixerStore {
     return this.status.outbox;
   }
 
+  /** FINE latch: faders, pans and parameters move at a tenth of their travel, as with Shift held. */
+  fine = $state(false);
   /** The operator locked this screen: it shows everything and changes nothing. */
   deskLock = $state(false);
   /** Why write controls are disabled and send nothing (link not transmitting, or no quorum and no ready standby), or null. */

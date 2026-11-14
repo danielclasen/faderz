@@ -27,7 +27,7 @@
   }
   function move(e: PointerEvent): void {
     if (!drag || e.pointerId !== drag.id) return;
-    const scale = e.shiftKey ? 0.1 : 1;
+    const scale = e.shiftKey || mixer.fine ? 0.1 : 1;
     const v = Math.max(-1, Math.min(1, drag.v + ((e.clientX - drag.x) / drag.w) * 2 * scale));
     const r = Math.round(v * 100) / 100;
     if (r !== value) mixer.set(path, r);
@@ -38,7 +38,7 @@
     mixer.release(path);
   }
   function key(e: KeyboardEvent): void {
-    const step = e.shiftKey ? 0.01 : 0.05;
+    const step = e.shiftKey || mixer.fine ? 0.01 : 0.05;
     let v: number | null = null;
     if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') v = value - step;
     else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') v = value + step;

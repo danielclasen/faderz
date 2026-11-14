@@ -44,7 +44,7 @@
     });
   }
 
-  const isFine = (e: PointerEvent | KeyboardEvent) => e.shiftKey || e.ctrlKey || e.metaKey;
+  const isFine = (e: PointerEvent | KeyboardEvent) => mixer.fine || e.shiftKey || e.ctrlKey || e.metaKey;
 
   function pointerdown(e: PointerEvent): void {
     if (e.button !== 0) return;

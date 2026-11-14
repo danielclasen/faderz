@@ -190,4 +190,6 @@ in the selected unit (ms, frames at the shape's frame rate, or
 samples) or with a suffix: `40ms`, `2f`, `1.5s`, `1920smp`; the arrow
 keys step one unit, Shift a tenth. Matrix grids move with the arrow keys.
 
-With a pointer: drag a fader, hold Shift (or Ctrl) for fine travel.
+With a pointer: drag a fader, hold Shift (or Ctrl) for fine travel; the
+FINE key in the bank bar latches fine travel for faders and pans, for
+touch screens. A double-click does nothing to a fader.
