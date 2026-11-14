@@ -19,8 +19,11 @@
     index: number;
     selected: boolean;
     onselect: (id: string, section?: string) => void;
+    /** Sends on faders: the fader sets this aux's send level instead of the channel level. */
+    sendsTo?: { id: string; name: string } | null;
   }
-  let { channel, index, selected, onselect }: Props = $props();
+  let { channel, index, selected, onselect, sendsTo = null }: Props = $props();
+  const levelPath = $derived(sendsTo ? channelPath(channel.id, 'sends', sendsTo.id, 'level') : channelPath(channel.id, 'fader'));
 
   const mixer = getMixer();
   const coarse = new MediaQuery('pointer: coarse');
@@ -30,7 +33,8 @@
   const mute = $derived(mixer.value<boolean>(channelPath(channel.id, 'mute')));
   const solo = $derived(mixer.value<Solo>(channelPath(channel.id, 'solo')));
   const fader = $derived(mixer.value<number>(channelPath(channel.id, 'fader')));
-  const holder = $derived(mixer.ownerOf(channelPath(channel.id, 'fader')));
+  const level = $derived(mixer.value<number>(levelPath));
+  const holder = $derived(mixer.ownerOf(levelPath));
   const holderMine = $derived(mixer.isMine(holder));
   const holderName = $derived(holder ? (holderMine ? 'YOU' : mixer.ownerLabel(holder)) : '');
   const vcas = $derived(
@@ -54,7 +58,7 @@
   }
 </script>
 
-<section class="strip" class:selected class:alt={index % 2 === 1} aria-label={`Channel ${index + 1} ${channel.name}`} data-channel={channel.id}>
+<section class="strip" class:sof={sendsTo !== null} class:selected class:alt={index % 2 === 1} aria-label={`Channel ${index + 1} ${channel.name}`} data-channel={channel.id}>
   <button
     class="head"
     data-color={st.color}
@@ -160,7 +164,7 @@
   </div>
 
   <div class="fm">
-    <Fader path={channelPath(channel.id, 'fader')} label={`${channel.name} fader`} />
+    <Fader path={levelPath} label={sendsTo ? `${channel.name} send to ${sendsTo.name}` : `${channel.name} fader`} />
     <div class="meter">
       <Meter group="channels" id={channel.id} legs={channel.width} scale="right" label={`${channel.name} meter, ${TAP_LABEL[st.meterTap]}`} />
       <!-- The meter tap, in the meter's bottom padding. -->
@@ -169,7 +173,7 @@
   </div>
 
   <div class="foot">
-    <output class="num value" data-testid={`fader-value-${channel.id}`}><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
+    <output class="num value" data-testid={`fader-value-${channel.id}`}><span class="fixed">{fit(formatDb(level), 5)}</span></output>
     <!-- Who holds the fader, in words; the slot is there whether held or not. -->
     <span class="holder" class:held={holder !== null} class:mine={holderMine} title={holder ? `Fader held by ${holderName === 'YOU' ? 'you' : holderName}` : undefined} data-testid={`holder-${channel.id}`}
       ><span>{holderName}</span></span
@@ -201,6 +205,13 @@
     min-height: 0;
     content-visibility: auto;
     contain-intrinsic-size: auto 86px auto 600px;
+  }
+  /* Sends on faders: a band in the sends colour says the faders are not channel levels. */
+  .strip.sof {
+    box-shadow: inset 0 3px 0 var(--meter-loud);
+  }
+  .strip.sof .value {
+    color: var(--meter-loud);
   }
   .strip.alt {
     background: var(--strip-alt);

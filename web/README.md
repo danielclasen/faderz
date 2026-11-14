@@ -184,7 +184,10 @@ to it) and on a touch held for 0.5 s; Escape closes it.
 In the mixer, `[` and `]` step to the previous and next bank, the Jump
 field takes a strip number or the start of a channel name, FOLLOW keeps
 the strips on the first connected surface's bank, and a press on a VCA
-master's name shows only that VCA's members until EXIT.
+master's name shows only that VCA's members until EXIT. "Sends on
+faders" puts one aux on the channel faders: each fader then sets that
+channel's send level to the aux, under a band in the sends colour,
+until SOF ... - EXIT.
 
 A strip has five tab stops: its head (select), PFL, AFL, MUTE and the
 fader, and after them its VCA row while it is in a VCA, whose tooltip

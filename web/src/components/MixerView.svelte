@@ -99,6 +99,10 @@
     return () => document.removeEventListener('faderz:spill', on);
   });
 
+  // Sends on faders: the channel faders set one aux's send levels until EXIT.
+  let sof = $state('');
+  const sofAux = $derived(sof ? shape.auxes.find((a) => a.id === sof) : undefined);
+
   // FOLLOW: the strip area follows the first connected surface's bank.
   let follow = $state(false);
   const followed = $derived(surfaces[0]?.bankOffset ?? null);
@@ -113,16 +117,31 @@
   <div class="left">
     <div class="bankbar">
       <span class="panel-title">Banks</span>
-      {#if spillVca}
-        <button class="key spill" aria-pressed="true" onclick={() => (spill = null)} title="Show every channel again" data-testid="spill"
-          >VCA {spillVca.name} SPILL - EXIT</button
-        >
-      {/if}
-      <div class="banks" role="group" aria-label="Channel banks" class:hidden={spillVca !== undefined}>
-        {#each banks as b, i (b.start)}
-          <button class="key" aria-pressed={visibleBank === i} onclick={() => goto(b.start)}>{b.start + 1}-{b.end}</button>
-        {/each}
-      </div>
+      <!-- Fixed slots: what they show changes, their size does not. -->
+      <span class="sof-slot">
+        {#if sofAux}
+          <button class="key sof-exit" aria-pressed="true" onclick={() => (sof = '')} data-testid="sends-on-faders" title={`SOF ${sofAux.name} - EXIT: the faders set the sends to ${sofAux.name}; press to give them back their channel levels`}
+            >SOF {sofAux.name} - EXIT</button
+          >
+        {:else}
+          <select class="sof" aria-label="Sends on faders" value="" onchange={(e) => (sof = (e.currentTarget as HTMLSelectElement).value)}>
+            <option value="">Sends on faders...</option>
+            {#each shape.auxes as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
+          </select>
+        {/if}
+      </span>
+      <span class="banks-slot">
+        <div class="banks" role="group" aria-label="Channel banks" class:gone={spillVca !== undefined}>
+          {#each banks as b, i (b.start)}
+            <button class="key" aria-pressed={visibleBank === i} onclick={() => goto(b.start)}>{b.start + 1}-{b.end}</button>
+          {/each}
+        </div>
+        {#if spillVca}
+          <button class="key spill" aria-pressed="true" onclick={() => (spill = null)} title={`VCA ${spillVca.name} - EXIT: only its members are shown; press to show every channel`} data-testid="spill"
+            >VCA {spillVca.name} - EXIT</button
+          >
+        {/if}
+      </span>
       <input
         class="jump"
         type="text"
@@ -187,7 +206,7 @@
       </div>
       <div class="strips">
         {#each shown as channel (channel.id)}
-          <ChannelStrip {channel} index={shape.channels.indexOf(channel)} selected={selected === channel.id} {onselect} />
+          <ChannelStrip {channel} index={shape.channels.indexOf(channel)} selected={selected === channel.id} {onselect} sendsTo={sofAux ?? null} />
         {/each}
       </div>
     </div>
@@ -322,12 +341,55 @@
   .masters-key {
     display: none;
   }
-  .hidden {
-    display: none;
-  }
   .surfaces.hidden {
     display: block;
     visibility: hidden;
+  }
+  .sof-exit[aria-pressed='true'] {
+    background: var(--meter-loud);
+    border-color: var(--meter-loud);
+    color: #0b0d10;
+  }
+  .sof-slot {
+    flex: none;
+    width: 19ch;
+    display: flex;
+  }
+  .sof,
+  .sof-exit {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sof {
+    height: 22px;
+    font-size: 11px;
+  }
+  .banks-slot {
+    position: relative;
+    flex: none;
+  }
+  .banks.gone {
+    visibility: hidden;
+  }
+  .spill {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (pointer: coarse) {
+    .sof {
+      height: 32px;
+    }
+  }
+  @media (max-width: 700px) {
+    .sof-slot {
+      display: none;
+    }
   }
   .spill[aria-pressed='true'] {
     background: var(--owned);

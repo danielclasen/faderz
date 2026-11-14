@@ -1285,3 +1285,22 @@ test('opens processing over the strips with the masters and monitor reachable, a
   await expect(panel).toHaveCount(0);
   await expect(head).toBeFocused();
 });
+
+test('puts an aux on the channel faders and gives the faders back on EXIT', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch2/sends/aux1/level', -20);
+  const faderBefore = await fader(request, 'ch2');
+  const strip = (await page.locator('[data-channel="ch2"]').boundingBox())!;
+  await page.getByRole('combobox', { name: 'Sends on faders' }).selectOption({ label: 'IFB 1' });
+  await expect(page.getByTestId('sends-on-faders')).toBeVisible();
+  await expect(page.getByTestId('fader-value-ch2')).toHaveText(formatDb(-20));
+  await dragFader(page, '/channels/ch2/sends/aux1/level', -60);
+  await settled(page);
+  const send = (await serverState(request)).state.channels['ch2']!.sends['aux1']!.level;
+  expect(send).toBeGreaterThan(-20);
+  expect(await fader(request, 'ch2')).toBe(faderBefore);
+  expect(await page.locator('[data-channel="ch2"]').boundingBox()).toEqual(strip);
+  await page.getByTestId('sends-on-faders').click();
+  await expect(page.getByRole('slider', { name: 'Pres 2 fader' })).toBeVisible();
+  await expect(page.getByTestId('fader-value-ch2')).toHaveText(formatDb(faderBefore));
+});

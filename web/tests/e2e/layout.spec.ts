@@ -158,6 +158,14 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     await expectNoShift(page, 'bank change');
   }
 
+  const sof = page.getByRole('combobox', { name: 'Sends on faders' });
+  if (await sof.isVisible()) {
+    await sof.selectOption({ label: 'IFB 1' });
+    await page.waitForTimeout(300);
+    await page.getByTestId('sends-on-faders').click();
+    await expectNoShift(page, 'sends on faders');
+  }
+
   const masters = page.getByRole('button', { name: 'MASTERS' });
   if (await masters.isVisible()) {
     await masters.click();
