@@ -998,12 +998,13 @@
       }
     },
     "VcaState": {
-      "description": "offset is added in dB to every member's fader; offsets of several memberships sum. Effective channel gain is clamped at +20 dB. mute mutes every member. Members' faders do not move.",
+      "description": "offset is added in dB to every member's fader; offsets of several memberships sum. Effective channel gain is clamped at +20 dB. mute mutes every member. Members' faders do not move. solo listens to every member on the monitor, as if each member had that solo set, without changing the members' own solo.",
       "type": "object",
       "required": [
         "offset",
         "mute",
-        "members"
+        "members",
+        "solo"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1016,6 +1017,9 @@
         "members": {
           "description": "Channel ids.",
           "$ref": "#/$defs/IdSet"
+        },
+        "solo": {
+          "$ref": "#/$defs/Solo"
         }
       }
     },
@@ -1417,7 +1421,7 @@
           "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|fader|mute|interrupt/(source|active))$"
         },
         {
-          "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/(offset|mute|members)$"
+          "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/(offset|mute|members|solo)$"
         },
         {
           "pattern": "^/monitor/(source|level|dim|cut|mono|talkbackDim|dimDepth|monoCompensation|downmix|image|speakerMute/[0-7]|speakerSolo/[0-7])$"

@@ -10,9 +10,10 @@
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
   const source = $derived(mixer.value<string>(monitorPath('source')));
-  const listening = $derived(
-    shape.channels.filter((c) => mixer.state!.channels[c.id]!.solo !== 'off').map((c) => ({ name: c.name, mode: mixer.state!.channels[c.id]!.solo })),
-  );
+  const listening = $derived([
+    ...shape.vcas.filter((v) => mixer.state!.vcas[v.id]!.solo !== 'off').map((v) => ({ name: `VCA ${v.name}`, mode: mixer.state!.vcas[v.id]!.solo })),
+    ...shape.channels.filter((c) => mixer.state!.channels[c.id]!.solo !== 'off').map((c) => ({ name: c.name, mode: mixer.state!.channels[c.id]!.solo })),
+  ]);
   const sources = $derived([
     ...shape.buses.map((e) => ({ ...e, group: 'buses' as MeterGroup })),
     ...shape.auxes.map((e) => ({ ...e, group: 'auxes' as MeterGroup })),

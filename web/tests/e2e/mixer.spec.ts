@@ -264,3 +264,14 @@ test('mutes and solos monitor speakers and sets monitor image and dim depth', as
     ['/monitor/downmix', 'loRo'],
   ] as const) await patch(request, path, value);
 });
+
+test('listens to every member of a VCA with its PFL key', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'VCA PRES PFL, all members' }).click();
+  await settled(page);
+  const state = (await serverState(request)).state;
+  expect(state.vcas['vca1']!.solo).toBe('pfl');
+  expect(state.channels['ch1']!.solo).toBe('off');
+  await expect(page.getByRole('region', { name: 'Monitor' }).getByText('VCA PRES')).toBeVisible();
+  await patch(request, '/vcas/vca1/solo', 'off');
+});

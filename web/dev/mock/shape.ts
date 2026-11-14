@@ -193,8 +193,8 @@ export function initialState(shape: Shape): State {
       shape.mixMinus.map((m, i) => [m.id, { exclude: existing([i === 0 ? 'ch11' : 'ch12']), fader: 0, mute: false, interrupt: { source: null, active: false } }]),
     ),
     vcas: {
-      vca1: { offset: 0, mute: false, members: existing(['ch1', 'ch2']) },
-      vca2: { offset: -2, mute: false, members: existing(['ch3', 'ch4', 'ch5', 'ch6']) },
+      vca1: { offset: 0, mute: false, members: existing(['ch1', 'ch2']), solo: 'off' },
+      vca2: { offset: -2, mute: false, members: existing(['ch3', 'ch4', 'ch5', 'ch6']), solo: 'off' },
     },
     monitor: {
       source: 'pgm20',

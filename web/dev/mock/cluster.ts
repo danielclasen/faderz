@@ -167,7 +167,7 @@ export function recallGroup(path: string): RecallGroup | null {
   const [group, , key] = parsePointer(path);
   if (group === 'afv') return key === 'open' ? null : 'afv';
   if (group === 'mixMinus') return key === 'exclude' ? 'routing' : key === 'interrupt' ? null : (key as RecallGroup);
-  if (group === 'vcas') return key === 'offset' ? 'fader' : key === 'members' ? 'routing' : 'mute';
+  if (group === 'vcas') return key === 'offset' ? 'fader' : key === 'members' ? 'routing' : key === 'solo' ? null : 'mute';
   switch (key) {
     case 'trim': case 'legTrim': case 'polarity': case 'hpf': case 'delay': return 'input';
     case 'eq': return 'eq';

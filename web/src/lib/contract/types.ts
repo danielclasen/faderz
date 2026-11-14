@@ -173,6 +173,8 @@ export interface VcaState {
   offset: number;
   mute: boolean;
   members: Id[];
+  /** Listens to every member. */
+  solo: Solo;
 }
 export interface MonitorState {
   source: Id;

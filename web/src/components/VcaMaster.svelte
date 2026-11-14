@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { VcaShape } from '../lib/contract/types';
+  import type { Solo, VcaShape } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { vcaPath } from '../lib/state/paths';
   import { formatDb } from '../lib/audio/db';
@@ -10,6 +10,10 @@
   const mute = $derived(mixer.value<boolean>(vcaPath(vca.id, 'mute')));
   const offset = $derived(mixer.value<number>(vcaPath(vca.id, 'offset')));
   const members = $derived(mixer.state!.vcas[vca.id]!.members);
+  const solo = $derived(mixer.value<Solo>(vcaPath(vca.id, 'solo')));
+  function toggleSolo(mode: Exclude<Solo, 'off'>): void {
+    mixer.set(vcaPath(vca.id, 'solo'), solo === mode ? 'off' : mode);
+  }
 </script>
 
 <section class="vca" aria-label={`VCA ${vca.name}`}>
@@ -20,6 +24,8 @@
   <div class="members" title={members.map((m) => mixer.shape?.channels.find((c) => c.id === m)?.name ?? m).join(', ')}>
     {members.length} ch
   </div>
+  <button class="key" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`VCA ${vca.name} PFL, all members`}>PFL</button>
+  <button class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`VCA ${vca.name} AFL, all members`}>AFL</button>
   <button class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
   <div class="f"><Fader path={vcaPath(vca.id, 'offset')} label={`VCA ${vca.name} offset`} /></div>
   <output class="num value"><span>{formatDb(offset)}</span></output>

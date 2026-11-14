@@ -128,6 +128,7 @@ describe('Change values are constrained by path', () => {
     ['/monitor/image', 'swap'],
     ['/monitor/speakerMute/1', true],
     ['/monitor/speakerSolo/0', false],
+    ['/vcas/vca1/solo', 'pfl'],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -183,6 +184,7 @@ describe('Change values are constrained by path', () => {
     ['/monitor/downmix', 'ltRt'],
     ['/monitor/speakerMute/8', true],
     ['/monitor/speakerMute', [true, false]],
+    ['/vcas/vca1/solo', true],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });
