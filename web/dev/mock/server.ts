@@ -3,6 +3,7 @@
 // replica, like a service endpoint) and at /__mock/replicas/<id>/api/v1/ws
 // (one replica), and dev and test controls under /__mock (README.md).
 
+import { SESSION_ID } from '../../src/lib/net/ids.ts';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -57,6 +58,12 @@ export class MockServer {
       const r = this.cluster.replica(m[1]!);
       replica = r && r.healthy && r.frozen === 'none' ? r : null;
     }
+    const session = url.searchParams.get('session');
+    if (session === null || !SESSION_ID.test(session)) {
+      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     if (!replica) {
       socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       socket.destroy();
@@ -66,6 +73,7 @@ export class MockServer {
     this.wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
       const conn = this.cluster.connect(
         target,
+        session,
         (text) => {
           if (ws.readyState === ws.OPEN) ws.send(text);
         },

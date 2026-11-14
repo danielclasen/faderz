@@ -20,7 +20,7 @@ import { FakeClock, FakeSocket } from './fakes';
 const R1: ReplicaRef = { id: 'r1', role: 'leader' };
 const R2: ReplicaRef = { id: 'r2', role: 'follower' };
 const R3: ReplicaRef = { id: 'r3', role: 'follower' };
-const SESSION = 'sess-me';
+const SESSION = 'c2Vzc2lvbi1tZS0xMjM0NTY';
 const YOU: Owner = { principal: 'anonymous', session: SESSION, kind: 'ui', connection: 'c1' };
 const OTHER: Owner = { principal: 'anonymous', session: 'sess-other', kind: 'ui', connection: 'c9' };
 const F1 = '/channels/ch1/fader';
@@ -135,8 +135,17 @@ describe('sync engine: connecting', () => {
 
   it('opens the standby on another endpoint of a list', () => {
     const { primary, standby } = live(['ws://a/ws', 'ws://b/ws', 'ws://c/ws']);
-    expect(primary.url).toBe('ws://a/ws');
-    expect(standby.url).not.toBe('ws://a/ws');
+    expect(primary.url).toBe(`ws://a/ws?session=${SESSION}`);
+    expect(standby.url).not.toBe(`ws://a/ws?session=${SESSION}`);
+  });
+
+  it('carries the same ?session= on the primary, the standby, every reconnect and after a failover', () => {
+    const t = live(['ws://a/ws', 'ws://b/ws', 'ws://c/ws']);
+    t.primary.drop();
+    t.clock.advance(5000);
+    const urls = t.sockets.map((s) => new URL(s.url));
+    expect(urls.length).toBeGreaterThan(2);
+    for (const u of urls) expect(u.searchParams.getAll('session')).toEqual([SESSION]);
   });
 
   it('retries the standby when it lands on the primary replica', () => {
@@ -263,7 +272,7 @@ describe('sync engine: heartbeat and failure detection', () => {
     t.sockets[0]!.drop();
     expect(t.engine.link).toBe('Connecting');
     t.clock.advance(1000);
-    const again = t.sockets.find((s, i) => i > 0 && s.url === 'ws://b/ws' && s.onopen)!;
+    const again = t.sockets.find((s, i) => i > 0 && s.url === `ws://b/ws?session=${SESSION}` && s.onopen)!;
     again.open();
     expect(again.sent[0]).toEqual({ type: 'hello', session: SESSION, kind: 'ui', mode: 'primary', lastRevision: 3 });
   });

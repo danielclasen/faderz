@@ -12,3 +12,15 @@ export function uuid(): string {
   const h = Array.from(b, (x) => HEX[x]!);
   return `${h.slice(0, 4).join('')}-${h.slice(4, 6).join('')}-${h.slice(6, 8).join('')}-${h.slice(8, 10).join('')}-${h.slice(10).join('')}`;
 }
+
+/**
+ * Session id per model.schema.json SessionId: 16 random bytes (128 bits)
+ * from crypto.getRandomValues, base64url without padding, 22 characters.
+ */
+export function randomSessionId(): string {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export const SESSION_ID = /^[A-Za-z0-9_-]{22,128}$/;

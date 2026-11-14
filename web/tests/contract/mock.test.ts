@@ -104,7 +104,7 @@ class Client {
   }
 
   async open(path = '/api/v1/ws', base = main.base): Promise<this> {
-    this.ws = new WebSocket(`ws://${base}${path}`);
+    this.ws = new WebSocket(`ws://${base}${path}${path.includes('?') ? '&' : '?'}session=${encodeURIComponent(this.session)}`);
     this.closed = new Promise((r) => this.ws.once('close', () => r()));
     this.ws.on('message', (data, isBinary) => (isBinary ? this.binary(data as Buffer) : this.text(String(data))));
     await new Promise((r, j) => {
@@ -495,6 +495,32 @@ describe('leases', () => {
     await sleep(LEASE_MS + 600);
     expect((await owners())[path]).toBeUndefined();
   }, 10_000);
+});
+
+describe('session query', () => {
+  const refused = (url: string) =>
+    new Promise<number>((resolve) => {
+      const ws = new WebSocket(url);
+      ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+      ws.on('open', () => {
+        ws.close();
+        resolve(101);
+      });
+    });
+
+  it('refuses an upgrade without a valid ?session=', async () => {
+    expect(await refused(`ws://${main.base}/api/v1/ws`)).toBe(400);
+    expect(await refused(`ws://${main.base}/api/v1/ws?session=short`)).toBe(400);
+    expect(await refused(`ws://${main.base}/api/v1/ws?session=dGFiLTEtc2Vzc2lvbi1pZA==`)).toBe(400);
+    expect(await refused(`ws://${main.base}/api/v1/ws?session=dGFiLTEtc2Vzc2lvbi1pZA`)).toBe(101);
+  });
+
+  it('refuses a hello whose session differs from ?session=', async () => {
+    const c = await new Client().open();
+    c.send({ type: 'hello', session: 'b3RoZXItc2Vzc2lvbi1pZA', kind: 'ui', mode: 'primary' });
+    const err = await c.next<ErrorMessage>((m) => m.type === 'error');
+    expect(err).toMatchObject({ code: 400, message: 'hello session differs from ?session=' });
+  });
 });
 
 describe('IFB interrupt', () => {

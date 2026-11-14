@@ -67,7 +67,10 @@ contexts.
 The UI connects to `/api/v1/ws` on its own origin. A list of replica
 endpoints can be given instead:
 `?endpoints=ws://a/api/v1/ws,ws://b/api/v1/ws`; the standby connection
-then uses another endpoint than the primary.
+then uses another endpoint than the primary. Every connection carries
+the tab's session id as `?session=` (16 random bytes, base64url), the
+same on the standby and on every reconnect; the mock refuses an upgrade
+without one with 400.
 
 ## Client
 

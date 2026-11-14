@@ -41,6 +41,7 @@ import {
   type TouchState,
 } from './machines';
 import type { FailoverInfo, Patch, SyncStatus, ToWorker, WorkerNotice } from './messages';
+import { withSession } from './session';
 import { isContinuousPath } from '../contract/continuous';
 import { Outbox } from './outbox';
 
@@ -243,7 +244,7 @@ export class SyncEngine {
   // ---- connections -----------------------------------------------------------
 
   private connect(role: Role, index: number): Link {
-    const socket = this.deps.socket(this.deps.endpoints[index]!);
+    const socket = this.deps.socket(withSession(this.deps.endpoints[index]!, this.deps.session));
     socket.binaryType = 'arraybuffer';
     const link = new Link(role, index, socket, this.clock.now());
     link.cancelWatch = this.clock.schedule(() => this.closed(link, 'lost'), CONNECT_TIMEOUT_MS);

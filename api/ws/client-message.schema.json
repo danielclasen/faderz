@@ -34,7 +34,7 @@
   ],
   "$defs": {
     "Hello": {
-      "description": "Identifies the client and the role of this connection. With lastRevision the server answers, once it has applied that revision (read index), with resume when it still holds every delta after it, otherwise with a snapshot. Without it the server answers with a snapshot. A standby connection receives deltas, replicas and pings but no meter frames or counters.",
+      "description": "Identifies the client and the role of this connection. With lastRevision the server answers, once it has applied that revision (read index), with resume when it still holds every delta after it, otherwise with a snapshot. Without it the server answers with a snapshot. A standby connection receives deltas, replicas and pings but no meter frames or counters. session must equal the ?session= of the connection.",
       "type": "object",
       "required": [
         "type",

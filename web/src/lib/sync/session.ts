@@ -3,7 +3,7 @@
 // Any other navigation, including a duplicated tab that inherits a copy of
 // sessionStorage, starts a new session.
 
-import { uuid } from '../net/ids';
+import { randomSessionId, SESSION_ID } from '../net/ids';
 
 const KEY = 'faderz.session';
 
@@ -15,11 +15,11 @@ export interface SessionStorageLike {
 export function sessionId(
   storage: SessionStorageLike | null,
   navigationType: string | undefined,
-  generate: () => string = uuid,
+  generate: () => string = randomSessionId,
 ): string {
   try {
     const stored = storage?.getItem(KEY) ?? null;
-    if (stored && navigationType === 'reload') return stored;
+    if (stored && navigationType === 'reload' && SESSION_ID.test(stored)) return stored;
   } catch {
     // Storage blocked: a new session for this load.
   }
@@ -46,5 +46,12 @@ export function pageSession(): string {
 
 /** Short display tag of a session id. */
 export function sessionTag(session: string): string {
-  return session.replace(/-/g, '').slice(0, 6);
+  return session.replace(/[-_]/g, '').slice(0, 6);
+}
+
+/** A WebSocket endpoint with the session as its ?session= query parameter. */
+export function withSession(endpoint: string, session: string): string {
+  const url = new URL(endpoint);
+  url.searchParams.set('session', session);
+  return url.toString();
 }

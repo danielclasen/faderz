@@ -245,13 +245,13 @@ describe('WebSocket messages', () => {
     }
   };
   const replica = { id: 'r1', role: 'leader' };
-  const owner = { principal: 'anonymous', session: 'tab-1', kind: 'ui', connection: 'c1' };
+  const owner = { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', connection: 'c1' };
   const cmd = '0b6e3a4c-5d1f-4c2a-9e8b-7f6a5d4c3b2a';
   const cmd2 = '1c7f4b5d-6e2a-4d3b-8f9c-8a7b6e5d4c3b';
 
   it.each([
-    { type: 'hello', session: 'tab-1', kind: 'ui', mode: 'primary' },
-    { type: 'hello', session: 'console:mcu-1', kind: 'console', mode: 'standby', lastRevision: 12 },
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', mode: 'primary' },
+    { type: 'hello', session: 'Y29uc29sZS1tY3UtMS1zZXNz', kind: 'console', mode: 'standby', lastRevision: 12 },
     { type: 'promote', lastRevision: 4 },
     { type: 'resync', lastRevision: 4, full: true },
     { type: 'credit', n: 1 },
@@ -267,12 +267,14 @@ describe('WebSocket messages', () => {
   });
 
   it.each([
-    { type: 'hello', clientId: 'tab-1', kind: 'ui', mode: 'primary' },
-    { type: 'hello', session: 'tab-1', kind: 'ui' },
-    { type: 'hello', session: 'tab-1', mode: 'primary' },
-    { type: 'hello', session: 'tab-1', kind: 'script', mode: 'primary' },
-    { type: 'hello', session: 'tab-1', kind: 'ui', mode: 'backup' },
-    { type: 'hello', session: 'tab 1', kind: 'ui', mode: 'primary' },
+    { type: 'hello', clientId: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', mode: 'primary' },
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui' },
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', mode: 'primary' },
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'script', mode: 'primary' },
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', mode: 'backup' },
+    { type: 'hello', session: 'dGFiIDEt c2Vzc2lvbi1pZA', kind: 'ui', mode: 'primary' },
+    { type: 'hello', session: 'tab-1', kind: 'ui', mode: 'primary' },
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA==', kind: 'ui', mode: 'primary' },
     { type: 'promote', mode: 'primary' },
     { type: 'promote' },
     { type: 'resync', lastRevision: 4, full: false },
@@ -302,7 +304,7 @@ describe('WebSocket messages', () => {
     owners: [{ path: '/channels/ch1/fader', owner }],
     origins: [
       { owner, commandId: cmd, seq: 1731590000001 },
-      { owner: { ...owner, session: 'console:mcu-1', kind: 'console', connection: 'c2' }, commandId: cmd2 },
+      { owner: { ...owner, session: 'Y29uc29sZS1tY3UtMS1zZXNz', kind: 'console', connection: 'c2' }, commandId: cmd2 },
     ],
   };
 
@@ -323,9 +325,9 @@ describe('WebSocket messages', () => {
   it.each([
     ['meters', { type: 'meters', replica, channels: {}, buses: {}, auxes: {}, mixMinus: {} }],
     ['resume without you', { type: 'resume', replica, revision: 7, deltas: [] }],
-    ['you as a client id', { type: 'resume', you: 'tab-1', replica, revision: 7, deltas: [] }],
-    ['owner as a client id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: 'tab-1' }] }],
-    ['owner without connection', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', session: 'tab-1', kind: 'ui' } }] }],
+    ['you as a client id', { type: 'resume', you: 'dGFiLTEtc2Vzc2lvbi1pZA', replica, revision: 7, deltas: [] }],
+    ['owner as a client id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: 'dGFiLTEtc2Vzc2lvbi1pZA' }] }],
+    ['owner without connection', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui' } }] }],
     ['owner of unknown kind', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, kind: 'robot' } }] }],
     ['owner with empty principal', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, principal: '' } }] }],
     ['origin without owner', { ...delta, origins: [{ commandId: cmd }] }],
@@ -349,7 +351,7 @@ describe('WebSocket messages', () => {
   it('owners map control paths to owner records', () => {
     const owners = contract.ajv.compile({ $ref: 'https://github.com/danielclasen/faderz/raw/main/api/ws/model.schema.json#/$defs/Owners' });
     expect(owners({ '/channels/ch1/fader': owner })).toBe(true);
-    expect(owners({ '/channels/ch1/fader': 'tab-1' })).toBe(false);
+    expect(owners({ '/channels/ch1/fader': 'dGFiLTEtc2Vzc2lvbi1pZA' })).toBe(false);
     expect(owners({ '/channels/ch1/peak': owner })).toBe(false);
   });
 });

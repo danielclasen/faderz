@@ -17,9 +17,9 @@
       "uniqueItems": true
     },
     "SessionId": {
-      "description": "Session of a client. The web UI keeps it across reconnects, replica switches and reloads of the same tab; a console keeps it across bridge restarts.",
+      "description": "Session of a client: 22 to 128 base64url characters without padding, carrying at least 128 random bits. A client sends it as ?session= on every WebSocket connection and in hello, and keeps it across reconnects and failover; the web UI also across reloads of the same tab, a console across bridge restarts. Command deduplication and the ownership lease key on it.",
       "type": "string",
-      "pattern": "^[A-Za-z0-9:._-]{1,64}$"
+      "pattern": "^[A-Za-z0-9_-]{22,128}$"
     },
     "Owner": {
       "description": "Identity of a client: who (principal), which session, which kind of client, and which WebSocket connection. principal is 'anonymous' while no authentication is configured, otherwise the authenticated principal from the token or the authenticating proxy. Ownership and leases key on principal and session; connection only identifies the WebSocket that sent a command.",

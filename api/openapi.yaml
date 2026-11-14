@@ -313,9 +313,18 @@ paths:
         binary meter frames of its $defs/MeterFrame. The first client
         message is hello.
         The Origin header must be in api.allowedOrigins.
+      parameters:
+        - name: session
+          in: query
+          required: true
+          description: Session id of the client (model SessionId), the same on every connection of the session, including the standby connection and every reconnect.
+          schema:
+            $ref: "./ws/model.schema.json#/$defs/SessionId"
       responses:
         "101":
           description: Switching protocols.
+        "400":
+          description: session missing or not a SessionId.
         "403":
           description: Origin not allowed.
 components:

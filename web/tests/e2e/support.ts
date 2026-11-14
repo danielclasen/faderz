@@ -124,12 +124,11 @@ type Message = { type: string; [k: string]: unknown };
 
 /** A client on its own WebSocket: hello, heartbeat answers and commands. */
 export class RawClient {
-  readonly session = crypto.randomUUID();
   readonly messages: Message[] = [];
   private readonly ws: WebSocket;
   private seq = Date.now();
 
-  private constructor(url: string, readonly kind: 'ui' | 'console' | 'script') {
+  private constructor(url: string, readonly kind: 'ui' | 'console' | 'script', readonly session: string) {
     this.ws = new WebSocket(url);
     this.ws.on('message', (data, binary) => {
       if (binary) return;
@@ -141,7 +140,8 @@ export class RawClient {
 
   /** Opens a primary connection on the service endpoint and waits for its snapshot. */
   static async open(baseURL: string, kind: 'ui' | 'console' | 'script' = 'ui'): Promise<RawClient> {
-    const c = new RawClient(`${baseURL.replace(/^http/, 'ws')}/api/v1/ws`, kind);
+    const session = `raw-${crypto.randomUUID()}`;
+    const c = new RawClient(`${baseURL.replace(/^http/, 'ws')}/api/v1/ws?session=${session}`, kind, session);
     await new Promise<void>((resolve, reject) => {
       c.ws.once('open', () => resolve());
       c.ws.once('error', reject);

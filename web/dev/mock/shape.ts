@@ -119,7 +119,7 @@ function busState(width: number, fader = 0, limiter = false): BusState {
 }
 
 /** Session id each console uses as a client (ConsoleStatus.session). */
-export const CONSOLE_SESSIONS: Record<string, string> = { 'mcu-1': 'console-mcu-1', 'ext-1': 'console-ext-1', 'osc-1': 'console-osc-1' };
+export const CONSOLE_SESSIONS: Record<string, string> = { 'mcu-1': 'console-mcu-1-Q2xQnS8fHw', 'ext-1': 'console-ext-1-4fVd9KkQ2w', 'osc-1': 'console-osc-1-Zr0aLm3Pxg' };
 
 const FADERS: Record<string, number> = {
   ch1: 0, ch2: -2.5, ch3: -4, ch4: -3, ch5: -6, ch6: -90, ch7: -5, ch8: -90, ch9: -90, ch10: -90,

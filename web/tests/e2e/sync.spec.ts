@@ -376,3 +376,20 @@ test('without quorum and standby the client stays connected and disables every w
   await expect.poll(async () => (await audit(request)).entries.map((e) => e.path)).toContain('/channels/ch3/mute');
   expect((await serverState(request)).state.channels['ch3']!.mute).toBe(!before.state.channels['ch3']!.mute);
 });
+
+test('sends the same ?session= on the primary, the standby and the reconnect after a failover', async ({ page, request }) => {
+  const urls: string[] = [];
+  page.on('websocket', (ws) => {
+    if (ws.url().includes('/api/v1/ws')) urls.push(ws.url());
+  });
+  await live(page);
+  await expect.poll(() => urls.length).toBeGreaterThanOrEqual(2);
+  const primary = await debug(page, 'primaryReplica');
+  await request.post(`/__mock/replicas/${primary}/kill`);
+  await expect.poll(() => debug(page, 'failovers')).toBeGreaterThan(0);
+  await expect.poll(() => urls.length).toBeGreaterThanOrEqual(3);
+  const sessions = new Set(urls.map((u) => new URL(u).searchParams.get('session')));
+  expect(sessions.size).toBe(1);
+  expect([...sessions][0]).toMatch(/^[A-Za-z0-9_-]{22,128}$/);
+  expect([...sessions][0]).toBe(await debug(page, 'session'));
+});

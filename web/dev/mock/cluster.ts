@@ -63,6 +63,8 @@ export interface ConnStats {
 
 export interface Conn {
   id: string;
+  /** ?session= of the WebSocket upgrade. */
+  session: string;
   replica: Replica;
   owner: Owner | null;
   mode: LinkMode;
@@ -404,10 +406,11 @@ export class Cluster {
 
   // ---- connections --------------------------------------------------------
 
-  connect(replica: Replica, send: (data: string | Uint8Array) => void, close: () => void): Conn {
+  connect(replica: Replica, session: string, send: (data: string | Uint8Array) => void, close: () => void): Conn {
     const now = Date.now();
     const conn: Conn = {
       id: `c${++this.connCounter}`,
+      session,
       replica,
       owner: null,
       mode: 'primary',
@@ -490,6 +493,9 @@ export class Cluster {
       });
     }
     if (msg.type === 'hello') {
+      if (msg.session !== conn.session) {
+        return this.emit(conn, { type: 'error', replica: this.ref(r), code: 400, message: 'hello session differs from ?session=' });
+      }
       conn.owner = { principal: 'anonymous', session: msg.session, kind: msg.kind, connection: conn.id };
       conn.mode = msg.mode;
       this.renew(conn.owner, r);

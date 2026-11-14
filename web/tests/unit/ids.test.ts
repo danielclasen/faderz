@@ -20,6 +20,6 @@ describe('uuid on a non-secure origin', () => {
   it('creates a session id without crypto.randomUUID', () => {
     const real = globalThis.crypto;
     vi.stubGlobal('crypto', { getRandomValues: (a: Uint8Array<ArrayBuffer>) => real.getRandomValues(a) });
-    expect(sessionId(null, 'navigate')).toMatch(V4);
+    expect(sessionId(null, 'navigate')).toMatch(/^[A-Za-z0-9_-]{22}$/);
   });
 });
