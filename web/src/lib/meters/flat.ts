@@ -1,8 +1,9 @@
 // Decoded meter frame as one Float32Array in layout order, so the worker
-// can transfer it to the page without copying. Per channel: peak legs, rms
-// legs. Per bus, aux and mix-minus output: peak, truePeak and rms legs,
-// then momentary, shortTerm, integrated, lra (NaN for null) and
-// integratedValid (1 or 0).
+// can transfer it to the page without copying. Per channel: peak legs,
+// truePeak legs, momentary (NaN for null). Per bus, aux and mix-minus
+// output: peak, truePeak and rms legs, then momentary, shortTerm,
+// integrated, lra, maxMomentary, maxShortTerm, correlation (NaN for null)
+// and flags (bit 0 integratedValid, bit 1 lraStable).
 
 import type { MeterFrame, MeterLayout } from '../contract/meterFrame';
 import type { BusMeter, Loudness } from '../contract/types';
@@ -16,7 +17,7 @@ export interface MeterSlot {
 }
 
 const GROUPS: readonly MeterGroup[] = ['channels', 'buses', 'auxes', 'mixMinus'];
-const BUS_TAIL = 5;
+const BUS_TAIL = 8;
 
 export const slotKey = (group: MeterGroup, id: string) => `${group}/${id}`;
 
@@ -28,7 +29,7 @@ export function meterSlots(layout: MeterLayout): Map<string, MeterSlot> {
     const bus = group !== 'channels';
     for (const e of layout[group]) {
       slots.set(slotKey(group, e.id), { offset, legs: e.legs, bus });
-      offset += bus ? 3 * e.legs + BUS_TAIL : 2 * e.legs;
+      offset += bus ? 3 * e.legs + BUS_TAIL : 2 * e.legs + 1;
     }
   }
   return slots;
@@ -42,17 +43,20 @@ export function flattenMeterFrame(layout: MeterLayout, frame: MeterFrame): Float
   };
   for (const c of frame.channels) {
     put(c.peak);
-    put(c.rms);
+    put(c.truePeak);
+    out[o++] = c.momentary ?? Number.NaN;
   }
-  const loud = (l: Loudness) => {
-    for (const v of [l.momentary, l.shortTerm, l.integrated, l.lra]) out[o++] = v ?? Number.NaN;
-    out[o++] = l.integratedValid ? 1 : 0;
+  const loud = (l: Loudness, correlation: number | null) => {
+    for (const v of [l.momentary, l.shortTerm, l.integrated, l.lra, l.maxMomentary, l.maxShortTerm, correlation]) {
+      out[o++] = v ?? Number.NaN;
+    }
+    out[o++] = (l.integratedValid ? 1 : 0) | (l.lraStable ? 2 : 0);
   };
   for (const b of [...frame.buses, ...frame.auxes, ...frame.mixMinus] as BusMeter[]) {
     put(b.peak);
     put(b.truePeak);
     put(b.rms);
-    loud(b.loudness);
+    loud(b.loudness, b.correlation);
   }
   return out;
 }

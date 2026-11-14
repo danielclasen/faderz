@@ -118,6 +118,27 @@ const power = (db: number) => (db <= SILENCE ? 0 : Math.pow(10, db / 10));
 const toDb = (p: number) => (p <= 1e-12 ? SILENCE : 10 * Math.log10(p));
 const r1 = (v: number) => Math.round(Math.min(30, Math.max(SILENCE, v)) * 10) / 10;
 
+/** 60 s of 40 ms meter periods: LRA is shown as unstable before (EBU Tech 3341). */
+const LRA_STABLE_PERIODS = 1500;
+
+/** BS.1770 momentary loudness of one set of leg levels, LFE excluded, surrounds +1.5 dB. */
+function legLoudness(layout: Layout, legs: readonly number[]): number | null {
+  const labels = LAYOUT_LABELS[layout];
+  const z = legs.reduce((a, l, i) => {
+    const label = labels[i]!;
+    if (label === 'LFE') return a;
+    return a + power(l) * (/^(Ls|Rs|Lrs|Rrs)$/.test(label) ? 1.41 : 1);
+  }, 0);
+  return z <= 1e-12 ? null : r1(-0.691 + 10 * Math.log10(z));
+}
+
+/** Phase correlation of a stereo mix, made up from how far its legs differ. */
+function correlationOf(layout: Layout, legs: readonly number[]): number | null {
+  if (layout !== 'stereo' || legs.every((l) => l <= -70)) return null;
+  const spread = Math.min(1, Math.abs(legs[0]! - legs[1]!) / 20);
+  return Math.round((0.95 - 0.8 * spread + (Math.random() - 0.5) * 0.06) * 100) / 100;
+}
+
 class LoudnessMeter {
   private frames: number[] = [];
   private blocks: number[] = [];
@@ -125,10 +146,17 @@ class LoudnessMeter {
   private tick = 0;
   private cachedIntegrated: number | null = null;
   private cachedLra: number | null = null;
+  private maxMomentary: number | null = null;
+  private maxShortTerm: number | null = null;
+  /** Meter periods since the last reset. */
+  private since = 0;
 
   reset(): void {
     this.blocks = [];
     this.shortTerms = [];
+    this.maxMomentary = null;
+    this.maxShortTerm = null;
+    this.since = 0;
     this.cachedIntegrated = null;
     this.cachedLra = null;
   }
@@ -157,12 +185,19 @@ class LoudnessMeter {
       this.cachedLra = this.lra();
     }
     const clampL = (v: number | null) => (v === null ? null : Math.round(Math.max(-120, Math.min(30, v)) * 10) / 10);
+    const higher = (a: number | null, b: number | null) => (a === null ? b : b === null ? a : Math.max(a, b));
+    this.maxMomentary = higher(this.maxMomentary, clampL(momentary));
+    this.maxShortTerm = higher(this.maxShortTerm, clampL(shortTerm));
+    this.since++;
     return {
       momentary: clampL(momentary),
       shortTerm: clampL(shortTerm),
       integrated: clampL(this.cachedIntegrated),
       lra: this.cachedLra === null ? null : Math.round(Math.min(100, this.cachedLra) * 10) / 10,
+      maxMomentary: this.maxMomentary,
+      maxShortTerm: this.maxShortTerm,
       integratedValid: true,
+      lraStable: this.since >= LRA_STABLE_PERIODS,
     };
   }
 
@@ -223,9 +258,12 @@ export class ReplicaMeters {
       const fader = st.mute || vcaMuted(c.id) ? SILENCE : effectiveGainDb(st.fader, vcaOffsets(c.id));
       const tapped =
         st.meterTap === 'input' ? input : st.meterTap === 'preFader' ? legs : legs.map((l) => (fader <= SILENCE ? SILENCE : l + fader));
+      const direct =
+        st.directOut.tap === 'input' ? input : st.directOut.tap === 'preFader' ? legs : legs.map((l) => (fader <= SILENCE ? SILENCE : l + fader));
       channels.push({
         peak: tapped.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
-        rms: tapped.map((l) => r1(l + jitter())),
+        truePeak: direct.map((l) => r1(l + 9.5 + Math.random() * 3 + jitter())),
+        momentary: legLoudness(c.layout, tapped),
       });
     }
     const postGains = new Map<string, number>();
@@ -281,6 +319,7 @@ export class ReplicaMeters {
         truePeak: peak.map((v) => r1(v + Math.random() * 0.6 + jitter())),
         rms: rms.map((v) => r1(v + jitter())),
         loudness: meter.push(z),
+        correlation: correlationOf(layout, rms),
       };
     };
 

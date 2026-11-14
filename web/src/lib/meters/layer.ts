@@ -13,6 +13,8 @@ import { onAnimationFrame, type MeterGroup, type MeterStore } from './store';
 export const STALE_MS = 500;
 const MID = -18;
 const HIGH = -6;
+/** Width of the momentary loudness bar of a channel meter, px. */
+const LOUD_W = 3;
 
 export interface MeterSpec {
   group: MeterGroup;
@@ -34,7 +36,10 @@ interface Slot {
   /** Nearest ancestor below the host that clips its content, or null; undefined until measured. */
   clipper: HTMLElement | null | undefined;
   peak: LegBallistics[];
+  /** Bus RMS legs; empty for channels. */
   rms: LegBallistics[];
+  /** Channel momentary loudness at the meter tap; null for buses. */
+  loud: LegBallistics | null;
   rect: Rect;
   clip: Rect | null;
   /** In the viewport, by an IntersectionObserver: only these are measured and drawn. */
@@ -48,6 +53,7 @@ interface Colors {
   well: string;
   line: string;
   text: string;
+  loud: string;
 }
 
 export class MeterLayer {
@@ -76,7 +82,7 @@ export class MeterLayer {
   private dpr = 1;
   private w = 0;
   private h = 0;
-  private colors: Colors = { low: '', mid: '', high: '', well: '', line: '', text: '' };
+  private colors: Colors = { low: '', mid: '', high: '', well: '', line: '', text: '', loud: '' };
 
   constructor(private readonly meters: MeterStore) {}
 
@@ -95,7 +101,18 @@ export class MeterLayer {
 
   register(el: HTMLElement, spec: MeterSpec): () => void {
     const legs = (n: number) => Array.from({ length: n }, newLeg);
-    this.slots.set(el, { spec, el, clipper: undefined, peak: legs(spec.legs), rms: legs(spec.legs), rect: { x: 0, y: 0, w: 0, h: 0 }, clip: null, visible: false });
+    const channel = spec.group === 'channels';
+    this.slots.set(el, {
+      spec,
+      el,
+      clipper: undefined,
+      peak: legs(spec.legs),
+      rms: channel ? [] : legs(spec.legs),
+      loud: channel ? newLeg() : null,
+      rect: { x: 0, y: 0, w: 0, h: 0 },
+      clip: null,
+      visible: false,
+    });
     this.ro.observe(el);
     this.io.observe(el);
     this.relayout();
@@ -138,6 +155,7 @@ export class MeterLayer {
       well: v('--well'),
       line: v('--line-strong'),
       text: v('--text-faint'),
+      loud: v('--meter-loud'),
     };
   }
 
@@ -194,6 +212,7 @@ export class MeterLayer {
     for (const s of this.slots.values()) {
       for (const l of s.peak) if (l.bar > METER_FLOOR_DB || l.hold > METER_FLOOR_DB) return true;
       for (const l of s.rms) if (l.bar > METER_FLOOR_DB) return true;
+      if (s.loud && s.loud.bar > METER_FLOOR_DB) return true;
     }
     return false;
   }
@@ -202,8 +221,9 @@ export class MeterLayer {
     const reading = fresh ? this.meters.get(s.spec.group, s.spec.id) : undefined;
     for (let i = 0; i < s.spec.legs; i++) {
       stepLeg(s.peak[i]!, reading?.peak[i] ?? METER_FLOOR_DB, now, dt);
-      stepLeg(s.rms[i]!, reading?.rms[i] ?? METER_FLOOR_DB, now, dt);
+      if (s.rms[i]) stepLeg(s.rms[i]!, reading?.rms?.[i] ?? METER_FLOOR_DB, now, dt);
     }
+    if (s.loud) stepLeg(s.loud, reading?.momentary ?? METER_FLOOR_DB, now, dt);
   }
 
   private draw(): void {
@@ -256,13 +276,24 @@ export class MeterLayer {
     ctx.globalAlpha = 1;
     ctx.fillStyle = colors.well;
     ctx.fillRect(x0, y0, w, h);
+    // A channel meter gives its rightmost LOUD_W pixels to one momentary
+    // loudness bar; the legs share the rest.
+    const loudW = s.loud ? LOUD_W : 0;
     const inner = w - scaleW;
+    const legsW = inner - (loudW ? loudW + 1 : 0);
     const gap = legs > 1 ? 1 : 0;
-    const bw = Math.max(1, (inner - gap * (legs - 1)) / legs);
+    const bw = Math.max(1, (legsW - gap * (legs - 1)) / legs);
+    if (s.loud && s.loud.bar > METER_FLOOR_DB) {
+      bar(x0 + w - loudW, loudW, METER_FLOOR_DB, s.loud.bar, colors.loud, 1);
+    }
     for (let i = 0; i < legs; i++) {
       const x = x0 + scaleW + i * (bw + gap);
-      zoned(x, bw, s.peak[i]!.bar, 0.45);
-      zoned(x, bw, s.rms[i]!.bar, 1);
+      if (s.rms[i]) {
+        zoned(x, bw, s.peak[i]!.bar, 0.45);
+        zoned(x, bw, s.rms[i]!.bar, 1);
+      } else {
+        zoned(x, bw, s.peak[i]!.bar, 1);
+      }
       const hold = s.peak[i]!.hold;
       if (hold > METER_FLOOR_DB) {
         ctx.globalAlpha = 1;

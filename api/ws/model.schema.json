@@ -1809,31 +1809,47 @@
       "maxItems": 8
     },
     "ChannelMeter": {
-      "description": "Input channel metering at the channel meterTap: sample peak and RMS.",
+      "description": "Input channel metering. peak is the sample peak and momentary the BS.1770-5 momentary loudness (K-weighted, 400 ms window, LFE excluded, in LUFS) at the channel meterTap; truePeak (4x oversampling, dBTP) is measured at the direct out tap, where the channel leaves the mixer. momentary is null until 400 ms of audio have been measured.",
       "type": "object",
       "required": [
         "peak",
-        "rms"
+        "truePeak",
+        "momentary"
       ],
       "additionalProperties": false,
       "properties": {
         "peak": {
           "$ref": "#/$defs/MeterLegs"
         },
-        "rms": {
+        "truePeak": {
           "$ref": "#/$defs/MeterLegs"
+        },
+        "momentary": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": -120,
+              "maximum": 30
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
     "Loudness": {
-      "description": "ITU-R BS.1770-5 / EBU R128 loudness in LUFS, LRA in LU (EBU Tech 3342). null until enough audio has been measured. integratedValid is false after a telemetry drop until the integrated measurement is reset.",
+      "description": "ITU-R BS.1770-5 / EBU R128 loudness in LUFS, LRA in LU (EBU Tech 3342). null until enough audio has been measured. maxMomentary and maxShortTerm are the highest momentary and short-term loudness since the last reset (EBU Tech 3341). integratedValid is false after a telemetry drop until the integrated measurement is reset. lraStable is false during the first 60 s after a reset, while LRA is not yet meaningful.",
       "type": "object",
       "required": [
         "momentary",
         "shortTerm",
         "integrated",
         "lra",
-        "integratedValid"
+        "maxMomentary",
+        "maxShortTerm",
+        "integratedValid",
+        "lraStable"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1885,19 +1901,47 @@
             }
           ]
         },
+        "maxMomentary": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": -120,
+              "maximum": 30
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxShortTerm": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": -120,
+              "maximum": 30
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "integratedValid": {
+          "type": "boolean"
+        },
+        "lraStable": {
           "type": "boolean"
         }
       }
     },
     "BusMeter": {
-      "description": "Bus, aux and mix-minus metering: sample peak, true peak (4x oversampling), RMS and loudness.",
+      "description": "Bus, aux and mix-minus metering at the output, where the signal leaves the mixer: sample peak, true peak (4x oversampling, dBTP), RMS and loudness. RMS is referenced to a full-scale sine (AES17), so a sine at -18 dBFS peak reads -18 dB RMS. correlation is the phase correlation of the L and R legs of a stereo element, -1 to 1, measured over 400 ms; null for other layouts and while both legs are silent.",
       "type": "object",
       "required": [
         "peak",
         "truePeak",
         "rms",
-        "loudness"
+        "loudness",
+        "correlation"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1912,6 +1956,18 @@
         },
         "loudness": {
           "$ref": "#/$defs/Loudness"
+        },
+        "correlation": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

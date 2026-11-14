@@ -10,11 +10,12 @@ const FIXED_HEADER = 12;
 const MAX_REPLICA_LENGTH = 32;
 const FNV_OFFSET = 2166136261;
 const FNV_PRIME = 16777619;
-/** Loudness values (momentary, shortTerm, integrated, lra) and flags per bus. */
-const BUS_TAIL = 5;
+/** Loudness values (momentary, shortTerm, integrated, lra, maxMomentary, maxShortTerm), correlation and flags per bus. */
+const BUS_TAIL = 8;
 const SILENCE_DB = -120;
 const MAX_DB = 30;
 const MAX_LRA = 100;
+const MAX_CORRELATION = 1;
 
 export interface MeterElement {
   readonly id: Id;
@@ -82,7 +83,7 @@ export function deriveMeterLayout(shape: MeteredShape): MeterLayout {
   let valueCount = 0;
   for (const c of channels) {
     text += `c/${c.id}/${c.legs};`;
-    valueCount += 2 * c.legs;
+    valueCount += 2 * c.legs + 1;
   }
   for (const [section, list] of [['b', buses], ['a', auxes], ['m', mixMinus]] as const) {
     for (const e of list) {
@@ -161,12 +162,16 @@ export function encodeMeterFrame(layout: MeterLayout, header: MeterFrameHeader, 
     put(m.loudness.shortTerm);
     put(m.loudness.integrated);
     put(m.loudness.lra);
-    view.setInt16(o, m.loudness.integratedValid ? 1 : 0, true);
+    put(m.loudness.maxMomentary);
+    put(m.loudness.maxShortTerm);
+    put(m.correlation);
+    view.setInt16(o, (m.loudness.integratedValid ? 1 : 0) | (m.loudness.lraStable ? 2 : 0), true);
     o += 2;
   };
   section('channels', layout.channels, values.channels, (m, e) => {
     legs(`${e.id} peak`, m.peak, e.legs);
-    legs(`${e.id} rms`, m.rms, e.legs);
+    legs(`${e.id} truePeak`, m.truePeak, e.legs);
+    put(m.momentary);
   });
   section('buses', layout.buses, values.buses, bus);
   section('auxes', layout.auxes, values.auxes, bus);
@@ -179,8 +184,8 @@ export function encodeMeterFrame(layout: MeterLayout, header: MeterFrameHeader, 
  * shape. Throws MeterFrameError when magic, version, replica id length,
  * fingerprint or byte length do not match. The result validates against
  * model.schema.json: legs are clamped to -120..30 dB with METER_NULL read
- * as -120, loudness to -120..30 LUFS and LRA to 0..100 LU with METER_NULL
- * read as null.
+ * as -120, loudness to -120..30 LUFS, LRA to 0..100 LU and correlation
+ * to -1..1, with METER_NULL read as null.
  */
 export function decodeMeterFrame(layout: MeterLayout, data: ArrayBuffer | ArrayBufferView): MeterFrame {
   const view = ArrayBuffer.isView(data)
@@ -233,18 +238,30 @@ export function decodeMeterFrame(layout: MeterLayout, data: ArrayBuffer | ArrayB
     const peak = legs(e.legs);
     const truePeak = legs(e.legs);
     const rms = legs(e.legs);
+    const momentary = optional(SILENCE_DB, MAX_DB);
+    const shortTerm = optional(SILENCE_DB, MAX_DB);
+    const integrated = optional(SILENCE_DB, MAX_DB);
+    const lra = optional(0, MAX_LRA);
+    const maxMomentary = optional(SILENCE_DB, MAX_DB);
+    const maxShortTerm = optional(SILENCE_DB, MAX_DB);
+    const correlation = optional(-MAX_CORRELATION, MAX_CORRELATION);
+    const flags = next();
     const loudness: Loudness = {
-      momentary: optional(SILENCE_DB, MAX_DB),
-      shortTerm: optional(SILENCE_DB, MAX_DB),
-      integrated: optional(SILENCE_DB, MAX_DB),
-      lra: optional(0, MAX_LRA),
-      integratedValid: (next() & 1) === 1,
+      momentary,
+      shortTerm,
+      integrated,
+      lra,
+      maxMomentary,
+      maxShortTerm,
+      integratedValid: (flags & 1) === 1,
+      lraStable: (flags & 2) === 2,
     };
-    return { peak, truePeak, rms, loudness };
+    return { peak, truePeak, rms, loudness, correlation };
   };
   const channels = layout.channels.map((e): ChannelMeter => {
     const peak = legs(e.legs);
-    return { peak, rms: legs(e.legs) };
+    const truePeak = legs(e.legs);
+    return { peak, truePeak, momentary: optional(SILENCE_DB, MAX_DB) };
   });
   const buses = layout.buses.map(bus);
   const auxes = layout.auxes.map(bus);

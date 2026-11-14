@@ -50,11 +50,15 @@ function values(layout: MeterLayout, seed = 1): MeterValues {
       shortTerm: maybe(-120, 30),
       integrated: maybe(-120, 30),
       lra: maybe(0, 100),
+      maxMomentary: maybe(-120, 30),
+      maxShortTerm: maybe(-120, 30),
       integratedValid: rnd() < 0.5,
+      lraStable: rnd() < 0.5,
     },
+    correlation: maybe(-1, 1),
   });
   return {
-    channels: layout.channels.map((e): ChannelMeter => ({ peak: legs(e.legs), rms: legs(e.legs) })),
+    channels: layout.channels.map((e): ChannelMeter => ({ peak: legs(e.legs), truePeak: legs(e.legs), momentary: maybe(-120, 30) })),
     buses: layout.buses.map(bus),
     auxes: layout.auxes.map(bus),
     mixMinus: layout.mixMinus.map(bus),
@@ -80,13 +84,23 @@ const TINY = deriveMeterLayout({
   mixMinus: [],
 });
 const TINY_VALUES: MeterValues = {
-  channels: [{ peak: [-6.5], rms: [-20.004] }],
+  channels: [{ peak: [-6.5], truePeak: [-5.9], momentary: -20.004 }],
   buses: [
     {
       peak: [0, 3.21],
       truePeak: [0.5, -Infinity],
       rms: [-18, -18.5],
-      loudness: { momentary: -23, shortTerm: null, integrated: -23.456, lra: 7.25, integratedValid: true },
+      loudness: {
+        momentary: -23,
+        shortTerm: null,
+        integrated: -23.456,
+        lra: 7.25,
+        maxMomentary: -21.5,
+        maxShortTerm: null,
+        integratedValid: true,
+        lraStable: false,
+      },
+      correlation: 0.85,
     },
   ],
   auxes: [],
@@ -94,12 +108,13 @@ const TINY_VALUES: MeterValues = {
 };
 // prettier-ignore
 const TINY_BYTES = [
-  0x4d, 0x01, 0x03, 0x00, // magic 'M', version 1, replica id length 3, reserved
+  0x4d, 0x02, 0x03, 0x00, // magic 'M', version 2, replica id length 3, reserved
   0x02, 0x01, 0x00, 0x00, // sequence 258
   0xf5, 0x1d, 0xdd, 0xbd, // fingerprint FNV-1a("c/ch1/1;b/pgm/2;") = 0xbddd1df5
   0x72, 0x65, 0x70, 0x00, // "rep", padding
   0x76, 0xfd, // ch1 peak -6.5 -> -650
-  0x30, 0xf8, // ch1 rms -20.004 -> -2000
+  0xb2, 0xfd, // ch1 truePeak -5.9 -> -590
+  0x30, 0xf8, // ch1 momentary -20.004 -> -2000
   0x00, 0x00, 0x41, 0x01, // pgm peak 0, 3.21 -> 0, 321
   0x32, 0x00, 0x00, 0x80, // pgm truePeak 0.5, -Infinity -> 50, -32768
   0xf8, 0xf8, 0xc6, 0xf8, // pgm rms -18, -18.5 -> -1800, -1850
@@ -107,7 +122,10 @@ const TINY_BYTES = [
   0x00, 0x80, // shortTerm null -> -32768
   0xd6, 0xf6, // integrated -23.456 -> -2346
   0xd5, 0x02, // lra 7.25 -> 725
-  0x01, 0x00, // flags: integratedValid
+  0x9a, 0xf7, // maxMomentary -21.5 -> -2150
+  0x00, 0x80, // maxShortTerm null -> -32768
+  0x55, 0x00, // correlation 0.85 -> 85
+  0x01, 0x00, // flags: integratedValid, not lraStable
 ];
 
 describe('meter frame byte layout', () => {
@@ -129,13 +147,23 @@ describe('meter frame byte layout', () => {
     expect(frame).toEqual({
       sequence: 258,
       replica: 'rep',
-      channels: [{ peak: [-6.5], rms: [-20] }],
+      channels: [{ peak: [-6.5], truePeak: [-5.9], momentary: -20 }],
       buses: [
         {
           peak: [0, 3.21],
           truePeak: [0.5, -120],
           rms: [-18, -18.5],
-          loudness: { momentary: -23, shortTerm: null, integrated: -23.46, lra: 7.25, integratedValid: true },
+          loudness: {
+            momentary: -23,
+            shortTerm: null,
+            integrated: -23.46,
+            lra: 7.25,
+            maxMomentary: -21.5,
+            maxShortTerm: null,
+            integratedValid: true,
+            lraStable: false,
+          },
+          correlation: 0.85,
         },
       ],
       auxes: [],
@@ -146,7 +174,7 @@ describe('meter frame byte layout', () => {
 
   it('starts the values at an even offset without padding for an even replica id', () => {
     const bytes = encodeMeterFrame(TINY, { sequence: 0, replica: 'r1' }, TINY_VALUES);
-    expect(bytes.length).toBe(12 + 2 + 2 * 13);
+    expect(bytes.length).toBe(12 + 2 + 2 * 17);
     expect([...bytes.slice(12, 16)]).toEqual([0x72, 0x31, 0x76, 0xfd]);
   });
 });
@@ -155,7 +183,7 @@ describe('meter layout', () => {
   it('orders channels, buses, auxes, mix-minus with their legs', () => {
     const layout = deriveMeterLayout(shape([1, 2, 6, 8], [2], [1], [2]));
     expect(layout.channels.map((e) => e.legs)).toEqual([1, 2, 6, 8]);
-    expect(layout.valueCount).toBe(2 * 17 + (3 * 2 + 5) + (3 * 1 + 5) + (3 * 2 + 5));
+    expect(layout.valueCount).toBe(2 * 17 + 4 + (3 * 2 + 8) + (3 * 1 + 8) + (3 * 2 + 8));
     expect(layout.fingerprint).toBe(
       fnv1a('c/ch1/1;c/ch2/2;c/ch3/6;c/ch4/8;b/bus1/2;a/aux1/1;m/mm1/2;'),
     );
@@ -214,7 +242,18 @@ describe('meter values', () => {
         peak: [leg],
         truePeak: [leg],
         rms: [leg],
-        loudness: { momentary: null, shortTerm: null, integrated: null, lra: null, integratedValid: false, ...loudness },
+        loudness: {
+          momentary: null,
+          shortTerm: null,
+          integrated: null,
+          lra: null,
+          maxMomentary: null,
+          maxShortTerm: null,
+          integratedValid: false,
+          lraStable: false,
+          ...loudness,
+        },
+        correlation: null,
       },
     ],
     auxes: [],
@@ -236,22 +275,33 @@ describe('meter values', () => {
 
   it('writes the null sentinel for null, NaN and -Infinity', () => {
     const bytes = encodeMeterFrame(one, { sequence: 0, replica: 'r1' }, busWith(-Infinity, { lra: Number.NaN }));
-    expect(wire(bytes)).toEqual([METER_NULL, METER_NULL, METER_NULL, METER_NULL, METER_NULL, METER_NULL, METER_NULL, 0]);
+    expect(wire(bytes)).toEqual([...Array<number>(10).fill(METER_NULL), 0]);
     const bus = decodeMeterFrame(one, bytes).buses[0]!;
     expect(bus.peak).toEqual([-120]);
-    expect(bus.loudness).toEqual({ momentary: null, shortTerm: null, integrated: null, lra: null, integratedValid: false });
+    expect(bus.loudness).toEqual({
+      momentary: null,
+      shortTerm: null,
+      integrated: null,
+      lra: null,
+      maxMomentary: null,
+      maxShortTerm: null,
+      integratedValid: false,
+      lraStable: false,
+    });
+    expect(bus.correlation).toBeNull();
     expectModelValid(decodeMeterFrame(one, bytes));
   });
 
   it('clamps to the Int16 range on the wire and to the model range when decoding', () => {
     const bytes = encodeMeterFrame(one, { sequence: 0, replica: 'r1' }, busWith(400, { momentary: -400, shortTerm: Infinity, integrated: 31, lra: 150 }));
-    expect(wire(bytes)).toEqual([32767, 32767, 32767, -32767, 32767, 3100, 15000, 0]);
+    expect(wire(bytes)).toEqual([32767, 32767, 32767, -32767, 32767, 3100, 15000, METER_NULL, METER_NULL, METER_NULL, 0]);
     const frame = decodeMeterFrame(one, bytes);
     expect(frame.buses[0]).toEqual({
       peak: [30],
       truePeak: [30],
       rms: [30],
-      loudness: { momentary: -120, shortTerm: 30, integrated: 30, lra: 100, integratedValid: false },
+      loudness: { momentary: -120, shortTerm: 30, integrated: 30, lra: 100, maxMomentary: null, maxShortTerm: null, integratedValid: false, lraStable: false },
+      correlation: null,
     });
     expectModelValid(frame);
     const low = decodeMeterFrame(one, encodeMeterFrame(one, { sequence: 0, replica: 'r1' }, busWith(-400, { lra: -3 })));

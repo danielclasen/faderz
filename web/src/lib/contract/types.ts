@@ -233,21 +233,30 @@ export interface Origin {
 // Meter values. On the WebSocket they travel in binary meter frames,
 // encoded and decoded by meterFrame.ts.
 export interface ChannelMeter {
+  /** Sample peak at the meter tap. */
   peak: number[];
-  rms: number[];
+  /** True peak at the direct out tap. */
+  truePeak: number[];
+  /** BS.1770 momentary loudness at the meter tap, LUFS. */
+  momentary: number | null;
 }
 export interface Loudness {
   momentary: number | null;
   shortTerm: number | null;
   integrated: number | null;
   lra: number | null;
+  maxMomentary: number | null;
+  maxShortTerm: number | null;
   integratedValid: boolean;
+  lraStable: boolean;
 }
 export interface BusMeter {
   peak: number[];
   truePeak: number[];
   rms: number[];
   loudness: Loudness;
+  /** Phase correlation of a stereo element, -1..1; null otherwise. */
+  correlation: number | null;
 }
 
 // WebSocket client messages

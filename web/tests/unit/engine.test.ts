@@ -104,10 +104,11 @@ function meterValues(layout: MeterLayout, db: number): MeterValues {
     peak: legs(n),
     truePeak: legs(n),
     rms: legs(n),
-    loudness: { momentary: -23, shortTerm: null, integrated: null, lra: null, integratedValid: false },
+    loudness: { momentary: -23, shortTerm: null, integrated: null, lra: null, maxMomentary: -23, maxShortTerm: null, integratedValid: false, lraStable: false },
+    correlation: null,
   });
   return {
-    channels: layout.channels.map((e) => ({ peak: legs(e.legs), rms: legs(e.legs) })),
+    channels: layout.channels.map((e) => ({ peak: legs(e.legs), truePeak: legs(e.legs), momentary: db })),
     buses: layout.buses.map((e) => bus(e.legs)),
     auxes: layout.auxes.map((e) => bus(e.legs)),
     mixMinus: layout.mixMinus.map((e) => bus(e.legs)),

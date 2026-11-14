@@ -21,7 +21,7 @@ export const MAX_WRITES_PER_SECOND = 50;
 /** First byte of a binary meter frame, ASCII 'M'. */
 export const METER_FRAME_MAGIC = 0x4d;
 /** Format version in the second byte of a binary meter frame. */
-export const METER_FRAME_VERSION = 1;
+export const METER_FRAME_VERSION = 2;
 /** Int16 meter value meaning null, -Infinity or no measurement. */
 export const METER_NULL = -32768;
 /** Largest and smallest Int16 meter values other than METER_NULL. */

@@ -90,10 +90,20 @@ describe('flattened meter frames', () => {
       peak: legs(n),
       truePeak: legs(n),
       rms: legs(n),
-      loudness: { momentary: -23 - i, shortTerm: i % 2 ? null : -20, integrated: null, lra: 4.5, integratedValid: i % 2 === 0 },
+      loudness: {
+        momentary: -23 - i,
+        shortTerm: i % 2 ? null : -20,
+        integrated: null,
+        lra: 4.5,
+        maxMomentary: -20 - i,
+        maxShortTerm: null,
+        integratedValid: i % 2 === 0,
+        lraStable: i % 2 === 1,
+      },
+      correlation: i % 2 ? null : 0.5 + i / 10,
     });
     const values = {
-      channels: layout.channels.map((e) => ({ peak: legs(e.legs), rms: legs(e.legs) })),
+      channels: layout.channels.map((e, i) => ({ peak: legs(e.legs), truePeak: legs(e.legs), momentary: i % 3 ? -30 - i : null })),
       buses: layout.buses.map((e, i) => bus(e.legs, i)),
       auxes: layout.auxes.map((e, i) => bus(e.legs, i + 1)),
       mixMinus: layout.mixMinus.map((e, i) => bus(e.legs, i)),
@@ -106,7 +116,9 @@ describe('flattened meter frames', () => {
     layout.channels.forEach((e, i) => {
       const r = store.get('channels', e.id)!;
       expect(r.peak).toEqual(frame.channels[i]!.peak.map((v) => Math.fround(v)));
-      expect(r.rms).toEqual(frame.channels[i]!.rms.map((v) => Math.fround(v)));
+      expect(r.truePeak).toEqual(frame.channels[i]!.truePeak.map((v) => Math.fround(v)));
+      const m = frame.channels[i]!.momentary;
+      expect(r.momentary).toBe(m === null ? null : Math.fround(m));
     });
     for (const group of ['buses', 'auxes', 'mixMinus'] as const) {
       layout[group].forEach((e, i) => {
@@ -118,8 +130,12 @@ describe('flattened meter frames', () => {
           shortTerm: want.loudness.shortTerm === null ? null : Math.fround(want.loudness.shortTerm),
           integrated: null,
           lra: Math.fround(4.5),
+          maxMomentary: Math.fround(want.loudness.maxMomentary!),
+          maxShortTerm: null,
           integratedValid: want.loudness.integratedValid,
+          lraStable: want.loudness.lraStable,
         });
+        expect(r.correlation).toBe(want.correlation === null ? null : Math.fround(want.correlation));
       });
     }
     store.clear();

@@ -10,9 +10,13 @@ export type { MeterGroup } from './flat';
 
 export interface MeterReading {
   peak: number[];
-  rms: number[];
-  truePeak?: number[];
+  truePeak: number[];
+  /** Bus, aux and mix-minus only. */
+  rms?: number[];
+  /** Channels: momentary loudness at the meter tap. */
+  momentary?: number | null;
   loudness?: BusMeter['loudness'];
+  correlation?: number | null;
 }
 
 export class MeterStore {
@@ -44,12 +48,13 @@ export class MeterStore {
     const slot = this.slots.get(key);
     if (!v || !slot) return undefined;
     const legs = (i: number) => Array.from(v.subarray(slot.offset + i * slot.legs, slot.offset + (i + 1) * slot.legs));
+    const opt = (x: number) => (Number.isNaN(x) ? null : x);
     let reading: MeterReading;
     if (!slot.bus) {
-      reading = { peak: legs(0), rms: legs(1) };
+      reading = { peak: legs(0), truePeak: legs(1), momentary: opt(v[slot.offset + 2 * slot.legs]!) };
     } else {
       const t = slot.offset + 3 * slot.legs;
-      const opt = (x: number) => (Number.isNaN(x) ? null : x);
+      const flags = v[t + 7]!;
       reading = {
         peak: legs(0),
         truePeak: legs(1),
@@ -59,8 +64,12 @@ export class MeterStore {
           shortTerm: opt(v[t + 1]!),
           integrated: opt(v[t + 2]!),
           lra: opt(v[t + 3]!),
-          integratedValid: v[t + 4] === 1,
+          maxMomentary: opt(v[t + 4]!),
+          maxShortTerm: opt(v[t + 5]!),
+          integratedValid: (flags & 1) === 1,
+          lraStable: (flags & 2) === 2,
         },
+        correlation: opt(v[t + 6]!),
       };
     }
     this.readings.set(key, reading);
