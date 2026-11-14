@@ -15,7 +15,18 @@ info:
     client-generated command id; a command id is applied at most once
     across all replicas, so a client resends it to another replica after a
     failover. Parameter changes take effect at a sample index chosen by the
-    system (atIndex), the same on every replica.
+    system (atIndex), the same on every replica. The server batches the
+    commands arriving within one processing block into one log entry, so
+    one revision may carry changes of several commands.
+
+    WebSocket clients keep a primary connection and a standby connection
+    to another replica, exchange heartbeats every 250 ms on both and fail
+    over to the standby when the primary is lost or its replica reports
+    that it cannot commit. Touch ownership belongs to a session (owner
+    record: principal, session, kind, connection) and lapses 2 s after the
+    session's last message through any replica not partitioned from the
+    quorum. Meters arrive on the primary connection as binary frames,
+    paced by credits the client grants.
 
     State-changing requests without a bearer token need the header
     `X-Samplez-Request: 1` and `Content-Type: application/json`.
@@ -41,8 +52,8 @@ paths:
       summary: Write one or more controls atomically.
       description: |
         All changes apply in one revision, or none does. A change to a
-        control owned by a client (touch) is refused with 409 and the
-        current value of every owned control in the request.
+        control owned by a session (touch) is refused with 409 and the
+        current value and owner of every owned control in the request.
       parameters:
         - $ref: "#/components/parameters/RequestHeader"
       requestBody:
@@ -297,7 +308,9 @@ paths:
       summary: WebSocket upgrade for commands, deltas, meters and counters.
       description: |
         Client messages: ws/client-message.schema.json. Server messages:
-        ws/server-message.schema.json. The first client message is hello.
+        ws/server-message.schema.json, JSON text messages except the
+        binary meter frames of its $defs/MeterFrame. The first client
+        message is hello.
         The Origin header must be in api.allowedOrigins.
       responses:
         "101":
@@ -378,7 +391,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     Conflict:
-      description: A control in the request is owned by another client.
+      description: A control in the request is owned by a session.
       content:
         application/json:
           schema:

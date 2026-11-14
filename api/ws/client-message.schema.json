@@ -2,70 +2,225 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/danielclasen/faderz/raw/main/api/ws/client-message.schema.json",
   "title": "faderz WebSocket client message",
-  "description": "Messages a client sends on /api/v1/ws. hello is the first message on every connection. Commands (set, touch, release) are applied in the order received and answered by exactly one of: a delta whose origin carries the command id, an ack, or an error.",
+  "description": "Messages a client sends on /api/v1/ws. hello is the first message on every connection. A client keeps one primary connection (commands, deltas, meter frames, counters) and one standby connection to another replica (deltas, replicas, heartbeats). Commands (set, touch, release) are applied in the order received and answered by exactly one of: a delta listing the command id among its origins, an ack, or an error. The server batches the commands arriving within one processing block into one delta. A client coalesces writes to one control to at most 50 per second, sending the latest value. Every message renews the session lease (model.schema.json#/$defs/Owners).",
   "oneOf": [
-    { "$ref": "#/$defs/Hello" },
-    { "$ref": "#/$defs/Set" },
-    { "$ref": "#/$defs/Touch" },
-    { "$ref": "#/$defs/Release" },
-    { "$ref": "#/$defs/Resync" }
+    {
+      "$ref": "#/$defs/Hello"
+    },
+    {
+      "$ref": "#/$defs/Promote"
+    },
+    {
+      "$ref": "#/$defs/Set"
+    },
+    {
+      "$ref": "#/$defs/Touch"
+    },
+    {
+      "$ref": "#/$defs/Release"
+    },
+    {
+      "$ref": "#/$defs/Resync"
+    },
+    {
+      "$ref": "#/$defs/Credit"
+    },
+    {
+      "$ref": "#/$defs/Ping"
+    },
+    {
+      "$ref": "#/$defs/Pong"
+    }
   ],
   "$defs": {
     "Hello": {
-      "description": "Identifies the client. With lastRevision the server answers with resume when it still holds every delta after it, otherwise with a snapshot. Without it the server answers with a snapshot.",
+      "description": "Identifies the client and the role of this connection. With lastRevision the server answers with resume when it still holds every delta after it, otherwise with a snapshot. Without it the server answers with a snapshot. A standby connection receives deltas, replicas and pings but no meter frames or counters.",
       "type": "object",
-      "required": ["type", "clientId"],
+      "required": [
+        "type",
+        "session",
+        "kind",
+        "mode"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "hello" },
-        "clientId": { "$ref": "model.schema.json#/$defs/ClientId" },
-        "lastRevision": { "$ref": "model.schema.json#/$defs/Revision" }
+        "type": {
+          "const": "hello"
+        },
+        "session": {
+          "$ref": "model.schema.json#/$defs/SessionId"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ui",
+            "console"
+          ]
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "standby"
+          ]
+        },
+        "lastRevision": {
+          "$ref": "model.schema.json#/$defs/Revision"
+        }
       }
     },
     "Set": {
-      "description": "Write one control. seq increases per client and control; a set whose seq is not above the last one applied from this client for the same path is answered with ack result stale. Refused with error 409 while another client owns the control.",
+      "description": "Write one control. seq increases per session and control, also across reloads: a web client starts the seq of every control at the Unix time in milliseconds when it loads and adds one per write to that control, and at most 50 writes per second keep it below the clock. A set whose seq is not above the last one applied from this session for the same path is answered with ack result stale. Refused with error 409 while another session owns the control.",
       "type": "object",
-      "required": ["type", "id", "seq", "path", "value"],
+      "required": [
+        "type",
+        "id",
+        "seq",
+        "path",
+        "value"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "set" },
-        "id": { "$ref": "model.schema.json#/$defs/CommandId" },
-        "seq": { "type": "integer", "minimum": 1 },
-        "path": { "$ref": "model.schema.json#/$defs/ControlPath" },
+        "type": {
+          "const": "set"
+        },
+        "id": {
+          "$ref": "model.schema.json#/$defs/CommandId"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path": {
+          "$ref": "model.schema.json#/$defs/ControlPath"
+        },
         "value": true
       },
       "$ref": "model.schema.json#/$defs/ValueByPath"
     },
     "Touch": {
-      "description": "Take ownership of a control, as on pointer-down or a touched console fader. Held until release, or until 2 s after the client has no connection to any replica. Refused with error 409 while another client owns it.",
+      "description": "Take ownership of a control for this session, as on pointer-down or a touched console fader. Held until release or until the session lease expires. Refused with error 409 while another session owns it.",
       "type": "object",
-      "required": ["type", "id", "path"],
+      "required": [
+        "type",
+        "id",
+        "path"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "touch" },
-        "id": { "$ref": "model.schema.json#/$defs/CommandId" },
-        "path": { "$ref": "model.schema.json#/$defs/ControlPath" }
+        "type": {
+          "const": "touch"
+        },
+        "id": {
+          "$ref": "model.schema.json#/$defs/CommandId"
+        },
+        "path": {
+          "$ref": "model.schema.json#/$defs/ControlPath"
+        }
       }
     },
     "Release": {
-      "description": "Give up ownership of a control.",
+      "description": "Give up ownership of a control. After a snapshot or resume on a new connection of its session, a client releases every control its session owns that it is not touching (model.schema.json#/$defs/Owners).",
       "type": "object",
-      "required": ["type", "id", "path"],
+      "required": [
+        "type",
+        "id",
+        "path"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "release" },
-        "id": { "$ref": "model.schema.json#/$defs/CommandId" },
-        "path": { "$ref": "model.schema.json#/$defs/ControlPath" }
+        "type": {
+          "const": "release"
+        },
+        "id": {
+          "$ref": "model.schema.json#/$defs/CommandId"
+        },
+        "path": {
+          "$ref": "model.schema.json#/$defs/ControlPath"
+        }
       }
     },
     "Resync": {
       "description": "Sent after a revision gap. Answered like hello.",
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "resync" },
-        "lastRevision": { "$ref": "model.schema.json#/$defs/Revision" }
+        "type": {
+          "const": "resync"
+        },
+        "lastRevision": {
+          "$ref": "model.schema.json#/$defs/Revision"
+        }
+      }
+    },
+    "Promote": {
+      "description": "Turn this standby connection into the primary one, after the primary was lost or its replica reported it cannot commit.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "promote"
+        }
+      }
+    },
+    "Credit": {
+      "description": "Grants the server n more meter frames on this connection. The server holds an outstanding credit count per connection, 0 when it opens and at most 8: credit adds n, and credits beyond 8 are discarded. Each meter frame sent consumes one credit. In a meter period in which the connection holds no credit the server sends it no frame; that frame is dropped, never queued. The meter rate of a connection is therefore the lower of the replica's 25 per second and the rate of its credits. A client grants up to 8 after hello and then one credit per meter frame it has rendered, batched into one credit message per few frames. A client that stops granting, such as a hidden tab, receives at most 8 more frames and then none until it grants again; there is no unsubscribe message. A standby connection receives no meter frames; credits granted on it are kept, within the cap, until promote.",
+      "type": "object",
+      "required": [
+        "type",
+        "n"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "credit"
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "Ping": {
+      "description": "Heartbeat. Both sides send ping every 250 ms on every connection after hello and answer every ping with pong echoing t. t is the sender's clock in milliseconds, opaque to the receiver; ping and pong carry no state. Each side watches every connection with a monotonic clock of its own, and any received message, text or binary, counts as traffic. A peer without traffic for 375 ms (1.5 periods) is suspect, which closes or switches nothing; without traffic for 750 ms (3 periods) it is dead and the connection is closed, and a client whose primary is dead promotes its standby. One late beat, from scheduling jitter or a garbage collection pause, reaches only suspect and cannot cause a failover; three missed beats in a row bound failure detection to 750 ms.",
+      "type": "object",
+      "required": [
+        "type",
+        "t"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "ping"
+        },
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Pong": {
+      "description": "Answer to a server ping, echoing its t. Carries no state.",
+      "type": "object",
+      "required": [
+        "type",
+        "t"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "pong"
+        },
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     }
   }
