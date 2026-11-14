@@ -158,6 +158,20 @@ test('reconnects and resyncs after a dropped link and after a revision gap', asy
   await expect(page.getByTestId('revision')).toHaveText(`rev ${server.revision}`);
 });
 
+test('moves nothing on its own when the system asks for reduced motion', async ({ page, request }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await live(page);
+  await page.getByRole('button', { name: '9-16' }).click();
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(r)));
+  expect(await page.locator('.scroller').evaluate((e) => e.scrollLeft)).toBe(8 * 86);
+  await patch(request, '/tone/targets', ['me']);
+  await patch(request, '/tone/on', true);
+  await expect(page.getByTestId('tone')).toBeVisible();
+  await expect.poll(() => page.getByTestId('tone').evaluate((e) => e.getAnimations().length)).toBe(0);
+  await patch(request, '/tone/on', false);
+  await patch(request, '/tone/targets', []);
+});
+
 test('switches to the light theme and works at tablet width', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await live(page);

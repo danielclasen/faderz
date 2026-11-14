@@ -42,7 +42,8 @@
   const channelOvers = $derived(shape.channels.filter((c) => mixer.meters.overs.has(`channels/${c.id}`)));
 
   function goto(start: number): void {
-    scroller?.scrollTo({ left: start * STRIP_W, behavior: 'smooth' });
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    scroller?.scrollTo({ left: start * STRIP_W, behavior: still ? 'instant' : 'smooth' });
   }
 </script>
 

@@ -289,6 +289,11 @@
   .flash .cap {
     animation: refuse 0.7s ease-out;
   }
+  @media (prefers-reduced-motion: reduce) {
+    .flash .cap {
+      box-shadow: 0 0 0 3px var(--err);
+    }
+  }
   @keyframes refuse {
     0%,
     40% {

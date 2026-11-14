@@ -292,3 +292,16 @@ input[type='number'] {
   contain: layout style;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
+
+/* Reduced motion: blinks, flashes, the hold bar and smooth scrolling
+   stop moving; each keeps a static mark of its state. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
