@@ -43,6 +43,17 @@ test('moves a fader and shows the value the server echoed', async ({ page, reque
   await expect.poll(async () => (await serverState(request)).owners['/channels/ch3/fader']).toBeUndefined();
 });
 
+test('keeps the fader cap under the pointer while dragging', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch3/fader', -20);
+  const cap = page.locator('[data-path="/channels/ch3/fader"] .cap');
+  await expect(page.getByTestId('fader-value-ch3')).toHaveText(formatDb(-20));
+  const before = (await cap.boundingBox())!.y;
+  await dragFader(page, '/channels/ch3/fader', -60);
+  await settled(page);
+  await expect.poll(async () => Math.abs((await cap.boundingBox())!.y - before + 60)).toBeLessThan(2);
+});
+
 test("applies another client's change as a delta", async ({ page, request }) => {
   await live(page);
   await patch(request, '/channels/ch17/fader', -12.5);
@@ -302,6 +313,18 @@ test('talks into a mix-minus output while TALK is held and stops on release', as
   await expect.poll(async () => (await serverState(request)).state.mixMinus['mm1']!.interrupt.active).toBe(false);
   await expect.poll(async () => (await serverState(request)).owners['/mixMinus/mm1/interrupt/active']).toBeUndefined();
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
+test('keeps the alignment level below the permitted maximum', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'Setup' }).click();
+  const alignment = page.getByRole('textbox', { name: /^Alignment/ });
+  await alignment.fill('-3');
+  await alignment.press('Enter');
+  await settled(page);
+  const zones = (await serverState(request)).state.metering.zones;
+  expect(zones.alignment).toBeLessThan(zones.permittedMax);
+  await patch(request, '/metering/zones/alignment', -18);
 });
 
 test('puts line-up tone at the selected level on chosen outputs from the setup view', async ({ page, request }) => {

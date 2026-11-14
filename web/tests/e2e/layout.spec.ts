@@ -113,6 +113,10 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     ['/tone/on', true],
     ['/tone/on', false],
     ['/tone/targets', []],
+    ['/metering/loudness/tolerance', 3],
+    ['/metering/scale', 'ebu18'],
+    ['/metering/scale', 'ebu9'],
+    ['/metering/loudness/tolerance', 1],
   ] as const) await patch(request, path, value);
   await request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources: { CAM1: 'off', CAM2: 'program' } } });
   await page.waitForTimeout(1500);
@@ -172,6 +176,19 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     }
   }
   info.annotations.push({ type: 'viewport', description: phone ? 'phone' : 'desktop' });
+});
+
+test('every fader fits its box, VCA masters included', async ({ page }) => {
+  await live(page);
+  const over = await page.locator('.fader').evaluateAll((list) =>
+    list.flatMap((f) => {
+      const box = f.parentElement!.getBoundingClientRect();
+      const r = f.getBoundingClientRect();
+      const w = [...f.children].reduce((a, c) => a + c.getBoundingClientRect().width, 0) + 2 * (f.children.length - 1);
+      return w > box.width + 0.5 || r.right > box.right + 0.5 ? [`${f.closest('section')?.getAttribute('aria-label')}: ${w} > ${box.width}`] : [];
+    }),
+  );
+  expect(over).toEqual([]);
 });
 
 test('status-bar counters reserve their width, so a new digit moves nothing', async ({ page }) => {
