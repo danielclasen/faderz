@@ -399,12 +399,14 @@ test('a client ahead of a rewound cluster shows it at once and takes the cluster
   await patch(request, '/channels/ch19/fader', -11);
   await expect.poll(() => debug(page, 'revision')).toBe((await serverState(request)).revision);
   const ahead = (await debug(page, 'revision')) as number;
-  await request.post('/__mock/rewind?by=2');
+  // Far enough back that background revisions (lease expiries) cannot catch up during the test.
+  const by = Math.min(50, ahead);
+  await request.post(`/__mock/rewind?by=${by}`);
   await request.post('/__mock/drop-clients');
   const banner = page.getByTestId('ahead');
   await expect(banner).toBeVisible({ timeout: 15_000 });
   await expect(banner).toContainText(String(ahead));
-  await expect(banner).toContainText(String(ahead - 2));
+  await expect(banner).toContainText(String(ahead - by));
   expect(await debug(page, 'connection')).toBe('Ahead');
   await banner.getByRole('button', { name: 'TAKE CLUSTER STATE' }).click();
   await expect(banner).toBeHidden();
