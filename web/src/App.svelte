@@ -53,6 +53,7 @@
   </header>
 
   <main>
+    <svelte:boundary onerror={(e) => console.error(e)}>
     {#if !mixer.shape || !mixer.state}
       <div class="waiting" role="status">Connecting to the mixer...</div>
     {:else if view === 'mixer'}
@@ -66,6 +67,14 @@
     {:else}
       <ScenesView />
     {/if}
+    {#snippet failed(error, reset)}
+      <div class="failed" role="alert" data-testid="view-error">
+        <strong>This view failed to render.</strong>
+        <pre>{error instanceof Error ? `${error.name}: ${error.message}` : String(error)}</pre>
+        <button class="key" onclick={reset}>RETRY</button>
+      </div>
+    {/snippet}
+    </svelte:boundary>
   </main>
 
   {#if view === 'mixer' && selected && mixer.state}
@@ -148,6 +157,14 @@
   main {
     min-height: 0;
     overflow: hidden;
+  }
+  .failed {
+    padding: 16px;
+    color: var(--err);
+  }
+  .failed pre {
+    white-space: pre-wrap;
+    color: var(--text);
   }
   .waiting {
     display: grid;

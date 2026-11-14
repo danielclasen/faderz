@@ -5,21 +5,33 @@ import { MixerStore, mixerContext } from './lib/state/mixer.svelte';
 import { configureRest } from './lib/state/actions';
 import { Connection, resolveEndpoints } from './lib/net/connection';
 import { initTheme } from './lib/theme';
+import { renderFatal } from './lib/fatal';
 
-initTheme();
+const root = document.getElementById('app')!;
 
-const mixer = new MixerStore();
-const endpoints = resolveEndpoints(new URLSearchParams(location.search).get('endpoints'), location);
-const connection = new Connection(endpoints, {
-  open: (endpoint) => mixer.opened(endpoint),
-  message: (data) => mixer.receive(data),
-  close: () => mixer.closed(),
-});
-mixer.attach(connection);
-configureRest(endpoints, mixer);
-connection.start();
+function fail(e: unknown): void {
+  console.error(e);
+  renderFatal(e, root);
+}
 
-mount(App, { target: document.getElementById('app')!, context: mixerContext(mixer) });
+try {
+  initTheme();
+
+  const mixer = new MixerStore();
+  const endpoints = resolveEndpoints(new URLSearchParams(location.search).get('endpoints'), location);
+  const connection = new Connection(endpoints, {
+    open: (endpoint) => mixer.opened(endpoint),
+    message: (data) => mixer.receive(data),
+    close: () => mixer.closed(),
+  });
+  mixer.attach(connection);
+  configureRest(endpoints, mixer);
+  connection.start();
+
+  mount(App, { target: root, context: mixerContext(mixer) });
+} catch (e) {
+  fail(e);
+}
 
 if (import.meta.env.DEV) {
   // Dev-only controls of the mock server; absent from production builds.
