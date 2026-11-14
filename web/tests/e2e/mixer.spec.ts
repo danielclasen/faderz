@@ -314,6 +314,27 @@ test('puts line-up tone at the selected level on chosen outputs from the setup v
   await patch(request, '/tone/targets', []);
 });
 
+test('labels every leg of a 5.1 master under its own bar', async ({ page }) => {
+  await live(page);
+  const master = page.locator('[data-master="pgm51"]');
+  const geometry = await master.evaluate((el) => {
+    const m = el.querySelector<HTMLElement>('[data-meter]')!.getBoundingClientRect();
+    return { x: m.x, w: m.width, labels: [...el.querySelectorAll<HTMLElement>('.legs span')].map((s) => {
+      const r = s.getBoundingClientRect();
+      return { text: s.textContent, centre: r.x + r.width / 2 };
+    }) };
+  });
+  // Bar geometry of meters/layer.ts: an 18 px scale, then equal bars 1 px apart.
+  const n = geometry.labels.length;
+  expect(geometry.labels.map((l) => l.text)).toEqual(['L', 'R', 'C', 'LFE', 'Ls', 'Rs']);
+  const bw = (geometry.w - 18 - (n - 1)) / n;
+  geometry.labels.forEach((l, i) => {
+    const left = geometry.x + 18 + i * (bw + 1);
+    expect(l.centre, l.text!).toBeGreaterThanOrEqual(left);
+    expect(l.centre, l.text!).toBeLessThanOrEqual(left + bw);
+  });
+});
+
 test('latches a true-peak over of a channel direct out until cleared', async ({ page, request }) => {
   await live(page);
   const overs = page.getByTestId('channel-overs');

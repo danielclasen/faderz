@@ -55,9 +55,11 @@
     <div class="meter">
       <Meter {group} id={element.id} legs={element.width} scale label={`${element.name} meter`} />
     </div>
-  </div>
-  <div class="legs" style:padding-left="18px">
-    {#each labels as l (l)}<span>{l}</span>{/each}
+    <!-- Same geometry as the bars the meter layer draws: after the 18 px
+         scale, one equal column per leg with a 1 px gap. -->
+    <div class="legs" aria-hidden="true" style:grid-template-columns={`repeat(${labels.length}, minmax(0, 1fr))`}>
+      {#each labels as l (l)}<span>{l}</span>{/each}
+    </div>
   </div>
   <output class="num value"><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
 </section>
@@ -152,18 +154,26 @@
     min-height: 140px;
     display: grid;
     grid-template-columns: auto 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
     gap: 3px;
   }
   .meter {
     padding: 17px 0;
   }
   .legs {
-    display: flex;
-    justify-content: space-around;
+    grid-column: 2;
+    display: grid;
+    column-gap: 1px;
+    padding-left: 18px;
     font-size: 8.5px;
+    line-height: 11px;
     color: var(--text-faint);
-    margin-left: 52px;
-    padding-left: 0 !important;
+    text-align: center;
+  }
+  .legs span {
+    min-width: 0;
+    overflow: visible;
+    white-space: nowrap;
   }
   .value {
     font-size: 11.5px;
