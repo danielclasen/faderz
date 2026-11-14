@@ -174,6 +174,25 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
   info.annotations.push({ type: 'viewport', description: phone ? 'phone' : 'desktop' });
 });
 
+test('status-bar counters reserve their width, so a new digit moves nothing', async ({ page }) => {
+  await live(page);
+  await expect(page.getByTestId('counter').first()).toBeVisible();
+  const widths = await page.getByTestId('counter').evaluateAll((list) =>
+    list.map((b) => {
+      const probe = document.createElement('b');
+      probe.className = b.className;
+      probe.style.whiteSpace = 'pre';
+      probe.textContent = '000000';
+      b.parentElement!.append(probe);
+      const want = probe.getBoundingClientRect().width;
+      probe.remove();
+      return Math.abs(b.getBoundingClientRect().width - want);
+    }),
+  );
+  expect(widths.length).toBeGreaterThan(0);
+  for (const d of widths) expect(d).toBeLessThan(0.5);
+});
+
 test('no visible label is cut off without its full text in a tooltip reachable by keyboard', async ({ page, request }) => {
   // A long channel name (ch8), a long VCA name (vca2) and a listen list
   // longer than the monitor's box.

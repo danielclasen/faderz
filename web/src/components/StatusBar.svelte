@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getMixer } from '../lib/state/mixer.svelte';
   import { handleTag } from '../lib/net/handle';
+  import { fit } from '../lib/format';
   const mixer = getMixer();
   const counters = $derived(Object.entries(mixer.counters));
   const latest = $derived(mixer.notices.at(-1) ?? null);
@@ -24,9 +25,11 @@
       </div>
     {/if}
   </div>
-  <span class="label">counters {mixer.countersReplica ?? '-'}</span>
+  <!-- Counts grow without a bound: each is padded to a fixed width, so a
+       new digit moves nothing. -->
+  <span class="label">counters <span class="fixed">{fit(mixer.countersReplica ?? '-', 3)}</span></span>
   {#each counters as [name, value] (name)}
-    <span class="c" class:nz={value > 0}><span>{name.replace(/_total$/, '')}</span> <b class="num">{value}</b></span>
+    <span class="c" class:nz={value > 0}><span>{name.replace(/_total$/, '')}</span> <b class="num fixed" data-testid="counter">{fit(value > 999999 ? '>999k' : String(value), 6)}</b></span>
   {/each}
   <span class="right num" title="Session tag, as other clients name this screen, and primary endpoint" data-testid="session">{handleTag(mixer.status.handle)} {mixer.endpoint ?? ''}</span>
 </footer>
