@@ -37,7 +37,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,
-  reporter: [['list']],
+  forbidOnly: !!process.env['CI'],
+  // CI keeps an HTML report to upload when a test fails.
+  reporter: process.env['CI'] ? [['list'], ['html', { open: 'never' }]] : [['list']],
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     trace: 'retain-on-failure',
