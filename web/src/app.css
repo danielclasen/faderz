@@ -39,13 +39,20 @@
   --meter-high: #ff3b47;
   --meter-rms: rgba(255, 255, 255, 0.16);
   --meter-loud: #8fb3ff;
+  /* True-peak marker; meter wells are dark in both themes. */
+  --meter-tp: #f2f5f8;
   --talk: #c58bff;
   --talk-ink: #160624;
+  /* Line-up tone on an output. */
+  --tone: #ff7a33;
+  --tone-ink: #1a0800;
 
   color-scheme: dark;
 }
 
 :root[data-theme='light'] {
+  --tone: #c2410c;
+  --tone-ink: #ffffff;
   --bg: #d9dde3;
   --panel: #eceff3;
   --panel-2: #e3e7ec;

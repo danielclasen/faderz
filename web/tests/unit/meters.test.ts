@@ -154,3 +154,64 @@ describe('flattened meter frames', () => {
     expect(store.get('channels', 'ch1')).toBeUndefined();
   });
 });
+
+describe('meter store: true peak between display ticks', () => {
+  const shape = exampleShape();
+  const layout = deriveMeterLayout(shape);
+  /** Offset of the true-peak legs of bus `id` in a flattened frame (meters/flat.ts). */
+  const tpOffset = (id: string) => {
+    let offset = layout.channels.reduce((a, e) => a + 2 * e.legs + 1, 0);
+    for (const e of layout.buses) {
+      if (e.id === id) return offset + e.legs;
+      offset += 3 * e.legs + 8;
+    }
+    throw new Error(id);
+  };
+  /** A frame with every value at -40 dB but the first true-peak leg of pgm20 at `tp`. */
+  const frame = (tp: number) => {
+    const flat = new Float32Array(layout.valueCount).fill(-40);
+    flat[tpOffset('pgm20')] = tp;
+    return flat;
+  };
+
+  it('keeps the highest true peak of every frame since a given time, not only the latest', () => {
+    const store = new MeterStore();
+    store.setShape(shape);
+    store.ingest('r1', frame(-12), 40);
+    store.ingest('r1', frame(-3.5), 80);
+    store.ingest('r1', frame(-20), 120);
+    expect(store.get('buses', 'pgm20')!.truePeak[0]).toBe(-20);
+    const out: number[] = [];
+    expect(store.maxSince('buses', 'pgm20', 'truePeak', 0, out)).toBe(true);
+    expect(out[0]).toBeCloseTo(-3.5, 5);
+    expect(out[1]).toBe(-40);
+    expect(store.maxSince('buses', 'pgm20', 'truePeak', 80, out)).toBe(true);
+    expect(out[0]).toBe(-20);
+    expect(store.maxSince('buses', 'pgm20', 'truePeak', 120, out)).toBe(false);
+  });
+
+  it('latches a true-peak over from any one frame until it is cleared', () => {
+    const store = new MeterStore();
+    store.setShape(shape);
+    store.truePeakMax = -1;
+    store.ingest('r1', frame(-1), 40);
+    expect(store.overs.has('buses/pgm20')).toBe(false);
+    store.ingest('r1', frame(-0.5), 80);
+    store.ingest('r1', frame(-30), 120);
+    store.clear();
+    expect(store.overs.has('buses/pgm20')).toBe(true);
+    expect([...store.overs]).toEqual(['buses/pgm20']);
+    store.clearOvers('buses', ['pgm20']);
+    expect(store.overs.size).toBe(0);
+  });
+
+  it('latches the true peak of a channel direct out', () => {
+    const store = new MeterStore();
+    store.setShape(shape);
+    const flat = new Float32Array(layout.valueCount).fill(-40);
+    // ch1 is the first channel, one leg: peak, then true peak.
+    flat[1] = 0.2;
+    store.ingest('r1', flat, 40);
+    expect([...store.overs]).toEqual(['channels/ch1']);
+  });
+});

@@ -109,6 +109,10 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     ['/vcas/vca1/offset', -6],
     ['/vcas/vca1/offset', 0],
     ['/vcas/vca1/members', ['ch1', 'ch2']],
+    ['/tone/targets', ['pgm20']],
+    ['/tone/on', true],
+    ['/tone/on', false],
+    ['/tone/targets', []],
   ] as const) await patch(request, path, value);
   await request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources: { CAM1: 'off', CAM2: 'program' } } });
   await page.waitForTimeout(1500);
@@ -195,6 +199,8 @@ test('no visible label is cut off without its full text in a tooltip reachable b
       }, name)),
     );
   }
+  for (const ch of ['ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6', 'ch7', 'ch8']) await patch(request, `/channels/${ch}/solo`, 'off');
+  await patch(request, '/vcas/vca2/members', ['ch3', 'ch4', 'ch5', 'ch6']);
   expect(problems).toEqual([]);
 });
 

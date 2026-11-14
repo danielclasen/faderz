@@ -226,7 +226,8 @@ export function initialState(shape: Shape): State {
     scenes: [],
     sceneRecalled: null,
     consoles,
-    tone: { on: false, level: -18, ident: false, targets: shape.buses.map((b) => b.id) },
+    // No output takes tone until one is chosen: tone on programme replaces it.
+    tone: { on: false, level: -18, ident: false, targets: [] },
     metering: {
       zones: { alignment: -18, permittedMax: -9, truePeakMax: -1 },
       loudness: { preset: 'ebu', target: -23, tolerance: 1 },

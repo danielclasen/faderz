@@ -6,6 +6,8 @@
   import BusMaster from './BusMaster.svelte';
   import VcaMaster from './VcaMaster.svelte';
   import MonitorSection from './MonitorSection.svelte';
+  import { fit } from '../lib/format';
+  import { tip } from '../lib/tip';
 
   interface Props {
     selected: string | null;
@@ -36,6 +38,8 @@
   let scrollLeft = $state(0);
   const visibleBank = $derived(Math.floor((scrollLeft + STRIP_W / 2) / (STRIP_W * BANK)));
   const kindTag: Record<string, string> = { program: 'PGM', me: 'M&E', cleanFeed: 'CF' };
+  /** Channels whose direct out latched a true-peak over. */
+  const channelOvers = $derived(shape.channels.filter((c) => mixer.meters.overs.has(`channels/${c.id}`)));
 
   function goto(start: number): void {
     scroller?.scrollTo({ left: start * STRIP_W, behavior: 'smooth' });
@@ -51,6 +55,17 @@
           <button class="key" aria-pressed={visibleBank === i} onclick={() => goto(b.start)}>{b.start + 1}-{b.end}</button>
         {/each}
       </div>
+      <button
+        class="key overs"
+        class:lit={channelOvers.length > 0}
+        disabled={channelOvers.length === 0}
+        onclick={() => mixer.meters.clearOvers('channels', shape.channels.map((c) => c.id))}
+        aria-label={channelOvers.length > 0
+          ? `Clear the true-peak overs of ${channelOvers.length} channel direct outs: ${channelOvers.map((c) => c.name).join(', ')}`
+          : 'No channel direct out went over the true-peak limit'}
+        use:tip={channelOvers.length > 0 ? `Direct out above ${mixer.state!.metering.zones.truePeakMax} dBTP: ${channelOvers.map((c) => c.name).join(', ')}. Press to clear.` : ''}
+        data-testid="channel-overs"><span class="fixed">TP{fit(String(channelOvers.length), 3)}</span></button
+      >
       <span class="meters-from" title="Replica that measured the meters shown" data-testid="meter-replica">
         meters <b class="num">{mixer.meterReplica ?? '-'}</b>
       </span>
@@ -114,6 +129,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    white-space: nowrap;
     padding: 4px 8px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
@@ -125,6 +141,16 @@
   .banks .key {
     font-family: var(--font-num);
     font-size: 10px;
+  }
+  .overs {
+    flex: none;
+    font-size: 10px;
+    padding: 0 5px;
+  }
+  .overs.lit {
+    background: var(--meter-high);
+    border-color: var(--meter-high);
+    color: #fff;
   }
   .meters-from {
     margin-left: auto;
@@ -192,6 +218,12 @@
     .masters {
       border-left: none;
       border-top: 2px solid var(--line-strong);
+    }
+  }
+  /* Phones: the bank keys name themselves. */
+  @media (max-width: 700px) {
+    .bankbar .panel-title {
+      display: none;
     }
   }
 </style>

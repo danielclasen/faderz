@@ -2,6 +2,7 @@
 // (meters/flat.ts). Kept outside Svelte reactivity: canvases read it from
 // one animation-frame loop instead of re-rendering at 25 Hz.
 
+import { SvelteSet } from 'svelte/reactivity';
 import { deriveMeterLayout } from '../contract/meterFrame';
 import type { BusMeter, Shape } from '../contract/types';
 import { meterSlots, slotKey, type MeterGroup, type MeterSlot } from './flat';
@@ -19,18 +20,32 @@ export interface MeterReading {
   correlation?: number | null;
 }
 
+/** Frames kept for maxima over a display period: 0.64 s at 25 frames per second. */
+const HISTORY = 16;
+
 export class MeterStore {
   private slots = new Map<string, MeterSlot>();
   private values: Float32Array | null = null;
   private readings = new Map<string, MeterReading>();
+  /** The latest frames, oldest first, with the time each arrived. */
+  private history: Array<{ at: number; values: Float32Array }> = [];
   /** Replica that measured the latest frame. */
   replica: string | null = null;
   receivedAt = 0;
+  /** True peak above which an element latches an over, dBTP (State.metering.zones.truePeakMax). */
+  truePeakMax = -1;
+  /**
+   * Slot keys (group/id) whose true peak went above truePeakMax in any
+   * ingested frame since the key was last cleared. Reactive: it changes
+   * only when an over latches or is cleared.
+   */
+  readonly overs = new SvelteSet<string>();
 
   /** Meter frames follow the shape of the last snapshot. */
   setShape(shape: Shape): void {
     this.slots = meterSlots(deriveMeterLayout(shape));
     this.clear();
+    this.overs.clear();
   }
 
   ingest(replica: string, values: Float32Array, now: number): void {
@@ -38,6 +53,45 @@ export class MeterStore {
     this.receivedAt = now;
     this.values = values;
     this.readings.clear();
+    this.history.push({ at: now, values });
+    if (this.history.length > HISTORY) this.history.shift();
+    for (const [key, slot] of this.slots) {
+      if (this.overs.has(key)) continue;
+      const tp = slot.offset + slot.legs;
+      for (let i = 0; i < slot.legs; i++) {
+        if (values[tp + i]! > this.truePeakMax) {
+          this.overs.add(key);
+          break;
+        }
+      }
+    }
+  }
+
+  /** Clears the latched true-peak overs of these elements. */
+  clearOvers(group: MeterGroup, ids: readonly string[]): void {
+    for (const id of ids) this.overs.delete(slotKey(group, id));
+  }
+
+  /**
+   * Highest value per leg of `kind` over every frame that arrived after
+   * `since` (ms, the clock of ingest), into `out`; false when none did.
+   * A display that draws less often than frames arrive misses no peak.
+   */
+  maxSince(group: MeterGroup, id: string, kind: 'peak' | 'truePeak', since: number, out: number[]): boolean {
+    const slot = this.slots.get(slotKey(group, id));
+    if (!slot) return false;
+    const base = slot.offset + (kind === 'truePeak' ? slot.legs : 0);
+    let any = false;
+    for (let f = this.history.length - 1; f >= 0; f--) {
+      const frame = this.history[f]!;
+      if (frame.at <= since) break;
+      for (let i = 0; i < slot.legs; i++) {
+        const v = frame.values[base + i]!;
+        if (!any || v > out[i]!) out[i] = v;
+      }
+      any = true;
+    }
+    return any;
   }
 
   get(group: MeterGroup, id: string): MeterReading | undefined {
@@ -76,10 +130,11 @@ export class MeterStore {
     return reading;
   }
 
-  /** Forget the latest frame, so bars fall. */
+  /** Forget the latest frames, so bars fall. Latched overs stay. */
   clear(): void {
     this.values = null;
     this.readings.clear();
+    this.history = [];
   }
 }
 

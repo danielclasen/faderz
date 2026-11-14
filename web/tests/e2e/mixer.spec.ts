@@ -300,12 +300,51 @@ test('puts line-up tone at the selected level on chosen outputs from the setup v
   await page.getByRole('button', { name: 'Line-up tone', exact: true }).click();
   await settled(page);
   const tone = (await serverState(request)).state.tone;
-  expect(tone).toMatchObject({ on: true, level: -20 });
-  expect(tone.targets).not.toContain('me');
+  expect(tone).toMatchObject({ on: true, level: -20, targets: ['me'] });
   await expect(page.getByRole('button', { name: 'Line-up tone', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  // The header and the targeted master say so in every view.
+  await expect(page.getByTestId('tone')).toBeVisible();
+  await page.getByRole('button', { name: 'Mixer' }).click();
+  await expect(page.getByTestId('tone-me')).toBeVisible();
+  await expect(page.getByTestId('tone-pgm20')).toBeHidden();
   await patch(request, '/tone/on', false);
+  await expect(page.getByTestId('tone')).toBeHidden();
+  await expect(page.getByTestId('tone-me')).toBeHidden();
   await patch(request, '/tone/level', -18);
-  await patch(request, '/tone/targets', ['pgm51', 'pgm20', 'me', 'cf']);
+  await patch(request, '/tone/targets', []);
+});
+
+test('latches a true-peak over of a channel direct out until cleared', async ({ page, request }) => {
+  await live(page);
+  const overs = page.getByTestId('channel-overs');
+  await expect(overs).toBeDisabled();
+  await patch(request, '/channels/ch1/trim', 20);
+  await expect(overs).toBeEnabled();
+  await expect(overs).toHaveAccessibleName(/Pres 1/);
+  await patch(request, '/channels/ch1/trim', 0);
+  await page.waitForTimeout(300);
+  await expect(overs).toHaveAccessibleName(/Pres 1/);
+  await overs.click();
+  await expect(overs).toBeDisabled();
+});
+
+test('latches a true-peak over on a master until RESET, however short it was', async ({ page, request }) => {
+  await live(page);
+  const lamp = page.getByTestId('tp-over-pgm20');
+  await expect(lamp).not.toHaveClass(/over/);
+  // Tone at 0 dBFS bypasses the limiter: true peak 0 dBTP, above -1.
+  await patch(request, '/tone/level', 0);
+  await patch(request, '/tone/targets', ['pgm20']);
+  await patch(request, '/tone/on', true);
+  await page.waitForTimeout(150);
+  await patch(request, '/tone/on', false);
+  await expect(lamp).toHaveClass(/over/);
+  await page.waitForTimeout(500);
+  await expect(lamp).toHaveClass(/over/);
+  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await expect(lamp).not.toHaveClass(/over/);
+  await patch(request, '/tone/level', -18);
+  await patch(request, '/tone/targets', []);
 });
 
 test('mutes and solos monitor speakers and sets monitor image and dim depth', async ({ page, request }) => {

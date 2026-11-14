@@ -4,6 +4,9 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import type { MeterGroup, MeterReading } from '../lib/meters/store';
 
+  /** Readout period, ms. */
+  const READOUT_MS = 100;
+
   interface Props {
     group: MeterGroup;
     id: string;
@@ -14,11 +17,29 @@
   let { group, id, stereo = false, onreset }: Props = $props();
   const mixer = getMixer();
   let reading = $state<MeterReading | undefined>();
+  /** Highest true peak of every frame since the previous readout tick, dBTP. */
+  let tp = $state<number | null>(null);
+  const tpLegs: number[] = [];
 
+  // 10 readouts per second, the rate EBU Tech 3341 asks of a live meter.
+  // The true peak is the maximum over every frame in between, so a short
+  // over between two ticks is still shown.
   onMount(() => {
-    const t = setInterval(() => (reading = mixer.meters.get(group, id)), 250);
+    let since = -Infinity;
+    const t = setInterval(() => {
+      const meters = mixer.meters;
+      reading = meters.get(group, id);
+      tp = meters.maxSince(group, id, 'truePeak', since, tpLegs) ? Math.max(...tpLegs) : reading ? tp : null;
+      since = meters.receivedAt;
+    }, READOUT_MS);
     return () => clearInterval(t);
   });
+  const over = $derived(mixer.meters.overs.has(`${group}/${id}`));
+  function reset(): void {
+    if (mixer.locked) return;
+    mixer.meters.clearOvers(group, [id]);
+    onreset?.();
+  }
 
   /** One decimal place at most (EBU Tech 3341); every value fits 5 characters. */
   const fmt = (v: number | null | undefined) => fit(v === null || v === undefined ? '--.-' : v <= -100 ? '-inf' : v.toFixed(1), 5);
@@ -27,7 +48,6 @@
   const target = $derived(settings.loudness.target);
   const tolerance = $derived(settings.loudness.tolerance);
   const l = $derived(reading?.loudness);
-  const tp = $derived(reading?.truePeak?.length ? Math.max(...reading.truePeak) : null);
   const dev = $derived(l?.integrated == null ? null : l.integrated - target);
   const corr = $derived(reading?.correlation ?? null);
   /** Short-term loudness relative to the target on the Tech 3341 scale, 0..1. */
@@ -60,7 +80,13 @@
   <span class="k">LRA</span>
   <b class="num v" class:unstable={l !== undefined && !l.lraStable} title={l && !l.lraStable ? 'Settles after 60 s of measurement' : undefined}><span>{fmt(l?.lra)}</span></b>
   <span class="max unit">LU</span>
-  <span class="k">TP</span><b class="num v" class:hot={tp !== null && tp > settings.zones.truePeakMax}><span>{fmt(tp)}</span></b><span class="max unit">dBTP</span>
+  <span class="k">TP</span><b class="num v" class:hot={tp !== null && tp > settings.zones.truePeakMax}><span>{fmt(tp)}</span></b><span
+    class="max unit lamp"
+    class:over
+    data-testid={`tp-over-${id}`}
+    title={over ? `True peak went above ${settings.zones.truePeakMax} dBTP since the last reset` : `No true peak above ${settings.zones.truePeakMax} dBTP since the last reset`}
+    >dBTP<span class="sr-only">{over ? ', over since the last reset' : ''}</span></span
+  >
   <!-- Every master keeps the correlation row, so all masters line up. -->
   {#if stereo}
     <span class="k" title="Phase correlation">COR</span>
@@ -71,7 +97,7 @@
   {/if}
   <span class="max unit"></span>
   {#if onreset}
-    <button class="key reset" aria-disabled={mixer.locked} onclick={onreset} title="Reset integrated loudness, LRA and maxima">RESET</button>
+    <button class="key reset" aria-disabled={mixer.locked} onclick={reset} title="Reset integrated loudness, LRA, maxima and the true-peak over">RESET</button>
   {/if}
 </div>
 
@@ -169,6 +195,15 @@
   }
   .hot {
     color: var(--meter-high);
+  }
+  /* Latched true-peak over: lit until RESET. */
+  .lamp {
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .lamp.over {
+    background: var(--meter-high);
+    color: #fff;
   }
   .reset {
     grid-column: 1 / -1;

@@ -12,8 +12,22 @@
   import Consoles from './components/Consoles.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import AheadBanner from './components/AheadBanner.svelte';
+  import { tip } from './lib/tip';
 
   const mixer = getMixer();
+  const toneOn = $derived(!!mixer.state?.tone.on && (mixer.state?.tone.targets.length ?? 0) > 0);
+  const toneText = $derived.by(() => {
+    const t = mixer.state?.tone;
+    const shape = mixer.shape;
+    if (!t || !shape) return '';
+    const names = [...shape.buses, ...shape.auxes, ...shape.mixMinus].filter((e) => t.targets.includes(e.id)).map((e) => e.name);
+    return `Line-up tone 1 kHz ${t.level} dBFS replaces ${names.join(', ')}`;
+  });
+  // Overs latch in every view, against the shared true-peak limit.
+  $effect(() => {
+    const max = mixer.state?.metering.zones.truePeakMax;
+    if (max !== undefined) mixer.meters.truePeakMax = max;
+  });
 
   const VIEWS = [
     { id: 'mixer', label: 'Mixer' },
@@ -51,6 +65,13 @@
     <div class="right">
       <Consoles />
       <StatusArea />
+      <!-- Reserved: shown or not, the tone lamp moves nothing. -->
+      <span class="tone-slot">
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <span class="tone" class:on={toneOn} role="status" data-testid="tone" aria-hidden={!toneOn} use:tip={toneOn ? toneText : ''} tabindex={toneOn ? 0 : -1}
+          >TONE<span class="sr-only">{toneOn ? ` on: ${toneText}` : ''}</span></span
+        >
+      </span>
       <button class="key" onclick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
         {theme === 'dark' ? 'LIGHT' : 'DARK'}
       </button>
@@ -188,6 +209,36 @@
     gap: 10px;
     flex-wrap: nowrap;
     overflow: hidden;
+  }
+  .tone-slot {
+    flex: none;
+    width: 46px;
+    display: flex;
+    justify-content: center;
+  }
+  .tone {
+    visibility: hidden;
+    height: 24px;
+    line-height: 24px;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    background: var(--tone);
+    color: var(--tone-ink);
+  }
+  .tone.on {
+    visibility: visible;
+    animation: tone-blink 1s steps(1) infinite;
+  }
+  .tone:focus-visible {
+    outline: 2px solid var(--focus);
+  }
+  @keyframes tone-blink {
+    50% {
+      opacity: 0.55;
+    }
   }
   main {
     position: relative;
