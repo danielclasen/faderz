@@ -318,6 +318,7 @@ describe('WebSocket messages', () => {
     ['pong', { type: 'pong', replica, t: 5 }],
     ['409 with owner', { type: 'error', replica, code: 409, message: 'owned', commandId: cmd, path: '/channels/ch1/fader', current: -3, owner }],
     ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 } }],
+    ['ahead', { type: 'ahead', replica, revision: 120, lastRevision: 245 }],
   ])('server accepts %s', (_, msg) => {
     expect(server(msg)).toBeNull();
   });

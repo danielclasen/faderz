@@ -16,6 +16,7 @@ import type {
   Owners,
   ReplicaRef,
   ReplicaStatus,
+  AheadMessage,
   ResumeMessage,
   ServerMessage,
   Shape,
@@ -125,6 +126,9 @@ export class SyncEngine {
   private readonly dirty = new Set<string>();
   private readonly ownersDirty = new Set<string>();
   private snapshotPending = false;
+  /** Set by adopt(): the next snapshot replaces the state even if it is older. */
+  private adopting = false;
+  private ahead: SyncStatus['ahead'] = null;
   private notices: WorkerNotice[] = [];
   private meters: Patch['meters'] | null = null;
   private counters: Patch['counters'] | null = null;
@@ -173,6 +177,8 @@ export class SyncEngine {
       case 'tick':
         this.grantCredits();
         return this.postPatch();
+      case 'adopt':
+        return this.adopt();
       case 'init':
         return;
     }
@@ -468,6 +474,9 @@ export class SyncEngine {
         return this.answer(msg.commandId, msg.result === 'stale' ? 'stale' : 'ack');
       case 'error':
         return this.error(msg);
+      case 'ahead':
+        if (link === this.primary) this.primaryAhead(msg);
+        return;
       case 'counters':
         if (link === this.primary) this.counters = { replica: msg.replica.id, values: msg.values };
         return;
@@ -475,7 +484,10 @@ export class SyncEngine {
   }
 
   private primarySnapshot(msg: SnapshotMessage): void {
-    if (this.older(msg.revision)) return;
+    // Taking the cluster state is the one case where state moves backwards.
+    if (!this.adopting && this.older(msg.revision)) return;
+    this.adopting = false;
+    this.ahead = null;
     this.you = msg.you;
     this.shape = msg.shape;
     this.state = msg.state;
@@ -561,6 +573,27 @@ export class SyncEngine {
     return true;
   }
 
+  /**
+   * The replica will not answer with state: this client holds a revision
+   * the cluster never committed. Nothing is retried; the operator decides.
+   */
+  private primaryAhead(msg: AheadMessage): void {
+    this.cancelResyncRetry?.();
+    this.cancelResyncRetry = null;
+    this.ahead = { lastRevision: msg.lastRevision, cluster: msg.revision };
+    this.linkEvent('ahead');
+  }
+
+  /** Takes the cluster state: a resync without lastRevision, whose snapshot replaces this state. */
+  private adopt(): void {
+    const p = this.primary;
+    if (this.link !== 'Ahead' || !p) return;
+    this.adopting = true;
+    this.send(p, { type: 'resync' });
+    this.linkEvent('adopt');
+    if (this.standby) this.dropStandby(this.standby);
+  }
+
   private resync(full: boolean): void {
     const p = this.primary;
     if (!p) return;
@@ -644,6 +677,7 @@ export class SyncEngine {
       touching: [...this.touches].filter(([, s]) => s === 'Touching').map(([p]) => p),
       lastSync: this.lastSync,
       meterCredits: this.credits,
+      ahead: this.ahead,
     };
   }
 

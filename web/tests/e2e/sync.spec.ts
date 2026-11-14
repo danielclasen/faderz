@@ -393,3 +393,21 @@ test('sends the same ?session= on the primary, the standby and the reconnect aft
   expect([...sessions][0]).toMatch(/^[A-Za-z0-9_-]{22,128}$/);
   expect([...sessions][0]).toBe(await debug(page, 'session'));
 });
+
+test('a client ahead of a rewound cluster shows it at once and takes the cluster state on request', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch19/fader', -11);
+  await expect.poll(() => debug(page, 'revision')).toBe((await serverState(request)).revision);
+  const ahead = (await debug(page, 'revision')) as number;
+  await request.post('/__mock/rewind?by=2');
+  await request.post('/__mock/drop-clients');
+  const banner = page.getByTestId('ahead');
+  await expect(banner).toBeVisible({ timeout: 5000 });
+  await expect(banner).toContainText(String(ahead));
+  await expect(banner).toContainText(String(ahead - 2));
+  expect(await debug(page, 'connection')).toBe('Ahead');
+  await banner.getByRole('button', { name: 'TAKE CLUSTER STATE' }).click();
+  await expect(banner).toBeHidden();
+  await expect.poll(() => debug(page, 'connection')).toBe('Live');
+  expect(await debug(page, 'revision')).toBe((await serverState(request)).revision);
+});

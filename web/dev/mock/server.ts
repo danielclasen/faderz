@@ -324,6 +324,12 @@ export class MockServer {
       for (const conn of c.connections()) conn.close();
       return send(200, { ok: true });
     }
+    if (method === 'POST' && path === '/__mock/rewind') {
+      const by = Number(url.searchParams.get('by') ?? '1');
+      if (!Number.isInteger(by) || by < 1) return send(400, { error: 'by must be a positive integer' });
+      c.rewind(by);
+      return send(200, { revision: c.revision });
+    }
     if (method === 'POST' && path === '/__mock/skip-revision') {
       c.skipRevision();
       return send(200, { revision: c.revision });

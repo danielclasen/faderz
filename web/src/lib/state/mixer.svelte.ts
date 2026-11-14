@@ -48,6 +48,7 @@ export const INITIAL_STATUS: SyncStatus = {
   touching: [],
   lastSync: null,
   meterCredits: 0,
+  ahead: null,
 };
 
 const NOTICE_LIMIT = 5;
@@ -148,6 +149,11 @@ export class MixerStore {
   release(path: string): void {
     if (!this.held.delete(path)) return;
     this.post({ type: 'release', path });
+  }
+
+  /** Takes the cluster state while this client is ahead of it. */
+  adopt(): void {
+    this.post({ type: 'adopt' });
   }
 
   /** Called once per animation frame while the page is visible. */

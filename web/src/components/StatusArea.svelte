@@ -17,6 +17,7 @@
     Suspect: 'SUSPECT',
     FailingOver: 'FAILOVER',
     Resyncing: 'RESYNC',
+    Ahead: 'AHEAD',
     Offline: 'OFFLINE',
   };
   const status = $derived(mixer.status);
@@ -117,6 +118,7 @@
   }
   .link[data-state='Syncing'] i,
   .link[data-state='Resyncing'] i,
+  .link[data-state='Ahead'] i,
   .link[data-state='Suspect'] i {
     background: var(--warn);
     box-shadow: 0 0 6px var(--warn);

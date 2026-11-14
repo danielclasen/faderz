@@ -12,6 +12,7 @@
   import Consoles from './components/Consoles.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import Toasts from './components/Toasts.svelte';
+  import AheadBanner from './components/AheadBanner.svelte';
 
   const mixer = getMixer();
 
@@ -55,6 +56,7 @@
   </header>
 
   <main>
+    <AheadBanner />
     <svelte:boundary onerror={(e) => console.error(e)}>
     {#if !mixer.shape || !mixer.state}
       <div class="waiting" role="status">Connecting to the mixer...</div>
@@ -159,6 +161,7 @@
     padding: 4px 0;
   }
   main {
+    position: relative;
     min-height: 0;
     overflow: hidden;
   }

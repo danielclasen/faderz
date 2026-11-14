@@ -30,6 +30,9 @@
     },
     {
       "$ref": "#/$defs/Pong"
+    },
+    {
+      "$ref": "#/$defs/Ahead"
     }
   ],
   "$defs": {
@@ -101,6 +104,33 @@
           "items": {
             "$ref": "#/$defs/Delta"
           }
+        }
+      }
+    },
+    "Ahead": {
+      "description": "Answers a hello or resync whose lastRevision is above the highest revision the cluster has committed, in place of holding it: the client holds state the cluster does not have, for example after the cluster was restored from an older backup or redeployed empty. The replica holds nothing for the connection. A client takes the cluster state with a resync without lastRevision, which the replica answers with a snapshot at revision.",
+      "type": "object",
+      "required": [
+        "type",
+        "replica",
+        "revision",
+        "lastRevision"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "ahead"
+        },
+        "replica": {
+          "$ref": "model.schema.json#/$defs/ReplicaRef"
+        },
+        "revision": {
+          "description": "Highest revision the cluster has committed.",
+          "$ref": "model.schema.json#/$defs/Revision"
+        },
+        "lastRevision": {
+          "description": "The lastRevision of the hello or resync.",
+          "$ref": "model.schema.json#/$defs/Revision"
         }
       }
     },

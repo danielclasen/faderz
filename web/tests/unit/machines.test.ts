@@ -38,21 +38,22 @@ function check<S extends string, E extends string>(
 describe('connection machine', () => {
   it('has the expected event and state lists', () => {
     expect(LINK_EVENTS).toEqual([
-      'open', 'synced', 'resync', 'beatLate', 'beat', 'beatsMissed', 'lost', 'notCommitable', 'promoted', 'noStandby', 'exhausted', 'retry',
+      'open', 'synced', 'resync', 'beatLate', 'beat', 'beatsMissed', 'lost', 'notCommitable', 'promoted', 'noStandby', 'exhausted', 'retry', 'ahead', 'adopt',
     ]);
-    expect(LINK_STATES).toEqual(['Connecting', 'Syncing', 'Live', 'Suspect', 'FailingOver', 'Resyncing', 'Offline']);
+    expect(LINK_STATES).toEqual(['Connecting', 'Syncing', 'Live', 'Suspect', 'FailingOver', 'Resyncing', 'Ahead', 'Offline']);
   });
 
   it('follows the full transition table', () => {
-    // open, synced, resync, beatLate, beat, beatsMissed, lost, notCommitable, promoted, noStandby, exhausted, retry
+    // open, synced, resync, beatLate, beat, beatsMissed, lost, notCommitable, promoted, noStandby, exhausted, retry, ahead, adopt
     check(LINK, LINK_STATES, LINK_EVENTS, {
-      Connecting: ['Syncing', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Offline', 'Connecting'],
-      Syncing: ['Syncing', 'Live', 'Syncing', 'Syncing', 'Syncing', 'Connecting', 'Connecting', 'Syncing', 'Syncing', 'Syncing', 'Syncing', 'Syncing'],
-      Live: ['Live', 'Live', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Live', 'Live', 'Live', 'Live'],
-      Suspect: ['Suspect', 'Suspect', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Suspect', 'Suspect', 'Suspect', 'Suspect'],
-      FailingOver: ['FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'Resyncing', 'Connecting', 'FailingOver', 'FailingOver'],
-      Resyncing: ['Resyncing', 'Live', 'Resyncing', 'Resyncing', 'Resyncing', 'FailingOver', 'FailingOver', 'FailingOver', 'Resyncing', 'Resyncing', 'Resyncing', 'Resyncing'],
-      Offline: ['Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Connecting'],
+      Connecting: ['Syncing', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Offline', 'Connecting', 'Connecting', 'Connecting'],
+      Syncing: ['Syncing', 'Live', 'Syncing', 'Syncing', 'Syncing', 'Connecting', 'Connecting', 'Syncing', 'Syncing', 'Syncing', 'Syncing', 'Syncing', 'Ahead', 'Syncing'],
+      Live: ['Live', 'Live', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Live', 'Live', 'Live', 'Live', 'Live', 'Live'],
+      Suspect: ['Suspect', 'Suspect', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Suspect', 'Suspect', 'Suspect', 'Suspect', 'Suspect', 'Suspect'],
+      FailingOver: ['FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'Resyncing', 'Connecting', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver'],
+      Resyncing: ['Resyncing', 'Live', 'Resyncing', 'Resyncing', 'Resyncing', 'FailingOver', 'FailingOver', 'FailingOver', 'Resyncing', 'Resyncing', 'Resyncing', 'Resyncing', 'Ahead', 'Resyncing'],
+      Ahead: ['Ahead', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Connecting', 'Connecting', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Resyncing'],
+      Offline: ['Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Offline', 'Connecting', 'Offline', 'Offline'],
     });
   });
 });

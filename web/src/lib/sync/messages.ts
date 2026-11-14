@@ -10,6 +10,8 @@ export type ToWorker =
   | { type: 'set'; path: string; value: unknown }
   | { type: 'touch'; path: string }
   | { type: 'release'; path: string }
+  /** Take the cluster state while the link is Ahead. */
+  | { type: 'adopt' }
   /** The page rendered a frame and wants the changes since the last patch. */
   | { type: 'tick' };
 
@@ -38,6 +40,8 @@ export interface SyncStatus {
   touching: string[];
   lastSync: 'snapshot' | 'resume' | null;
   meterCredits: number;
+  /** While the link is Ahead: this client's revision and the cluster's. */
+  ahead: { lastRevision: Revision; cluster: Revision } | null;
 }
 
 export type WorkerNotice =

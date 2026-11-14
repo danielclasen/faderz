@@ -412,6 +412,35 @@ describe('sync engine: read index', () => {
   });
 });
 
+describe('sync engine: ahead of the cluster', () => {
+  it('stops in Ahead without retrying when the replica says this client is ahead, and takes the cluster state on adopt', () => {
+    const { engine, primary, standby, clock, tick } = live();
+    primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -3 }] }));
+    primary.drop();
+    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 11 }]);
+    standby.deliver({ type: 'ahead', replica: R2, revision: 7, lastRevision: 11 });
+    expect(engine.link).toBe('Ahead');
+    expect(tick()!.status?.ahead).toEqual({ lastRevision: 11, cluster: 7 });
+    beats(clock, 5 * RESYNC_RETRY_MS, [standby, R2]);
+    expect(engine.link).toBe('Ahead');
+    expect(standby.ofType('resync')).toHaveLength(1);
+    engine.input({ type: 'adopt' });
+    expect(standby.ofType('resync').at(-1)).toEqual({ type: 'resync' });
+    standby.deliver(snapshot(R2, 7));
+    expect(engine.link).toBe('Live');
+    expect(engine.revision).toBe(7);
+    expect(getAt(engine.state, F1)).not.toBe(-3);
+    expect(tick()!.status?.ahead).toBeNull();
+  });
+
+  it('ignores adopt while not ahead', () => {
+    const { engine, primary } = live();
+    engine.input({ type: 'adopt' });
+    expect(primary.ofType('resync')).toHaveLength(0);
+    expect(engine.link).toBe('Live');
+  });
+});
+
 describe('sync engine: ownership', () => {
   it('releases on resync every control the session owns but is not touching', () => {
     const t = setup();

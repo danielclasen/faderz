@@ -546,6 +546,11 @@ export class Cluster {
       return;
     }
     const replica = this.ref(r);
+    if (lastRevision !== undefined && lastRevision > this.revision) {
+      // The client holds a revision this cluster never committed.
+      conn.synced = false;
+      return this.emit(conn, { type: 'ahead', replica, revision: this.revision, lastRevision });
+    }
     const you = conn.owner!;
     const revision = r.applied;
     conn.synced = true;
@@ -840,6 +845,18 @@ export class Cluster {
   }
 
   /** Advance the revision without telling clients; dev control for gap tests. */
+  /**
+   * Rolls the cluster back by `by` revisions, as a restore from an older
+   * backup would; clients that saw later revisions are then ahead of it.
+   */
+  rewind(by: number): void {
+    this.flush();
+    this.revision = Math.max(0, this.revision - by);
+    for (const r of this.replicas) r.applied = Math.min(r.applied, this.revision);
+    this.log = this.log.filter((e) => e.revision <= this.revision);
+    this.logStart = Math.min(this.logStart, this.revision + 1);
+  }
+
   skipRevision(): void {
     this.flush();
     this.revision++;

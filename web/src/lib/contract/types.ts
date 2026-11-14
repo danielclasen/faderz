@@ -408,6 +408,13 @@ export interface DeltaMessage {
   owners?: OwnershipChange[];
   origins?: Origin[];
 }
+export interface AheadMessage {
+  type: 'ahead';
+  replica: ReplicaRef;
+  /** Highest revision the cluster has committed. */
+  revision: Revision;
+  lastRevision: Revision;
+}
 export interface ResumeMessage {
   type: 'resume';
   you: Owner;
@@ -455,6 +462,7 @@ export type ServerMessage =
   | ReplicasMessage
   | CountersMessage
   | ErrorMessage
+  | AheadMessage
   | ServerPing;
 
 // REST

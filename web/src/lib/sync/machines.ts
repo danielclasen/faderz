@@ -9,7 +9,7 @@ export function step<S extends string, E extends string>(table: Table<S, E>, sta
 
 // ---- primary connection ---------------------------------------------------
 
-export type LinkState = 'Connecting' | 'Syncing' | 'Live' | 'Suspect' | 'FailingOver' | 'Resyncing' | 'Offline';
+export type LinkState = 'Connecting' | 'Syncing' | 'Live' | 'Suspect' | 'FailingOver' | 'Resyncing' | 'Ahead' | 'Offline';
 export type LinkEvent =
   /** socket opened, hello sent */
   | 'open'
@@ -34,20 +34,27 @@ export type LinkEvent =
   /** consecutive connection attempts failed */
   | 'exhausted'
   /** backoff elapsed after Offline */
-  | 'retry';
+  | 'retry'
+  /** the replica answered that this client holds a revision the cluster never committed */
+  | 'ahead'
+  /** the operator chose to take the cluster state */
+  | 'adopt';
 
-export const LINK_STATES: readonly LinkState[] = ['Connecting', 'Syncing', 'Live', 'Suspect', 'FailingOver', 'Resyncing', 'Offline'];
+export const LINK_STATES: readonly LinkState[] = ['Connecting', 'Syncing', 'Live', 'Suspect', 'FailingOver', 'Resyncing', 'Ahead', 'Offline'];
 export const LINK_EVENTS: readonly LinkEvent[] = [
-  'open', 'synced', 'resync', 'beatLate', 'beat', 'beatsMissed', 'lost', 'notCommitable', 'promoted', 'noStandby', 'exhausted', 'retry',
+  'open', 'synced', 'resync', 'beatLate', 'beat', 'beatsMissed', 'lost', 'notCommitable', 'promoted', 'noStandby', 'exhausted', 'retry', 'ahead', 'adopt',
 ];
 
 export const LINK: Table<LinkState, LinkEvent> = {
   Connecting: { open: 'Syncing', exhausted: 'Offline' },
-  Syncing: { synced: 'Live', lost: 'Connecting', beatsMissed: 'Connecting' },
+  Syncing: { synced: 'Live', lost: 'Connecting', beatsMissed: 'Connecting', ahead: 'Ahead' },
   Live: { resync: 'Resyncing', beatLate: 'Suspect', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver' },
   Suspect: { beat: 'Live', resync: 'Resyncing', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver' },
   FailingOver: { promoted: 'Resyncing', noStandby: 'Connecting' },
-  Resyncing: { synced: 'Live', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver' },
+  Resyncing: { synced: 'Live', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver', ahead: 'Ahead' },
+  // Ahead waits for the operator; it never resyncs on its own, and a lost
+  // link reconnects and is told again.
+  Ahead: { adopt: 'Resyncing', beatsMissed: 'Connecting', lost: 'Connecting' },
   Offline: { retry: 'Connecting' },
 };
 

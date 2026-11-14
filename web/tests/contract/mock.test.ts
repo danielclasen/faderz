@@ -155,7 +155,7 @@ class Client {
   async hello(mode: LinkMode = 'primary', lastRevision?: number): Promise<ServerMessage> {
     const from = this.messages.length;
     this.send({ type: 'hello', session: this.session, kind: this.kind, mode, ...(lastRevision === undefined ? {} : { lastRevision }) });
-    const answer = await this.next((m) => m.type === 'snapshot' || m.type === 'resume', from);
+    const answer = await this.next((m) => m.type === 'snapshot' || m.type === 'resume' || m.type === 'ahead', from);
     if (this.heartbeat) this.pinger = setInterval(() => this.send({ type: 'ping', t: Date.now() }), HEARTBEAT_MS);
     return answer;
   }
@@ -495,6 +495,28 @@ describe('leases', () => {
     await sleep(LEASE_MS + 600);
     expect((await owners())[path]).toBeUndefined();
   }, 10_000);
+});
+
+describe('ahead of the cluster', () => {
+  it('answers a hello above the committed revision with ahead, and a resync without lastRevision with a snapshot', async () => {
+    const committed = cluster.revision;
+    const c = await new Client().open();
+    const answer = await c.hello('primary', committed + 50);
+    expect(answer).toMatchObject({ type: 'ahead', revision: committed, lastRevision: committed + 50 });
+    c.send({ type: 'resync' });
+    const snap = await c.next<SnapshotMessage>((m) => m.type === 'snapshot');
+    expect(snap.revision).toBe(committed);
+  });
+
+  it('rewinds the cluster through /__mock/rewind', async () => {
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch20/fader', value: -7 }] });
+    await control('POST', '/blocks/flush');
+    const before = cluster.revision;
+    expect((await control('POST', '/rewind?by=1')).status).toBe(200);
+    expect(cluster.revision).toBe(before - 1);
+    const c = await new Client().open();
+    expect(await c.hello('primary', before)).toMatchObject({ type: 'ahead', revision: before - 1 });
+  });
 });
 
 describe('session query', () => {
