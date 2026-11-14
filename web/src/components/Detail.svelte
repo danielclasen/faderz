@@ -259,8 +259,14 @@
         </div>
         <h3 class="panel-title">Listen</h3>
         <div class="grid">
-          {#each ['off', 'pfl', 'afl'] as const as mode (mode)}
-            <button class="key" aria-disabled={mixer.locked} aria-pressed={mixer.value<Solo>(p('solo')) === mode} onclick={() => mixer.set(p('solo'), mode)}>{mode}</button>
+          <!-- Off is both keys unlit, never a lit key of its own. -->
+          {#each ['pfl', 'afl'] as const as mode (mode)}
+            <button
+              class="key {mode}"
+              aria-disabled={mixer.locked}
+              aria-pressed={mixer.value<Solo>(p('solo')) === mode}
+              onclick={() => mixer.set(p('solo'), mixer.value<Solo>(p('solo')) === mode ? 'off' : mode)}>{mode}</button
+            >
           {/each}
         </div>
       </div>

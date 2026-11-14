@@ -45,6 +45,7 @@
   <div
     class="listen"
     class:active={listening.length > 0}
+    class:afl={listenMode === 'AFL'}
     aria-live="polite"
     role="status"
     tabindex={listening.length > 0 ? 0 : -1}
@@ -147,6 +148,10 @@
   .listen.active {
     background: var(--listen);
     color: #1a1200;
+  }
+  .listen.active.afl {
+    background: var(--afl);
+    color: var(--afl-ink);
   }
   .listen span {
     white-space: nowrap;

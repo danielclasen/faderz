@@ -83,7 +83,7 @@
     min-height: 0;
   }
   .master.selected {
-    box-shadow: inset 0 2px 0 var(--accent);
+    box-shadow: inset 0 2px 0 var(--on);
   }
   .head {
     all: unset;

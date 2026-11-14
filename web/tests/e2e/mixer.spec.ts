@@ -1050,3 +1050,28 @@ test('shows one engine lamp in the status bar and the counters only on request',
   }, [0, 3, 12, 99, 250].map(engineLamp));
   for (const s of sizes) expect(s).toEqual({ w: width, fits: true });
 });
+
+test('lights PFL amber and every generic on key in the neutral colour, with no lit OFF key', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch1/routes/pgm51', true);
+  await patch(request, '/channels/ch1/solo', 'pfl');
+  const bg = (sel: string) => page.locator(sel).first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  const token = (name: string) =>
+    page.evaluate((n) => {
+      const probe = document.createElement('i');
+      probe.style.color = `var(${n})`;
+      document.body.append(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }, name);
+  await expect(page.getByRole('button', { name: 'Pres 1 PFL' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await bg('[data-channel="ch1"] .key.pfl')).toBe(await token('--listen'));
+  expect(await bg('[data-path="/channels/ch1/routes/pgm51"]')).toBe(await token('--on'));
+  expect(await token('--on')).not.toBe(await token('--accent'));
+  await page.locator('[data-channel="ch1"] .head').click();
+  const panel = page.getByRole('region', { name: 'Pres 1 processing' });
+  await expect(panel.getByRole('button', { name: 'off', exact: true })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'pfl', exact: true }).click();
+  await expect.poll(async () => (await serverState(request)).state.channels['ch1']!.solo).toBe('off');
+});

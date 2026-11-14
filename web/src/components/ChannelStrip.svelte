@@ -124,7 +124,7 @@
   </div>
 
   <div class="ctl">
-    <button class="key" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
+    <button class="key pfl" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
     <button class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
     <button
       class="key mute big"
@@ -181,7 +181,7 @@
   }
   .strip.selected {
     background: var(--strip-sel);
-    box-shadow: inset 0 2px 0 var(--accent);
+    box-shadow: inset 0 2px 0 var(--on);
   }
   /* Scribble strip: a colour band, the number and name on the first
      line, the source and badges on the second. Two fixed lines. */
@@ -267,11 +267,8 @@
   .badge.shown {
     visibility: visible;
   }
-  .selected .name {
-    color: var(--accent);
-  }
-  :global([data-theme='light']) .selected .name {
-    color: #ffb000;
+  .selected .head {
+    box-shadow: 0 0 0 2px var(--on);
   }
   .afv {
     height: 16px;
@@ -335,8 +332,8 @@
     background: var(--afl);
   }
   .routes .chip.on {
-    color: var(--accent-ink);
-    background: var(--accent);
+    color: var(--on-ink);
+    background: var(--on);
   }
   /* A hold fills a bar along the bottom of a route chip; transform only. */
   .routes .chip::after {

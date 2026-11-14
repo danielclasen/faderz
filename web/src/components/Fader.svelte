@@ -224,7 +224,8 @@
     color: #fff;
   }
   .owner.mine {
-    background: var(--accent);
+    background: var(--on);
+    color: var(--on-ink);
   }
   .track {
     position: relative;
@@ -287,8 +288,8 @@
     background: #10141a;
   }
   .cap.mine {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent), 0 2px 4px rgba(0, 0, 0, 0.45);
+    border-color: var(--on);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--on) 70%, transparent), 0 2px 4px rgba(0, 0, 0, 0.45);
   }
   .cap.foreign {
     border-color: var(--owned);

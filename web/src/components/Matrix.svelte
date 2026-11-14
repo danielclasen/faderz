@@ -136,8 +136,8 @@
     padding: 0;
   }
   td button[aria-checked='true'] {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--on);
+    border-color: var(--on);
   }
   tbody tr:hover th,
   tbody tr:hover td {

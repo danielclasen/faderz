@@ -23,6 +23,11 @@
 
   --accent: #ffb000;
   --accent-ink: #1a1200;
+  /* A lit key that is not PFL, AFL, mute or tally: neutral bright, so
+     amber keeps meaning PFL (D6: amber PFL, cyan AFL, red mute and PGM,
+     green PVW and OK, purple ownership). */
+  --on: #dfe5ec;
+  --on-ink: #0b0d10;
   --listen: #ffb000;
   --afl: #3fd0e0;
   --afl-ink: #00191c;
@@ -75,6 +80,8 @@
 
   --accent: #a86b00;
   --accent-ink: #ffffff;
+  --on: #2a3038;
+  --on-ink: #ffffff;
   --listen: #a86b00;
   --afl: #00788a;
   --afl-ink: #ffffff;
@@ -171,9 +178,15 @@ select {
 }
 .key[aria-pressed='true'],
 .key[aria-checked='true'] {
+  color: var(--on-ink);
+  background: var(--on);
+  border-color: var(--on);
+}
+.key.pfl[aria-pressed='true'],
+.key.pfl[aria-checked='true'] {
   color: var(--accent-ink);
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--listen);
+  border-color: var(--listen);
 }
 .key.mute[aria-pressed='true'] {
   background: var(--mute);
