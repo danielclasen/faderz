@@ -51,9 +51,10 @@
                   {@const lvl = mixer.value<number>(sendPath(ch.id, aux.id, 'level'))}
                   <td class:off={!on}>
                     <div class="send">
-                      <button class="key" aria-pressed={on} aria-label={`${ch.name} send to ${aux.name}`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'on'), !on)}>ON</button>
+                      <button class="key" aria-disabled={mixer.locked} aria-pressed={on} aria-label={`${ch.name} send to ${aux.name}`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'on'), !on)}>ON</button>
                       <input
                         type="range"
+                        disabled={mixer.locked}
                         min="0"
                         max="1000"
                         value={dbToPosition(lvl) * 1000}
@@ -66,7 +67,7 @@
                         onlostpointercapture={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
                       />
                       <span class="num db">{formatDb(lvl)}</span>
-                      <button class="key" aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
+                      <button class="key" aria-disabled={mixer.locked} aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
                     </div>
                   </td>
                 {/each}

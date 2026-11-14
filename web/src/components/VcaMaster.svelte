@@ -20,7 +20,7 @@
   <div class="members" title={members.map((m) => mixer.shape?.channels.find((c) => c.id === m)?.name ?? m).join(', ')}>
     {members.length} ch
   </div>
-  <button class="key mute" aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
+  <button class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
   <div class="f"><Fader path={vcaPath(vca.id, 'offset')} label={`VCA ${vca.name} offset`} /></div>
   <output class="num value"><span>{formatDb(offset)}</span></output>
 </section>

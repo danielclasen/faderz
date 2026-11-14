@@ -24,6 +24,10 @@ function client(): RestClient {
 }
 
 async function run<T>(mixer: MixerStore, what: string, fn: () => Promise<T>): Promise<T | null> {
+  if (mixer.locked) {
+    mixer.notify('error', `${what} not sent: no quorum`);
+    return null;
+  }
   try {
     return await fn();
   } catch (e) {

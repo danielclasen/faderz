@@ -77,11 +77,12 @@
   </div>
 
   <div class="keys">
-    <button class="key" aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
-    <button class="key afl" aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
+    <button class="key" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
+    <button class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
   </div>
   <button
     class="key mute big"
+    aria-disabled={mixer.locked}
     aria-pressed={mute}
     class:vca-muted={vcaMuted && !mute}
     onclick={() => mixer.set(channelPath(channel.id, 'mute'), !mute)}

@@ -52,6 +52,7 @@
   class="pan"
   role="slider"
   tabindex="0"
+  aria-disabled={mixer.locked}
   aria-label={label}
   aria-valuemin={-1}
   aria-valuemax={1}

@@ -42,6 +42,7 @@
     max={log ? 1000 : max}
     step={log ? 1 : step}
     value={toSlider(value)}
+    disabled={mixer.locked}
     oninput={input}
     onpointerdown={() => mixer.touch(path)}
     onpointerup={() => mixer.release(path)}

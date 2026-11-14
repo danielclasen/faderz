@@ -79,7 +79,12 @@
       class:lost={!commitable}
       data-testid="quorum"
       data-commitable={commitable}
-      title={commitable ? 'The serving replica can commit' : 'The serving replica cannot commit (no quorum)'}
+      role={mixer.locked ? 'alert' : undefined}
+      title={commitable
+        ? 'The serving replica can commit'
+        : mixer.locked
+          ? 'No quorum and no standby: every write control is disabled'
+          : 'The serving replica cannot commit (no quorum)'}
     >{commitable ? 'Q' : 'NO Q'}</span>
   {/if}
 </div>
@@ -210,9 +215,15 @@
     color: var(--text-faint);
   }
   .quorum.lost {
+    height: 24px;
+    line-height: 24px;
+    padding: 0 10px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
     background: var(--err);
     color: #fff;
-    font-weight: 600;
+    font-weight: 700;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 40%, transparent);
   }
   @media (max-width: 600px) {
     .rev {

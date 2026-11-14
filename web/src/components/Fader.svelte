@@ -137,6 +137,7 @@
     class="track"
     role="slider"
     tabindex="0"
+    aria-disabled={mixer.locked}
     aria-label={label}
     aria-valuemin={FADER_OFF_DB}
     aria-valuemax={10}

@@ -81,6 +81,7 @@ animation frame while visible and applies the one patch the worker
 answers with, leaf by leaf, measured as the `faderz:patch` performance
 measure. A hidden page sends no ticks, so the worker grants no meter
 credits. The state machines are in `src/lib/sync/machines.ts`.
+When the serving replica cannot commit and no standby is ready, the client stays connected, the status area shows NO Q, and every write control is `aria-disabled` and sends nothing until quorum returns (`src/lib/state/writes.ts`).
 
 `window.__faderz` is a read-only view of the sync state for tests:
 `connection`, `standby`, `primaryReplica`, `standbyReplica`, `session`,

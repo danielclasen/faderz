@@ -40,7 +40,7 @@
     <h2 class="panel-title">Scenes</h2>
     <form class="new" onsubmit={create}>
       <input type="text" bind:value={name} placeholder="New scene name" maxlength="64" aria-label="New scene name" />
-      <button class="key" type="submit" disabled={!name.trim()}>STORE NEW</button>
+      <button class="key" type="submit" disabled={!name.trim() || mixer.locked}>STORE NEW</button>
     </form>
     <label class="xf">
       <span>Crossfade</span>
@@ -53,12 +53,12 @@
           <span class="num idx">{i + 1}</span>
           <span class="name">{s.name}</span>
           <span class="num when">{time(s.storedAt)}</span>
-          <button class="key go" onclick={() => recall(s.id)} aria-label={`Recall ${s.name}`}>RECALL</button>
-          <button class="key" onclick={() => storeScene(mixer, s.id)} aria-label={`Store into ${s.name}`}>STORE</button>
+          <button class="key go" aria-disabled={mixer.locked} onclick={() => recall(s.id)} aria-label={`Recall ${s.name}`}>RECALL</button>
+          <button class="key" aria-disabled={mixer.locked} onclick={() => storeScene(mixer, s.id)} aria-label={`Store into ${s.name}`}>STORE</button>
           {#if confirmDelete === s.id}
-            <button class="key mute" aria-pressed="true" onclick={() => { void deleteScene(mixer, s.id); confirmDelete = null; }}>CONFIRM</button>
+            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void deleteScene(mixer, s.id); confirmDelete = null; }}>CONFIRM</button>
           {:else}
-            <button class="key" onclick={() => (confirmDelete = s.id)} aria-label={`Delete ${s.name}`}>DEL</button>
+            <button class="key" aria-disabled={mixer.locked} onclick={() => (confirmDelete = s.id)} aria-label={`Delete ${s.name}`}>DEL</button>
           {/if}
         </li>
       {:else}

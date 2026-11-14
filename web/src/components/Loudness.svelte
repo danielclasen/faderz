@@ -33,7 +33,7 @@
   <div class="cell"><span>LRA</span><b class="num"><span>{fmt(l?.lra)}</span></b></div>
   <div class="cell" class:hot={tp !== null && tp > -1}><span>TP</span><b class="num"><span>{fmt(tp)}</span></b></div>
   {#if onreset}
-    <button class="key reset" onclick={onreset} title="Reset integrated loudness and LRA">RST</button>
+    <button class="key reset" aria-disabled={mixer.locked} onclick={onreset} title="Reset integrated loudness and LRA">RST</button>
   {/if}
 </div>
 

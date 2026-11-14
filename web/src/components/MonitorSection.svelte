@@ -35,6 +35,7 @@
       <button
         class="key"
         role="radio"
+        aria-disabled={mixer.locked}
         aria-checked={s.id === source}
         onclick={() => mixer.set(monitorPath('source'), s.id)}
         title={s.name}>{s.name}</button
@@ -51,9 +52,9 @@
       {/if}
     </div>
     <div class="flags">
-      <button class="key" aria-pressed={flag('dim')} onclick={() => mixer.set(monitorPath('dim'), !flag('dim'))}>DIM</button>
-      <button class="key mute" aria-pressed={flag('cut')} onclick={() => mixer.set(monitorPath('cut'), !flag('cut'))}>CUT</button>
-      <button class="key" aria-pressed={flag('mono')} onclick={() => mixer.set(monitorPath('mono'), !flag('mono'))}>MONO</button>
+      <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('dim')} onclick={() => mixer.set(monitorPath('dim'), !flag('dim'))}>DIM</button>
+      <button class="key mute" aria-disabled={mixer.locked} aria-pressed={flag('cut')} onclick={() => mixer.set(monitorPath('cut'), !flag('cut'))}>CUT</button>
+      <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('mono')} onclick={() => mixer.set(monitorPath('mono'), !flag('mono'))}>MONO</button>
     </div>
   </div>
 </section>

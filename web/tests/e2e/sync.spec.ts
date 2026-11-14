@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { DEAD_MS } from '../../src/lib/contract/protocol';
 import {
+  REPLICAS,
   RawClient,
   audit,
   commands,
@@ -327,4 +328,51 @@ test('a promote onto a lagging replica never shows an older value', async ({ pag
   await expect(readout).toHaveText(formatDb(target));
   const seen = await page.evaluate(() => (window as unknown as { __seen: string[] }).__seen);
   expect(seen.slice(seen.indexOf(formatDb(target)))).not.toContain(formatDb(before));
+});
+
+test('without quorum and standby the client stays connected and disables every write control', async ({ page, request }) => {
+  test.setTimeout(60_000);
+  await live(page);
+  const faderPath = '/channels/ch3/fader';
+  const slider = page.locator(`[role="slider"][data-path="${faderPath}"]`);
+  const mute = page.locator('button[data-path="/channels/ch3/mute"]');
+  await expect(slider).toHaveAttribute('aria-disabled', 'false');
+  await expect(mute).toHaveAttribute('aria-disabled', 'false');
+  const before = await serverState(request);
+  const primary = (await debug(page, 'primaryReplica'))!;
+  const others = REPLICAS.filter((r) => r !== primary);
+  for (const r of others) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
+
+  const quorum = page.getByTestId('quorum');
+  await expect(quorum).toHaveText('NO Q');
+  await expect(quorum).toHaveAttribute('data-commitable', 'false');
+  await expect(quorum).toBeVisible();
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
+  await expect(slider).toHaveAttribute('aria-disabled', 'true');
+  await expect(mute).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('[role="slider"][aria-disabled="false"]')).toHaveCount(0);
+  await expect(page.locator('button[aria-pressed][aria-disabled="false"]').filter({ hasText: /MUTE|PFL|AFL/ })).toHaveCount(0);
+  await request.post('/__mock/audit/reset');
+
+  // force: Playwright waits for an aria-disabled control to become enabled.
+  await dragFader(page, faderPath, -60);
+  await mute.click({ force: true });
+  await slider.focus();
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Home');
+  await page.waitForTimeout(1000);
+  expect((await audit(request)).entries).toEqual([]);
+  expect(await commands(request)).toEqual([]);
+  expect(await debug(page, 'outbox')).toBe(0);
+  await expect(page.getByTestId('fader-value-ch3')).toHaveText(formatDb(before.state.channels['ch3']!.fader));
+  await expect(mute).toHaveAttribute('aria-pressed', String(before.state.channels['ch3']!.mute));
+
+  for (const r of others) expect((await request.post(`/__mock/replicas/${r}/heal`)).ok()).toBe(true);
+  await expect(quorum).toHaveText('Q');
+  await expect(slider).toHaveAttribute('aria-disabled', 'false');
+  await expect(mute).toHaveAttribute('aria-disabled', 'false');
+  await mute.click();
+  await settled(page);
+  await expect.poll(async () => (await audit(request)).entries.map((e) => e.path)).toContain('/channels/ch3/mute');
+  expect((await serverState(request)).state.channels['ch3']!.mute).toBe(!before.state.channels['ch3']!.mute);
 });

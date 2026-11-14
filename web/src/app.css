@@ -173,6 +173,14 @@ select {
   opacity: 0.4;
   cursor: default;
 }
+/* Write controls while writes are blocked: no quorum and no standby. */
+[aria-disabled='true'],
+input:disabled,
+select:disabled {
+  opacity: 0.35;
+  filter: grayscale(1);
+  cursor: not-allowed;
+}
 
 .panel-title {
   font-size: 10px;

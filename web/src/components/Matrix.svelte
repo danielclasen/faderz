@@ -1,4 +1,5 @@
 <script lang="ts" generics="Row extends { id: string; name: string }, Col extends { id: string; name: string }">
+  import { getMixer } from '../lib/state/mixer.svelte';
   // Grid of on/off cells with arrow-key navigation (one tab stop).
   interface Props {
     label: string;
@@ -9,6 +10,7 @@
     toggle: (row: Row, col: Col) => void;
   }
   let { label, rows, cols, groups = [], get, toggle }: Props = $props();
+  const mixer = getMixer();
   let focus = $state({ r: 0, c: 0 });
   let table: HTMLTableElement | undefined = $state();
 
@@ -47,6 +49,7 @@
             <td>
               <button
                 role="switch"
+                aria-disabled={mixer.locked}
                 aria-checked={on}
                 aria-label={`${row.name} to ${col.name}`}
                 tabindex={focus.r === r && focus.c === c ? 0 : -1}

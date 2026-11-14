@@ -37,12 +37,13 @@
               <td class="num idx">{i + 1}</td>
               <td>{ch.name}</td>
               <td>
-                <button class="key" aria-pressed={enabled} aria-label={`${ch.name} AFV`} onclick={() => mixer.set(afvPath(ch.id, 'enabled'), !enabled)}>
+                <button class="key" aria-disabled={mixer.locked} aria-pressed={enabled} aria-label={`${ch.name} AFV`} onclick={() => mixer.set(afvPath(ch.id, 'enabled'), !enabled)}>
                   {enabled ? 'ON' : 'OFF'}
                 </button>
               </td>
               <td>
                 <select
+                  disabled={mixer.locked}
                   aria-label={`${ch.name} AFV source`}
                   value={source ?? ''}
                   onchange={(e) => {

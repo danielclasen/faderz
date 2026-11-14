@@ -14,6 +14,7 @@ import type { Patch, SyncStatus, ToWorker } from '../sync/messages';
 import { sessionTag } from '../sync/session';
 import { getAt, setAt } from './pointer';
 import { describePath } from './paths';
+import { writesBlocked } from './writes';
 
 export interface Port {
   post(msg: ToWorker): void;
@@ -91,6 +92,9 @@ export class MixerStore {
     return this.status.outbox;
   }
 
+  /** No quorum and no ready standby: write controls are disabled and send nothing. */
+  readonly locked = $derived(writesBlocked(this.status));
+
   // ---- reading -----------------------------------------------------------
 
   value<T>(path: string): T {
@@ -128,18 +132,19 @@ export class MixerStore {
   // ---- writing -----------------------------------------------------------
 
   set(path: string, value: unknown): void {
-    if (!this.state) return;
+    if (!this.state || this.locked) return;
     setAt(this.state as unknown as Record<string, unknown>, path, value);
     this.post({ type: 'set', path, value });
     this.localWrites.set(path, { input: this.posted, value });
   }
 
   touch(path: string): void {
-    if (this.held.has(path)) return;
+    if (this.locked || this.held.has(path)) return;
     this.held.add(path);
     this.post({ type: 'touch', path });
   }
 
+  /** Sent also while locked: it ends a touch made before, and changes no value. */
   release(path: string): void {
     if (!this.held.delete(path)) return;
     this.post({ type: 'release', path });
