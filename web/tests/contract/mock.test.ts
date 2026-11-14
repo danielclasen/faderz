@@ -816,6 +816,19 @@ describe('REST', () => {
     expect(cluster.state.metering.loudness).toEqual({ preset: 'ebu', target: -23, tolerance: 1 });
   });
 
+  it('stores and recalls AFV timing and closed level with a scene', async () => {
+    const write = (path: string, value: unknown) => rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path, value }] });
+    await write('/afv/ch13/fallMs', 800);
+    const created = await rest('POST', '/scenes', { commandId: crypto.randomUUID(), name: 'AFV' });
+    const id = (created.body!['scene'] as { id: string }).id;
+    await write('/afv/ch13/fallMs', 100);
+    await write('/afv/ch13/offLevel', -15);
+    await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 });
+    expect(cluster.state.afv['ch13']).toMatchObject({ fallMs: 800, offLevel: -90 });
+    await write('/afv/ch13/fallMs', 200);
+    await rest('DELETE', `/scenes/${id}`);
+  });
+
   it('drives AFV stages from tally', async () => {
     await rest('PUT', '/afv/tally', { sources: { CAM1: 'off', CAM2: 'program' } });
     expect(cluster.state.afv['ch14']!.open).toBe(true);

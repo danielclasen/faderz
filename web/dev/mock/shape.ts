@@ -200,7 +200,7 @@ export function initialState(shape: Shape): State {
     afv: Object.fromEntries(
       shape.channels.map((c, i) => {
         const cam = i >= 12 && i < 16 ? `CAM${i - 11}` : null;
-        return [c.id, { enabled: cam !== null, source: cam, open: cam === null || cam === 'CAM1' }];
+        return [c.id, { enabled: cam !== null, source: cam, riseMs: 40, fallMs: 200, holdMs: 0, offLevel: -90, open: cam === null || cam === 'CAM1' }];
       }),
     ),
     tally: { CAM1: 'program', CAM2: 'preview', CAM3: 'off', CAM4: 'off' },

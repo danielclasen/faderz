@@ -1021,11 +1021,15 @@
       }
     },
     "AfvBinding": {
-      "description": "Audio-follow-video stage of a channel: post-fader, ramped 0/1 gain. open is driven by tally and is read-only.",
+      "description": "Audio-follow-video stage of a channel: post-fader, ramped gain between 0 dB (open) and offLevel (closed). open is driven by tally and is read-only. On program the stage rises to 0 dB over riseMs; on preview or off it waits holdMs, then falls to offLevel over fallMs. A tally carrying transitionMs uses it for both directions of that transition. offLevel -90 closes fully.",
       "type": "object",
       "required": [
         "enabled",
         "source",
+        "riseMs",
+        "fallMs",
+        "holdMs",
+        "offLevel",
         "open"
       ],
       "additionalProperties": false,
@@ -1043,10 +1047,33 @@
             }
           ]
         },
+        "riseMs": {
+          "$ref": "#/$defs/AfvTimeMs"
+        },
+        "fallMs": {
+          "$ref": "#/$defs/AfvTimeMs"
+        },
+        "holdMs": {
+          "$ref": "#/$defs/AfvTimeMs"
+        },
+        "offLevel": {
+          "$ref": "#/$defs/AfvOffLevel"
+        },
         "open": {
           "type": "boolean"
         }
       }
+    },
+    "AfvTimeMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "AfvOffLevel": {
+      "description": "Level of a closed AFV stage in dB, -90 (fully closed) to 0.",
+      "type": "number",
+      "minimum": -90,
+      "maximum": 0
     },
     "Scene": {
       "type": "object",
@@ -1305,7 +1332,7 @@
           "pattern": "^/monitor/(source|level|dim|cut|mono)$"
         },
         {
-          "pattern": "^/afv/[a-z][a-z0-9-]{0,31}/(enabled|source)$"
+          "pattern": "^/afv/[a-z][a-z0-9-]{0,31}/(enabled|source|riseMs|fallMs|holdMs|offLevel)$"
         },
         {
           "pattern": "^/recallSafe/[a-z][a-z0-9-]{0,31}$"
@@ -1999,6 +2026,40 @@
             "properties": {
               "value": {
                 "$ref": "#/$defs/LimiterCeiling"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/afv/[a-z][a-z0-9-]{0,31}/(riseMs|fallMs|holdMs)$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/AfvTimeMs"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/afv/[a-z][a-z0-9-]{0,31}/offLevel$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/AfvOffLevel"
               }
             }
           }

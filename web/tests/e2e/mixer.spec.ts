@@ -194,3 +194,18 @@ test('switches a programme bus limiter and the dynamics order from the processin
   await patch(request, '/buses/pgm20/limiter/enabled', true);
   await patch(request, '/buses/pgm20/dynamicsBeforeEq', false);
 });
+
+test('sets AFV rise, hold, fall and closed level from the AFV view', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'AFV' }).click();
+  const hold = page.getByRole('textbox', { name: /^Amb 1 AFV hold time/ });
+  await hold.fill('300');
+  await hold.press('Enter');
+  const off = page.getByRole('textbox', { name: /^Amb 1 AFV closed level/ });
+  await off.fill('-20');
+  await off.press('Tab');
+  await settled(page);
+  expect((await serverState(request)).state.afv['ch13']).toMatchObject({ holdMs: 300, offLevel: -20 });
+  await patch(request, '/afv/ch13/holdMs', 0);
+  await patch(request, '/afv/ch13/offLevel', -90);
+});

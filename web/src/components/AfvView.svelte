@@ -2,6 +2,7 @@
   import type { TallyState } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { afvPath } from '../lib/state/paths';
+  import NumberEntry from './NumberEntry.svelte';
 
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
@@ -26,7 +27,7 @@
     <h2 class="panel-title">Audio follows video</h2>
     <div class="wrap">
       <table aria-label="AFV bindings">
-        <thead><tr><th>#</th><th>Channel</th><th>AFV</th><th>Source</th><th>Tally</th><th>Stage</th></tr></thead>
+        <thead><tr><th>#</th><th>Channel</th><th>AFV</th><th>Source</th><th>Tally</th><th>Stage</th><th>Rise ms</th><th>Hold ms</th><th>Fall ms</th><th>Off dB</th></tr></thead>
         <tbody>
           {#each shape.channels as ch, i (ch.id)}
             {@const b = mixer.state!.afv[ch.id]!}
@@ -58,6 +59,10 @@
               </td>
               <td><span class="pill {t ?? 'none'}">{t ? label[t] : '-'}</span></td>
               <td><span class="stage" class:open={b.open}>{b.open ? 'open' : 'closed'}</span></td>
+              <td><NumberEntry path={afvPath(ch.id, 'riseMs')} label={`${ch.name} AFV rise time`} min={0} max={10000} step={1} unit="ms" compact /></td>
+              <td><NumberEntry path={afvPath(ch.id, 'holdMs')} label={`${ch.name} AFV hold time`} min={0} max={10000} step={1} unit="ms" compact /></td>
+              <td><NumberEntry path={afvPath(ch.id, 'fallMs')} label={`${ch.name} AFV fall time`} min={0} max={10000} step={1} unit="ms" compact /></td>
+              <td><NumberEntry path={afvPath(ch.id, 'offLevel')} label={`${ch.name} AFV closed level`} min={-90} max={0} step={1} unit="dB" compact /></td>
             </tr>
           {/each}
         </tbody>

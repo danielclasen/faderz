@@ -11,8 +11,10 @@
     max: number;
     step?: number;
     unit?: string;
+    /** Label only for assistive technology, e.g. in a table with column headers. */
+    compact?: boolean;
   }
-  let { path, label, min, max, step = 0.1, unit = '' }: Props = $props();
+  let { path, label, min, max, step = 0.1, unit = '', compact = false }: Props = $props();
   const mixer = getMixer();
   const value = $derived(mixer.value<number>(path));
   const decimals = $derived(step >= 1 ? 0 : Math.min(2, Math.ceil(-Math.log10(step))));
@@ -41,8 +43,8 @@
   }
 </script>
 
-<label class="entry">
-  <span class="lbl">{label}</span>
+<label class="entry" class:compact>
+  {#if !compact}<span class="lbl">{label}</span>{/if}
   <input
     bind:this={input}
     class="num"
@@ -56,7 +58,7 @@
     aria-label={`${label}, ${min} to ${max}${unit ? ` ${unit}` : ''}`}
     data-path={path}
   />
-  <span class="unit">{unit}</span>
+  {#if !compact}<span class="unit">{unit}</span>{/if}
 </label>
 
 <style>
@@ -66,6 +68,9 @@
     gap: 6px;
     align-items: center;
     min-height: 26px;
+  }
+  .entry.compact {
+    grid-template-columns: 7ch;
   }
   .lbl {
     font-size: 12px;

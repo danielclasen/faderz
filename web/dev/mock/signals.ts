@@ -297,7 +297,9 @@ export class ReplicaMeters {
       let gain = postGains.get(id);
       if (gain === undefined) {
         const st = state.channels[id]!;
-        gain = st.mute || vcaMuted(id) || !state.afv[id]!.open ? 0 : dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
+        const afv = state.afv[id]!;
+        const stage = afv.open ? 1 : dbToGain(afv.offLevel);
+        gain = st.mute || vcaMuted(id) ? 0 : dbToGain(effectiveGainDb(st.fader, vcaOffsets(id))) * stage;
         postGains.set(id, gain);
       }
       return gain;

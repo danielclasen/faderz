@@ -110,6 +110,10 @@ describe('Change values are constrained by path', () => {
     ['/channels/ch1/dynamicsBeforeEq', true],
     ['/buses/pgm20/limiter/ceiling', -1.5],
     ['/auxes/aux1/limiter/enabled', true],
+    ['/afv/ch13/riseMs', 0],
+    ['/afv/ch13/fallMs', 400],
+    ['/afv/ch13/holdMs', 250],
+    ['/afv/ch13/offLevel', -20],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -150,6 +154,9 @@ describe('Change values are constrained by path', () => {
     ['/channels/ch1/limiter/enabled', true],
     ['/buses/pgm20/limiter/ceiling', 0.5],
     ['/buses/pgm20/dynamicsBeforeEq', 'yes'],
+    ['/afv/ch13/riseMs', 12.5],
+    ['/afv/ch13/holdMs', 10001],
+    ['/afv/ch13/offLevel', 3],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });

@@ -177,6 +177,11 @@ export interface MonitorState {
 export interface AfvBinding {
   enabled: boolean;
   source: string | null;
+  riseMs: number;
+  fallMs: number;
+  holdMs: number;
+  /** Closed level, dB; -90 closes fully. */
+  offLevel: number;
   open: boolean;
 }
 export interface Scene {

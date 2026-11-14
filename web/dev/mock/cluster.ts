@@ -7,6 +7,7 @@
 
 import type {
   AckMessage,
+  AfvBinding,
   Change,
   ClientMessage,
   CommandMessage,
@@ -182,7 +183,7 @@ export function recallGroup(path: string): RecallGroup | null {
 
 interface StoredScene {
   scene: Scene;
-  data: Pick<State, 'channels' | 'buses' | 'auxes' | 'mixMinus' | 'vcas'> & { afv: Record<string, { enabled: boolean; source: string | null }> };
+  data: Pick<State, 'channels' | 'buses' | 'auxes' | 'mixMinus' | 'vcas'> & { afv: Record<string, Omit<AfvBinding, 'open'>> };
 }
 
 export interface ClusterOptions {
@@ -845,7 +846,7 @@ export class Cluster {
       auxes: s.auxes,
       mixMinus: s.mixMinus,
       vcas: s.vcas,
-      afv: Object.fromEntries(Object.entries(s.afv).map(([id, b]) => [id, { enabled: b.enabled, source: b.source }])),
+      afv: Object.fromEntries(Object.entries(s.afv).map(([id, { open: _open, ...b }]) => [id, b])),
     };
   }
 
