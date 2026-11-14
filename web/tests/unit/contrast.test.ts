@@ -41,3 +41,7 @@ describe.each([
     expect(contrast(t['afl-ink']!, t['afl']!)).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+it('separates alternate strips in the light theme', () => {
+  expect(contrast(light['strip']!, light['strip-alt']!)).toBeGreaterThanOrEqual(1.1);
+});

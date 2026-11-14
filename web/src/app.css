@@ -65,7 +65,8 @@
   --panel: #eceff3;
   --panel-2: #e3e7ec;
   --strip: #f5f6f8;
-  --strip-alt: #eef0f3;
+  /* Alternate strips 1.13:1 apart: neighbours separate at a glance. */
+  --strip-alt: #e6e9ee;
   --strip-sel: #fff4d6;
   --well: #12161b;
   --line: #c4cbd4;
