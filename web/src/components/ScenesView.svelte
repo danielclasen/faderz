@@ -11,7 +11,11 @@
   let name = $state('');
   let crossfade = $state(500);
   let confirmDelete = $state<string | null>(null);
-  let lastRecalled = $state<string | null>(null);
+  /** Scene picked for the next GO; recall is a separate key, as on a console. */
+  let next = $state<string | null>(null);
+  let confirmStore = $state<string | null>(null);
+  const current = $derived(mixer.state!.sceneRecalled?.id ?? null);
+  const safeCount = $derived(Object.values(mixer.state!.recallSafe).filter((g) => g.length > 0).length);
 
   const elements = $derived([...shape.channels, ...shape.buses, ...shape.auxes, ...shape.mixMinus, ...shape.vcas]);
   const groups = RECALL_GROUPS.map((g) => ({ id: g, name: g }));
@@ -30,7 +34,7 @@
   }
   async function recall(id: string): Promise<void> {
     const r = await recallScene(mixer, id, Math.max(0, Math.min(60000, Math.round(crossfade))));
-    if (r) lastRecalled = id;
+    if (r) next = null;
   }
   const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 </script>
@@ -47,14 +51,27 @@
       <input type="number" min="0" max="60000" step="100" bind:value={crossfade} aria-label="Crossfade in milliseconds" />
       <span>ms</span>
     </label>
+    <div class="go-row">
+      <span class="next-name" aria-live="polite">
+        {#if next}NEXT: {scenes.find((x) => x.id === next)?.name ?? ''}{:else}Pick a scene, then GO{/if}
+      </span>
+      <span class="scope" title="Elements with recall-safe groups keep those groups">{safeCount} recall-safe</span>
+      <button class="key go" aria-disabled={mixer.locked || next === null} disabled={next === null} onclick={() => next && recall(next)} aria-label="Recall the picked scene">GO</button>
+    </div>
     <ol>
       {#each scenes as s, i (s.id)}
-        <li class:recalled={lastRecalled === s.id} data-scene={s.id}>
+        <li class:recalled={current === s.id} class:next={next === s.id} data-scene={s.id}>
           <span class="num idx">{i + 1}</span>
-          <span class="name">{s.name}</span>
+          <button class="pick" onclick={() => (next = next === s.id ? null : s.id)} aria-pressed={next === s.id} aria-label={`Pick ${s.name} for recall`}>
+            <span class="name">{s.name}</span>
+            <span class="tag" class:shown={current === s.id}>CURRENT</span>
+          </button>
           <span class="num when">{time(s.storedAt)}</span>
-          <button class="key go" aria-disabled={mixer.locked} onclick={() => recall(s.id)} aria-label={`Recall ${s.name}`}>RECALL</button>
-          <button class="key" aria-disabled={mixer.locked} onclick={() => storeScene(mixer, s.id)} aria-label={`Store into ${s.name}`}>STORE</button>
+          {#if confirmStore === s.id}
+            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void storeScene(mixer, s.id); confirmStore = null; }} aria-label={`Confirm store into ${s.name}`}>CONFIRM</button>
+          {:else}
+            <button class="key" aria-disabled={mixer.locked} onclick={() => (confirmStore = s.id)} aria-label={`Store into ${s.name}`}>STORE</button>
+          {/if}
           {#if confirmDelete === s.id}
             <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void deleteScene(mixer, s.id); confirmDelete = null; }}>CONFIRM</button>
           {:else}
@@ -124,7 +141,7 @@
   }
   li {
     display: grid;
-    grid-template-columns: 24px 1fr auto auto auto auto;
+    grid-template-columns: 24px minmax(0, 1fr) auto 9ch 6ch;
     gap: 6px;
     align-items: center;
     padding: 6px 4px;
@@ -132,6 +149,48 @@
   }
   li.recalled {
     box-shadow: inset 3px 0 0 var(--accent);
+  }
+  li.next {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .pick {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    cursor: pointer;
+  }
+  .pick:focus-visible {
+    outline: 2px solid var(--focus);
+  }
+  .tag {
+    visibility: hidden;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--accent-ink);
+    background: var(--accent);
+    border-radius: 2px;
+    padding: 0 4px;
+  }
+  .tag.shown {
+    visibility: visible;
+  }
+  .go-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 8ch;
+    gap: 8px;
+    align-items: center;
+  }
+  .next-name {
+    font-size: 12px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .scope {
+    font-size: 11px;
+    color: var(--text-dim);
   }
   .idx,
   .when {
@@ -143,6 +202,7 @@
     font-size: 13px;
   }
   .go {
+    height: 32px;
     background: color-mix(in srgb, var(--accent) 20%, var(--panel-2));
     color: var(--text);
   }

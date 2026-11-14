@@ -257,6 +257,8 @@ export interface State {
   consoles: ConsoleStatus[];
   metering: Metering;
   tone: Tone;
+  /** Last recalled scene; server-written. */
+  sceneRecalled: { id: Id; at: string } | null;
 }
 export interface Owner {
   principal: string;

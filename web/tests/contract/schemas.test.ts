@@ -144,6 +144,7 @@ describe('Change values are constrained by path', () => {
     ['/buses/pgm51/trim', 0],
     ['/buses/pgm51/pan/lr', 0],
     ['/afv/ch13/open', true],
+    ['/sceneRecalled', null],
     ['/vcas/vca1/members', ['ch1', 'ch1']],
     ['/recallSafe/ch1', ['everything']],
     ['/monitor/level', 11],

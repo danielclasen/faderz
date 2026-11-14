@@ -837,7 +837,9 @@ describe('REST', () => {
     expect(cluster.state.channels['ch2']!.fader).not.toBe(-30);
     expect(cluster.state.channels['ch11']!.fader).toBe(-30);
     expect((await rest('PUT', `/scenes/${id}`, { commandId: crypto.randomUUID(), name: 'Renamed' })).status).toBe(200);
+    expect(cluster.state.sceneRecalled).toMatchObject({ id });
     expect((await rest('DELETE', `/scenes/${id}`)).status).toBe(200);
+    expect(cluster.state.sceneRecalled).toBeNull();
     expect((await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 })).status).toBe(404);
   });
 

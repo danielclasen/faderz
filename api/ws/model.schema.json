@@ -1206,6 +1206,31 @@
         }
       }
     },
+    "SceneRecalled": {
+      "description": "The scene recalled last, for every client to show as current; null before the first recall and after that scene is deleted. Only the server changes it.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "at"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "ConsoleStatus": {
       "description": "Hardware control surface attached to the mixer.",
       "type": "object",
@@ -1280,7 +1305,8 @@
         "scenes",
         "consoles",
         "metering",
-        "tone"
+        "tone",
+        "sceneRecalled"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1383,6 +1409,9 @@
         },
         "tone": {
           "$ref": "#/$defs/Tone"
+        },
+        "sceneRecalled": {
+          "$ref": "#/$defs/SceneRecalled"
         }
       }
     },
@@ -1493,6 +1522,9 @@
         },
         {
           "pattern": "^/(scenes|consoles)$"
+        },
+        {
+          "pattern": "^/sceneRecalled$"
         }
       ]
     },
@@ -2352,6 +2384,23 @@
             "properties": {
               "value": {
                 "$ref": "#/$defs/InputSelect"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/sceneRecalled$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/SceneRecalled"
               }
             }
           }

@@ -905,6 +905,7 @@ export class Cluster {
   deleteScene(id: string): void {
     this.scenes.delete(id);
     this.publishScenes();
+    if (this.state.sceneRecalled?.id === id) this.stage({ changes: [{ path: '/sceneRecalled', value: null }] });
   }
 
   /** Changes that recalling a scene makes, skipping recall-safe groups. */
@@ -926,8 +927,12 @@ export class Cluster {
 
   recallScene(id: string): { revision: number; atIndex?: number; changed: boolean } {
     const changes = this.recallChanges(id);
-    if (changes.length === 0) return { revision: this.revision, changed: false };
-    return { ...this.stage({ changes: this.withSideEffects(changes) }), changed: true };
+    const recalled: Change = { path: '/sceneRecalled', value: { id, at: new Date().toISOString() } };
+    if (changes.length === 0) {
+      this.stage({ changes: [recalled] });
+      return { revision: this.revision, changed: false };
+    }
+    return { ...this.stage({ changes: [...this.withSideEffects(changes), recalled] }), changed: true };
   }
 
   /** Record a REST command id as answered. */

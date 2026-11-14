@@ -223,6 +223,7 @@ export function initialState(shape: Shape): State {
     tally: { CAM1: 'program', CAM2: 'preview', CAM3: 'off', CAM4: 'off' },
     recallSafe: Object.fromEntries(existing(['ch11', 'ch12']).map((id) => [id, ['fader', 'mute']])),
     scenes: [],
+    sceneRecalled: null,
     consoles,
     tone: { on: false, level: -18, ident: false, targets: shape.buses.map((b) => b.id) },
     metering: {

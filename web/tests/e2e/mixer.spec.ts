@@ -67,8 +67,18 @@ test('stores and recalls a scene', async ({ page, request }) => {
   await expect(page.getByText(name)).toBeVisible();
   const stored = await fader(request, 'ch18');
   await patch(request, '/channels/ch18/fader', stored === -33 ? -34 : -33);
-  await page.getByRole('button', { name: `Recall ${name}` }).click();
+  // Picking a scene recalls nothing; GO does, and every client sees it as current.
+  await page.getByRole('button', { name: `Pick ${name} for recall` }).click();
+  await page.waitForTimeout(300);
+  expect(await fader(request, 'ch18')).not.toBe(stored);
+  await page.getByRole('button', { name: 'Recall the picked scene' }).click();
   await expect.poll(() => fader(request, 'ch18')).toBe(stored);
+  const id = (await serverState(request)).state.scenes.find((s) => s.name === name)!.id;
+  await expect.poll(async () => (await serverState(request)).state.sceneRecalled?.id).toBe(id);
+  await expect(page.locator(`[data-scene="${id}"] .tag`)).toBeVisible();
+  // Storing over a scene asks for a confirmation in place.
+  await page.getByRole('button', { name: `Store into ${name}` }).click();
+  await expect(page.getByRole('button', { name: `Confirm store into ${name}` })).toBeVisible();
   await page.getByRole('button', { name: 'Mixer' }).click();
   await expect(page.getByTestId('fader-value-ch18')).toHaveText(formatDb(stored));
 });
