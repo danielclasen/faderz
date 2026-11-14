@@ -85,7 +85,15 @@ test('refuses a fader held by another session with 409 and shows its value and o
     const held = await fader(request, 'ch4');
     const tag = other.session.replace(/-/g, '').slice(0, 6);
     await dragFader(page, path, -80);
-    await expect(page.getByTestId('notice').filter({ hasText: `held by ui ${tag}` }).first()).toBeVisible();
+    const notice = page.getByTestId('notice');
+    await expect(notice).toContainText(`Guest 2 fader is held by web client ${tag}`);
+    await dragFader(page, path, 40);
+    await expect(notice).toHaveCount(1);
+    await expect(notice.locator('.count')).toBeVisible();
+    // The notice sits in the status bar, clear of the monitor and masters.
+    const box = (await notice.boundingBox())!;
+    const monitor = (await page.getByRole('region', { name: 'Monitor' }).boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(monitor.y + monitor.height);
     await settled(page);
     await expect(page.getByTestId('fader-value-ch4')).toHaveText(formatDb(held));
     expect(await fader(request, 'ch4')).toBe(held);

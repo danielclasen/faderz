@@ -11,7 +11,6 @@
   import StatusArea from './components/StatusArea.svelte';
   import Consoles from './components/Consoles.svelte';
   import StatusBar from './components/StatusBar.svelte';
-  import Toasts from './components/Toasts.svelte';
   import AheadBanner from './components/AheadBanner.svelte';
 
   const mixer = getMixer();
@@ -93,7 +92,6 @@
 
 
   <StatusBar />
-  <Toasts />
 </div>
 
 <style>

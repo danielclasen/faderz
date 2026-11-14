@@ -24,6 +24,9 @@ export interface Notice {
   id: number;
   kind: 'conflict' | 'error' | 'info';
   text: string;
+  /** Notices with one key (a control path) are one notice, counted. */
+  key?: string;
+  count: number;
 }
 
 export interface PatchStats {
@@ -127,7 +130,8 @@ export class MixerStore {
       const c = this.state?.consoles.find((x) => x.session === owner.session);
       if (c) return c.name;
     }
-    return `${principal}${owner.kind} ${sessionTag(owner.session)}`;
+    const kind = owner.kind === 'ui' ? 'web client' : owner.kind;
+    return `${principal}${kind} ${sessionTag(owner.session)}`;
   }
 
   // ---- writing -----------------------------------------------------------
@@ -207,7 +211,7 @@ export class MixerStore {
     for (const n of p.notices ?? []) {
       if (n.kind === 'conflict') {
         this.conflicts.set(n.path, Date.now());
-        this.notify('conflict', `${describePath(n.path, this.shape)} is held by ${this.ownerLabel(n.owner)}`);
+        this.notify('conflict', `${describePath(n.path, this.shape)} is held by ${this.ownerLabel(n.owner)}`, n.path);
       } else {
         this.notify('error', n.text);
       }
@@ -225,8 +229,11 @@ export class MixerStore {
     this.notices = this.notices.filter((n) => n.id !== id);
   }
 
-  notify(kind: Notice['kind'], text: string): void {
-    this.notices = [...this.notices.slice(-(NOTICE_LIMIT - 1)), { id: ++this.noticeId, kind, text }];
+  /** Adds a notice; one with the key of a shown notice replaces it and counts up. */
+  notify(kind: Notice['kind'], text: string, key?: string): void {
+    const same = key === undefined ? undefined : this.notices.find((n) => n.key === key);
+    const rest = this.notices.filter((n) => n !== same).slice(-(NOTICE_LIMIT - 1));
+    this.notices = [...rest, { id: ++this.noticeId, kind, text, key, count: (same?.count ?? 0) + 1 }];
   }
 }
 
