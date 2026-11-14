@@ -5,12 +5,14 @@
   import { vcaPath } from '../lib/state/paths';
   import { formatDb } from '../lib/audio/db';
   import Fader from './Fader.svelte';
+  import { tip } from '../lib/tip';
 
   let { vca }: { vca: VcaShape } = $props();
   const mixer = getMixer();
   const mute = $derived(mixer.value<boolean>(vcaPath(vca.id, 'mute')));
   const offset = $derived(mixer.value<number>(vcaPath(vca.id, 'offset')));
   const members = $derived(mixer.state!.vcas[vca.id]!.members);
+  const memberNames = $derived(members.map((m) => mixer.shape?.channels.find((c) => c.id === m)?.name ?? m).join(', '));
   const solo = $derived(mixer.value<Solo>(vcaPath(vca.id, 'solo')));
   function toggleSolo(mode: Exclude<Solo, 'off'>): void {
     mixer.set(vcaPath(vca.id, 'solo'), solo === mode ? 'off' : mode);
@@ -18,11 +20,14 @@
 </script>
 
 <section class="vca" aria-label={`VCA ${vca.name}`}>
-  <div class="head">
+  <!-- Focusable so that the tooltip with the full name and the members
+       reaches the keyboard too. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="head" role="note" tabindex="0" use:tip={`VCA ${vca.name}: ${memberNames || 'no members'}`}>
     <span class="kind">VCA</span>
     <span class="name">{vca.name}</span>
   </div>
-  <div class="members" title={members.map((m) => mixer.shape?.channels.find((c) => c.id === m)?.name ?? m).join(', ')}>
+  <div class="members">
     {members.length} ch
   </div>
   <button class="key" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`VCA ${vca.name} PFL, all members`}>PFL</button>

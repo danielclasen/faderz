@@ -14,7 +14,7 @@ import { handleOf } from './handle.ts';
 
 const MONO_NAMES = [
   'Pres 1', 'Pres 2', 'Guest 1', 'Guest 2', 'Guest 3', 'Guest 4',
-  'Rpt 1', 'Rpt 2', 'Rpt 3', 'Rpt 4', 'Phone 1', 'Phone 2',
+  'Rpt 1', 'Reporter 2 North Gate', 'Rpt 3', 'Rpt 4', 'Phone 1', 'Phone 2',
   'Amb 1', 'Amb 2', 'Amb 3', 'Amb 4', 'Lav 1', 'Lav 2',
   'Lav 3', 'Lav 4', 'Hand 1', 'Hand 2', 'Spot 1', 'Spot 2',
 ];
@@ -86,7 +86,7 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
     mixMinus,
     vcas: [
       { id: 'vca1', name: 'PRES' },
-      { id: 'vca2', name: 'GUESTS' },
+      { id: 'vca2', name: 'GUEST PANEL' },
     ],
     monitorOutputs,
     outputs,

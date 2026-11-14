@@ -9,6 +9,7 @@
   import Pan from './Pan.svelte';
   import EqCurve from './EqCurve.svelte';
   import { TAP_LABEL } from '../lib/audio/taps';
+  import { tip } from '../lib/tip';
 
   interface Props {
     channel: ChannelShape;
@@ -30,6 +31,11 @@
   );
   const vcaMuted = $derived(vcas.some((v) => mixer.state!.vcas[v.id]!.mute));
   const effective = $derived(effectiveGainDb(fader, vcas.map((v) => mixer.state!.vcas[v.id]!.offset)));
+  const vcaText = $derived(
+    vcas.length === 0
+      ? ''
+      : `${vcas.map((v) => `VCA ${v.name} ${formatDb(mixer.state!.vcas[v.id]!.offset)} dB`).join(', ')}; effective gain ${formatDb(effective)} dB`,
+  );
   const badge = $derived(channel.layout === 'mono' ? '' : channel.layout === 'stereo' ? 'ST' : channel.layout);
   const short = (bus: { name: string; kind: string }) =>
     bus.kind === 'cleanFeed' ? 'CF' : bus.kind === 'me' ? 'ME' : (bus.name.split(' ').at(-1) ?? bus.name).slice(0, 4);
@@ -40,7 +46,7 @@
 </script>
 
 <section class="strip" class:selected class:alt={index % 2 === 1} aria-label={`Channel ${index + 1} ${channel.name}`} data-channel={channel.id}>
-  <button class="head" onclick={() => onselect(channel.id)} aria-pressed={selected} title="Open channel processing">
+  <button class="head" onclick={() => onselect(channel.id)} aria-pressed={selected} use:tip={channel.name}>
     <span class="no num">{index + 1}</span>
     <span class="badges">
       <span class="badge alt" class:shown={st.input === 'b'} title="Fed from its B input" aria-hidden={st.input !== 'b'}>B</span>
@@ -102,10 +108,17 @@
 
   <div class="foot">
     <output class="num value" data-testid={`fader-value-${channel.id}`}><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
-    <div class="vca">
-      {#each vcas as v (v.id)}<span title={`VCA ${v.name}, offset ${formatDb(mixer.state!.vcas[v.id]!.offset)} dB`}>{v.name}</span>{/each}
-      {#if vcas.length > 0 && effective !== fader}<span class="eff num" title="Effective gain">{formatDb(effective)}</span>{/if}
-    </div>
+    <!-- One fixed row, whatever the memberships: the full list and the
+         effective gain are in its tooltip and its accessible name. -->
+    {#if vcas.length > 0}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="vca" role="note" tabindex="0" aria-label={vcaText} use:tip={vcaText}>
+        <span class="names">{vcas.map((v) => v.name).join(' ')}</span>
+        <span class="eff fixed" class:shown={effective !== fader}>{fit(formatDb(effective), 5)}</span>
+      </div>
+    {:else}
+      <div class="vca" aria-hidden="true"></div>
+    {/if}
   </div>
 </section>
 
@@ -304,9 +317,11 @@
   .vca {
     display: flex;
     gap: 2px;
-    min-height: 14px;
-    justify-content: center;
-    flex-wrap: wrap;
+    height: 14px;
+    border-radius: 2px;
+  }
+  .vca:focus-visible {
+    outline: 2px solid var(--focus);
   }
   .vca span {
     font-size: 9px;
@@ -316,8 +331,24 @@
     background: var(--panel-2);
     color: var(--text-dim);
     line-height: 14px;
+    height: 14px;
   }
+  .vca .names {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Reserved: shown or not, the effective gain never resizes the names. */
   .vca .eff {
+    flex: none;
+    font-size: 8.5px;
     color: var(--accent);
+    visibility: hidden;
+    contain: layout style;
+  }
+  .vca .eff.shown {
+    visibility: visible;
   }
 </style>

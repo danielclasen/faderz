@@ -104,6 +104,11 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     ['/channels/ch3/pan/lr', 0],
     ['/vcas/vca2/offset', -12.5],
     ['/vcas/vca2/offset', -2],
+    // ch3 in a second VCA, then back: the foot row keeps its height.
+    ['/vcas/vca1/members', ['ch1', 'ch2', 'ch3']],
+    ['/vcas/vca1/offset', -6],
+    ['/vcas/vca1/offset', 0],
+    ['/vcas/vca1/members', ['ch1', 'ch2']],
   ] as const) await patch(request, path, value);
   await request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources: { CAM1: 'off', CAM2: 'program' } } });
   await page.waitForTimeout(1500);
@@ -149,7 +154,12 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
   info.annotations.push({ type: 'viewport', description: phone ? 'phone' : 'desktop' });
 });
 
-test('no visible label is cut off without its full text on hover and to assistive technology', async ({ page }) => {
+test('no visible label is cut off without its full text in a tooltip reachable by keyboard', async ({ page, request }) => {
+  // A long channel name (ch8), a long VCA name (vca2) and a listen list
+  // longer than the monitor's box.
+  for (const ch of ['ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6', 'ch8']) await patch(request, `/channels/${ch}/solo`, 'pfl');
+  await patch(request, '/channels/ch7/solo', 'afl');
+  await patch(request, '/vcas/vca2/members', ['ch3', 'ch4', 'ch5', 'ch6', 'ch8']);
   await live(page);
   await page.evaluate(() => document.fonts.ready);
   const views = ['Mixer', 'Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup'];
@@ -176,13 +186,45 @@ test('no visible label is cut off without its full text on hover and to assistiv
           const clipY = cs.overflowY === 'hidden' || cs.overflowY === 'clip';
           const cut = (clipX && el.scrollWidth > el.clientWidth + 1) || (clipY && el.scrollHeight > el.clientHeight + 1);
           if (!cut) continue;
-          const holder = el.closest<HTMLElement>('[title]');
-          const titled = holder !== null && holder.title.includes(text);
-          if (!titled) out.push(`${view}: "${text}" (${el.tagName.toLowerCase()}.${el.className})`);
+          // lib/tip.ts: shown on hover, keyboard focus and a long touch.
+          const holder = el.closest<HTMLElement>('[data-tip]');
+          const tipped = holder !== null && (holder.dataset['tip'] ?? '').includes(text) && holder.tabIndex >= 0;
+          if (!tipped) out.push(`${view}: "${text}" (${el.tagName.toLowerCase()}.${el.className})`);
         }
         return out;
       }, name)),
     );
   }
   expect(problems).toEqual([]);
+});
+
+test('a cut-off label shows its full text on hover, on keyboard focus and on a long touch', async ({ page }, info) => {
+  await live(page);
+  const tooltip = page.getByRole('tooltip');
+  const head = page.locator('[data-channel="ch1"] .head');
+  if (info.project.name === 'desktop') {
+    await page.locator('[data-channel="ch8"] .head').hover();
+    await expect(tooltip).toHaveText('Reporter 2 North Gate');
+    await page.mouse.move(0, 0);
+    await expect(tooltip).toBeHidden();
+    // Keyboard focus, which a mouse click does not give.
+    await page.locator('[data-channel="ch8"] .head').focus();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    await expect(tooltip).toHaveText('Reporter 2 North Gate');
+    await expect(page.locator('[data-channel="ch8"] .head')).toHaveAttribute('aria-describedby', 'faderz-tip');
+    await page.keyboard.press('Escape');
+    await expect(tooltip).toBeHidden();
+    return;
+  }
+  // A held touch shows the tooltip and does not also open the channel.
+  const box = (await head.boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  const point = [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point });
+  await page.waitForTimeout(800);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(tooltip).toHaveText('Pres 1');
+  await expect(head).toHaveAttribute('aria-pressed', 'false');
+  await expect(tooltip).toBeHidden({ timeout: 5000 });
 });

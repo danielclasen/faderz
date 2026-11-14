@@ -6,6 +6,7 @@
   import type { MeterGroup } from '../lib/meters/store';
   import Fader from './Fader.svelte';
   import Meter from './Meter.svelte';
+  import { tip } from '../lib/tip';
 
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
@@ -14,6 +15,14 @@
     ...shape.vcas.filter((v) => mixer.state!.vcas[v.id]!.solo !== 'off').map((v) => ({ name: `VCA ${v.name}`, mode: mixer.state!.vcas[v.id]!.solo })),
     ...shape.channels.filter((c) => mixer.state!.channels[c.id]!.solo !== 'off').map((c) => ({ name: c.name, mode: mixer.state!.channels[c.id]!.solo })),
   ]);
+  // PFL takes priority over AFL: while any PFL is on, the AFL listens wait.
+  const pfl = $derived(listening.filter((l) => l.mode === 'pfl'));
+  const afl = $derived(listening.filter((l) => l.mode === 'afl'));
+  const listenMode = $derived(pfl.length > 0 ? 'PFL' : afl.length > 0 ? 'AFL' : null);
+  const heard = $derived((pfl.length > 0 ? pfl : afl).map((l) => l.name).join(', '));
+  const listenText = $derived(
+    listenMode === null ? '' : `${listenMode}: ${heard}${pfl.length > 0 && afl.length > 0 ? `; AFL held while PFL is on: ${afl.map((l) => l.name).join(', ')}` : ''}`,
+  );
   const sources = $derived([
     ...shape.buses.map((e) => ({ ...e, group: 'buses' as MeterGroup })),
     ...shape.auxes.map((e) => ({ ...e, group: 'auxes' as MeterGroup })),
@@ -33,10 +42,18 @@
 
 <section class="monitor" aria-label="Monitor">
   <div class="panel-title" title={shape.monitorOutputs.map((o) => `${o.name} (${o.layout})`).join(', ')}>Monitor</div>
-  <div class="listen" class:active={listening.length > 0} aria-live="polite">
-    {#if listening.length > 0}
-      <b>{listening.some((l) => l.mode === 'pfl') ? 'PFL' : 'AFL'}</b>
-      <span>{listening.map((l) => l.name).join(', ')}</span>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div
+    class="listen"
+    class:active={listening.length > 0}
+    aria-live="polite"
+    role="status"
+    tabindex={listening.length > 0 ? 0 : -1}
+    use:tip={listenText}
+  >
+    {#if listenMode}
+      <b>{listenMode}{pfl.length > 0 && afl.length > 0 ? ' (AFL held)' : ''}</b>
+      <span>{heard}</span>
     {:else}
       <span class="idle">{current?.name ?? source}</span>
     {/if}
