@@ -196,7 +196,20 @@ export function initialState(shape: Shape): State {
       vca1: { offset: 0, mute: false, members: existing(['ch1', 'ch2']) },
       vca2: { offset: -2, mute: false, members: existing(['ch3', 'ch4', 'ch5', 'ch6']) },
     },
-    monitor: { source: 'pgm20', level: -10, dim: false, cut: false, mono: false, talkbackDim: true },
+    monitor: {
+      source: 'pgm20',
+      level: -10,
+      dim: false,
+      cut: false,
+      mono: false,
+      talkbackDim: true,
+      dimDepth: 20,
+      monoCompensation: 3,
+      downmix: 'loRo',
+      image: 'normal',
+      speakerMute: Array<boolean>(shape.monitorOutputs[0]?.width ?? 2).fill(false),
+      speakerSolo: Array<boolean>(shape.monitorOutputs[0]?.width ?? 2).fill(false),
+    },
     afv: Object.fromEntries(
       shape.channels.map((c, i) => {
         const cam = i >= 12 && i < 16 ? `CAM${i - 11}` : null;

@@ -181,6 +181,15 @@ export interface MonitorState {
   cut: boolean;
   mono: boolean;
   talkbackDim: boolean;
+  /** dB. */
+  dimDepth: number;
+  /** dB. */
+  monoCompensation: number;
+  downmix: 'loRo' | 'lr';
+  image: StereoImage;
+  /** Per leg of the monitor output. */
+  speakerMute: boolean[];
+  speakerSolo: boolean[];
 }
 export interface AfvBinding {
   enabled: boolean;

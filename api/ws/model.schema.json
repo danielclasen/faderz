@@ -1020,7 +1020,7 @@
       }
     },
     "MonitorState": {
-      "description": "Monitor section. While any channel has solo pfl or afl, the monitor plays the listen sum instead of source.",
+      "description": "Monitor section. While any channel or VCA has solo pfl or afl, the monitor plays the listen sum instead of source. A source wider than the monitor output folds down by downmix: loRo uses the ITU-R BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), lr plays only its L and R legs. dim lowers the monitor by dimDepth dB; mono sums the legs and lowers the sum by monoCompensation dB; image feeds one leg to both or swaps them on a stereo monitor. speakerMute and speakerSolo hold one entry per leg of the monitor output in layout order: a muted leg is silent, and while any leg is soloed only soloed legs play.",
       "type": "object",
       "required": [
         "source",
@@ -1028,7 +1028,13 @@
         "dim",
         "cut",
         "mono",
-        "talkbackDim"
+        "talkbackDim",
+        "dimDepth",
+        "monoCompensation",
+        "downmix",
+        "image",
+        "speakerMute",
+        "speakerSolo"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1051,8 +1057,55 @@
         "talkbackDim": {
           "description": "Dims the monitor while any mix-minus interrupt is active, so talkback does not feed back through the control room speakers.",
           "type": "boolean"
+        },
+        "dimDepth": {
+          "$ref": "#/$defs/MonitorDimDepth"
+        },
+        "monoCompensation": {
+          "$ref": "#/$defs/MonoCompensation"
+        },
+        "downmix": {
+          "$ref": "#/$defs/Downmix"
+        },
+        "image": {
+          "$ref": "#/$defs/StereoImage"
+        },
+        "speakerMute": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "speakerSolo": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          },
+          "minItems": 1,
+          "maxItems": 8
         }
       }
+    },
+    "MonitorDimDepth": {
+      "description": "Attenuation of DIM, dB.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 60
+    },
+    "MonoCompensation": {
+      "description": "Attenuation of the mono sum, dB; 3 keeps the level of uncorrelated legs.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "Downmix": {
+      "type": "string",
+      "enum": [
+        "loRo",
+        "lr"
+      ]
     },
     "AfvBinding": {
       "description": "Audio-follow-video stage of a channel: post-fader, ramped gain between 0 dB (open) and offLevel (closed). open is driven by tally and is read-only. On program the stage rises to 0 dB over riseMs; on preview or off it waits holdMs, then falls to offLevel over fallMs. A tally carrying transitionMs uses it for both directions of that transition. offLevel -90 closes fully.",
@@ -1367,7 +1420,7 @@
           "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/(offset|mute|members)$"
         },
         {
-          "pattern": "^/monitor/(source|level|dim|cut|mono|talkbackDim)$"
+          "pattern": "^/monitor/(source|level|dim|cut|mono|talkbackDim|dimDepth|monoCompensation|downmix|image|speakerMute/[0-7]|speakerSolo/[0-7])$"
         },
         {
           "pattern": "^/afv/[a-z][a-z0-9-]{0,31}/(enabled|source|riseMs|fallMs|holdMs|offLevel)$"
@@ -2193,6 +2246,74 @@
             "properties": {
               "value": {
                 "$ref": "#/$defs/IdSet"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/monitor/dimDepth$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/MonitorDimDepth"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/monitor/monoCompensation$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/MonoCompensation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/monitor/downmix$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/Downmix"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/monitor/(speakerMute|speakerSolo)/[0-7]$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
               }
             }
           }

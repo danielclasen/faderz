@@ -151,10 +151,10 @@ test('sets the loudness target from the setup view and judges integrated loudnes
 test('sets the LFE send and the stereo image of a channel from the processing panel', async ({ page, request }) => {
   await live(page);
   await page.locator('[data-channel="st1"] .head').click();
-  await page.getByRole('radio', { name: 'Right to both' }).click();
+  await page.getByRole('radio', { name: 'Right to both', exact: true }).click();
   await settled(page);
   expect((await serverState(request)).state.channels['st1']!.image).toBe('rightToBoth');
-  await expect(page.getByRole('radio', { name: 'Right to both' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio', { name: 'Right to both', exact: true })).toHaveAttribute('aria-checked', 'true');
   await patch(request, '/channels/st1/image', 'normal');
   await page.locator('[data-channel="ch1"] .head').click();
   await expect(page.getByLabel('LFE', { exact: true })).toBeVisible();
@@ -240,4 +240,27 @@ test('puts line-up tone at the selected level on chosen outputs from the setup v
   await patch(request, '/tone/on', false);
   await patch(request, '/tone/level', -18);
   await patch(request, '/tone/targets', ['pgm51', 'pgm20', 'me', 'cf']);
+});
+
+test('mutes and solos monitor speakers and sets monitor image and dim depth', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'Mute speaker R' }).click();
+  await page.getByRole('button', { name: 'Solo speaker L' }).click();
+  await page.getByRole('radio', { name: 'Monitor left to both' }).click();
+  await settled(page);
+  expect((await serverState(request)).state.monitor).toMatchObject({ speakerMute: [false, true], speakerSolo: [true, false], image: 'leftToBoth' });
+  await page.getByRole('button', { name: 'Setup' }).click();
+  const depth = page.getByRole('textbox', { name: /^Dim depth/ });
+  await depth.fill('12');
+  await depth.press('Enter');
+  await page.getByRole('radio', { name: 'L/R only' }).click();
+  await settled(page);
+  expect((await serverState(request)).state.monitor).toMatchObject({ dimDepth: 12, downmix: 'lr' });
+  for (const [path, value] of [
+    ['/monitor/speakerMute/1', false],
+    ['/monitor/speakerSolo/0', false],
+    ['/monitor/image', 'normal'],
+    ['/monitor/dimDepth', 20],
+    ['/monitor/downmix', 'loRo'],
+  ] as const) await patch(request, path, value);
 });

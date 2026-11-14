@@ -1,6 +1,8 @@
 <script lang="ts">
   import { getMixer } from '../lib/state/mixer.svelte';
   import { monitorPath } from '../lib/state/paths';
+  import { pointer } from '../lib/state/pointer';
+  import { LAYOUT_LABELS, type StereoImage } from '../lib/contract/types';
   import type { MeterGroup } from '../lib/meters/store';
   import Fader from './Fader.svelte';
   import Meter from './Meter.svelte';
@@ -17,6 +19,14 @@
     ...shape.mixMinus.map((e) => ({ ...e, group: 'mixMinus' as MeterGroup })),
   ]);
   const current = $derived(sources.find((s) => s.id === source));
+  const output = $derived(shape.monitorOutputs[0]);
+  const legs = $derived(output ? LAYOUT_LABELS[output.layout] : []);
+  const monitor = $derived(mixer.state!.monitor);
+  const IMAGES: Array<{ id: StereoImage; key: string; label: string }> = [
+    { id: 'leftToBoth', key: 'L>B', label: 'Monitor left to both' },
+    { id: 'rightToBoth', key: 'R>B', label: 'Monitor right to both' },
+    { id: 'swap', key: 'SWP', label: 'Monitor swap left and right' },
+  ];
   const flag = (key: 'dim' | 'cut' | 'mono' | 'talkbackDim') => mixer.value<boolean>(monitorPath(key));
 </script>
 
@@ -42,6 +52,29 @@
       >
     {/each}
   </div>
+  <div class="speakers" role="group" aria-label="Monitor speakers" style:grid-template-columns={`repeat(${legs.length}, minmax(0, 1fr))`}>
+    {#each legs as leg, i (i)}
+      <button class="key mute" aria-disabled={mixer.locked} aria-pressed={monitor.speakerMute[i]} aria-label={`Mute speaker ${leg}`} title={`Mute speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerMute', i), !monitor.speakerMute[i])}>{leg}</button>
+    {/each}
+    {#each legs as leg, i (i)}
+      <button class="key solo" aria-disabled={mixer.locked} aria-pressed={monitor.speakerSolo[i]} aria-label={`Solo speaker ${leg}`} title={`Solo speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerSolo', i), !monitor.speakerSolo[i])}>S</button>
+    {/each}
+  </div>
+  {#if output?.layout === 'stereo'}
+    <div class="image" role="radiogroup" aria-label="Monitor image">
+      {#each IMAGES as im (im.id)}
+        <button
+          class="key"
+          role="radio"
+          aria-disabled={mixer.locked}
+          aria-checked={monitor.image === im.id}
+          aria-label={im.label}
+          title={im.label}
+          onclick={() => mixer.set(monitorPath('image'), monitor.image === im.id ? 'normal' : im.id)}>{im.key}</button
+        >
+      {/each}
+    </div>
+  {/if}
   <div class="body">
     <div class="f"><Fader path={monitorPath('level')} label="Monitor level" /></div>
     <div class="meter">
@@ -111,6 +144,24 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .speakers,
+  .image {
+    display: grid;
+    gap: 2px;
+  }
+  .image {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .speakers .key,
+  .image .key {
+    padding: 0;
+    font-size: 10px;
+  }
+  .speakers .solo[aria-pressed='true'] {
+    background: var(--listen);
+    border-color: var(--listen);
+    color: #1a1200;
   }
   .body {
     flex: 1;

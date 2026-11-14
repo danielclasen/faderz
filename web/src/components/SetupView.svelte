@@ -11,6 +11,7 @@
     { id: 'custom', label: 'Custom', hint: 'target and tolerance as entered' },
   ];
   const tone = $derived(mixer.state!.tone);
+  const monitorState = $derived(mixer.state!.monitor);
   const outputs = $derived([...mixer.shape!.buses, ...mixer.shape!.auxes, ...mixer.shape!.mixMinus]);
   const TONE_LEVELS = [
     { level: -18, hint: 'EBU R 68 alignment' },
@@ -71,6 +72,16 @@
       {#each outputs as o (o.id)}
         <button class="key" aria-disabled={mixer.locked} aria-pressed={tone.targets.includes(o.id)} aria-label={`Tone on ${o.name}`} title={o.name} onclick={() => toggleTarget(o.id)}>{o.name}</button>
       {/each}
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="setup-monitor">
+    <h2 class="panel-title" id="setup-monitor">Monitor</h2>
+    <NumberEntry path="/monitor/dimDepth" label="Dim depth" min={0} max={60} step={1} unit="dB" />
+    <NumberEntry path="/monitor/monoCompensation" label="Mono compensation" min={0} max={6} step={0.5} unit="dB" />
+    <div class="radios" role="radiogroup" aria-label="Monitor downmix of wider sources">
+      <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'loRo'} title="ITU-R BS.775 Lo/Ro" onclick={() => mixer.set('/monitor/downmix', 'loRo')}>Lo/Ro</button>
+      <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'lr'} title="Left and right legs only" onclick={() => mixer.set('/monitor/downmix', 'lr')}>L/R only</button>
     </div>
   </section>
 

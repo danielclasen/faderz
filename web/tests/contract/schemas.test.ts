@@ -122,6 +122,12 @@ describe('Change values are constrained by path', () => {
     ['/tone/level', -20],
     ['/tone/ident', true],
     ['/tone/targets', ['pgm20', 'aux1']],
+    ['/monitor/dimDepth', 20],
+    ['/monitor/monoCompensation', 3],
+    ['/monitor/downmix', 'lr'],
+    ['/monitor/image', 'swap'],
+    ['/monitor/speakerMute/1', true],
+    ['/monitor/speakerSolo/0', false],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -172,6 +178,11 @@ describe('Change values are constrained by path', () => {
     ['/tone/level', 1],
     ['/tone/frequency', 440],
     ['/tone/targets', ['pgm20', 'pgm20']],
+    ['/monitor/dimDepth', 61],
+    ['/monitor/monoCompensation', -1],
+    ['/monitor/downmix', 'ltRt'],
+    ['/monitor/speakerMute/8', true],
+    ['/monitor/speakerMute', [true, false]],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });
