@@ -271,4 +271,12 @@
       scrollbar-gutter: stable;
     }
   }
+  /* A phone in landscape: two stretched rows would leave the scene list
+     no height at all, so each section takes its own and the view
+     scrolls. */
+  @media (max-width: 1000px) and (max-height: 500px) {
+    .view {
+      grid-auto-rows: max-content;
+    }
+  }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from './lib/state/mixer.svelte';
   import { setTheme, type Theme } from './lib/theme';
   import MixerView from './components/MixerView.svelte';
@@ -13,8 +14,11 @@
   import StatusBar from './components/StatusBar.svelte';
   import AheadBanner from './components/AheadBanner.svelte';
   import { tip } from './lib/tip';
+  import NoticeLine from './components/NoticeLine.svelte';
 
   const mixer = getMixer();
+  /** A phone in landscape: notices move from the status bar into the header. */
+  const short = new MediaQuery('max-height: 500px');
   const toneOn = $derived(!!mixer.state?.tone.on && (mixer.state?.tone.targets.length ?? 0) > 0);
   const toneText = $derived.by(() => {
     const t = mixer.state?.tone;
@@ -62,6 +66,7 @@
         <button class="tab" aria-current={view === v.id ? 'page' : undefined} onclick={() => (view = v.id)}>{v.label}</button>
       {/each}
     </nav>
+    {#if short.current}<div class="header-notices"><NoticeLine /></div>{/if}
     <div class="right">
       <Consoles />
       <StatusArea />
@@ -190,6 +195,33 @@
     .brand {
       font-size: 0;
       gap: 0;
+    }
+  }
+  /* Short screens (a phone in landscape): one header row of 36 px with
+     the view menu, the notices and the connection state; the status bar
+     is gone, so the faders get the height. */
+  @media (max-height: 500px) {
+    .top {
+      height: 36px;
+      min-height: 36px;
+      gap: 8px;
+    }
+    nav {
+      display: none;
+    }
+    .view-menu {
+      display: block;
+    }
+    .brand {
+      font-size: 0;
+      gap: 0;
+    }
+    .header-notices {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+    .right {
+      flex: 0 0 auto;
     }
   }
   .tab:hover {

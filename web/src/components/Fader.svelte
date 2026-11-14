@@ -178,6 +178,11 @@
     min-height: 120px;
     gap: 2px;
   }
+  @media (max-height: 500px) {
+    .fader {
+      min-height: 90px;
+    }
+  }
   .scale {
     position: relative;
     width: 20px;

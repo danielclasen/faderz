@@ -3,7 +3,11 @@
   import { handleTag } from '../lib/net/handle';
   import { fit } from '../lib/format';
   import { tip } from '../lib/tip';
+  import NoticeLine from './NoticeLine.svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   const mixer = getMixer();
+  /** Same query as the header's: on a short screen the notices show there. */
+  const short = new MediaQuery('max-height: 500px');
   const counters = $derived(Object.entries(mixer.counters).map(([name, value]) => [name.replace(/_total$/, ''), value] as const));
   const nonzero = $derived(counters.filter(([, v]) => v > 0).length);
   /** Every counter, for the tooltip and the accessible name: none is ever cut silently. */
@@ -30,8 +34,6 @@
     void counters.length;
     measure();
   });
-  const latest = $derived(mixer.notices.at(-1) ?? null);
-  const others = $derived(mixer.notices.length - 1);
 
   $effect(() => {
     const timers = mixer.notices.map((n) => setTimeout(() => mixer.dismiss(n.id), n.kind === 'error' ? 8000 : 4000));
@@ -41,16 +43,7 @@
 
 <footer class="bar">
   <!-- Notices take this fixed line, never an overlay on the controls. -->
-  <div class="notice-line" role="log" aria-live="polite" aria-label="Notices">
-    {#if latest}
-      <div class="notice {latest.kind}" data-testid="notice" title={latest.text}>
-        <span class="text">{latest.text}</span>
-        <span class="count num" class:shown={latest.count > 1}>x{latest.count}</span>
-        <span class="more num" class:shown={others > 0}>+{others}</span>
-        <button onclick={() => mixer.dismiss(latest.id)} aria-label="Dismiss notice">x</button>
-      </div>
-    {/if}
-  </div>
+  <div class="notices">{#if !short.current}<NoticeLine />{/if}</div>
   <!-- Counts grow without a bound: each is padded to a fixed width, so a
        new digit moves nothing. -->
   <span class="label">counters <span class="fixed">{fit(mixer.countersReplica ?? '-', 3)}</span></span>
@@ -150,49 +143,9 @@
     white-space: nowrap;
     contain: layout paint style;
   }
-  .notice-line {
+  .notices {
     flex: 0 0 min(44%, 560px);
-    height: 20px;
     min-width: 0;
-  }
-  .notice {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 20px;
-    padding: 0 6px;
-    border-radius: 3px;
-    border-left: 3px solid var(--afl);
-    background: var(--panel-2);
-    color: var(--text);
-    font-size: 11.5px;
-  }
-  .notice.conflict {
-    border-left-color: var(--owned);
-  }
-  .notice.error {
-    border-left-color: var(--err);
-  }
-  .text {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .count,
-  .more {
-    visibility: hidden;
-    width: 4ch;
-    color: var(--text-dim);
-  }
-  .shown {
-    visibility: visible;
-  }
-  .notice button {
-    all: unset;
-    cursor: pointer;
-    color: var(--text-dim);
-    padding: 0 4px;
   }
   /* Phones: the replica label goes (the counters' tooltip names it) and
      the session box keeps the tag (its tooltip has the endpoint), so
@@ -204,11 +157,18 @@
     .label {
       display: none;
     }
-    .notice-line {
+    .notices {
       flex-basis: 40%;
     }
     .right {
       flex-basis: 8ch;
+    }
+  }
+  /* Short screens: the bar gives its row to the faders; notices show in
+     the header instead. */
+  @media (max-height: 500px) {
+    .bar {
+      display: none;
     }
   }
 </style>

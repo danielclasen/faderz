@@ -87,19 +87,19 @@
     {/if}
   </div>
 
-  <div class="keys">
+  <div class="ctl">
     <button class="key" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
     <button class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
+    <button
+      class="key mute big"
+      aria-disabled={mixer.locked}
+      aria-pressed={mute}
+      class:vca-muted={vcaMuted && !mute}
+      onclick={() => mixer.set(channelPath(channel.id, 'mute'), !mute)}
+      aria-label={`${channel.name} mute`}
+      data-path={channelPath(channel.id, 'mute')}>MUTE</button
+    >
   </div>
-  <button
-    class="key mute big"
-    aria-disabled={mixer.locked}
-    aria-pressed={mute}
-    class:vca-muted={vcaMuted && !mute}
-    onclick={() => mixer.set(channelPath(channel.id, 'mute'), !mute)}
-    aria-label={`${channel.name} mute`}
-    data-path={channelPath(channel.id, 'mute')}>MUTE</button
-  >
 
   <div class="fm">
     <Fader path={channelPath(channel.id, 'fader')} label={`${channel.name} fader`} />
@@ -272,12 +272,14 @@
     text-align: center;
     line-height: 18px;
   }
-  .keys {
+  /* PFL and AFL side by side, MUTE across both below. */
+  .ctl {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 3px;
+    gap: 3px 3px;
   }
   .big {
+    grid-column: 1 / -1;
     height: 26px;
     font-size: 12px;
   }
@@ -375,5 +377,54 @@
   }
   .vca .eff.shown {
     visibility: visible;
+  }
+  /* Short screens (a phone in landscape): the processing, EQ and route
+     rows, which the processing panel shows in full, give their height to
+     the fader; the name takes one line and PFL, AFL and MUTE one row. */
+  @media (max-height: 500px) {
+    .strip {
+      gap: 3px;
+      padding: 3px 3px 4px;
+      contain-intrinsic-size: auto 86px auto 280px;
+    }
+    .proc,
+    .eq,
+    .routes,
+    .vca {
+      display: none;
+    }
+    .head {
+      min-height: 0;
+      grid-template-columns: auto auto 1fr;
+      grid-template-rows: auto;
+      align-items: baseline;
+    }
+    .name {
+      grid-column: auto;
+      grid-row: 1;
+      grid-column-start: 2;
+    }
+    .badges {
+      grid-column: 3;
+    }
+    .ctl {
+      grid-template-columns: auto auto 1fr;
+      gap: 2px;
+    }
+    .ctl .key {
+      padding: 0 2px;
+      font-size: 10px;
+      letter-spacing: 0;
+    }
+    .big {
+      grid-column: auto;
+      height: 22px;
+    }
+    .fm {
+      min-height: 100px;
+    }
+    .meter {
+      padding: 17px 0;
+    }
   }
 </style>
