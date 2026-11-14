@@ -408,6 +408,12 @@
         "altInput": {
           "description": "true when the channel has a second (B) input source configured, e.g. a redundant flow.",
           "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Label of the input source, shown under the channel name; absent when the source has no label."
         }
       }
     },
@@ -849,7 +855,8 @@
         "meterTap",
         "directOut",
         "sends",
-        "routes"
+        "routes",
+        "color"
       ],
       "additionalProperties": false,
       "properties": {
@@ -925,6 +932,9 @@
           "additionalProperties": {
             "type": "boolean"
           }
+        },
+        "color": {
+          "$ref": "#/$defs/ScribbleColor"
         }
       }
     },
@@ -1468,7 +1478,7 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|color|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
@@ -2403,6 +2413,23 @@
             "properties": {
               "path": {
                 "type": "string",
+                "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/color$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/ScribbleColor"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
                 "pattern": "^/sceneRecalled$"
               }
             }
@@ -2800,6 +2827,20 @@
         "type": "integer",
         "minimum": 0
       }
+    },
+    "ScribbleColor": {
+      "description": "Operator-assigned colour of a channel's scribble strip; none shows the plain strip.",
+      "type": "string",
+      "enum": [
+        "none",
+        "red",
+        "orange",
+        "yellow",
+        "green",
+        "cyan",
+        "blue",
+        "purple"
+      ]
     }
   }
 }

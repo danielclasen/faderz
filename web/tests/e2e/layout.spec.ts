@@ -344,14 +344,14 @@ test('a cut-off label shows its full text on hover, on keyboard focus and on a l
   const head = page.locator('[data-channel="ch1"] .head');
   if (info.project.name === 'desktop') {
     await page.locator('[data-channel="ch8"] .head').hover();
-    await expect(tooltip).toHaveText('Reporter 2 North Gate');
+    await expect(tooltip).toHaveText('Reporter 2 North Gate (Studio mic 8)');
     await page.mouse.move(0, 0);
     await expect(tooltip).toBeHidden();
     // Keyboard focus, which a mouse click does not give.
     await page.locator('[data-channel="ch8"] .head').focus();
     await page.keyboard.press('Shift+Tab');
     await page.keyboard.press('Tab');
-    await expect(tooltip).toHaveText('Reporter 2 North Gate');
+    await expect(tooltip).toHaveText('Reporter 2 North Gate (Studio mic 8)');
     await expect(page.locator('[data-channel="ch8"] .head')).toHaveAttribute('aria-describedby', 'faderz-tip');
     await page.keyboard.press('Escape');
     await expect(tooltip).toBeHidden();
@@ -364,7 +364,7 @@ test('a cut-off label shows its full text on hover, on keyboard focus and on a l
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point });
   await page.waitForTimeout(800);
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await expect(tooltip).toHaveText('Pres 1');
+  await expect(tooltip).toHaveText('Pres 1 (Studio mic 1)');
   await expect(head).toHaveAttribute('aria-pressed', 'false');
   await expect(tooltip).toBeHidden({ timeout: 5000 });
 });

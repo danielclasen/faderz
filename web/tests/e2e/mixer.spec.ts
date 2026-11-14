@@ -1003,3 +1003,19 @@ test('opens processing at the section of a strip chip and assigns a bus from the
   await expect.poll(async () => (await serverState(request)).state.channels['ch1']!.routes['pgm51']).toBe(!before);
   await expect(chip).toHaveAttribute('aria-pressed', String(!before));
 });
+
+test('shows the source under the channel name and colours the scribble strip from the processing panel', async ({ page, request }) => {
+  await live(page);
+  const head = page.locator('[data-channel="ch3"] .head');
+  await expect(head.locator('.source')).toHaveText('Studio mic 3');
+  const name = (await head.locator('.name').evaluate((el) => parseFloat(getComputedStyle(el).fontSize)));
+  expect(name).toBeGreaterThanOrEqual(15);
+  const before = (await head.boundingBox())!.height;
+  await head.click();
+  await page.getByRole('radiogroup', { name: 'Guest 1 strip colour' }).getByRole('radio', { name: 'red' }).click();
+  await expect(head).toHaveAttribute('data-color', 'red');
+  await expect.poll(async () => (await serverState(request)).state.channels['ch3']!.color).toBe('red');
+  expect((await head.boundingBox())!.height).toBe(before);
+  await page.getByRole('radiogroup', { name: 'Guest 1 strip colour' }).getByRole('radio', { name: 'No colour' }).click();
+  await expect.poll(async () => (await serverState(request)).state.channels['ch3']!.color).toBe('none');
+});

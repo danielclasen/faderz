@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { BusState, ChannelState, EqBandType, RecallGroup, Solo, StereoImage, Tap } from '../lib/contract/types';
   import { TAPS, TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
-  import { LAYOUT_LABELS, RECALL_GROUPS } from '../lib/contract/types';
+  import { LAYOUT_LABELS, RECALL_GROUPS, SCRIBBLE_COLORS } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { pointer } from '../lib/state/pointer';
   import { recallSafePath } from '../lib/state/paths';
@@ -89,6 +89,23 @@
   <div class="cols">
     <div class="col" data-section="input">
       <h3 class="panel-title">Input</h3>
+      {#if ch}
+        <div class="taps colors" role="radiogroup" aria-label={`${element.name} strip colour`}>
+          <span class="lbl">Colour</span>
+          {#each SCRIBBLE_COLORS as c (c)}
+            <button
+              class="key swatch"
+              role="radio"
+              data-color={c}
+              aria-disabled={mixer.locked}
+              aria-checked={ch.color === c}
+              aria-label={c === 'none' ? 'No colour' : c}
+              title={c === 'none' ? 'No colour' : c}
+              onclick={() => mixer.set(p('color'), c)}><i></i></button
+            >
+          {/each}
+        </div>
+      {/if}
       {#if channel?.altInput}
         <div class="taps" role="radiogroup" aria-label={`${element.name} input source`}>
           <span class="lbl">Source</span>
@@ -300,6 +317,30 @@
   .meta {
     color: var(--text-dim);
     font-size: 11px;
+  }
+  .swatch {
+    width: 24px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+  }
+  .swatch i {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    border: 1px solid var(--line-strong);
+  }
+  .swatch[data-color='red'] i { background: #ff5a5f; }
+  .swatch[data-color='orange'] i { background: #ff9d3a; }
+  .swatch[data-color='yellow'] i { background: #f2d53c; }
+  .swatch[data-color='green'] i { background: #3ccf75; }
+  .swatch[data-color='cyan'] i { background: #3fd0e0; }
+  .swatch[data-color='blue'] i { background: #4d8dff; }
+  .swatch[data-color='purple'] i { background: #b07cff; }
+  .swatch[aria-checked='true'] {
+    background: var(--panel-2);
+    border-color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--text);
   }
   .step {
     margin-left: auto;

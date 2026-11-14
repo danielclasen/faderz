@@ -20,11 +20,11 @@ const MONO_NAMES = [
 ];
 
 const WIDE_CHANNELS: ChannelShape[] = [
-  { id: 'st1', name: 'Music', width: 2, layout: 'stereo', altInput: false },
-  { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo', altInput: false },
-  { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo', altInput: false },
+  { id: 'st1', name: 'Music', width: 2, layout: 'stereo', altInput: false, source: 'Playout 1' },
+  { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo', altInput: false, source: 'Clip server A' },
+  { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo', altInput: false, source: 'Clip server B' },
   { id: 'st4', name: 'FX', width: 2, layout: 'stereo', altInput: false },
-  { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1', altInput: true },
+  { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1', altInput: true, source: 'Playout 2' },
 ];
 
 /** Channel count of the example shape when none is given. */
@@ -48,6 +48,7 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
       width: 1 as const,
       layout: 'mono' as const,
       altInput: i < 2,
+      ...(i < 8 ? { source: `Studio mic ${i + 1}` } : {}),
     })),
     ...WIDE_CHANNELS.slice(0, channelCount - mono).map((c) => ({ ...c })),
   ];
@@ -134,6 +135,7 @@ export function initialState(shape: Shape): State {
     const mic = c.layout === 'mono';
     const s: ChannelState = {
       input: 'a',
+      color: c.id === 'ch1' || c.id === 'ch2' ? 'blue' : c.layout === 'mono' ? 'none' : 'green',
       trim: 0,
       legTrim: Array<number>(c.width).fill(0),
       polarity: Array<boolean>(c.width).fill(false),

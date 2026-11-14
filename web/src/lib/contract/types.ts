@@ -51,7 +51,12 @@ export interface ElementShape {
 export interface ChannelShape extends ElementShape {
   /** A second (B) input source is configured. */
   altInput: boolean;
+  /** Label of the input source, shown under the channel name. */
+  source?: string;
 }
+/** Operator-assigned scribble strip colour. */
+export type ScribbleColor = 'none' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'purple';
+export const SCRIBBLE_COLORS: readonly ScribbleColor[] = ['none', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple'];
 export type InputSelect = 'a' | 'b';
 export interface BusShape extends ElementShape {
   kind: BusKind;
@@ -128,6 +133,7 @@ export interface Send {
 }
 export interface ChannelState {
   input: InputSelect;
+  color: ScribbleColor;
   trim: number;
   /** Per leg, layout order. */
   legTrim: number[];

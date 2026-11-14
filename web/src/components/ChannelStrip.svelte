@@ -50,14 +50,23 @@
 </script>
 
 <section class="strip" class:selected class:alt={index % 2 === 1} aria-label={`Channel ${index + 1} ${channel.name}`} data-channel={channel.id}>
-  <button class="head" onclick={() => onselect(channel.id)} aria-pressed={selected} use:tip={channel.name}>
+  <button
+    class="head"
+    data-color={st.color}
+    onclick={() => onselect(channel.id)}
+    aria-pressed={selected}
+    use:tip={channel.source ? `${channel.name} (${channel.source})` : channel.name}
+  >
     <span class="no num">{index + 1}</span>
-    <span class="badges">
-      <span class="badge iso" class:shown={safe.length > 0} title={`Recall safe: ${safe.join(', ')}`} aria-hidden={safe.length === 0} data-testid={`iso-${channel.id}`}>ISO</span>
-      <span class="badge alt" class:shown={st.input === 'b'} title="Fed from its B input" aria-hidden={st.input !== 'b'}>B</span>
-      {#if badge}<span class="badge">{badge}</span>{/if}
-    </span>
     <span class="name">{channel.name}</span>
+    <span class="line2">
+      <span class="source">{channel.source ?? ''}</span>
+      <span class="badges">
+        <span class="badge iso" class:shown={safe.length > 0} title={`Recall safe: ${safe.join(', ')}`} aria-hidden={safe.length === 0} data-testid={`iso-${channel.id}`}>ISO</span>
+        <span class="badge alt" class:shown={st.input === 'b'} title="Fed from its B input" aria-hidden={st.input !== 'b'}>B</span>
+        {#if badge}<span class="badge">{badge}</span>{/if}
+      </span>
+    </span>
   </button>
 
   <div class="afv" class:program={tally === 'program'} class:preview={tally === 'preview'} class:closed={afv?.enabled && !afv.open}>
@@ -174,42 +183,79 @@
     background: var(--strip-sel);
     box-shadow: inset 0 2px 0 var(--accent);
   }
+  /* Scribble strip: a colour band, the number and name on the first
+     line, the source and badges on the second. Two fixed lines. */
   .head {
     all: unset;
     display: grid;
-    grid-template-columns: auto 1fr;
-    grid-template-rows: auto auto;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: 19px 14px;
     column-gap: 4px;
+    align-items: baseline;
     cursor: pointer;
-    padding: 3px 4px;
+    padding: 2px 4px 3px;
     border-radius: 3px;
+    border-top: 3px solid transparent;
     background: var(--well);
     color: #e6edf3;
-    min-height: 34px;
   }
+  .head[data-color='red'] { border-top-color: #ff5a5f; }
+  .head[data-color='orange'] { border-top-color: #ff9d3a; }
+  .head[data-color='yellow'] { border-top-color: #f2d53c; }
+  .head[data-color='green'] { border-top-color: #3ccf75; }
+  .head[data-color='cyan'] { border-top-color: #3fd0e0; }
+  .head[data-color='blue'] { border-top-color: #4d8dff; }
+  .head[data-color='purple'] { border-top-color: #b07cff; }
   .head:focus-visible {
     outline: 2px solid var(--focus);
   }
   .no {
+    font-size: 11px;
+    color: #c9d1db;
+  }
+  .name {
+    font-weight: 600;
+    font-size: 15px;
+    line-height: 19px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .line2 {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+    min-width: 0;
+  }
+  .source {
+    flex: 1;
     font-size: 10px;
-    color: #8b96a4;
+    line-height: 14px;
+    color: #9aa5b3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
   .badge {
-    justify-self: end;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     color: #0b0d10;
     background: #8b96a4;
     border-radius: 2px;
-    padding: 0 3px;
+    padding: 0 2px;
     line-height: 13px;
   }
   .badges {
-    justify-self: end;
+    flex: none;
     display: flex;
     gap: 2px;
   }
-  /* Reserved space: shown or not, the B badge never moves the head. */
+  /* Hidden badges give their room to the source. */
+  .badge:not(.shown):is(.alt, .iso) {
+    display: none;
+  }
   .badge.alt,
   .badge.iso {
     visibility: hidden;
@@ -220,15 +266,6 @@
   }
   .badge.shown {
     visibility: visible;
-  }
-  .name {
-    grid-column: 1 / -1;
-    font-weight: 600;
-    font-size: 12.5px;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .selected .name {
     color: var(--accent);
@@ -453,18 +490,10 @@
       display: none;
     }
     .head {
-      min-height: 0;
-      grid-template-columns: auto auto 1fr;
-      grid-template-rows: auto;
-      align-items: baseline;
+      grid-template-rows: 19px;
     }
-    .name {
-      grid-column: auto;
-      grid-row: 1;
-      grid-column-start: 2;
-    }
-    .badges {
-      grid-column: 3;
+    .line2 {
+      display: none;
     }
     .ctl {
       grid-template-columns: auto auto 1fr;
