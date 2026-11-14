@@ -326,3 +326,20 @@ test('mutes a programme output only after a hold, and a short press does nothing
   await settled(page);
   expect((await serverState(request)).state.buses['pgm20']!.mute).toBe(false);
 });
+
+test('types an EQ frequency and a gate threshold into the processing panel', async ({ page, request }) => {
+  await live(page);
+  await page.locator('[data-channel="ch5"] .head').click();
+  const freq = page.getByRole('textbox', { name: 'Freq value, type to set' }).nth(1);
+  await freq.fill('1.2k');
+  await freq.press('Enter');
+  const thr = page.getByRole('textbox', { name: 'Thr value, type to set' }).first();
+  await thr.fill('-42');
+  await thr.press('Enter');
+  await settled(page);
+  const ch = (await serverState(request)).state.channels['ch5']!;
+  expect(ch.eq.bands[1]!.freq).toBe(1200);
+  expect(ch.gate.threshold).toBe(-42);
+  await patch(request, '/channels/ch5/eq/bands/1/freq', 400);
+  await patch(request, '/channels/ch5/gate/threshold', -50);
+});

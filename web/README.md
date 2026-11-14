@@ -133,8 +133,10 @@ closes the channel processing panel. The mute of an output (bus, aux,
 mix-minus) needs a 0.5 s hold, by pointer, Space or Enter; one press
 unmutes. Channel mutes take one press.
 
-Typed values (delay, the Setup view) are written on Enter or when the
-field is left, and Escape restores the current value. A delay is typed
+Typed values (the readout of every processing parameter, delay, the
+Setup view) are written on Enter or when the field is left, and Escape
+restores the current value. Parameters take units: `2.5k` or `2.5 kHz`,
+`-3 dB`, `40%`, `4:1`, `off`. A delay is typed
 in the selected unit (ms, frames at the shape's frame rate, or
 samples) or with a suffix: `40ms`, `2f`, `1.5s`, `1920smp`; the arrow
 keys step one unit, Shift a tenth. Matrix grids move with the arrow keys.

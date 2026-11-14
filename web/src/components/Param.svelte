@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fit } from '../lib/format';
   import { getMixer } from '../lib/state/mixer.svelte';
+  import { parseEntry } from '../lib/audio/entry';
 
   interface Props {
     path: string;
@@ -28,6 +29,30 @@
   };
   const shown = $derived(format ? format(value) : `${Number(value.toFixed(step < 1 ? 1 : 0))}${unit}`);
 
+  let field: HTMLInputElement | undefined = $state();
+
+  /** Writes a typed value, clamped and rounded like the slider's. */
+  function commit(): void {
+    if (!field) return;
+    const typed = parseEntry(field.value, min);
+    if (typed === null) {
+      field.value = fit(shown, 8);
+      return;
+    }
+    const v = Number((Math.round(Math.min(max, Math.max(min, typed)) / step) * step).toFixed(4));
+    if (v !== value) mixer.set(path, v);
+    field.value = fit(format ? format(v) : `${Number(v.toFixed(step < 1 ? 1 : 0))}${unit}`, 8);
+  }
+  function fieldKey(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      commit();
+      field?.select();
+    } else if (e.key === 'Escape' && field) {
+      field.value = fit(shown, 8);
+      field.blur();
+    }
+  }
+
   function input(e: Event): void {
     const v = Math.min(max, Math.max(min, fromSlider(Number((e.currentTarget as HTMLInputElement).value))));
     mixer.set(path, Number(v.toFixed(4)));
@@ -52,7 +77,19 @@
     aria-valuetext={shown}
     data-path={path}
   />
-  <output for={id} class="num fixed">{fit(shown, 8)}</output>
+  <input
+    bind:this={field}
+    class="entry fixed"
+    type="text"
+    inputmode="decimal"
+    value={fit(shown, 8)}
+    disabled={mixer.locked}
+    onchange={commit}
+    onkeydown={fieldKey}
+    onfocus={() => field?.select()}
+    aria-label={`${label} value, type to set`}
+    title="Type a value; Enter sets it, Escape restores"
+  />
 </div>
 
 <style>
@@ -72,12 +109,27 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  output {
+  .entry {
+    width: 100%;
+    box-sizing: border-box;
+    height: 20px;
+    padding: 0 3px;
     font-size: 11px;
     text-align: right;
     color: var(--text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 2px;
   }
-  .foreign output {
+  .entry:hover {
+    border-color: var(--line-strong);
+  }
+  .entry:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 0;
+    background: var(--well);
+  }
+  .foreign .entry {
     color: var(--owned);
   }
 </style>
