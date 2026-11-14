@@ -337,6 +337,8 @@ describe('WebSocket messages', () => {
     ['ping', { type: 'ping', replica, t: 0 }],
     ['pong', { type: 'pong', replica, t: 5 }],
     ['409 with owner', { type: 'error', replica, code: 409, message: 'owned', commandId: cmd, path: '/channels/ch1/fader', current: -3, owner }],
+    // <replica>:<32 hex>:<n> with a 63-character replica id.
+    ['owner of a long connection id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, connection: `${'r'.repeat(63)}:${'0f'.repeat(16)}:18446744073709551615` } }] }],
     ['503 not applied', { type: 'error', replica, code: 503, message: 'not applied', commandId: cmd, path: '/channels/ch1/fader' }],
     ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 } }],
     ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
@@ -359,6 +361,7 @@ describe('WebSocket messages', () => {
     ['owner with a session id for a handle', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', connection: 'c1' } }] }],
     ['handle of the wrong length', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, handle: 'dGFiLTEtc2Vzc2lvbi1pZA0' } }] }],
     ['owner of unknown kind', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, kind: 'robot' } }] }],
+    ['owner with a connection id over 128 characters', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, connection: 'c'.repeat(129) } }] }],
     ['owner with empty principal', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, principal: '' } }] }],
     ['origin without owner', { ...delta, origins: [{ commandId: cmd }] }],
     ['origin with seq 0', { ...delta, origins: [{ owner, commandId: cmd, seq: 0 }] }],

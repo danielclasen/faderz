@@ -17,7 +17,7 @@
       "uniqueItems": true
     },
     "SessionId": {
-      "description": "Session of a client: 22 to 128 base64url characters without padding, carrying at least 128 random bits. A client sends it as ?session= on every WebSocket connection and in hello, and keeps it across reconnects and failover; the web UI also across reloads of the same tab, a console across bridge restarts. Command deduplication and the ownership lease key on it. It is a credential of the session: a client presenting another client's session id under the same principal can take over its ownership and the deduplication of its commands. It therefore never leaves the client that drew it and the server; every record published to clients carries the session's OwnerHandle instead.",
+      "description": "Session of a client: 22 to 128 base64url characters without padding, carrying at least 128 random bits. A client sends it as ?session= on every WebSocket connection and in hello, and keeps it across reconnects and failover; the web UI also across reloads of the same tab, a console across bridge restarts. Command deduplication and the ownership lease key on it. It is a credential of the session: a client presenting another client's session id under the same principal can take over its ownership and the deduplication of its commands. It therefore never leaves the client that drew it and the server; every record published to clients carries the session's OwnerHandle instead. As it travels in the URL of every WebSocket upgrade, the server and every proxy in front of it redact the session query parameter from their access logs.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,128}$"
     },
@@ -54,10 +54,10 @@
           ]
         },
         "connection": {
-          "description": "Server-assigned id of the WebSocket connection.",
+          "description": "Server-assigned id of the WebSocket connection, up to 128 characters: room for a 63-character replica id, a 32-digit hexadecimal id and a decimal counter.",
           "type": "string",
           "minLength": 1,
-          "maxLength": 64
+          "maxLength": 128
         }
       }
     },
@@ -1426,7 +1426,7 @@
       }
     },
     "Owners": {
-      "description": "Owned controls: control path to the owner. Part of the replicated state, so ownership survives a replica switch. Ownership belongs to the session (principal and session of the owner) and lapses when the session lease expires. Every message of the session that reaches a replica not partitioned from the quorum renews the lease, through any connection; the lease expires 2 s after the last renewal. A replica failure or a page reload therefore keeps a held control while the session reconnects within the lease. After a snapshot or resume on a new connection of its session, a client releases every control its session owns that it is not touching, so ownership does not outlast a reload.",
+      "description": "Owned controls: control path to the owner. Part of the replicated state, so ownership survives a replica switch. Ownership belongs to the session (principal and session of the owner) and lapses when the session lease expires. Every message of the session that reaches a replica not partitioned from the quorum renews the lease, through any connection; the lease expires 2 s after the last renewal. A server also renews the lease of every session it holds an open connection of, and may take up to 7 s to close a connection whose client has gone silent (client-message.schema.json#/$defs/Ping), so ownership of a session whose client is gone lapses up to 9 s after the client's last message: up to 7 s until its connections are closed plus the 2 s lease. A replica failure or a page reload therefore keeps a held control while the session reconnects within the lease. After a snapshot or resume on a new connection of its session, a client releases every control its session owns that it is not touching, so ownership does not outlast a reload.",
       "type": "object",
       "propertyNames": {
         "$ref": "#/$defs/ControlPath"
