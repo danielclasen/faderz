@@ -61,6 +61,7 @@ export function deleteScene(mixer: MixerStore, id: string) {
   return run(mixer, 'Scene delete', () => client().request<CommandResult>('DELETE', `/scenes/${id}`));
 }
 
+/** A retry after a lost answer resets once more: the measurement restarts either way. */
 export function resetLoudness(mixer: MixerStore, ids: string[]) {
   return run(mixer, 'Loudness reset', () => client().request<null>('POST', '/loudness/reset', { ids }));
 }
