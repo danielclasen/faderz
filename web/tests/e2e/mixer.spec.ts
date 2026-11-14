@@ -426,15 +426,20 @@ test('labels every leg of a 5.1 master under its own bar', async ({ page }) => {
 test('latches a true-peak over of a channel direct out until cleared', async ({ page, request }) => {
   await live(page);
   const overs = page.getByTestId('channel-overs');
-  await expect(overs).toBeDisabled();
+  const pres1 = /Pres 1(,|$|\.)/;
+  // Other channels of the mock may latch their own overs meanwhile.
+  await patch(request, '/channels/ch1/trim', -20);
+  await page.waitForTimeout(200);
+  if (await overs.isEnabled()) await overs.click();
+  await expect(overs).not.toHaveAccessibleName(pres1);
   await patch(request, '/channels/ch1/trim', 20);
-  await expect(overs).toBeEnabled();
-  await expect(overs).toHaveAccessibleName(/Pres 1/);
-  await patch(request, '/channels/ch1/trim', 0);
+  await expect(overs).toHaveAccessibleName(pres1);
+  await patch(request, '/channels/ch1/trim', -20);
   await page.waitForTimeout(300);
-  await expect(overs).toHaveAccessibleName(/Pres 1/);
+  await expect(overs).toHaveAccessibleName(pres1);
   await overs.click();
-  await expect(overs).toBeDisabled();
+  await expect(overs).not.toHaveAccessibleName(pres1);
+  await patch(request, '/channels/ch1/trim', 0);
 });
 
 test('latches a true-peak over on a master until RESET, however short it was', async ({ page, request }) => {

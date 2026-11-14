@@ -22,6 +22,11 @@
     Offline: 'OFFLINE',
   };
   const status = $derived(mixer.status);
+  let chipsWidth = $state(0);
+  let reserve = $state(0);
+  $effect(() => {
+    if (chipsWidth > reserve) reserve = chipsWidth;
+  });
   const failover = $derived(
     status.failover && mixer.failoverAt !== null && now - mixer.failoverAt < 8000 ? status.failover : null,
   );
@@ -40,7 +45,9 @@
      empties; the replica chips, whose count follows the cluster, come
      first, so in the right-aligned header they move nothing else. -->
 <div class="status" aria-label="Connection" data-testid="status">
-  <div class="replicas" aria-label="Replicas" data-testid="replicas">
+  <!-- The chips empty while the link reconnects: the box keeps the widest
+       it has been, so the consoles before it never move. -->
+  <div class="replicas" aria-label="Replicas" data-testid="replicas" bind:clientWidth={chipsWidth} style:min-width={`${reserve}px`}>
     {#each status.replicas as r (r.id)}
       <span
         class="replica"
@@ -83,7 +90,7 @@
   <span class="slot fo">
     {#if failover}
       <span class="failover num" role="status" data-testid="failover" title={`Failover after ${failover.reason}`}>
-        FAILOVER {failover.from ?? '-'}-&gt;{failover.to ?? '-'}
+        <span class="fixed">{`FAILOVER ${failover.from ?? '-'}->${failover.to ?? '-'}`.padEnd(15)}</span>
       </span>
     {/if}
   </span>
@@ -119,8 +126,11 @@
   .slot.pend {
     width: 11ch;
   }
+  /* Left-aligned, with its text padded at the end: the target replica
+     appearing after the source moves nothing. */
   .slot.fo {
     width: 17ch;
+    justify-content: flex-start;
   }
   .link b {
     display: inline-block;
@@ -177,7 +187,10 @@
     color: var(--warn);
   }
   .replicas {
-    display: contents;
+    flex: none;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
   }
   .replica {
     display: inline-flex;
@@ -263,7 +276,7 @@
   }
   @media (max-width: 1500px) {
     .slot.fo,
-    .replica {
+    .replicas {
       display: none;
     }
   }
