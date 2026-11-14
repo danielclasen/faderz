@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { handleTag, ownerHandle } from '../../src/lib/net/handle';
 import { engineLamp } from '../../src/lib/counters';
+import { CONSOLE_SESSIONS } from '../../dev/mock/shape';
 import {
   REPLICAS,
   RawClient,
@@ -1207,4 +1208,33 @@ test('keeps a strip to five tab stops and skips to the masters and the monitor',
   }
   expect(stops.filter((s) => s !== 'outside')).toEqual(['head', 'Pres 1 PFL', 'Pres 1 AFL', 'Pres 1 mute', 'Pres 1 fader', 'vca']);
   await expect(page.getByRole('region', { name: 'Channel strips' })).toBeVisible();
+});
+
+test('lists the consoles and every other session with what it holds, each once', async ({ page, baseURL }) => {
+  await live(page);
+  const other = await RawClient.open(baseURL!);
+  // A control surface that holds a fader is a console row, not a session.
+  const surface = await RawClient.open(baseURL!, 'console', CONSOLE_SESSIONS['mcu-1']!);
+  try {
+    await other.command({ type: 'touch', path: '/channels/ch4/fader' });
+    await surface.command({ type: 'touch', path: '/channels/ch5/fader' });
+    const key = page.getByRole('button', { name: /^USERS/ });
+    // Two connected surfaces and one web client.
+    await expect(key).toHaveText('USERS  3');
+    await key.click();
+    const panel = page.getByRole('region', { name: 'Users' });
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('This screen');
+    // Named by the tag of its handle, never by its session id.
+    await expect(panel.getByTestId('user')).toHaveCount(1);
+    await expect(panel.getByTestId('user')).toContainText(`web client ${handleTag(ownerHandle(other.session))}`);
+    await expect(panel.getByTestId('user')).toContainText('holds Guest 2 fader');
+    await expect(panel).toContainText(handleTag(ownerHandle(await debug(page, 'session'))));
+    await expect(panel.getByTestId('console').filter({ hasText: 'MCU Pro' })).toContainText('holds Guest 3 fader');
+  } finally {
+    await other.command({ type: 'release', path: '/channels/ch4/fader' });
+    await surface.command({ type: 'release', path: '/channels/ch5/fader' });
+    other.close();
+    surface.close();
+  }
 });

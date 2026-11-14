@@ -16,6 +16,7 @@
   import { tip } from './lib/tip';
   import NoticeLine from './components/NoticeLine.svelte';
   import LockKey from './components/LockKey.svelte';
+  import Users from './components/Users.svelte';
   import CommitBanner from './components/CommitBanner.svelte';
 
   const mixer = getMixer();
@@ -95,6 +96,7 @@
       </div>
       <Consoles />
       <StatusArea />
+      <Users />
       <!-- Reserved: shown or not, the tone lamp moves nothing. -->
       <span class="tone-slot">
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->

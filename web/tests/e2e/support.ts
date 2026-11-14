@@ -139,8 +139,7 @@ export class RawClient {
   }
 
   /** Opens a primary connection on the service endpoint and waits for its snapshot. */
-  static async open(baseURL: string, kind: 'ui' | 'console' | 'script' = 'ui'): Promise<RawClient> {
-    const session = `raw-${crypto.randomUUID()}`;
+  static async open(baseURL: string, kind: 'ui' | 'console' | 'script' = 'ui', session = `raw-${crypto.randomUUID()}`): Promise<RawClient> {
     const c = new RawClient(`${baseURL.replace(/^http/, 'ws')}/api/v1/ws?session=${session}`, kind, session);
     await new Promise<void>((resolve, reject) => {
       c.ws.once('open', () => resolve());
