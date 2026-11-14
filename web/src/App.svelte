@@ -6,6 +6,7 @@
   import AuxView from './components/AuxView.svelte';
   import AfvView from './components/AfvView.svelte';
   import ScenesView from './components/ScenesView.svelte';
+  import SetupView from './components/SetupView.svelte';
   import Detail from './components/Detail.svelte';
   import StatusArea from './components/StatusArea.svelte';
   import Consoles from './components/Consoles.svelte';
@@ -20,6 +21,7 @@
     { id: 'aux', label: 'Aux / N-1' },
     { id: 'afv', label: 'AFV' },
     { id: 'scenes', label: 'Scenes' },
+    { id: 'setup', label: 'Setup' },
   ] as const;
   type View = (typeof VIEWS)[number]['id'];
   let view = $state<View>('mixer');
@@ -64,8 +66,10 @@
       <AuxView />
     {:else if view === 'afv'}
       <AfvView />
-    {:else}
+    {:else if view === 'scenes'}
       <ScenesView />
+    {:else}
+      <SetupView />
     {/if}
     {#snippet failed(error, reset)}
       <div class="failed" role="alert" data-testid="view-error">

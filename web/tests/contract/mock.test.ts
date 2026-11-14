@@ -805,6 +805,17 @@ describe('REST', () => {
     await rest('DELETE', `/scenes/${id}`);
   });
 
+  it('applies a loudness preset with its target and tolerance, and a typed target makes it custom', async () => {
+    const write = (path: string, value: unknown) =>
+      rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path, value }] });
+    expect((await write('/metering/loudness/preset', 'atsc')).status).toBe(200);
+    expect(cluster.state.metering.loudness).toEqual({ preset: 'atsc', target: -24, tolerance: 2 });
+    await write('/metering/loudness/target', -27);
+    expect(cluster.state.metering.loudness).toEqual({ preset: 'custom', target: -27, tolerance: 2 });
+    await write('/metering/loudness/preset', 'ebu');
+    expect(cluster.state.metering.loudness).toEqual({ preset: 'ebu', target: -23, tolerance: 1 });
+  });
+
   it('drives AFV stages from tally', async () => {
     await rest('PUT', '/afv/tally', { sources: { CAM1: 'off', CAM2: 'program' } });
     expect(cluster.state.afv['ch14']!.open).toBe(true);

@@ -28,6 +28,7 @@ import type {
   State,
   TallyState,
 } from '../../src/lib/contract/types.ts';
+import { LOUDNESS_PRESETS } from '../../src/lib/contract/types.ts';
 import { decodeMeterFrame, deriveMeterLayout, encodeMeterFrame, type MeterLayout } from '../../src/lib/contract/meterFrame.ts';
 import {
   DEAD_MS,
@@ -695,7 +696,7 @@ export class Cluster {
   private checkPath(path: string): string | null {
     const [group, id] = parsePointer(path);
     if (group === 'recallSafe') return this.elementIds().has(id!) ? null : `unknown element ${id}`;
-    if (group === 'monitor') return null;
+    if (group === 'monitor' || group === 'metering') return getAt(this.state, path) === undefined ? `unknown control ${path}` : null;
     return getAt(this.state, path) === undefined ? `unknown control ${path}` : null;
   }
 
@@ -717,11 +718,25 @@ export class Cluster {
     return new Set([...s.channels, ...s.buses, ...s.auxes, ...s.mixMinus, ...s.vcas].map((e) => e.id));
   }
 
-  /** Adds the AFV stage changes that follow from binding or tally changes. */
-  private withSideEffects(changes: Change[]): Change[] {
+  /**
+   * Adds the changes that follow from the written ones: AFV stages from
+   * binding or tally changes, loudness target and tolerance from a preset,
+   * and preset custom from a written target or tolerance.
+   */
+  private withSideEffects(written: Change[]): Change[] {
+    const changes = [...written];
+    for (const c of written) {
+      if (c.path === '/metering/loudness/preset' && c.value !== 'custom') {
+        const p = LOUDNESS_PRESETS[c.value as 'ebu' | 'atsc'];
+        changes.push({ path: '/metering/loudness/target', value: p.target }, { path: '/metering/loudness/tolerance', value: p.tolerance });
+      }
+      if ((c.path === '/metering/loudness/target' || c.path === '/metering/loudness/tolerance') && !written.some((w) => w.path === '/metering/loudness/preset')) {
+        changes.push({ path: '/metering/loudness/preset', value: 'custom' });
+      }
+    }
     const next = structuredClone(this.state);
     for (const c of changes) setAt(next as unknown as Record<string, unknown>, c.path, c.value);
-    const out = [...changes];
+    const out = [...new Map(changes.map((c) => [c.path, c])).values()];
     for (const c of this.shape.channels) {
       const b = next.afv[c.id]!;
       let open = b.open;

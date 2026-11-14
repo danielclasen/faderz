@@ -174,6 +174,18 @@ export interface ConsoleStatus {
   bankOffset: number;
   strips: number;
 }
+export type LoudnessPreset = 'ebu' | 'atsc' | 'custom';
+export type LoudnessScale = 'ebu9' | 'ebu18';
+export interface Metering {
+  zones: { alignment: number; permittedMax: number; truePeakMax: number };
+  loudness: { preset: LoudnessPreset; target: number; tolerance: number };
+  scale: LoudnessScale;
+}
+/** Target and tolerance a preset stands for. */
+export const LOUDNESS_PRESETS: Record<Exclude<LoudnessPreset, 'custom'>, { target: number; tolerance: number }> = {
+  ebu: { target: -23, tolerance: 1 },
+  atsc: { target: -24, tolerance: 2 },
+};
 export interface State {
   channels: Record<Id, ChannelState>;
   buses: Record<Id, BusState>;
@@ -186,6 +198,7 @@ export interface State {
   recallSafe: Record<Id, RecallGroup[]>;
   scenes: Scene[];
   consoles: ConsoleStatus[];
+  metering: Metering;
 }
 export interface Owner {
   principal: string;

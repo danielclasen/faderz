@@ -3,6 +3,7 @@ import {
   BAR_FALL_DB_PER_S,
   METER_FLOOR_DB,
   PEAK_HOLD_MS,
+  meterMarks,
   meterPosition,
   newLeg,
   stepLeg,
@@ -49,6 +50,17 @@ describe('meter ballistics', () => {
       expect(p).toBeGreaterThan(last);
       last = p;
     }
+  });
+});
+
+describe('meter marks', () => {
+  it('mark full scale, the EBU zone boundaries and the lower decades', () => {
+    expect(meterMarks({ alignment: -18, permittedMax: -9 })).toEqual([0, -9, -18, -30, -40, -50, -60]);
+  });
+
+  it('follow configured zones, without duplicates', () => {
+    expect(meterMarks({ alignment: -20, permittedMax: -10 })).toEqual([0, -10, -20, -30, -40, -50, -60]);
+    expect(meterMarks({ alignment: -30, permittedMax: 0 })).toEqual([0, -30, -40, -50, -60]);
   });
 });
 

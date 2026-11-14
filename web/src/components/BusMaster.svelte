@@ -30,7 +30,7 @@
     <span class="name">{element.name}</span>
     {#if tag}<span class="tag">{tag}</span>{/if}
   </button>
-  <Loudness {group} id={element.id} onreset={() => resetLoudness(mixer, [element.id])} />
+  <Loudness {group} id={element.id} stereo={element.layout === 'stereo'} onreset={() => resetLoudness(mixer, [element.id])} />
   <button class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(path('mute'), !mute)} aria-label={`${element.name} mute`}>MUTE</button>
   <div class="fm">
     <Fader path={path('fader')} label={`${element.name} fader`} />

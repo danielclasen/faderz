@@ -7,12 +7,15 @@
 // redrawn on every animation frame.
 
 import { getContext, setContext } from 'svelte';
-import { METER_FLOOR_DB, METER_MARKS, meterPosition, newLeg, stepLeg, type LegBallistics } from './ballistics';
+import { METER_FLOOR_DB, meterMarks, meterPosition, newLeg, stepLeg, type LegBallistics } from './ballistics';
 import { onAnimationFrame, type MeterGroup, type MeterStore } from './store';
 
 export const STALE_MS = 500;
-const MID = -18;
-const HIGH = -6;
+/** Meter colour boundaries, dBFS (State.metering.zones). */
+export interface MeterZones {
+  alignment: number;
+  permittedMax: number;
+}
 /** Width of the momentary loudness bar of a channel meter, px. */
 const LOUD_W = 3;
 
@@ -82,6 +85,8 @@ export class MeterLayer {
   private dpr = 1;
   private w = 0;
   private h = 0;
+  private zones: MeterZones = { alignment: -18, permittedMax: -9 };
+  private marks: number[] = meterMarks(this.zones);
   private colors: Colors = { low: '', mid: '', high: '', well: '', line: '', text: '', loud: '' };
 
   constructor(private readonly meters: MeterStore) {}
@@ -97,6 +102,14 @@ export class MeterLayer {
     host.addEventListener('scroll', this.relayout, { capture: true, passive: true });
     window.addEventListener('resize', this.relayout);
     this.stop = onAnimationFrame((now) => this.frame(now));
+  }
+
+  /** Colour boundaries and marked levels follow the shared metering settings. */
+  setZones(zones: MeterZones): void {
+    if (zones.alignment === this.zones.alignment && zones.permittedMax === this.zones.permittedMax) return;
+    this.zones = { alignment: zones.alignment, permittedMax: zones.permittedMax };
+    this.marks = meterMarks(this.zones);
+    this.relayout();
   }
 
   register(el: HTMLElement, spec: MeterSpec): () => void {
@@ -265,6 +278,8 @@ export class MeterLayer {
       ctx.fillStyle = color;
       ctx.fillRect(x, yTo, bw, yFrom - yTo);
     };
+    const MID = this.zones.alignment;
+    const HIGH = this.zones.permittedMax;
     const zoned = (x: number, bw: number, value: number, alpha: number) => {
       bar(x, bw, METER_FLOOR_DB, Math.min(value, MID), colors.low, alpha);
       if (value > MID) bar(x, bw, MID, Math.min(value, HIGH), colors.mid, alpha);
@@ -303,16 +318,16 @@ export class MeterLayer {
     }
     ctx.globalAlpha = 1;
     ctx.fillStyle = colors.line;
-    for (const mark of METER_MARKS) {
+    for (const mark of this.marks) {
       const y = Math.round(pos(mark)) + 0.5;
-      ctx.fillRect(x0 + scaleW, y, inner, mark === MID ? 1 : 0.5);
+      ctx.fillRect(x0 + scaleW, y, inner, mark === MID ? 2 : 0.5);
     }
     if (scale) {
       ctx.fillStyle = colors.text;
       ctx.font = '8px "JetBrains Mono", monospace';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
-      for (const mark of METER_MARKS) {
+      for (const mark of this.marks) {
         const y = Math.min(y0 + h - 5, Math.max(y0 + 5, pos(mark)));
         ctx.fillText(String(mark), x0 + scaleW - 3, y);
       }

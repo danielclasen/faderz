@@ -98,6 +98,11 @@ describe('Change values are constrained by path', () => {
     ['/buses/pgm51/polarity/3', true],
     ['/channels/ch1/meterTap', 'input'],
     ['/channels/ch1/directOut/tap', 'preFader'],
+    ['/metering/zones/alignment', -20],
+    ['/metering/loudness/preset', 'atsc'],
+    ['/metering/loudness/target', -24],
+    ['/metering/loudness/tolerance', 0.5],
+    ['/metering/scale', 'ebu18'],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -123,6 +128,12 @@ describe('Change values are constrained by path', () => {
     ['/channels/ch1/meterTap', 'post'],
     ['/channels/ch1/directOut', { tap: 'input' }],
     ['/buses/pgm51/meterTap', 'input'],
+    ['/metering/zones/alignment', 3],
+    ['/metering/loudness/preset', 'r128'],
+    ['/metering/loudness/target', -13],
+    ['/metering/loudness/tolerance', 0],
+    ['/metering/scale', 'ebu27'],
+    ['/metering/zones', { alignment: -18, permittedMax: -9, truePeakMax: -1 }],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });

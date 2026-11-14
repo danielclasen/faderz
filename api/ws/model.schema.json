@@ -1053,7 +1053,8 @@
         "tally",
         "recallSafe",
         "scenes",
-        "consoles"
+        "consoles",
+        "metering"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1150,6 +1151,9 @@
           "items": {
             "$ref": "#/$defs/ConsoleStatus"
           }
+        },
+        "metering": {
+          "$ref": "#/$defs/Metering"
         }
       }
     },
@@ -1215,6 +1219,9 @@
         },
         {
           "pattern": "^/recallSafe/[a-z][a-z0-9-]{0,31}$"
+        },
+        {
+          "pattern": "^/metering/(zones/(alignment|permittedMax|truePeakMax)|loudness/(preset|target|tolerance)|scale)$"
         }
       ]
     },
@@ -1730,6 +1737,93 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/metering/zones/(alignment|permittedMax|truePeakMax)$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "number",
+                "minimum": -40,
+                "maximum": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/metering/loudness/preset$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/LoudnessPreset"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/metering/loudness/target$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/LoudnessTarget"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/metering/loudness/tolerance$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/LoudnessTolerance"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/metering/scale$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/LoudnessScale"
+              }
+            }
+          }
         }
       ]
     },
@@ -1932,6 +2026,97 @@
           "type": "boolean"
         }
       }
+    },
+    "Metering": {
+      "description": "Meter display settings shared by every client. zones are the meter colour boundaries in dBFS: alignment level (EBU R 68: -18), permitted maximum (-9, the former quasi-peak limit) and the true-peak maximum (EBU R 128: -1 dBTP). loudness is the target and tolerance an integrated loudness is judged against: preset ebu is -23 LUFS +/-1 LU (EBU R 128 live), atsc -24 LKFS +/-2 LU (ATSC A/85), custom keeps target and tolerance as written. Writing preset ebu or atsc also sets target and tolerance to its values; writing target or tolerance sets preset to custom. scale is the loudness meter scale of EBU Tech 3341: ebu9 shows -18 to +9 LU around the target (the default), ebu18 shows -36 to +18 LU.",
+      "type": "object",
+      "required": [
+        "zones",
+        "loudness",
+        "scale"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "zones": {
+          "type": "object",
+          "required": [
+            "alignment",
+            "permittedMax",
+            "truePeakMax"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "alignment": {
+              "description": "Alignment level, dBFS.",
+              "type": "number",
+              "minimum": -40,
+              "maximum": 0
+            },
+            "permittedMax": {
+              "description": "Permitted maximum, dBFS.",
+              "type": "number",
+              "minimum": -40,
+              "maximum": 0
+            },
+            "truePeakMax": {
+              "description": "Maximum true-peak level, dBTP.",
+              "type": "number",
+              "minimum": -40,
+              "maximum": 0
+            }
+          }
+        },
+        "loudness": {
+          "type": "object",
+          "required": [
+            "preset",
+            "target",
+            "tolerance"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "preset": {
+              "$ref": "#/$defs/LoudnessPreset"
+            },
+            "target": {
+              "$ref": "#/$defs/LoudnessTarget"
+            },
+            "tolerance": {
+              "$ref": "#/$defs/LoudnessTolerance"
+            }
+          }
+        },
+        "scale": {
+          "$ref": "#/$defs/LoudnessScale"
+        }
+      }
+    },
+    "LoudnessPreset": {
+      "type": "string",
+      "enum": [
+        "ebu",
+        "atsc",
+        "custom"
+      ]
+    },
+    "LoudnessTarget": {
+      "description": "Target integrated loudness, LUFS.",
+      "type": "number",
+      "minimum": -31,
+      "maximum": -14
+    },
+    "LoudnessTolerance": {
+      "description": "Tolerance around the target, LU.",
+      "type": "number",
+      "minimum": 0.5,
+      "maximum": 5
+    },
+    "LoudnessScale": {
+      "type": "string",
+      "enum": [
+        "ebu9",
+        "ebu18"
+      ]
     },
     "BusMeter": {
       "description": "Bus, aux and mix-minus metering at the output, where the signal leaves the mixer: sample peak, true peak (4x oversampling, dBTP), RMS and loudness. RMS is referenced to a full-scale sine (AES17), so a sine at -18 dBFS peak reads -18 dB RMS. correlation is the phase correlation of the L and R legs of a stereo element, -1 to 1, measured over 400 ms; null for other layouts and while both legs are silent.",

@@ -23,6 +23,7 @@
     meters.attach(root!, canvas!);
     return () => meters.destroy();
   });
+  $effect(() => meters.setZones(mixer.state!.metering.zones));
   const shape = $derived(mixer.shape!);
   const banks = $derived(
     Array.from({ length: Math.ceil(shape.channels.length / BANK) }, (_, i) => ({

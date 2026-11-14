@@ -21,7 +21,12 @@ export const METER_SCALE: ReadonlyArray<readonly [number, number]> = [
   [-6, 0.8],
   [0, 1],
 ];
-export const METER_MARKS: readonly number[] = [0, -6, -10, -18, -20, -30, -40, -50, -60];
+/** Marked levels of a meter scale: full scale, the zone boundaries and every 10 dB below -20. */
+export function meterMarks(zones: { alignment: number; permittedMax: number }): number[] {
+  return [...new Set([0, zones.permittedMax, zones.alignment, -30, -40, -50, -60])]
+    .filter((m) => m <= 0 && m >= METER_FLOOR_DB)
+    .sort((a, b) => b - a);
+}
 
 export function meterPosition(db: number): number {
   if (db <= METER_SCALE[0]![0]) return 0;

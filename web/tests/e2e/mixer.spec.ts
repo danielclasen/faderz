@@ -129,3 +129,21 @@ test('operates a fader from the keyboard', async ({ page, request }) => {
   await expect(slider).toHaveAttribute('aria-valuenow', '0.9');
   expect(await fader(request, 'ch21')).toBe(0.9);
 });
+
+test('sets the loudness target from the setup view and judges integrated loudness against it', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'Setup' }).click();
+  await page.getByRole('radio', { name: 'ATSC A/85' }).click();
+  await settled(page);
+  expect((await serverState(request)).state.metering.loudness).toEqual({ preset: 'atsc', target: -24, tolerance: 2 });
+  const target = page.getByRole('textbox', { name: /^Target/ });
+  await expect(target).toHaveValue('-24.0');
+  await target.fill('-27');
+  await target.press('Enter');
+  await settled(page);
+  expect((await serverState(request)).state.metering.loudness).toEqual({ preset: 'custom', target: -27, tolerance: 2 });
+  await expect(page.getByRole('radio', { name: 'Custom' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('button', { name: 'Mixer' }).click();
+  await expect(page.locator('[data-master="pgm20"]').getByTitle('Target -27 LUFS +/-2 LU')).toHaveText('-27.0');
+  await patch(request, '/metering/loudness/preset', 'ebu');
+});
