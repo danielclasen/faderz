@@ -33,6 +33,7 @@ import type {
 import { LOUDNESS_PRESETS } from '../../src/lib/contract/types.ts';
 import { decodeMeterFrame, deriveMeterLayout, encodeMeterFrame, type MeterLayout } from '../../src/lib/contract/meterFrame.ts';
 import {
+  COMMAND_EXPIRY_MS,
   DEAD_MS,
   HEARTBEAT_MS,
   LEASE_MS,
@@ -48,6 +49,16 @@ import { ReplicaMeters, SourceModel } from './signals.ts';
 /** Commands arriving within one block share a log entry. */
 export const BLOCK_MS = 5;
 const LOG_LIMIT = 1000;
+/** A command id is remembered this long after it was applied (deduplication retention). */
+export const DEDUP_RETENTION_MS = 10_000;
+/**
+ * The last seq per session and control is kept this long past the end of
+ * the session's lifetime: the dedup retention plus the client's failover
+ * bound, within which it may still send a copy.
+ */
+export const SEQ_RETENTION_MS = DEDUP_RETENTION_MS + COMMAND_EXPIRY_MS;
+/** Entries the command logs of /__mock/audit and /__mock/commands keep. */
+const AUDIT_LIMIT = 10_000;
 /** Longest a replica holds a hello or resync for its read index before it answers stale. */
 export const READ_INDEX_HOLD_MS = 2000;
 const SAMPLES_PER_MS = 48;
@@ -148,6 +159,12 @@ function sampleIndexNow(): number {
   return Math.floor(Date.now() * SAMPLES_PER_MS) + APPLY_MARGIN_SAMPLES;
 }
 
+/** Appends to a command log, dropping its oldest entry beyond AUDIT_LIMIT. */
+function capped<T>(list: T[], entry: T): void {
+  list.push(entry);
+  if (list.length > AUDIT_LIMIT) list.shift();
+}
+
 function equal(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -239,7 +256,8 @@ export class Cluster {
   /** Blocks end only on flush(), a hello, a resync or a REST request: dev control for batching tests. */
   private holdBlocks = false;
   private lagTimers = new Set<ReturnType<typeof setTimeout>>();
-  private applied = new Map<string, number>();
+  /** Command id -> revision it was applied at and when, in apply order. */
+  private applied = new Map<string, { revision: number; at: number }>();
   private lastSeq = new Map<string, number>();
   private leases = new Map<string, number>();
   private scenes = new Map<string, StoredScene>();
@@ -661,10 +679,10 @@ export class Cluster {
    */
   command(owner: Owner, msg: CommandMessage, replica: string): Omit<AckMessage, 'replica'> | Omit<ErrorMessage, 'replica'> | null {
     const audit = (result: AuditEntry['result'], revision: number) => {
-      this.audit.push({ commandId: msg.id, owner, type: msg.type, path: msg.path, result, revision, replica });
+      capped(this.audit, { commandId: msg.id, owner, type: msg.type, path: msg.path, result, revision, replica });
       if (result !== 'applied') return;
       const set = msg.type === 'set';
-      this.applies.push({
+      capped(this.applies, {
         owner,
         commandId: msg.id,
         type: msg.type,
@@ -675,7 +693,7 @@ export class Cluster {
         replica,
       });
     };
-    const prior = this.applied.get(msg.id);
+    const prior = this.applied.get(msg.id)?.revision;
     if (prior !== undefined) {
       audit('duplicate', prior);
       return { type: 'ack', commandId: msg.id, result: 'duplicate', revision: prior };
@@ -699,7 +717,7 @@ export class Cluster {
     const known = this.checkPath(msg.path);
     if (known) return fail(404, known);
     const done = (result: 'noop' | 'stale') => {
-      this.applied.set(msg.id, this.revision);
+      this.remember(msg.id, this.revision);
       audit(result, this.revision);
       return { type: 'ack' as const, commandId: msg.id, result, revision: this.revision };
     };
@@ -730,7 +748,7 @@ export class Cluster {
 
   /** REST PATCH /state: all changes in one revision, or none. */
   patch(commandId: string, changes: Change[]): CommandResult {
-    const prior = this.applied.get(commandId);
+    const prior = this.applied.get(commandId)?.revision;
     if (prior !== undefined) return { commandId, result: 'duplicate', revision: prior };
     const conflicts: Conflict[] = changes
       .filter((c) => this.owners[c.path] !== undefined)
@@ -839,7 +857,7 @@ export class Cluster {
     }
     for (const o of entry.origins ?? []) {
       b.origins.push(o);
-      this.applied.set(o.commandId, b.revision);
+      this.remember(o.commandId, b.revision);
     }
     return { revision: b.revision, atIndex: b.atIndex };
   }
@@ -985,14 +1003,19 @@ export class Cluster {
     return { ...this.stage({ changes: [...this.withSideEffects(changes), recalled] }), changed: true };
   }
 
+  private remember(commandId: string, revision: number): void {
+    this.applied.delete(commandId);
+    this.applied.set(commandId, { revision, at: Date.now() });
+  }
+
   /** Record a REST command id as answered. */
   markApplied(commandId: string, result: 'applied' | 'noop' = 'applied', revision = this.batch?.revision ?? this.revision): void {
-    this.applied.set(commandId, revision);
-    this.audit.push({ commandId, owner: null, type: 'rest', path: null, result, revision, replica: 'rest' });
+    this.remember(commandId, revision);
+    capped(this.audit, { commandId, owner: null, type: 'rest', path: null, result, revision, replica: 'rest' });
   }
 
   appliedAt(commandId: string): number | undefined {
-    return this.applied.get(commandId);
+    return this.applied.get(commandId)?.revision;
   }
 
   /** Global revision a REST response reports: the open block's, if any. */
@@ -1083,6 +1106,21 @@ export class Cluster {
       }
     }
     this.expireLeases(t);
+    this.prune(t);
+  }
+
+  /**
+   * Forgets command ids older than the dedup retention, and the seqs and
+   * lease of a session SEQ_RETENTION_MS after its lease expired.
+   */
+  prune(now = Date.now()): void {
+    for (const [id, e] of this.applied) {
+      if (now - e.at <= DEDUP_RETENTION_MS) break;
+      this.applied.delete(id);
+    }
+    const gone = (session: string) => now - (this.leases.get(session) ?? 0) > LEASE_MS + SEQ_RETENTION_MS;
+    for (const key of this.lastSeq.keys()) if (gone(key.slice(0, key.lastIndexOf('\n')))) this.lastSeq.delete(key);
+    for (const session of this.leases.keys()) if (gone(session)) this.leases.delete(session);
   }
 
   /** Release every control of a session whose lease ran out. */
@@ -1144,6 +1182,7 @@ export class Cluster {
       this.command(owner, { type: 'set', id: id(), seq: ++seq, path, value }, 'console');
       if (step >= 20) {
         clearInterval(timer);
+        this.timers.splice(this.timers.indexOf(timer), 1);
         this.command(owner, { type: 'set', id: id(), seq: ++seq, path, value: start }, 'console');
         this.command(owner, { type: 'release', id: id(), seq: ++seq, path }, 'console');
       }

@@ -94,6 +94,18 @@ export class MockServer {
   /** Connect-style middleware; calls next() for anything it does not serve. */
   middleware = (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = new URL(req.url ?? '/', 'http://mock');
+    // REST of one replica, the base the client derives from a per-replica endpoint.
+    const one = /^\/__mock\/replicas\/([a-z0-9-]+)(\/api\/v1\/.+)$/.exec(url.pathname);
+    if (one && one[2] !== `${API}/ws`) {
+      const r = this.cluster.replica(one[1]!);
+      if (!r || !r.healthy || r.frozen !== 'none') {
+        res.statusCode = 503;
+        res.end();
+        return;
+      }
+      void this.api(req, res, one[2]!.slice(API.length));
+      return;
+    }
     if (url.pathname.startsWith('/__mock/')) {
       void this.dev(req, res, url);
       return;
@@ -283,6 +295,12 @@ export class MockServer {
     await readBody(req);
     const method = req.method ?? 'GET';
     const path = url.pathname;
+    // The dev server listens on every interface: a page of another origin
+    // must not drive the controls. Browsers send Origin with every POST.
+    const origin = req.headers.origin;
+    if (method !== 'GET' && origin !== undefined && (!URL.canParse(origin) || new URL(origin).host !== req.headers.host)) {
+      return send(403, { error: 'mock controls answer their own origin only' });
+    }
     if (method === 'GET' && path === '/__mock/replicas') {
       return send(
         200,
@@ -344,7 +362,8 @@ export class MockServer {
   private statsReport() {
     const connections = this.cluster.connections().map((conn) => ({
       connection: conn.id,
-      session: conn.owner ? conn.session : null,
+      // The handle, never the session id: the id is a credential.
+      handle: conn.owner?.handle ?? null,
       kind: conn.owner?.kind ?? null,
       mode: conn.mode,
       replica: conn.replica.id,

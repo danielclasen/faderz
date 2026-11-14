@@ -48,7 +48,7 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `POST /__mock/replicas/<id>/lag?ms=<n>` | log entries reach the replica `n` ms late; it answers a hello or resync carrying `lastRevision`, and runs commands after a promote, only once it has applied that revision; a hello or resync it has held for 2 s it answers with its state marked `stale`; `ms=0` catches up |
 | `POST /__mock/blocks/hold` | keeps the current processing block open, so every WebSocket command joins one log entry until a REST request or a hello or resync ends it |
 | `POST /__mock/blocks/flush` | ends the hold and commits the open block |
-| `GET /__mock/stats` | per live connection: `connection, session, kind, mode, replica, meterFramesSent, metersSkippedNoCredit, creditsOutstanding, messagesIn, messagesOut, openedAt`; `totals` over all connections since start or reset |
+| `GET /__mock/stats` | per live connection: `connection, handle, kind, mode, replica, meterFramesSent, metersSkippedNoCredit, creditsOutstanding, messagesIn, messagesOut, openedAt`; `totals` over all connections since start or reset |
 | `POST /__mock/stats/reset` | zeroes the counters |
 | `GET /__mock/audit` | applied WebSocket commands in apply order, `{owner, commandId, type, seq, path, value, revision, replica}`, and `summary: {total, duplicates}`, where `duplicates` counts command ids applied more than once |
 | `GET /__mock/commands` | every command outcome, REST included |
@@ -57,8 +57,14 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `POST /__mock/skip-revision` | advances the revision without a delta |
 | `POST /__mock/rewind?by=<n>` | rolls the cluster back `n` revisions, as a restore from an older backup would: a new epoch and every socket closed, so a client that held state reconnects with the old epoch and gets a snapshot of the new one |
 
-`/__mock/replicas/<id>/api/v1/ws` connects to one replica;
-`/api/v1/ws` picks a serving replica at random.
+`/__mock/replicas/<id>/api/v1/ws` connects to one replica, and
+`/__mock/replicas/<id>/api/v1/...` serves the REST API through it, 503
+while it is killed or hung; `/api/v1/ws` picks a serving replica at
+random. A `/__mock` POST that carries an `Origin` other than the dev
+server's own is refused with 403. The mock remembers a command id for
+10 s after it applied and the last seq of a session and control for
+13 s after the session's lease expired; its command logs keep the
+latest 10000 entries.
 
 HTTPS for the dev server: set `FADERZ_DEV_TLS_CERT` and `FADERZ_DEV_TLS_KEY`
 to PEM files, for example a self-signed pair; the UI then uses `wss://`.

@@ -154,7 +154,7 @@ test('a fader held across a reload stays owned by the session and is released af
     });
     const reload = page.reload();
     await reached;
-    await expect.poll(async () => (await stats(request)).filter((c) => c.session === session)).toEqual([]);
+    await expect.poll(async () => (await stats(request)).filter((c) => c.handle === ownerHandle(session))).toEqual([]);
     const refused = await other.command({ type: 'set', path, value: value - 6 });
     expect(refused).toMatchObject({ type: 'error', code: 409, path, owner: { principal: 'anonymous', handle: ownerHandle(session), kind: 'ui' } });
     open();
@@ -263,7 +263,7 @@ test('a hidden tab stops meter traffic after at most the credit cap and resumes 
   await live(page);
   const session = await debug(page, 'session');
   const primary = async () => {
-    const mine = (await stats(request)).filter((c) => c.session === session && c.mode === 'primary');
+    const mine = (await stats(request)).filter((c) => c.handle === ownerHandle(session) && c.mode === 'primary');
     expect(mine).toHaveLength(1);
     return mine[0]!;
   };

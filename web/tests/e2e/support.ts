@@ -32,7 +32,7 @@ export interface CommandOutcome {
 
 export interface ConnStats {
   connection: string;
-  session: string | null;
+  handle: string | null;
   kind: string | null;
   mode: 'primary' | 'standby';
   replica: string;

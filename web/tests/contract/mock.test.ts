@@ -8,7 +8,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { Cluster, READ_INDEX_HOLD_MS, type ClusterOptions } from '../../dev/mock/cluster';
+import { Cluster, DEDUP_RETENTION_MS, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, type ClusterOptions } from '../../dev/mock/cluster';
 import { Contract } from '../../dev/mock/contract';
 import { MockServer } from '../../dev/mock/server';
 import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
@@ -252,7 +252,7 @@ async function owners(): Promise<Record<string, Owner>> {
 
 interface StatsRow {
   connection: string;
-  session: string | null;
+  handle: string | null;
   kind: string | null;
   mode: LinkMode;
   replica: string;
@@ -835,7 +835,7 @@ describe('/__mock', () => {
     await sleep(10 * METER_PERIOD_MS);
     const first = await statsOf(c);
     expect(first).toMatchObject({
-      session: c.session,
+      handle: ownerHandle(c.session),
       kind: 'ui',
       mode: 'primary',
       replica: c.replica,
@@ -855,6 +855,8 @@ describe('/__mock', () => {
     expect(second.messagesIn).toBeGreaterThan(first.messagesIn);
     expect(stats.totals.meterFramesSent).toBeGreaterThanOrEqual(4);
     expect(stats.totals.connections).toBe(stats.connections.length);
+    // The session id is a credential: the dev controls show the handle only.
+    expect(JSON.stringify(stats)).not.toContain(c.session);
     await control('POST', '/stats/reset');
     const reset = await statsOf(c);
     expect(reset.meterFramesSent).toBe(0);
@@ -866,6 +868,57 @@ describe('/__mock', () => {
     const rows = (await control<Array<Record<string, unknown>>>('GET', '/replicas')).body;
     expect(rows.find((r) => r['id'] === 'r2')).toMatchObject({ healthy: true, frozen: 'none', partitioned: true });
     expect((await control('POST', '/replicas/r9/kill')).status).toBe(404);
+  });
+
+  it('refuses a control POST from a page of another origin', async () => {
+    const post = (origin: string) => fetch(`http://${main.base}/__mock/replicas/r2/kill`, { method: 'POST', headers: { Origin: origin } });
+    expect((await post('http://evil.example')).status).toBe(403);
+    expect((await post(`http://${main.base}.evil.example`)).status).toBe(403);
+    expect(cluster.replica('r2')!.healthy).toBe(true);
+    expect((await post(`http://${main.base}`)).status).toBe(200);
+    expect(cluster.replica('r2')!.healthy).toBe(false);
+  });
+
+  it('serves the REST API of one replica under its path, and 503 while it is down', async () => {
+    const one = (id: string) => fetch(`http://${main.base}/__mock/replicas/${id}/api/v1/state`);
+    expect((await one('r2')).status).toBe(200);
+    await control('POST', '/replicas/r2/kill');
+    expect((await one('r2')).status).toBe(503);
+    expect((await one('r1')).status).toBe(200);
+  });
+
+  it('forgets a command id after the dedup retention and a seq 13 s after its session ended', async () => {
+    const c = await new Client().open();
+    await c.hello();
+    const path = '/channels/ch2/trim';
+    const seq = c.nextSeq();
+    const id = c.set(path, cluster.state.channels['ch2']!.trim === 3 ? 4 : 3, undefined, seq);
+    await c.answer(id);
+    await c.close();
+    const owner = c.you!;
+    const copy = (value: number, commandId: string = crypto.randomUUID()) => cluster.command(owner, { type: 'set', id: commandId, seq, path, value }, 'test');
+    const now = Date.now();
+    cluster.prune(now + DEDUP_RETENTION_MS - 500);
+    expect(copy(0, id)).toMatchObject({ type: 'ack', result: 'duplicate' });
+    cluster.prune(now + DEDUP_RETENTION_MS + 500);
+    // A copy past the retention is no duplicate, and its seq still refuses it.
+    expect(copy(0, id)).toMatchObject({ type: 'ack', result: 'stale' });
+    cluster.prune(now + LEASE_MS + SEQ_RETENTION_MS - 500);
+    expect(copy(0)).toMatchObject({ type: 'ack', result: 'stale' });
+    cluster.prune(now + LEASE_MS + SEQ_RETENTION_MS + 500);
+    expect(copy(-1)).toBeNull();
+    cluster.flush();
+  });
+
+  it('keeps its command logs bounded', async () => {
+    await control('POST', '/audit/reset');
+    const owner: Owner = { principal: 'anonymous', handle: ownerHandle(randomSession()), kind: 'ui', connection: 'bulk' };
+    const path = '/channels/ch3/fader';
+    for (let i = 0; i < 10_050; i++) cluster.command(owner, { type: i % 2 === 0 ? 'touch' : 'release', id: crypto.randomUUID(), seq: i + 1, path }, 'test');
+    cluster.flush();
+    expect(cluster.audit.length).toBe(10_000);
+    expect(cluster.applies.length).toBe(10_000);
+    await control('POST', '/audit/reset');
   });
 });
 
