@@ -331,7 +331,7 @@
     outline: 2px solid var(--focus);
   }
   .proc .chip.on {
-    color: #00191c;
+    color: var(--afl-ink);
     background: var(--afl);
   }
   .routes .chip.on {
