@@ -1,0 +1,303 @@
+// Simulated programme audio for the mock: a shared source model (what the
+// inputs carry) and per-replica metering of it, so meter streams of
+// different replicas differ by measurement jitter like real ones would.
+
+import type {
+  BusMeter,
+  ChannelMeter,
+  Layout,
+  Loudness,
+  MetersMessage,
+  Shape,
+  State,
+} from '../../src/lib/contract/types.ts';
+import { LAYOUT_LABELS } from '../../src/lib/contract/types.ts';
+import { dbToGain, effectiveGainDb } from '../../src/lib/audio/db.ts';
+
+const FRAME_MS = 40;
+const SILENCE = -120;
+
+type Kind = 'speech' | 'music' | 'vt' | 'fx' | 'film' | 'phone' | 'amb' | 'idle';
+
+interface Source {
+  kind: Kind;
+  talking: boolean;
+  phaseLeft: number;
+  t: number;
+}
+
+function kindOf(name: string, layout: Layout): Kind {
+  if (layout === '5.1') return 'film';
+  if (name === 'Music') return 'music';
+  if (name.startsWith('VT')) return 'vt';
+  if (name === 'FX') return 'fx';
+  if (name.startsWith('Phone')) return 'phone';
+  if (name.startsWith('Amb')) return 'amb';
+  if (name.startsWith('Spot')) return 'idle';
+  return 'speech';
+}
+
+/** Source levels per input channel leg, RMS dBFS, advanced every frame. */
+export class SourceModel {
+  private readonly sources = new Map<string, Source>();
+  readonly levels = new Map<string, number[]>();
+  private readonly shape: Shape;
+
+  constructor(shape: Shape) {
+    this.shape = shape;
+    for (const c of shape.channels) {
+      this.sources.set(c.id, { kind: kindOf(c.name, c.layout), talking: false, phaseLeft: Math.random() * 3000, t: Math.random() * 10 });
+    }
+  }
+
+  advance(): void {
+    for (const c of this.shape.channels) {
+      const s = this.sources.get(c.id)!;
+      s.t += FRAME_MS / 1000;
+      s.phaseLeft -= FRAME_MS;
+      if (s.phaseLeft <= 0) {
+        s.talking = !s.talking;
+        s.phaseLeft = s.talking ? 1500 + Math.random() * 4500 : 600 + Math.random() * 3000;
+      }
+      const syllable = 4 * Math.sin(s.t * 2 * Math.PI * 4.3) + 3 * Math.sin(s.t * 2 * Math.PI * 1.7) + (Math.random() - 0.5) * 4;
+      let base: number;
+      switch (s.kind) {
+        case 'speech': base = s.talking ? -23 + syllable : -62 + Math.random() * 3; break;
+        case 'phone': base = s.talking ? -25 + syllable * 0.6 : -55 + Math.random() * 2; break;
+        case 'music': base = -16 + 2 * Math.sin(s.t * 0.5) + (Math.random() - 0.5) * 2; break;
+        case 'vt': base = -20 + 3 * Math.sin(s.t * 0.9) + (Math.random() - 0.5) * 3; break;
+        case 'fx': base = s.talking && Math.random() < 0.3 ? -14 + Math.random() * 6 : -70; break;
+        case 'film': base = -22 + 3 * Math.sin(s.t * 0.7) + (Math.random() - 0.5) * 3; break;
+        case 'amb': base = -34 + 2 * Math.sin(s.t * 0.3) + (Math.random() - 0.5) * 2; break;
+        default: base = -75;
+      }
+      const legs = c.width === 6 ? [0, 0, 2, -8, -6, -6].map((o) => base + o) : Array.from({ length: c.width }, (_, i) => base + (c.width === 2 ? (i === 0 ? 0.6 : -0.6) * Math.sin(s.t * 1.3) : 0));
+      this.levels.set(c.id, legs);
+    }
+  }
+}
+
+/** Power gain matrix [dst][src] from one layout into another. */
+export function legMatrix(src: Layout, dst: Layout, pan: number, front: number): number[][] {
+  const s = LAYOUT_LABELS[src];
+  const d = LAYOUT_LABELS[dst];
+  const m = d.map(() => s.map(() => 0));
+  const set = (dl: string, sl: string, g: number) => {
+    const di = d.indexOf(dl);
+    const si = s.indexOf(sl);
+    if (di >= 0 && si >= 0) m[di]![si]! += g * g;
+  };
+  const angle = ((pan + 1) * Math.PI) / 4;
+  const l = Math.cos(angle);
+  const r = Math.sin(angle);
+  if (src === 'mono') {
+    if (dst === 'mono') set('M', 'M', 1);
+    else if (dst === 'stereo') { set('L', 'M', l); set('R', 'M', r); }
+    else {
+      const rear = (front + 1) / 2;
+      const fr = Math.cos((rear * Math.PI) / 2);
+      const rr = Math.sin((rear * Math.PI) / 2);
+      set('L', 'M', l * fr); set('R', 'M', r * fr); set('Ls', 'M', l * rr); set('Rs', 'M', r * rr);
+    }
+    return m;
+  }
+  if (dst === 'mono') { s.forEach((sl) => sl !== 'LFE' && set('M', sl, Math.SQRT1_2)); return m; }
+  if (src === 'stereo') { set('L', 'L', 1); set('R', 'R', 1); return m; }
+  if (dst === 'stereo') {
+    set('L', 'L', 1); set('R', 'R', 1); set('L', 'C', Math.SQRT1_2); set('R', 'C', Math.SQRT1_2);
+    set('L', 'Ls', Math.SQRT1_2); set('R', 'Rs', Math.SQRT1_2);
+    set('L', 'Lrs', 0.5); set('R', 'Rrs', 0.5);
+    return m;
+  }
+  s.forEach((sl) => set(sl, sl, 1));
+  return m;
+}
+
+const power = (db: number) => (db <= SILENCE ? 0 : Math.pow(10, db / 10));
+const toDb = (p: number) => (p <= 1e-12 ? SILENCE : 10 * Math.log10(p));
+const r1 = (v: number) => Math.round(Math.min(30, Math.max(SILENCE, v)) * 10) / 10;
+
+class LoudnessMeter {
+  private frames: number[] = [];
+  private blocks: number[] = [];
+  private shortTerms: number[] = [];
+  private tick = 0;
+  private cachedIntegrated: number | null = null;
+  private cachedLra: number | null = null;
+
+  reset(): void {
+    this.blocks = [];
+    this.shortTerms = [];
+    this.cachedIntegrated = null;
+    this.cachedLra = null;
+  }
+
+  push(z: number): Loudness {
+    this.frames.push(z);
+    if (this.frames.length > 75) this.frames.shift();
+    const mean = (n: number) => {
+      const xs = this.frames.slice(-n);
+      return xs.reduce((a, b) => a + b, 0) / xs.length;
+    };
+    const lufs = (zz: number) => (zz <= 1e-12 ? null : -0.691 + 10 * Math.log10(zz));
+    const momentary = this.frames.length >= 10 ? lufs(mean(10)) : null;
+    const shortTerm = this.frames.length >= 75 ? lufs(mean(75)) : null;
+    this.tick++;
+    if (this.tick % 3 === 0 && this.frames.length >= 10) {
+      this.blocks.push(mean(10));
+      if (this.blocks.length > 6000) this.blocks.shift();
+    }
+    if (this.tick % 25 === 0) {
+      if (shortTerm !== null) {
+        this.shortTerms.push(shortTerm);
+        if (this.shortTerms.length > 600) this.shortTerms.shift();
+      }
+      this.cachedIntegrated = this.integrated();
+      this.cachedLra = this.lra();
+    }
+    const clampL = (v: number | null) => (v === null ? null : Math.round(Math.max(-120, Math.min(30, v)) * 10) / 10);
+    return {
+      momentary: clampL(momentary),
+      shortTerm: clampL(shortTerm),
+      integrated: clampL(this.cachedIntegrated),
+      lra: this.cachedLra === null ? null : Math.round(Math.min(100, this.cachedLra) * 10) / 10,
+      integratedValid: true,
+    };
+  }
+
+  private integrated(): number | null {
+    const abs = this.blocks.filter((z) => -0.691 + 10 * Math.log10(z) > -70);
+    if (abs.length === 0) return null;
+    const rel = -0.691 + 10 * Math.log10(abs.reduce((a, b) => a + b, 0) / abs.length) - 10;
+    const gated = abs.filter((z) => -0.691 + 10 * Math.log10(z) > rel);
+    if (gated.length === 0) return null;
+    return -0.691 + 10 * Math.log10(gated.reduce((a, b) => a + b, 0) / gated.length);
+  }
+
+  private lra(): number | null {
+    const abs = this.shortTerms.filter((l) => l > -70);
+    if (abs.length < 3) return null;
+    const meanZ = abs.reduce((a, l) => a + Math.pow(10, (l + 0.691) / 10), 0) / abs.length;
+    const rel = -0.691 + 10 * Math.log10(meanZ) - 20;
+    const xs = abs.filter((l) => l > rel).sort((a, b) => a - b);
+    if (xs.length < 3) return null;
+    const q = (p: number) => xs[Math.min(xs.length - 1, Math.floor(p * (xs.length - 1)))]!;
+    return q(0.95) - q(0.1);
+  }
+}
+
+interface Mix {
+  rms: number[];
+  peak: number[];
+}
+
+/** Metering of one replica. */
+export class ReplicaMeters {
+  private readonly loudness = new Map<string, LoudnessMeter>();
+  private readonly shape: Shape;
+
+  constructor(shape: Shape) {
+    this.shape = shape;
+  }
+
+  resetLoudness(ids: readonly string[]): void {
+    for (const id of ids) this.loudness.get(id)?.reset();
+  }
+
+  frame(state: State, sources: SourceModel): Omit<MetersMessage, 'replica'> {
+    const jitter = () => (Math.random() - 0.5) * 0.4;
+    const channelLevels = new Map<string, number[]>();
+    const channels: Record<string, ChannelMeter> = {};
+    for (const c of this.shape.channels) {
+      const st = state.channels[c.id]!;
+      const legs = (sources.levels.get(c.id) ?? Array(c.width).fill(SILENCE)).map((l) => l + st.trim + (st.comp.enabled ? st.comp.makeup - 2 : 0));
+      channelLevels.set(c.id, legs);
+      channels[c.id] = {
+        peak: legs.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
+        rms: legs.map((l) => r1(l + jitter())),
+      };
+    }
+    const vcaOffsets = (id: string) =>
+      Object.values(state.vcas).filter((v) => v.members.includes(id)).map((v) => v.offset);
+    const vcaMuted = (id: string) => Object.values(state.vcas).some((v) => v.mute && v.members.includes(id));
+    const post = (id: string) => {
+      const st = state.channels[id]!;
+      if (st.mute || vcaMuted(id) || !state.afv[id]!.open) return 0;
+      return dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
+    };
+
+    const mixInto = (layout: Layout, contributions: Array<{ id: string; gain: number; pan: number; fr: number }>): Mix => {
+      const width = LAYOUT_LABELS[layout].length;
+      const p = Array<number>(width).fill(0);
+      const peaks = Array<number>(width).fill(SILENCE);
+      for (const k of contributions) {
+        if (k.gain <= 0) continue;
+        const shape = this.shape.channels.find((c) => c.id === k.id)!;
+        const m = legMatrix(shape.layout, layout, k.pan, k.fr);
+        const src = channelLevels.get(k.id)!;
+        for (let d = 0; d < width; d++) {
+          for (let s = 0; s < src.length; s++) {
+            const g2 = m[d]![s]! * k.gain * k.gain;
+            if (g2 <= 0) continue;
+            p[d]! += g2 * power(src[s]!);
+            peaks[d] = Math.max(peaks[d]!, src[s]! + 10 * Math.log10(g2) + 10);
+          }
+        }
+      }
+      const rms = p.map(toDb);
+      return { rms, peak: rms.map((r, i) => Math.max(peaks[i]!, r + 6 + Math.random() * 2)) };
+    };
+
+    const busMeter = (id: string, layout: Layout, mix: Mix, fader: number, mute: boolean): BusMeter => {
+      const g = mute ? SILENCE : fader <= -90 ? SILENCE : fader;
+      const rms = mix.rms.map((r) => (g <= SILENCE ? SILENCE : r + g));
+      const peak = mix.peak.map((r) => (g <= SILENCE ? SILENCE : r + g));
+      const labels = LAYOUT_LABELS[layout];
+      const z = rms.reduce((a, r, i) => {
+        const label = labels[i]!;
+        if (label === 'LFE') return a;
+        return a + power(r) * (label.startsWith('L') && label.length > 1 || label.startsWith('R') && label.length > 1 ? 1.41 : 1);
+      }, 0);
+      let meter = this.loudness.get(id);
+      if (!meter) {
+        meter = new LoudnessMeter();
+        this.loudness.set(id, meter);
+      }
+      return {
+        peak: peak.map((v) => r1(v + jitter())),
+        truePeak: peak.map((v) => r1(v + Math.random() * 0.6 + jitter())),
+        rms: rms.map((v) => r1(v + jitter())),
+        loudness: meter.push(z),
+      };
+    };
+
+    const buses: Record<string, BusMeter> = {};
+    for (const b of this.shape.buses) {
+      const contributions = this.shape.channels
+        .filter((c) => state.channels[c.id]!.routes[b.id])
+        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr }));
+      const st = state.buses[b.id]!;
+      buses[b.id] = busMeter(b.id, b.layout, mixInto(b.layout, contributions), st.fader, st.mute);
+    }
+    const auxes: Record<string, BusMeter> = {};
+    for (const a of this.shape.auxes) {
+      const contributions = this.shape.channels.flatMap((c) => {
+        const send = state.channels[c.id]!.sends[a.id];
+        if (!send?.on) return [];
+        const base = send.pre ? 1 : post(c.id);
+        return [{ id: c.id, gain: base * dbToGain(send.level), pan: send.pan, fr: 0 }];
+      });
+      const st = state.auxes[a.id]!;
+      auxes[a.id] = busMeter(a.id, a.layout, mixInto(a.layout, contributions), st.fader, st.mute);
+    }
+    const mixMinus: Record<string, BusMeter> = {};
+    for (const mm of this.shape.mixMinus) {
+      const st = state.mixMinus[mm.id]!;
+      const contributions = this.shape.channels
+        .filter((c) => state.channels[c.id]!.routes[mm.bus] && !st.exclude.includes(c.id))
+        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr }));
+      mixMinus[mm.id] = busMeter(mm.id, mm.layout, mixInto(mm.layout, contributions), st.fader, st.mute);
+    }
+    return { type: 'meters', channels, buses, auxes, mixMinus };
+  }
+}

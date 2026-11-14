@@ -1,0 +1,171 @@
+// Example shape and starting state of the dev-only mock server.
+
+import type {
+  BusState,
+  ChannelState,
+  ConsoleStatus,
+  Eq,
+  ElementShape,
+  Shape,
+  State,
+} from '../../src/lib/contract/types.ts';
+
+const MONO_NAMES = [
+  'Pres 1', 'Pres 2', 'Guest 1', 'Guest 2', 'Guest 3', 'Guest 4',
+  'Rpt 1', 'Rpt 2', 'Rpt 3', 'Rpt 4', 'Phone 1', 'Phone 2',
+  'Amb 1', 'Amb 2', 'Amb 3', 'Amb 4', 'Lav 1', 'Lav 2',
+  'Lav 3', 'Lav 4', 'Hand 1', 'Hand 2', 'Spot 1', 'Spot 2',
+];
+
+export function exampleShape(): Shape {
+  const channels: ElementShape[] = [
+    ...MONO_NAMES.map((name, i) => ({ id: `ch${i + 1}`, name, width: 1 as const, layout: 'mono' as const })),
+    { id: 'st1', name: 'Music', width: 2, layout: 'stereo' },
+    { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo' },
+    { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo' },
+    { id: 'st4', name: 'FX', width: 2, layout: 'stereo' },
+    { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1' },
+  ];
+  const buses: Shape['buses'] = [
+    { id: 'pgm51', name: 'PGM 5.1', kind: 'program', width: 6, layout: '5.1' },
+    { id: 'pgm20', name: 'PGM 2.0', kind: 'program', width: 2, layout: 'stereo' },
+    { id: 'me', name: 'M&E', kind: 'me', width: 2, layout: 'stereo' },
+    { id: 'cf', name: 'Clean', kind: 'cleanFeed', width: 2, layout: 'stereo' },
+  ];
+  const auxes: ElementShape[] = [
+    { id: 'aux1', name: 'IFB 1', width: 1, layout: 'mono' },
+    { id: 'aux2', name: 'IFB 2', width: 1, layout: 'mono' },
+    { id: 'aux3', name: 'Stage', width: 2, layout: 'stereo' },
+    { id: 'aux4', name: 'Rec', width: 2, layout: 'stereo' },
+  ];
+  const mixMinus: Shape['mixMinus'] = [
+    { id: 'mm1', name: 'N-1 Phone 1', bus: 'pgm20', width: 2, layout: 'stereo' },
+    { id: 'mm2', name: 'N-1 Phone 2', bus: 'pgm20', width: 2, layout: 'stereo' },
+  ];
+  const monitorOutputs: ElementShape[] = [{ id: 'mon', name: 'Monitor', width: 2, layout: 'stereo' }];
+  const outputs: Shape['outputs'] = [...buses, ...auxes, ...mixMinus, ...monitorOutputs].map((e) => ({
+    id: `out-${e.id}`,
+    name: `${e.name} out`,
+    source: e.id,
+    width: e.width,
+    layout: e.layout,
+  }));
+  return {
+    sampleRate: 48000,
+    channels,
+    buses,
+    auxes,
+    mixMinus,
+    vcas: [
+      { id: 'vca1', name: 'PRES' },
+      { id: 'vca2', name: 'GUESTS' },
+    ],
+    monitorOutputs,
+    outputs,
+  };
+}
+
+function flatEq(): Eq {
+  return {
+    enabled: false,
+    bands: [
+      { type: 'lowShelf', freq: 100, gain: 0, q: 0.7 },
+      { type: 'peak', freq: 400, gain: 0, q: 1 },
+      { type: 'peak', freq: 2500, gain: 0, q: 1 },
+      { type: 'highShelf', freq: 8000, gain: 0, q: 0.7 },
+    ],
+  };
+}
+
+function busState(fader = 0): BusState {
+  return {
+    polarity: false,
+    eq: flatEq(),
+    gate: { enabled: false, threshold: -60, range: 20, attack: 1, release: 200 },
+    comp: { enabled: false, threshold: -12, ratio: 2, attack: 10, release: 200, makeup: 0 },
+    delay: 0,
+    fader,
+    mute: false,
+  };
+}
+
+const FADERS: Record<string, number> = {
+  ch1: 0, ch2: -2.5, ch3: -4, ch4: -3, ch5: -6, ch6: -90, ch7: -5, ch8: -90, ch9: -90, ch10: -90,
+  ch11: -3, ch12: -90, ch13: -12, ch14: -14, ch15: -18, ch16: -90, ch17: -4, ch18: -4, ch19: -90,
+  ch20: -90, ch21: -6, ch22: -90, ch23: -90, ch24: -90, st1: -12, st2: -90, st3: -90, st4: -8, sur1: -90,
+};
+
+export function initialState(shape: Shape): State {
+  const channels: State['channels'] = {};
+  shape.channels.forEach((c, i) => {
+    const mic = c.layout === 'mono';
+    const s: ChannelState = {
+      trim: 0,
+      polarity: false,
+      hpf: { enabled: mic, freq: mic ? 80 : 40 },
+      eq: flatEq(),
+      gate: { enabled: false, threshold: -50, range: 20, attack: 1, release: 200 },
+      comp: { enabled: i < 6, threshold: -18, ratio: 3, attack: 10, release: 150, makeup: i < 6 ? 3 : 0 },
+      delay: 0,
+      pan: { lr: mic && i >= 2 && i < 6 ? [-0.3, 0.3, -0.15, 0.15][i - 2]! : 0, fr: 0 },
+      fader: FADERS[c.id] ?? -90,
+      mute: c.id === 'ch23' || c.id === 'ch24',
+      solo: 'off',
+      sends: Object.fromEntries(
+        shape.auxes.map((a) => [
+          a.id,
+          { on: a.id === 'aux4' || (mic && i < 6 && a.id !== 'aux3'), level: a.id === 'aux4' ? 0 : -10, pan: 0, pre: a.id !== 'aux4' },
+        ]),
+      ),
+      routes: Object.fromEntries(
+        shape.buses.map((b) => [
+          b.id,
+          b.kind === 'me' ? !mic || (i >= 12 && i < 16) : b.kind === 'cleanFeed' ? !(i < 2) : true,
+        ]),
+      ),
+    };
+    channels[c.id] = s;
+  });
+  const ch1 = channels['ch1']!;
+  ch1.eq.enabled = true;
+  ch1.eq.bands[1].gain = -3;
+  ch1.eq.bands[1].freq = 300;
+  ch1.eq.bands[2].gain = 2.5;
+  ch1.eq.bands[2].freq = 3200;
+  channels['ch2']!.eq.enabled = true;
+  channels['ch2']!.eq.bands[3].gain = 2;
+  channels['ch11']!.eq.enabled = true;
+  channels['ch11']!.eq.bands[0].gain = -6;
+  channels['ch13']!.gate.enabled = true;
+  channels['ch14']!.gate.enabled = true;
+
+  const consoles: ConsoleStatus[] = [
+    { id: 'mcu-1', name: 'MCU Pro', protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 0, strips: 8 },
+    { id: 'ext-1', name: 'MCU Extender', protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 8, strips: 8 },
+    { id: 'osc-1', name: 'OSC tablet', protocol: 'osc', transport: 'osc-udp', connected: false, bankOffset: 0, strips: 16 },
+  ];
+
+  return {
+    channels,
+    buses: Object.fromEntries(shape.buses.map((b) => [b.id, busState()])),
+    auxes: Object.fromEntries(shape.auxes.map((a) => [a.id, busState(a.id === 'aux3' ? -6 : 0)])),
+    mixMinus: Object.fromEntries(
+      shape.mixMinus.map((m, i) => [m.id, { exclude: [i === 0 ? 'ch11' : 'ch12'], fader: 0, mute: false }]),
+    ),
+    vcas: {
+      vca1: { offset: 0, mute: false, members: ['ch1', 'ch2'] },
+      vca2: { offset: -2, mute: false, members: ['ch3', 'ch4', 'ch5', 'ch6'] },
+    },
+    monitor: { source: 'pgm20', level: -10, dim: false, cut: false, mono: false },
+    afv: Object.fromEntries(
+      shape.channels.map((c, i) => {
+        const cam = i >= 12 && i < 16 ? `CAM${i - 11}` : null;
+        return [c.id, { enabled: cam !== null, source: cam, open: cam === null || cam === 'CAM1' }];
+      }),
+    ),
+    tally: { CAM1: 'program', CAM2: 'preview', CAM3: 'off', CAM4: 'off' },
+    recallSafe: { ch11: ['fader', 'mute'], ch12: ['fader', 'mute'] },
+    scenes: [],
+    consoles,
+  };
+}
