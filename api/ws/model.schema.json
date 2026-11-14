@@ -17,16 +17,21 @@
       "uniqueItems": true
     },
     "SessionId": {
-      "description": "Session of a client: 22 to 128 base64url characters without padding, carrying at least 128 random bits. A client sends it as ?session= on every WebSocket connection and in hello, and keeps it across reconnects and failover; the web UI also across reloads of the same tab, a console across bridge restarts. Command deduplication and the ownership lease key on it.",
+      "description": "Session of a client: 22 to 128 base64url characters without padding, carrying at least 128 random bits. A client sends it as ?session= on every WebSocket connection and in hello, and keeps it across reconnects and failover; the web UI also across reloads of the same tab, a console across bridge restarts. Command deduplication and the ownership lease key on it. It is a credential of the session: a client presenting another client's session id under the same principal can take over its ownership and the deduplication of its commands. It therefore never leaves the client that drew it and the server; every record published to clients carries the session's OwnerHandle instead.",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22,128}$"
     },
+    "OwnerHandle": {
+      "description": "Public handle of a session: the first 16 bytes of the SHA-256 digest of the session id (its ASCII characters) in base64url without padding, 22 characters. The server publishes it in place of the session id. A client computes the handle of its own session id the same way to recognise its own ownership; the session id cannot be derived from it.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$"
+    },
     "Owner": {
-      "description": "Identity of a client: who (principal), which session, which kind of client, and which WebSocket connection. principal is 'anonymous' while no authentication is configured, otherwise the authenticated principal from the token or the authenticating proxy. Ownership and leases key on principal and session; connection only identifies the WebSocket that sent a command.",
+      "description": "Identity of a client: who (principal), which session (by its handle), which kind of client, and which WebSocket connection. principal is 'anonymous' while no authentication is configured, otherwise the authenticated principal from the token or the authenticating proxy. Ownership and leases key on principal and session; connection only identifies the WebSocket that sent a command.",
       "type": "object",
       "required": [
         "principal",
-        "session",
+        "handle",
         "kind",
         "connection"
       ],
@@ -37,8 +42,8 @@
           "minLength": 1,
           "maxLength": 128
         },
-        "session": {
-          "$ref": "#/$defs/SessionId"
+        "handle": {
+          "$ref": "#/$defs/OwnerHandle"
         },
         "kind": {
           "type": "string",
@@ -1242,7 +1247,7 @@
       "required": [
         "id",
         "name",
-        "session",
+        "handle",
         "protocol",
         "transport",
         "connected",
@@ -1259,9 +1264,9 @@
           "minLength": 1,
           "maxLength": 64
         },
-        "session": {
-          "description": "Session id the surface uses as a client, so its ownership can be shown by name.",
-          "$ref": "#/$defs/SessionId"
+        "handle": {
+          "description": "Handle of the session the surface uses as a client, so its ownership can be shown by name.",
+          "$ref": "#/$defs/OwnerHandle"
         },
         "protocol": {
           "type": "string",

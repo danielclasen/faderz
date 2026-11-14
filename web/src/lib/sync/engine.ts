@@ -25,6 +25,7 @@ import type {
   State,
 } from '../contract/types';
 import { flattenMeterFrame } from '../meters/flat';
+import { ownerHandle } from '../net/handle';
 import { uuid } from '../net/ids';
 import { getAt, setAt } from '../state/pointer';
 import type { Clock } from './clock';
@@ -122,6 +123,8 @@ export class SyncEngine {
   readonly touches = new Map<string, TouchState>();
 
   private readonly clock: Clock;
+  /** Owner handle of this session: how its ownership appears in records. */
+  private readonly handle: string;
   private readonly limiter: RateLimiter;
   private readonly seq = new Map<string, number>();
   /** Latest local value of every control with a write not yet answered. */
@@ -152,6 +155,7 @@ export class SyncEngine {
   constructor(private readonly deps: EngineDeps) {
     if (deps.endpoints.length === 0) throw new Error('no endpoints');
     this.clock = deps.clock;
+    this.handle = ownerHandle(deps.session);
     this.limiter = new RateLimiter(this.clock, (path, value) => this.issueSet(path, value));
   }
 
@@ -246,8 +250,8 @@ export class SyncEngine {
 
   private mine(owner: Owner | null | undefined): boolean {
     if (!owner) return false;
-    if (this.you) return owner.principal === this.you.principal && owner.session === this.you.session;
-    return owner.session === this.deps.session;
+    if (this.you) return owner.principal === this.you.principal && owner.handle === this.you.handle;
+    return owner.handle === this.handle;
   }
 
   // ---- connections -----------------------------------------------------------
@@ -707,6 +711,7 @@ export class SyncEngine {
       link: this.link,
       standby: this.standbyState,
       session: this.deps.session,
+      handle: this.handle,
       you: this.you,
       primaryReplica: this.primary?.replica?.id ?? null,
       primaryEndpoint: this.primary ? this.deps.endpoints[this.primary.endpoint]! : null,

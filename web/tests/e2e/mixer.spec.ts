@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { handleTag, ownerHandle } from '../../src/lib/net/handle';
 import {
   RawClient,
   debug,
@@ -84,16 +85,19 @@ test('stores and recalls a scene', async ({ page, request }) => {
 });
 
 test('refuses a fader held by another session with 409 and shows its value and owner', async ({ page, baseURL, request }) => {
+  const frames: string[] = [];
+  page.on('websocket', (ws) => ws.on('framereceived', (f) => typeof f.payload === 'string' && frames.push(f.payload)));
   await live(page);
   const path = '/channels/ch4/fader';
   const other = await RawClient.open(baseURL!);
   try {
     expect((await other.command({ type: 'touch', path })).type).toBe('delta');
     const owner = (await serverState(request)).owners[path];
-    expect(owner).toMatchObject({ principal: 'anonymous', session: other.session, kind: 'ui' });
+    const handle = ownerHandle(other.session);
+    expect(owner).toEqual({ principal: 'anonymous', handle, kind: 'ui', connection: expect.any(String) });
     await expect(page.locator('[data-channel="ch4"]').getByTestId('owner')).toHaveAttribute('data-owner-kind', 'ui');
     const held = await fader(request, 'ch4');
-    const tag = other.session.replace(/-/g, '').slice(0, 6);
+    const tag = handleTag(handle);
     await dragFader(page, path, -80);
     const notice = page.getByTestId('notice');
     await expect(notice).toContainText(`Guest 2 fader is held by web client ${tag}`);
@@ -108,6 +112,11 @@ test('refuses a fader held by another session with 409 and shows its value and o
     await expect(page.getByTestId('fader-value-ch4')).toHaveText(formatDb(held));
     expect(await fader(request, 'ch4')).toBe(held);
     expect((await other.command({ type: 'release', path })).type).toBe('delta');
+    // The page names the holder by its handle and never sees its session id.
+    expect(frames.some((f) => f.includes(handle))).toBe(true);
+    expect(frames.filter((f) => f.includes(other.session))).toEqual([]);
+    // Its own status bar shows the tag other clients see for it.
+    await expect(page.getByTestId('session')).toContainText(handleTag(ownerHandle(await debug(page, 'session'))));
   } finally {
     other.close();
   }

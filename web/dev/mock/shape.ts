@@ -10,6 +10,7 @@ import type {
   Shape,
   State,
 } from '../../src/lib/contract/types.ts';
+import { handleOf } from './handle.ts';
 
 const MONO_NAMES = [
   'Pres 1', 'Pres 2', 'Guest 1', 'Guest 2', 'Guest 3', 'Guest 4',
@@ -118,7 +119,7 @@ function busState(width: number, fader = 0, limiter = false): BusState {
   };
 }
 
-/** Session id each console uses as a client (ConsoleStatus.session). */
+/** Session id each console uses as a client; the state carries its handle (ConsoleStatus.handle). */
 export const CONSOLE_SESSIONS: Record<string, string> = { 'mcu-1': 'console-mcu-1-Q2xQnS8fHw', 'ext-1': 'console-ext-1-4fVd9KkQ2w', 'osc-1': 'console-osc-1-Zr0aLm3Pxg' };
 
 const FADERS: Record<string, number> = {
@@ -184,9 +185,9 @@ export function initialState(shape: Shape): State {
   const existing = (ids: string[]) => ids.filter((id) => channels[id] !== undefined);
 
   const consoles: ConsoleStatus[] = [
-    { id: 'mcu-1', name: 'MCU Pro', session: CONSOLE_SESSIONS['mcu-1']!, protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 0, strips: 8 },
-    { id: 'ext-1', name: 'MCU Extender', session: CONSOLE_SESSIONS['ext-1']!, protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 8, strips: 8 },
-    { id: 'osc-1', name: 'OSC tablet', session: CONSOLE_SESSIONS['osc-1']!, protocol: 'osc', transport: 'osc-udp', connected: false, bankOffset: 0, strips: 16 },
+    { id: 'mcu-1', name: 'MCU Pro', handle: handleOf(CONSOLE_SESSIONS['mcu-1']!), protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 0, strips: 8 },
+    { id: 'ext-1', name: 'MCU Extender', handle: handleOf(CONSOLE_SESSIONS['ext-1']!), protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 8, strips: 8 },
+    { id: 'osc-1', name: 'OSC tablet', handle: handleOf(CONSOLE_SESSIONS['osc-1']!), protocol: 'osc', transport: 'osc-udp', connected: false, bankOffset: 0, strips: 16 },
   ];
 
   return {

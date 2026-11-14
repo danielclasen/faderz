@@ -25,7 +25,7 @@ info:
     to another replica, exchange heartbeats every 250 ms on both and fail
     over to the standby when the primary is lost or its replica reports
     that it cannot commit. Touch ownership belongs to a session (owner
-    record: principal, session, kind, connection) and lapses 2 s after the
+    record: principal, the session's owner handle, kind, connection) and lapses 2 s after the
     session's last message through any replica not partitioned from the
     quorum. Meters arrive on the primary connection as binary frames,
     paced by credits the client grants.

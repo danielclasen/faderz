@@ -2,7 +2,7 @@
 // per user action and a tick per animation frame; the worker answers each
 // tick with at most one patch.
 
-import type { Owner, Owners, ReplicaStatus, Revision, Shape, State } from '../contract/types';
+import type { Owner, OwnerHandle, Owners, ReplicaStatus, Revision, Shape, State } from '../contract/types';
 import type { LinkState, StandbyState } from './machines';
 
 export type ToWorker =
@@ -27,6 +27,8 @@ export interface SyncStatus {
   link: LinkState;
   standby: StandbyState;
   session: string;
+  /** Handle of session, as every other client sees it. */
+  handle: OwnerHandle;
   you: Owner | null;
   primaryReplica: string | null;
   primaryEndpoint: string | null;

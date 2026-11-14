@@ -3,11 +3,13 @@ import { INITIAL_STATUS, MixerStore } from '../../src/lib/state/mixer.svelte';
 import type { Patch } from '../../src/lib/sync/messages';
 import type { ToWorker } from '../../src/lib/sync/messages';
 import type { Owner } from '../../src/lib/contract/types';
+import { ownerHandle } from '../../src/lib/net/handle';
 import { deriveMeterLayout } from '../../src/lib/contract/meterFrame';
 import { exampleShape, initialState } from '../../dev/mock/shape';
 
 const F1 = '/channels/ch1/fader';
-const ME: Owner = { principal: 'anonymous', session: 'sess-me', kind: 'ui', connection: 'c1' };
+const SESSION = 'c2Vzc2lvbi1tZS0xMjM0NTY';
+const ME: Owner = { principal: 'anonymous', handle: ownerHandle(SESSION), kind: 'ui', connection: 'c1' };
 
 function store() {
   const s = new MixerStore();
@@ -102,17 +104,24 @@ describe('mixer store: patches', () => {
 describe('mixer store: owners', () => {
   it('names the own session "you", a console by its name and another ui session by tag', () => {
     const { s } = store();
-    s.apply(patch(0, { status: { ...INITIAL_STATUS, session: 'sess-me', you: ME } }));
-    const consoleSession = s.state!.consoles[0]!;
+    s.apply(patch(0, { status: { ...INITIAL_STATUS, session: SESSION, handle: ME.handle, you: ME } }));
+    const surface = s.state!.consoles[0]!;
     expect(s.ownerLabel({ ...ME, connection: 'c7' })).toBe('you');
-    expect(s.ownerLabel({ principal: 'bridge', session: consoleSession.session, kind: 'console', connection: 'x' })).toBe(consoleSession.name);
-    expect(s.ownerLabel({ principal: 'anonymous', session: 'abcdef12-3456', kind: 'ui', connection: 'x' })).toBe('web client abcdef');
+    expect(s.ownerLabel({ principal: 'bridge', handle: surface.handle, kind: 'console', connection: 'x' })).toBe(surface.name);
+    expect(s.ownerLabel({ principal: 'anonymous', handle: 'abcdef12-3456789012345A', kind: 'ui', connection: 'x' })).toBe('web client abcdef');
     expect(s.ownedByOther(F1)).toBe(false);
+  });
+
+  it('recognises its own ownership by the handle of its session before the server names it', () => {
+    const { s } = store();
+    s.apply(patch(0, { status: { ...INITIAL_STATUS, session: SESSION, handle: ownerHandle(SESSION), you: null } }));
+    expect(s.isMine({ ...ME, connection: 'c3' })).toBe(true);
+    expect(s.isMine({ ...ME, handle: ownerHandle('b3RoZXItc2Vzc2lvbi0xMjM') })).toBe(false);
   });
 
   it('shows a refused write with the owner name', () => {
     const { s } = store();
-    s.apply(patch(0, { notices: [{ kind: 'conflict', path: F1, owner: { principal: 'anonymous', session: 'abcdef12', kind: 'ui', connection: 'x' } }] }));
+    s.apply(patch(0, { notices: [{ kind: 'conflict', path: F1, owner: { principal: 'anonymous', handle: 'abcdef12345678901234AB', kind: 'ui', connection: 'x' } }] }));
     expect(s.notices.at(-1)?.text).toBe('Pres 1 fader is held by web client abcdef');
     expect(s.conflicts.has(F1)).toBe(true);
   });
@@ -121,7 +130,7 @@ describe('mixer store: owners', () => {
 describe('notices', () => {
   it('keeps one notice per control path, counting repeats, and names a web client by kind and tag', () => {
     const s = new MixerStore();
-    const owner: Owner = { principal: 'anonymous', session: 'abcdefgh_ijklmnopqrstuv', kind: 'ui', connection: 'c9' };
+    const owner: Owner = { principal: 'anonymous', handle: 'abcdefgh_ijklmnopqrstu', kind: 'ui', connection: 'c9' };
     const conflict = { kind: 'conflict' as const, path: '/channels/ch1/fader', owner };
     for (let i = 0; i < 5; i++) s.apply({ type: 'patch', input: 0, changes: [], owners: [], notices: [conflict] } as unknown as Patch);
     s.notify('error', 'something else');

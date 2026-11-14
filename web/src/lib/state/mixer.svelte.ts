@@ -11,7 +11,7 @@ import { getContext } from 'svelte';
 import type { Owner, Owners, Shape, State } from '../contract/types';
 import { MeterStore } from '../meters/store';
 import type { Patch, SyncStatus, ToWorker } from '../sync/messages';
-import { sessionTag } from '../sync/session';
+import { handleTag } from '../net/handle';
 import { getAt, setAt } from './pointer';
 import { describePath } from './paths';
 import { writesBlocked } from './writes';
@@ -40,6 +40,7 @@ export const INITIAL_STATUS: SyncStatus = {
   link: 'Connecting',
   standby: 'Idle',
   session: '',
+  handle: '',
   you: null,
   primaryReplica: null,
   primaryEndpoint: null,
@@ -112,8 +113,8 @@ export class MixerStore {
   isMine(owner: Owner | null): boolean {
     const you = this.status.you;
     if (!owner) return false;
-    if (you) return owner.principal === you.principal && owner.session === you.session;
-    return owner.session === this.status.session;
+    if (you) return owner.principal === you.principal && owner.handle === you.handle;
+    return owner.handle === this.status.handle;
   }
 
   ownedByOther(path: string): boolean {
@@ -121,17 +122,17 @@ export class MixerStore {
     return o !== null && !this.isMine(o);
   }
 
-  /** Display name of an owner: "you", a console's name, or kind and session tag. */
+  /** Display name of an owner: "you", a console's name, or kind and handle tag. */
   ownerLabel(owner: Owner | null): string {
     if (!owner) return 'another session';
     if (this.isMine(owner)) return 'you';
     const principal = owner.principal === 'anonymous' ? '' : `${owner.principal} `;
     if (owner.kind === 'console') {
-      const c = this.state?.consoles.find((x) => x.session === owner.session);
+      const c = this.state?.consoles.find((x) => x.handle === owner.handle);
       if (c) return c.name;
     }
     const kind = owner.kind === 'ui' ? 'web client' : owner.kind;
-    return `${principal}${kind} ${sessionTag(owner.session)}`;
+    return `${principal}${kind} ${handleTag(owner.handle)}`;
   }
 
   // ---- writing -----------------------------------------------------------

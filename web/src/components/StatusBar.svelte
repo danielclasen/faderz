@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getMixer } from '../lib/state/mixer.svelte';
-  import { sessionTag } from '../lib/sync/session';
+  import { handleTag } from '../lib/net/handle';
   const mixer = getMixer();
   const counters = $derived(Object.entries(mixer.counters));
   const latest = $derived(mixer.notices.at(-1) ?? null);
@@ -28,7 +28,7 @@
   {#each counters as [name, value] (name)}
     <span class="c" class:nz={value > 0}><span>{name.replace(/_total$/, '')}</span> <b class="num">{value}</b></span>
   {/each}
-  <span class="right num" title="Session and primary endpoint" data-testid="session">{sessionTag(mixer.status.session)} {mixer.endpoint ?? ''}</span>
+  <span class="right num" title="Session tag, as other clients name this screen, and primary endpoint" data-testid="session">{handleTag(mixer.status.handle)} {mixer.endpoint ?? ''}</span>
 </footer>
 
 <style>

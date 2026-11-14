@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sessionId, sessionTag, withSession } from '../../src/lib/sync/session';
+import { sessionId, withSession } from '../../src/lib/sync/session';
 import { randomSessionId } from '../../src/lib/net/ids';
 
 class MemoryStorage {
@@ -47,10 +47,6 @@ describe('session identity', () => {
     const a = sessionId(broken, 'reload', gen);
     const b = sessionId(broken, 'reload', gen);
     expect(a).not.toBe(b);
-  });
-
-  it('shows a short tag of a session id', () => {
-    expect(sessionTag('0f3a9c2e-1111-4222-8333-444455556666')).toBe('0f3a9c');
   });
 });
 

@@ -344,7 +344,7 @@ export class MockServer {
   private statsReport() {
     const connections = this.cluster.connections().map((conn) => ({
       connection: conn.id,
-      session: conn.owner?.session ?? null,
+      session: conn.owner ? conn.session : null,
       kind: conn.owner?.kind ?? null,
       mode: conn.mode,
       replica: conn.replica.id,

@@ -11,7 +11,8 @@ import WebSocket from 'ws';
 import { Cluster, type ClusterOptions } from '../../dev/mock/cluster';
 import { Contract } from '../../dev/mock/contract';
 import { MockServer } from '../../dev/mock/server';
-import { DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
+import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
+import { ownerHandle } from '../../src/lib/net/handle';
 import { decodeMeterFrame, deriveMeterLayout, type MeterFrame, type MeterLayout } from '../../src/lib/contract/meterFrame';
 import { DEAD_MS, HEARTBEAT_MS, LEASE_MS, METER_CREDIT_CAP, METER_PERIOD_MS } from '../../src/lib/contract/protocol';
 import type {
@@ -270,8 +271,8 @@ describe('hello', () => {
     const snap = (await c.hello()) as SnapshotMessage;
     expect(c.messages[0]!.type).toBe('replicas');
     expect(snap).toMatchObject({ type: 'snapshot', revision: cluster.revision });
-    expect(snap.you).toEqual({ principal: 'anonymous', session: c.session, kind: 'ui', connection: expect.any(String) });
-    expect(snap.state.consoles.every((k) => typeof k.session === 'string')).toBe(true);
+    expect(snap.you).toEqual({ principal: 'anonymous', handle: ownerHandle(c.session), kind: 'ui', connection: expect.any(String) });
+    expect(snap.state.consoles.map((k) => k.handle)).toEqual(Object.values(CONSOLE_SESSIONS).map(ownerHandle));
   });
 
   it('serves a standby deltas, replicas and pings, but no meter frames or counters', async () => {
@@ -307,10 +308,10 @@ describe('hello', () => {
   });
 
   it('is answered as a console client with kind console', async () => {
-    const session = cluster.state.consoles[0]!.session;
+    const session = CONSOLE_SESSIONS['mcu-1']!;
     const c = await new Client(session, 'console').open();
     const snap = (await c.hello()) as SnapshotMessage;
-    expect(snap.you).toMatchObject({ session, kind: 'console' });
+    expect(snap.you).toMatchObject({ handle: cluster.state.consoles[0]!.handle, kind: 'console' });
     const id = c.command('touch', '/channels/ch24/fader');
     const delta = await c.answer<DeltaMessage>(id);
     expect(delta.owners).toEqual([{ path: '/channels/ch24/fader', owner: snap.you }]);
@@ -348,7 +349,7 @@ describe('commands', () => {
     const delta = await a.answer<DeltaMessage>(ids[0]!);
     const origins = delta.origins!;
     expect(origins.map((o) => o.commandId).sort()).toEqual([...ids].sort());
-    expect(new Set(origins.map((o) => o.owner.session))).toEqual(new Set([a.session, b.session]));
+    expect(new Set(origins.map((o) => o.owner.handle))).toEqual(new Set([ownerHandle(a.session), ownerHandle(b.session)]));
     expect(new Set(applied().map((e) => e.revision))).toEqual(new Set([delta.revision]));
     const fader4 = delta.changes!.filter((c) => c.path === '/channels/ch4/fader');
     expect(fader4).toHaveLength(1);
@@ -448,6 +449,8 @@ describe('commands', () => {
     expect((await a2.answer(a2.set(path, -1))).type).toBe('delta');
     const released = await a.answer<DeltaMessage>(a.command('release', path));
     expect(released.owners).toEqual([{ path, owner: null }]);
+    // The session id is a credential: nothing another client receives carries it.
+    for (const m of b.messages) expect(JSON.stringify(m)).not.toContain(a.session);
     expect((await b.answer(b.set(path, -2))).type).toBe('delta');
   });
 
@@ -862,7 +865,9 @@ describe('REST', () => {
     await c.hello();
     await c.answer(c.command('touch', '/channels/ch16/fader'));
     const res = await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch16/fader', value: 0 }] });
-    expect(res).toMatchObject({ status: 409, body: { conflicts: [{ path: '/channels/ch16/fader', owner: c.you, current: -90 }] } });
+    expect(res).toMatchObject({ status: 409, body: { conflicts: [{ path: '/channels/ch16/fader', owner: { ...c.you, handle: ownerHandle(c.session) }, current: -90 }] } });
+    expect(JSON.stringify(res.body)).not.toContain(c.session);
+    expect(JSON.stringify((await rest('GET', '/state')).body)).not.toContain(c.session);
     await c.answer(c.command('release', '/channels/ch16/fader'));
   });
 

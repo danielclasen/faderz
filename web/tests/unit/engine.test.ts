@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RESYNC_RETRY_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
+import { ownerHandle } from '../../src/lib/net/handle';
 import type { Patch } from '../../src/lib/sync/messages';
 import { deriveMeterLayout, encodeMeterFrame, type MeterLayout, type MeterValues } from '../../src/lib/contract/meterFrame';
 import { DEAD_MS, HEARTBEAT_MS, METER_CREDIT_CAP, SUSPECT_MS } from '../../src/lib/contract/protocol';
@@ -21,8 +22,8 @@ const R1: ReplicaRef = { id: 'r1', role: 'leader' };
 const R2: ReplicaRef = { id: 'r2', role: 'follower' };
 const R3: ReplicaRef = { id: 'r3', role: 'follower' };
 const SESSION = 'c2Vzc2lvbi1tZS0xMjM0NTY';
-const YOU: Owner = { principal: 'anonymous', session: SESSION, kind: 'ui', connection: 'c1' };
-const OTHER: Owner = { principal: 'anonymous', session: 'sess-other', kind: 'ui', connection: 'c9' };
+const YOU: Owner = { principal: 'anonymous', handle: ownerHandle(SESSION), kind: 'ui', connection: 'c1' };
+const OTHER: Owner = { principal: 'anonymous', handle: ownerHandle('b3RoZXItc2Vzc2lvbi0xMjM'), kind: 'ui', connection: 'c9' };
 const F1 = '/channels/ch1/fader';
 const F2 = '/channels/ch2/fader';
 const F3 = '/channels/ch3/fader';
@@ -133,7 +134,7 @@ describe('sync engine: connecting', () => {
     expect(sockets[1]!.sent[0]).toEqual({ type: 'hello', session: SESSION, kind: 'ui', mode: 'standby', lastRevision: 4, epoch: EPOCH });
     const p = tick()!;
     expect(p.snapshot?.state.channels['ch1']).toBeDefined();
-    expect(p.status).toMatchObject({ link: 'Live', primaryReplica: 'r1', standby: 'Syncing', revision: 4, session: SESSION });
+    expect(p.status).toMatchObject({ link: 'Live', primaryReplica: 'r1', standby: 'Syncing', revision: 4, session: SESSION, handle: ownerHandle(SESSION) });
   });
 
   it('opens the standby on another endpoint of a list', () => {

@@ -246,7 +246,7 @@ describe('WebSocket messages', () => {
     }
   };
   const replica = { id: 'r1', role: 'leader' };
-  const owner = { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', connection: 'c1' };
+  const owner = { principal: 'anonymous', handle: 'q3Jx0fZL1kWm7d2Y-0b_Aw', kind: 'ui', connection: 'c1' };
   const cmd = '0b6e3a4c-5d1f-4c2a-9e8b-7f6a5d4c3b2a';
   const cmd2 = '1c7f4b5d-6e2a-4d3b-8f9c-8a7b6e5d4c3b';
   /** The largest uint64. */
@@ -319,7 +319,7 @@ describe('WebSocket messages', () => {
     owners: [{ path: '/channels/ch1/fader', owner }],
     origins: [
       { owner, commandId: cmd, seq: 1731590000001 },
-      { owner: { ...owner, session: 'Y29uc29sZS1tY3UtMS1zZXNz', kind: 'console', connection: 'c2' }, commandId: cmd2 },
+      { owner: { ...owner, handle: 'Rk9vYmFyLWJhei1xdXV4LT', kind: 'console', connection: 'c2' }, commandId: cmd2 },
     ],
   };
 
@@ -346,7 +346,11 @@ describe('WebSocket messages', () => {
     ['ahead without epoch', { type: 'ahead', replica, revision: 120, lastRevision: 245 }],
     ['epoch as a number', { type: 'ahead', replica, epoch: 7, revision: 120, lastRevision: 245 }],
     ['owner as a client id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: 'dGFiLTEtc2Vzc2lvbi1pZA' }] }],
-    ['owner without connection', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui' } }] }],
+    ['owner without connection', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', handle: owner.handle, kind: 'ui' } }] }],
+    // The session id is a credential and never leaves its client.
+    ['owner with a session id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, session: 'dGFiLTEtc2Vzc2lvbi1pZA' } }] }],
+    ['owner with a session id for a handle', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', connection: 'c1' } }] }],
+    ['handle of the wrong length', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, handle: 'dGFiLTEtc2Vzc2lvbi1pZA0' } }] }],
     ['owner of unknown kind', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, kind: 'robot' } }] }],
     ['owner with empty principal', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, principal: '' } }] }],
     ['origin without owner', { ...delta, origins: [{ commandId: cmd }] }],

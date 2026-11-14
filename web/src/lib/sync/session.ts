@@ -44,11 +44,6 @@ export function pageSession(): string {
   return sessionId(storage, nav?.type);
 }
 
-/** Short display tag of a session id. */
-export function sessionTag(session: string): string {
-  return session.replace(/[-_]/g, '').slice(0, 6);
-}
-
 /** A WebSocket endpoint with the session as its ?session= query parameter. */
 export function withSession(endpoint: string, session: string): string {
   const url = new URL(endpoint);

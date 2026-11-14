@@ -41,6 +41,7 @@ import {
 } from '../../src/lib/contract/protocol.ts';
 import { getAt, parsePointer, pointer, setAt } from '../../src/lib/state/pointer.ts';
 import { Contract, ContractViolation } from './contract.ts';
+import { handleOf } from './handle.ts';
 import { CONSOLE_SESSIONS, exampleShape, initialState } from './shape.ts';
 import { ReplicaMeters, SourceModel } from './signals.ts';
 
@@ -140,7 +141,7 @@ export class CommandError extends Error {
   }
 }
 
-export const sessionKey = (o: Pick<Owner, 'principal' | 'session'>) => `${o.principal}\n${o.session}`;
+export const sessionKey = (o: Pick<Owner, 'principal' | 'handle'>) => `${o.principal}\n${o.handle}`;
 
 function sampleIndexNow(): number {
   return Math.floor(Date.now() * SAMPLES_PER_MS) + APPLY_MARGIN_SAMPLES;
@@ -205,7 +206,7 @@ interface Batch {
   origins: Origin[];
 }
 
-const CONSOLE_OWNER: Owner = { principal: 'bridge', session: CONSOLE_SESSIONS['mcu-1']!, kind: 'console', connection: 'bridge-mcu-1' };
+const CONSOLE_OWNER: Owner = { principal: 'bridge', handle: handleOf(CONSOLE_SESSIONS['mcu-1']!), kind: 'console', connection: 'bridge-mcu-1' };
 
 const emptyStats = (): ConnStats => ({ meterFramesSent: 0, metersSkippedNoCredit: 0, messagesIn: 0, messagesOut: 0 });
 
@@ -505,7 +506,7 @@ export class Cluster {
       if (msg.session !== conn.session) {
         return this.emit(conn, { type: 'error', replica: this.ref(r), code: 400, message: 'hello session differs from ?session=' });
       }
-      conn.owner = { principal: 'anonymous', session: msg.session, kind: msg.kind, connection: conn.id };
+      conn.owner = { principal: 'anonymous', handle: handleOf(msg.session), kind: msg.kind, connection: conn.id };
       conn.mode = msg.mode;
       this.renew(conn.owner, r);
       this.emit(conn, { type: 'replicas', replica: this.ref(r), replicas: this.replicaStatus() });
@@ -667,7 +668,7 @@ export class Cluster {
         path: msg.path,
         current: current ?? null,
         owner: holder,
-        message: `owned by ${holder.principal}/${holder.session}`,
+        message: `owned by ${holder.principal}/${holder.handle}`,
       };
     }
     const fail = (code: 400 | 404, message: string) => ({ type: 'error' as const, code, commandId: msg.id, path: msg.path, message });

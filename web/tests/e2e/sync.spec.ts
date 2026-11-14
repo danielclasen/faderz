@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { DEAD_MS } from '../../src/lib/contract/protocol';
+import { ownerHandle } from '../../src/lib/net/handle';
 import {
   REPLICAS,
   RawClient,
@@ -49,14 +50,14 @@ async function switchedAt(page: Page): Promise<number> {
 async function expectAppliedOnce(request: APIRequestContext, session: string, path: string): Promise<number[]> {
   const report = await audit(request);
   expect(report.summary.duplicates).toBe(0);
-  const outcomes = (await commands(request)).filter((c) => c.owner?.session === session && c.path === path && c.type === 'set');
+  const outcomes = (await commands(request)).filter((c) => c.owner?.handle === ownerHandle(session) && c.path === path && c.type === 'set');
   const applied = outcomes.filter((c) => c.result === 'applied').map((c) => c.commandId);
   expect(new Set(applied).size).toBe(applied.length);
   for (const c of outcomes) {
     expect(c.result === 'applied' || c.result === 'duplicate').toBe(true);
     if (c.result === 'duplicate') expect(applied).toContain(c.commandId);
   }
-  const sets = report.entries.filter((e) => e.owner.session === session && e.path === path && e.type === 'set');
+  const sets = report.entries.filter((e) => e.owner.handle === ownerHandle(session) && e.path === path && e.type === 'set');
   expect(sets.map((e) => e.commandId)).toEqual(applied);
   for (let i = 1; i < sets.length; i++) expect(sets[i]!.seq!).toBeGreaterThan(sets[i - 1]!.seq!);
   return sets.map((e) => e.value as number);
@@ -118,8 +119,8 @@ test('two clients move different faders at the same time and see each other', as
       await expect(p.getByTestId('fader-value-ch6')).toHaveText(formatDb(ch6));
     }
     const entries = (await audit(request)).entries.filter((e) => e.type === 'set');
-    expect(new Set(entries.filter((e) => e.path === '/channels/ch5/fader').map((e) => e.owner.session))).toEqual(new Set([sessions[0]]));
-    expect(new Set(entries.filter((e) => e.path === '/channels/ch6/fader').map((e) => e.owner.session))).toEqual(new Set([sessions[1]]));
+    expect(new Set(entries.filter((e) => e.path === '/channels/ch5/fader').map((e) => e.owner.handle))).toEqual(new Set([ownerHandle(sessions[0])]));
+    expect(new Set(entries.filter((e) => e.path === '/channels/ch6/fader').map((e) => e.owner.handle))).toEqual(new Set([ownerHandle(sessions[1])]));
   } finally {
     await Promise.all(contexts.map((c) => c.close()));
   }
@@ -133,7 +134,7 @@ test('a fader held across a reload stays owned by the session and is released af
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(x, y - 30);
-  await expect.poll(async () => (await serverState(request)).owners[path]?.session).toBe(session);
+  await expect.poll(async () => (await serverState(request)).owners[path]?.handle).toBe(ownerHandle(session));
   await page.waitForFunction(() => window.__faderz?.outbox === 0);
   const value = await fader(request, 'ch9');
   await expect(page.getByTestId('fader-value-ch9')).toHaveText(formatDb(value));
@@ -155,7 +156,7 @@ test('a fader held across a reload stays owned by the session and is released af
     await reached;
     await expect.poll(async () => (await stats(request)).filter((c) => c.session === session)).toEqual([]);
     const refused = await other.command({ type: 'set', path, value: value - 6 });
-    expect(refused).toMatchObject({ type: 'error', code: 409, path, owner: { principal: 'anonymous', session, kind: 'ui' } });
+    expect(refused).toMatchObject({ type: 'error', code: 409, path, owner: { principal: 'anonymous', handle: ownerHandle(session), kind: 'ui' } });
     open();
     await reload;
     await page.unrouteAll();
@@ -163,7 +164,7 @@ test('a fader held across a reload stays owned by the session and is released af
     expect(await debug(page, 'session')).toBe(session);
     await expect.poll(async () => (await serverState(request)).owners[path]).toBeUndefined();
     const releases = (await audit(request)).entries.filter((e) => e.type === 'release' && e.path === path);
-    expect(releases.map((e) => e.owner.session)).toEqual([session]);
+    expect(releases.map((e) => e.owner.handle)).toEqual([ownerHandle(session)]);
     expect(await fader(request, 'ch9')).toBe(value);
     await expect(page.getByTestId('fader-value-ch9')).toHaveText(formatDb(value));
     expect(await debug(page, 'touching')).toEqual([]);
@@ -235,14 +236,14 @@ test('keeps a held fader owned across a replica kill', async ({ page, request })
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(x, y - 20);
-  await expect.poll(async () => (await serverState(request)).owners[path]?.session).toBe(session);
+  await expect.poll(async () => (await serverState(request)).owners[path]?.handle).toBe(ownerHandle(session));
   await request.post(`/__mock/replicas/${from}/kill`);
   await expect(page.getByTestId('failover')).toBeVisible();
   await page.mouse.move(x, y - 60);
   await expect(page.locator(`[data-replica="${from}"]`)).toHaveAttribute('data-healthy', 'false');
   // Longer than the 2 s session lease: the new primary connection renews it.
   await page.waitForTimeout(2500);
-  expect((await serverState(request)).owners[path]).toMatchObject({ session, kind: 'ui' });
+  expect((await serverState(request)).owners[path]).toMatchObject({ handle: ownerHandle(session), kind: 'ui' });
   await page.mouse.up();
   await settled(page);
   await expect.poll(async () => (await serverState(request)).owners[path]).toBeUndefined();

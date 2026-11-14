@@ -3,6 +3,8 @@
 
 export type Id = string;
 export type SessionId = string;
+/** Published in place of a session id: base64url of the first 16 bytes of SHA-256 over it. */
+export type OwnerHandle = string;
 export type SessionKind = 'ui' | 'console' | 'script';
 export type LinkMode = 'primary' | 'standby';
 export type CommandId = string;
@@ -218,7 +220,7 @@ export interface Scene {
 export interface ConsoleStatus {
   id: Id;
   name: string;
-  session: SessionId;
+  handle: OwnerHandle;
   protocol: 'mcu' | 'hui' | 'osc';
   transport: 'alsa-midi' | 'bridge' | 'osc-udp';
   connected: boolean;
@@ -264,7 +266,7 @@ export interface State {
 }
 export interface Owner {
   principal: string;
-  session: SessionId;
+  handle: OwnerHandle;
   kind: SessionKind;
   connection: string;
 }

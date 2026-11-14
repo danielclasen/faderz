@@ -71,7 +71,10 @@ endpoints can be given instead:
 then uses another endpoint than the primary. Every connection carries
 the tab's session id as `?session=` (16 random bytes, base64url), the
 same on the standby and on every reconnect; the mock refuses an upgrade
-without one with 400.
+without one with 400. The session id leaves the tab only towards the
+server: owner records carry its handle, the first 16 bytes of SHA-256
+over it in base64url, which the client also computes for its own
+session (`src/lib/net/handle.ts`) to recognise its own ownership.
 
 ## Client
 
