@@ -3,7 +3,8 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { defineConfig, devices } from '@playwright/test';
 
-const PORT = 5181;
+/** Plain HTTP dev server; the HTTPS and preview servers take the next two ports. */
+const PORT = Number(process.env['FADERZ_E2E_PORT'] ?? 5181);
 /** A LAN address of this host: a plain-HTTP origin is not a secure context. */
 const LAN =
   Object.values(networkInterfaces())
@@ -16,12 +17,12 @@ export const LAN_URL = `http://${LAN}:${PORT}`;
  * serves the mock, for the load spec: dev mode adds main-thread work that
  * a deployed client does not do.
  */
-const PERF_PORT = 5183;
+const PERF_PORT = PORT + 2;
 const PERF_DIST = 'node_modules/.cache/faderz-e2e-perf-dist';
 export const PERF_URL = `http://127.0.0.1:${PERF_PORT}`;
 
 /** Second dev server over HTTPS with a throwaway self-signed certificate. */
-const TLS_PORT = 5182;
+const TLS_PORT = PORT + 1;
 const TLS_DIR = 'node_modules/.cache/faderz-e2e-tls';
 if (!existsSync(`${TLS_DIR}/cert.pem`)) {
   mkdirSync(TLS_DIR, { recursive: true });

@@ -110,7 +110,7 @@ Every write control is `aria-disabled` and sends nothing while the link transmit
 ```sh
 npm run check      # svelte-check; type errors and warnings fail
 npm test           # Vitest: units and contract tests
-npm run test:e2e   # Playwright against the mock on port 5181
+npm run test:e2e   # Playwright against the mock on ports 5181 to 5183
 npm run build      # production bundle in dist/
 ```
 
@@ -124,6 +124,7 @@ projects open it through a LAN address) and 5182 (HTTPS with a
 generated self-signed certificate), and on 5183 a production build
 under `vite preview`, which serves the mock too
 (`FADERZ_MOCK_CHANNELS=64`, for `perf.spec.ts`).
+`FADERZ_E2E_PORT=<n>` moves the three servers to ports n, n + 1 and n + 2.
 The specs share each server's mock state and run serially; each test
 restores every replica and clears the command logs and counters.
 `perf.spec.ts` and `throttle.spec.ts` run without tracing, whose DOM
