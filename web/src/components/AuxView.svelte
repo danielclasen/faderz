@@ -1,11 +1,21 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
+  import { MeterLayer, provideMeterLayer } from '../lib/meters/layer';
   import { channelPath, mixMinusPath } from '../lib/state/paths';
   import { dbToPosition, formatDb, positionToDb } from '../lib/audio/db';
   import BusMaster from './BusMaster.svelte';
   import Matrix from './Matrix.svelte';
 
   const mixer = getMixer();
+  const meters = provideMeterLayer(new MeterLayer(mixer.meters));
+  let root: HTMLDivElement | undefined = $state();
+  let canvas: HTMLCanvasElement | undefined = $state();
+  onMount(() => {
+    meters.attach(root!, canvas!);
+    return () => meters.destroy();
+  });
+  $effect(() => meters.setZones(mixer.state!.metering.zones));
   const shape = $derived(mixer.shape!);
   const sendPath = (ch: string, aux: string, key: string) => channelPath(ch, 'sends', aux, key);
 
@@ -22,6 +32,7 @@
 </script>
 
 <div class="view">
+  <div class="masters-wrap" bind:this={root}>
   <div class="masters">
     {#each shape.auxes as aux (aux.id)}
       <BusMaster group="auxes" element={aux} tag="AUX" />
@@ -29,6 +40,8 @@
     {#each shape.mixMinus as mm (mm.id)}
       <BusMaster group="mixMinus" element={mm} tag="N-1" />
     {/each}
+  </div>
+    <canvas class="meter-layer" bind:this={canvas} aria-hidden="true"></canvas>
   </div>
   <div class="editors">
     <section>
@@ -96,12 +109,27 @@
     height: 100%;
     min-height: 0;
   }
-  .masters {
-    display: flex;
+  .meter-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+  /* The meter layer covers the visible masters and stays put while they
+     scroll; it stacks above them and below anything outside the view. */
+  .masters-wrap {
+    position: relative;
+    isolation: isolate;
     height: 52%;
     min-height: 300px;
-    overflow-x: auto;
     border-bottom: 2px solid var(--line-strong);
+  }
+  .masters {
+    display: flex;
+    height: 100%;
+    overflow-x: auto;
   }
   .editors {
     flex: 1;
