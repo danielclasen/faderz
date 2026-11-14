@@ -387,6 +387,20 @@ export class ReplicaMeters {
         .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr, surround: state.channels[c.id]!.pan }));
       mixMinus.push(busMeter(mm.id, mm.layout, mixInto(mm.layout, contributions), st.fader, st.mute));
     }
+    // Line-up tone replaces the mix of its targets: a sine at level dBFS
+    // peak reads level - 3.01 dB RMS.
+    if (state.tone.on) {
+      const tone = (list: BusMeter[], shapes: ElementShape[]) =>
+        shapes.forEach((e, i) => {
+          if (!state.tone.targets.includes(e.id)) return;
+          const m = list[i]!;
+          const legs = m.peak.map(() => state.tone.level);
+          list[i] = { ...m, peak: legs, truePeak: legs, rms: legs.map((l) => r1(l - 3.01)) };
+        });
+      tone(buses, this.shape.buses);
+      tone(auxes, this.shape.auxes);
+      tone(mixMinus, this.shape.mixMinus);
+    }
     return { channels, buses, auxes, mixMinus };
   }
 }

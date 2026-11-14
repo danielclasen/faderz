@@ -219,6 +219,14 @@ export const LOUDNESS_PRESETS: Record<Exclude<LoudnessPreset, 'custom'>, { targe
   ebu: { target: -23, tolerance: 1 },
   atsc: { target: -24, tolerance: 2 },
 };
+export interface Tone {
+  on: boolean;
+  /** dBFS. */
+  level: number;
+  ident: boolean;
+  /** Bus, aux and mix-minus ids that carry the tone. */
+  targets: Id[];
+}
 export interface State {
   channels: Record<Id, ChannelState>;
   buses: Record<Id, BusState>;
@@ -232,6 +240,7 @@ export interface State {
   scenes: Scene[];
   consoles: ConsoleStatus[];
   metering: Metering;
+  tone: Tone;
 }
 export interface Owner {
   principal: string;

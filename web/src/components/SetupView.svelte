@@ -10,6 +10,15 @@
     { id: 'atsc', label: 'ATSC A/85', hint: '-24 LKFS +/-2 LU' },
     { id: 'custom', label: 'Custom', hint: 'target and tolerance as entered' },
   ];
+  const tone = $derived(mixer.state!.tone);
+  const outputs = $derived([...mixer.shape!.buses, ...mixer.shape!.auxes, ...mixer.shape!.mixMinus]);
+  const TONE_LEVELS = [
+    { level: -18, hint: 'EBU R 68 alignment' },
+    { level: -20, hint: 'SMPTE alignment' },
+  ];
+  function toggleTarget(id: string): void {
+    mixer.set('/tone/targets', tone.targets.includes(id) ? tone.targets.filter((t) => t !== id) : [...tone.targets, id]);
+  }
   const SCALES: Array<{ id: LoudnessScale; label: string }> = [
     { id: 'ebu9', label: 'EBU +9' },
     { id: 'ebu18', label: 'EBU +18' },
@@ -42,6 +51,25 @@
           aria-disabled={mixer.locked}
           onclick={() => mixer.set('/metering/scale', s.id)}>{s.label}</button
         >
+      {/each}
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="setup-tone">
+    <h2 class="panel-title" id="setup-tone">Line-up tone 1 kHz</h2>
+    <div class="radios">
+      <button class="key tone-on" aria-disabled={mixer.locked} aria-pressed={tone.on} aria-label="Line-up tone" onclick={() => mixer.set('/tone/on', !tone.on)}>TONE {tone.on ? 'ON' : 'OFF'}</button>
+      <button class="key" aria-disabled={mixer.locked} aria-pressed={tone.ident} onclick={() => mixer.set('/tone/ident', !tone.ident)} title="Stops the tone on one leg at a time to identify the legs">IDENT</button>
+    </div>
+    <div class="radios" role="radiogroup" aria-label="Tone level">
+      {#each TONE_LEVELS as l (l.level)}
+        <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={tone.level === l.level} title={l.hint} onclick={() => mixer.set('/tone/level', l.level)}>{l.level} dBFS</button>
+      {/each}
+    </div>
+    <NumberEntry path="/tone/level" label="Level" min={-30} max={0} step={1} unit="dBFS" />
+    <div class="targets" role="group" aria-label="Tone outputs">
+      {#each outputs as o (o.id)}
+        <button class="key" aria-disabled={mixer.locked} aria-pressed={tone.targets.includes(o.id)} aria-label={`Tone on ${o.name}`} title={o.name} onclick={() => toggleTarget(o.id)}>{o.name}</button>
       {/each}
     </div>
   </section>
@@ -84,6 +112,19 @@
   }
   .radios .key {
     height: 28px;
+  }
+  .targets {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px;
+  }
+  .targets .key {
+    height: 28px;
+  }
+  .tone-on[aria-pressed='true'] {
+    background: var(--mute);
+    border-color: var(--mute);
+    color: var(--mute-ink);
   }
   .hint {
     margin: 4px 0 0;

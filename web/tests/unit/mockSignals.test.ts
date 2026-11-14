@@ -49,3 +49,19 @@ describe('mock bus limiter', () => {
     expect(Math.max(...meters.frame(state, sources).buses[pgm]!.truePeak)).toBeLessThanOrEqual(-2);
   });
 });
+
+describe('mock line-up tone', () => {
+  it('replaces the mix of its target outputs at the selected level and leaves the others', () => {
+    const shape = exampleShape();
+    const state = initialState(shape);
+    const meters = new ReplicaMeters(shape);
+    const sources = new SourceModel(shape);
+    state.tone = { on: true, level: -20, ident: false, targets: ['pgm20'] };
+    const frame = meters.frame(state, sources);
+    const pgm = shape.buses.findIndex((b) => b.id === 'pgm20');
+    const me = shape.buses.findIndex((b) => b.id === 'me');
+    expect(frame.buses[pgm]!.peak).toEqual([-20, -20]);
+    expect(frame.buses[pgm]!.rms).toEqual([-23, -23]);
+    expect(frame.buses[me]!.peak).not.toEqual([-20, -20]);
+  });
+});

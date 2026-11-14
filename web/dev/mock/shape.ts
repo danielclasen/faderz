@@ -207,6 +207,7 @@ export function initialState(shape: Shape): State {
     recallSafe: Object.fromEntries(existing(['ch11', 'ch12']).map((id) => [id, ['fader', 'mute']])),
     scenes: [],
     consoles,
+    tone: { on: false, level: -18, ident: false, targets: shape.buses.map((b) => b.id) },
     metering: {
       zones: { alignment: -18, permittedMax: -9, truePeakMax: -1 },
       loudness: { preset: 'ebu', target: -23, tolerance: 1 },

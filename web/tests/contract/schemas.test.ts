@@ -118,6 +118,10 @@ describe('Change values are constrained by path', () => {
     ['/mixMinus/mm1/interrupt/source', null],
     ['/mixMinus/mm1/interrupt/active', true],
     ['/monitor/talkbackDim', false],
+    ['/tone/on', true],
+    ['/tone/level', -20],
+    ['/tone/ident', true],
+    ['/tone/targets', ['pgm20', 'aux1']],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -164,6 +168,10 @@ describe('Change values are constrained by path', () => {
     ['/mixMinus/mm1/interrupt/active', 'on'],
     ['/mixMinus/mm1/interrupt', { source: 'ch1', active: true }],
     ['/auxes/aux1/interrupt/active', true],
+    ['/tone/level', -31],
+    ['/tone/level', 1],
+    ['/tone/frequency', 440],
+    ['/tone/targets', ['pgm20', 'pgm20']],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });

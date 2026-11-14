@@ -1205,7 +1205,8 @@
         "recallSafe",
         "scenes",
         "consoles",
-        "metering"
+        "metering",
+        "tone"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1305,6 +1306,9 @@
         },
         "metering": {
           "$ref": "#/$defs/Metering"
+        },
+        "tone": {
+          "$ref": "#/$defs/Tone"
         }
       }
     },
@@ -1373,6 +1377,9 @@
         },
         {
           "pattern": "^/metering/(zones/(alignment|permittedMax|truePeakMax)|loudness/(preset|target|tolerance)|scale)$"
+        },
+        {
+          "pattern": "^/tone/(on|level|ident|targets)$"
         }
       ]
     },
@@ -2138,6 +2145,57 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/tone/(on|ident)$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/tone/level$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/ToneLevel"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/tone/targets$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/IdSet"
+              }
+            }
+          }
         }
       ]
     },
@@ -2404,6 +2462,37 @@
           "$ref": "#/$defs/LoudnessScale"
         }
       }
+    },
+    "Tone": {
+      "description": "Line-up tone: a 1 kHz sine at level dBFS (sample peak) on every leg. While on, each output in targets (bus, aux or mix-minus ids) carries the tone in place of its mix, after its fader and before its limiter. EBU R 68 aligns at -18 dBFS, SMPTE practice at -20 dBFS. ident true identifies the legs: the tone stops on one leg at a time in layout order, for 250 ms each second.",
+      "type": "object",
+      "required": [
+        "on",
+        "level",
+        "ident",
+        "targets"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "on": {
+          "type": "boolean"
+        },
+        "level": {
+          "$ref": "#/$defs/ToneLevel"
+        },
+        "ident": {
+          "type": "boolean"
+        },
+        "targets": {
+          "$ref": "#/$defs/IdSet"
+        }
+      }
+    },
+    "ToneLevel": {
+      "description": "dBFS.",
+      "type": "number",
+      "minimum": -30,
+      "maximum": 0
     },
     "LoudnessPreset": {
       "type": "string",

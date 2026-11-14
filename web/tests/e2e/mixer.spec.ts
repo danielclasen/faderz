@@ -225,3 +225,19 @@ test('talks into a mix-minus output while TALK is held and stops on release', as
   await expect.poll(async () => (await serverState(request)).owners['/mixMinus/mm1/interrupt/active']).toBeUndefined();
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
+
+test('puts line-up tone at the selected level on chosen outputs from the setup view', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'Setup' }).click();
+  await page.getByRole('radio', { name: '-20 dBFS' }).click();
+  await page.getByRole('button', { name: 'Tone on M&E' }).click();
+  await page.getByRole('button', { name: 'Line-up tone', exact: true }).click();
+  await settled(page);
+  const tone = (await serverState(request)).state.tone;
+  expect(tone).toMatchObject({ on: true, level: -20 });
+  expect(tone.targets).not.toContain('me');
+  await expect(page.getByRole('button', { name: 'Line-up tone', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await patch(request, '/tone/on', false);
+  await patch(request, '/tone/level', -18);
+  await patch(request, '/tone/targets', ['pgm51', 'pgm20', 'me', 'cf']);
+});

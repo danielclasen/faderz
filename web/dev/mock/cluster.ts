@@ -697,7 +697,7 @@ export class Cluster {
   private checkPath(path: string): string | null {
     const [group, id] = parsePointer(path);
     if (group === 'recallSafe') return this.elementIds().has(id!) ? null : `unknown element ${id}`;
-    if (group === 'monitor' || group === 'metering') return getAt(this.state, path) === undefined ? `unknown control ${path}` : null;
+    if (group === 'monitor' || group === 'metering' || group === 'tone') return getAt(this.state, path) === undefined ? `unknown control ${path}` : null;
     return getAt(this.state, path) === undefined ? `unknown control ${path}` : null;
   }
 
@@ -706,6 +706,11 @@ export class Cluster {
     if (/\/(exclude|members)$/.test(path)) {
       const bad = (value as string[]).find((id) => !channelIds.has(id));
       return bad ? `unknown channel ${bad}` : null;
+    }
+    if (path === '/tone/targets') {
+      const outputs = new Set([...this.shape.buses, ...this.shape.auxes, ...this.shape.mixMinus].map((e) => e.id));
+      const bad = (value as string[]).find((id) => !outputs.has(id));
+      return bad ? `unknown output ${bad}` : null;
     }
     if (path === '/monitor/source') {
       const sources = new Set([...this.shape.buses, ...this.shape.auxes, ...this.shape.mixMinus].map((e) => e.id));
