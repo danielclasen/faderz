@@ -66,9 +66,11 @@ Plain HTTP works too, also on LAN addresses that are not secure
 contexts.
 
 The UI connects to `/api/v1/ws` on its own origin. A list of replica
-endpoints can be given instead:
-`?endpoints=ws://a/api/v1/ws,ws://b/api/v1/ws`; the standby connection
-then uses another endpoint than the primary. Every connection carries
+endpoints on the same origin, as paths or URLs, can be given instead:
+`?endpoints=/__mock/replicas/r1/api/v1/ws,/__mock/replicas/r2/api/v1/ws`;
+the standby connection then uses another endpoint than the primary. An
+endpoint on another origin stops the page with an error, so a link
+cannot send the session id or the writes to another host. Every connection carries
 the tab's session id as `?session=` (16 random bytes, base64url), the
 same on the standby and on every reconnect; the mock refuses an upgrade
 without one with 400. The session id leaves the tab only towards the
