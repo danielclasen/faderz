@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/danielclasen/faderz/raw/main/api/ws/client-message.schema.json",
   "title": "faderz WebSocket client message",
-  "description": "Messages a client sends on /api/v1/ws. hello is the first message on every connection. A client keeps one primary connection (commands, deltas, meter frames, counters) and one standby connection to another replica (deltas, replicas, heartbeats). Commands (set, touch, release) are applied in the order received and answered by exactly one of: a delta listing the command id among its origins, an ack, or an error. The server batches the commands arriving within one processing block into one delta. A client coalesces writes to one control to at most 50 per second, sending the latest value. Every message renews the session lease (model.schema.json#/$defs/Owners).",
+  "description": "Messages a client sends on /api/v1/ws. hello is the first message on every connection. A client keeps one primary connection (commands, deltas, meter frames, counters) and one standby connection to another replica (deltas, replicas, heartbeats). Commands (set, touch, release) are applied in the order received and answered by exactly one of: a delta listing the command id among its origins, an ack, or an error. The server batches the commands arriving within one processing block into one delta. A client coalesces writes to one control to at most 50 per second, sending the latest value. Every message renews the session lease (model.schema.json#/$defs/Owners). Read index: a replica answers a hello or resync carrying lastRevision only once it has applied every log entry up to lastRevision, so the snapshot or resume it answers with never has an older revision; until then it holds the answer. It likewise applies no command that follows a promote carrying lastRevision before it has applied that revision.",
   "oneOf": [
     {
       "$ref": "#/$defs/Hello"
@@ -34,7 +34,7 @@
   ],
   "$defs": {
     "Hello": {
-      "description": "Identifies the client and the role of this connection. With lastRevision the server answers with resume when it still holds every delta after it, otherwise with a snapshot. Without it the server answers with a snapshot. A standby connection receives deltas, replicas and pings but no meter frames or counters.",
+      "description": "Identifies the client and the role of this connection. With lastRevision the server answers, once it has applied that revision (read index), with resume when it still holds every delta after it, otherwise with a snapshot. Without it the server answers with a snapshot. A standby connection receives deltas, replicas and pings but no meter frames or counters.",
       "type": "object",
       "required": [
         "type",
@@ -65,6 +65,7 @@
           ]
         },
         "lastRevision": {
+          "description": "Highest revision the client has applied.",
           "$ref": "model.schema.json#/$defs/Revision"
         }
       }
@@ -141,7 +142,7 @@
       }
     },
     "Resync": {
-      "description": "Sent after a revision gap. Answered like hello.",
+      "description": "Sent after a revision gap, a promote or a meter layout mismatch. Answered like hello, once the replica has applied lastRevision (read index); with full the answer is a snapshot.",
       "type": "object",
       "required": [
         "type"
@@ -152,20 +153,30 @@
           "const": "resync"
         },
         "lastRevision": {
+          "description": "Highest revision the client has applied.",
           "$ref": "model.schema.json#/$defs/Revision"
+        },
+        "full": {
+          "description": "Answer with a snapshot even when the replica holds every delta after lastRevision.",
+          "const": true
         }
       }
     },
     "Promote": {
-      "description": "Turn this standby connection into the primary one, after the primary was lost or its replica reported it cannot commit.",
+      "description": "Turn this standby connection into the primary one, after the primary was lost or its replica reported it cannot commit. The replica applies the commands that follow only once it has applied lastRevision (read index). Not answered; the client follows it with resync.",
       "type": "object",
       "required": [
-        "type"
+        "type",
+        "lastRevision"
       ],
       "additionalProperties": false,
       "properties": {
         "type": {
           "const": "promote"
+        },
+        "lastRevision": {
+          "description": "Highest revision the client has applied.",
+          "$ref": "model.schema.json#/$defs/Revision"
         }
       }
     },
