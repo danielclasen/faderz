@@ -36,6 +36,29 @@
     const r = await recallScene(mixer, id, Math.max(0, Math.min(60000, Math.round(crossfade))));
     if (r) next = null;
   }
+  /** An armed STORE or DEL disarms after this long, on Escape and on a press anywhere else. */
+  const ARM_MS = 4000;
+  $effect(() => {
+    if (confirmStore === null && confirmDelete === null) return;
+    const disarm = () => {
+      confirmStore = null;
+      confirmDelete = null;
+    };
+    const t = setTimeout(disarm, ARM_MS);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') disarm();
+    };
+    const press = (e: PointerEvent) => {
+      if (!(e.target instanceof Element && e.target.closest('[data-confirm]'))) disarm();
+    };
+    window.addEventListener('keydown', key);
+    window.addEventListener('pointerdown', press, true);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('keydown', key);
+      window.removeEventListener('pointerdown', press, true);
+    };
+  });
   const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 </script>
 
@@ -68,12 +91,12 @@
           </button>
           <span class="num when">{time(s.storedAt)}</span>
           {#if confirmStore === s.id}
-            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void storeScene(mixer, s.id); confirmStore = null; }} aria-label={`Confirm store into ${s.name}`}>CONFIRM</button>
+            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void storeScene(mixer, s.id); confirmStore = null; }} aria-label={`Confirm store into ${s.name}`} data-confirm>CONFIRM</button>
           {:else}
             <button class="key" aria-disabled={mixer.locked} onclick={() => (confirmStore = s.id)} aria-label={`Store into ${s.name}`}>STORE</button>
           {/if}
           {#if confirmDelete === s.id}
-            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void deleteScene(mixer, s.id); confirmDelete = null; }}>CONFIRM</button>
+            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void deleteScene(mixer, s.id); confirmDelete = null; }} aria-label={`Confirm delete of ${s.name}`} data-confirm>CONFIRM</button>
           {:else}
             <button class="key" aria-disabled={mixer.locked} onclick={() => (confirmDelete = s.id)} aria-label={`Delete ${s.name}`}>DEL</button>
           {/if}

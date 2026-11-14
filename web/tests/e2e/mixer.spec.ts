@@ -80,7 +80,19 @@ test('stores and recalls a scene', async ({ page, request }) => {
   await expect(page.locator(`[data-scene="${id}"] .tag`)).toBeVisible();
   // Storing over a scene asks for a confirmation in place.
   await page.getByRole('button', { name: `Store into ${name}` }).click();
-  await expect(page.getByRole('button', { name: `Confirm store into ${name}` })).toBeVisible();
+  const confirmStore = page.getByRole('button', { name: `Confirm store into ${name}` });
+  await expect(confirmStore).toBeVisible();
+  // An armed confirmation does not stay armed: Escape, a press elsewhere and time disarm it.
+  await page.keyboard.press('Escape');
+  await expect(confirmStore).toBeHidden();
+  await page.getByRole('button', { name: `Delete ${name}` }).click();
+  const confirmDelete = page.getByRole('button', { name: `Confirm delete of ${name}` });
+  await expect(confirmDelete).toBeVisible();
+  await page.getByLabel('New scene name').click();
+  await expect(confirmDelete).toBeHidden();
+  await page.getByRole('button', { name: `Store into ${name}` }).click();
+  await expect(confirmStore).toBeVisible();
+  await expect(confirmStore).toBeHidden({ timeout: 6000 });
   await page.getByRole('button', { name: 'Mixer' }).click();
   await expect(page.getByTestId('fader-value-ch18')).toHaveText(formatDb(stored));
 });
