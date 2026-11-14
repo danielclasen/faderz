@@ -66,7 +66,7 @@
     onchange={commit}
     onkeydown={keydown}
     onfocus={() => input?.select()}
-    aria-label={`${label} in ${UNITS.find((u) => u.id === unit)!.name}, up to 5 seconds`}
+    aria-label={`${label} in ${UNITS.find((u) => u.id === unit)!.name}, up to ${Number((MAX_DELAY_SAMPLES / shape.sampleRate).toFixed(2))} seconds`}
     data-path={path}
   />
   <div class="units" role="radiogroup" aria-label={`${label} unit`}>
