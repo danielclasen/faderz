@@ -101,10 +101,6 @@ export function formatDb(db: number): string {
 }
 
 /**
- * Step a fader value by `step` dB, as keyboard control does. Stepping up
- * from off lands on -60 dB, the lowest marked level.
- */
-/**
  * Keyboard step at a fader value, following the taper: 0.5 dB from -20 dB
  * up, where the most travel is, 1 dB down to -40 dB and 3 dB below.
  */
@@ -112,6 +108,10 @@ export function keyStepDb(db: number): number {
   return db > -20 ? 0.5 : db > -40 ? 1 : 3;
 }
 
+/**
+ * Step a fader value by `step` dB, as keyboard control does. Stepping up
+ * from off lands on -60 dB, the lowest marked level.
+ */
 export function stepDb(db: number, step: number): number {
   if (db <= FADER_OFF_DB) return step > 0 ? -60 : FADER_OFF_DB;
   const next = roundDb(db + step);
@@ -121,7 +121,7 @@ export function stepDb(db: number, step: number): number {
 
 /**
  * New fader value after a pointer drag of `dy` pixels (positive is down)
- * on a track `height` pixels tall. `fine` divides the travel by ten.
+ * over a cap travel of `height` pixels. `fine` divides the travel by ten.
  */
 export function dragDb(startDb: number, dy: number, height: number, fine: boolean): number {
   const scale = fine ? 0.1 : 1;

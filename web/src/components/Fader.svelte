@@ -18,7 +18,9 @@
   const position = $derived(dbToPosition(value));
 
   let flash = $state(false);
-  /** The track's height is read once per drag: reading it per move forces a layout. */
+  /** Cap height: the cap's centre travels the track height minus this. */
+  const CAP_H = 34;
+  /** The cap's travel is read once per drag: reading it per move forces a layout. */
   let drag: { y: number; db: number; fine: boolean; id: number; height: number } | null = null;
   let queued: number | null = null;
   let frame = 0;
@@ -50,7 +52,7 @@
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     el.focus({ preventScroll: true });
-    drag = { y: e.clientY, db: value, fine: isFine(e), id: e.pointerId, height: (e.currentTarget as HTMLElement).clientHeight };
+    drag = { y: e.clientY, db: value, fine: isFine(e), id: e.pointerId, height: (e.currentTarget as HTMLElement).clientHeight - CAP_H };
     mixer.touch(path);
   }
 
