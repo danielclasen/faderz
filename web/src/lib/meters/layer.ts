@@ -31,8 +31,12 @@ export interface MeterSpec {
   group: MeterGroup;
   id: string;
   legs: number;
-  scale: boolean;
+  /** dBFS labels: left of the bars (masters, every mark) or right of them (channels, the main marks). */
+  scale: 'left' | 'right' | null;
 }
+/** Width of a label column, px. */
+const SCALE_W = 17;
+const SCALE_FONT = '10px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif';
 
 interface Rect {
   x: number;
@@ -109,6 +113,8 @@ export class MeterLayer {
   /** Latched overs drawn last, to redraw when one latches or clears. */
   private oversDrawn = 0;
   private marks: number[] = meterMarks(this.zones);
+  /** Labels of a narrow channel meter: full scale, the zone boundaries and -40. */
+  private mainMarks: number[] = this.channelMarks();
   private colors: Colors = { low: '', mid: '', high: '', well: '', line: '', text: '', loud: '', tp: '' };
 
   constructor(private readonly meters: MeterStore) {}
@@ -131,6 +137,7 @@ export class MeterLayer {
     if (zones.alignment === this.zones.alignment && zones.permittedMax === this.zones.permittedMax && zones.truePeakMax === this.zones.truePeakMax) return;
     this.zones = { alignment: zones.alignment, permittedMax: zones.permittedMax, truePeakMax: zones.truePeakMax };
     this.marks = meterMarks(this.zones);
+    this.mainMarks = this.channelMarks();
     this.relayout();
   }
 
@@ -138,6 +145,10 @@ export class MeterLayer {
     if (target === this.target) return;
     this.target = target;
     this.relayout();
+  }
+
+  private channelMarks(): number[] {
+    return [...new Set([0, this.zones.permittedMax, this.zones.alignment, -40])].sort((a, b) => b - a);
   }
 
   register(el: HTMLElement, spec: MeterSpec): () => void {
@@ -197,7 +208,7 @@ export class MeterLayer {
       high: v('--meter-high'),
       well: v('--well'),
       line: v('--line-strong'),
-      text: v('--text-faint'),
+      text: v('--text-dim'),
       loud: v('--meter-loud'),
       tp: v('--meter-tp'),
     };
@@ -335,6 +346,8 @@ export class MeterLayer {
     // The over lamp takes the top of the box; the scale runs below it.
     const y0 = top + LAMP_H + LAMP_GAP;
     const h = full - LAMP_H - LAMP_GAP;
+    const scaleL = scale === 'left' ? SCALE_W : 0;
+    const scaleR = scale === 'right' ? SCALE_W : 0;
     const pos = (db: number) => y0 + h - meterPosition(db) * h;
     const bar = (x: number, bw: number, fromDb: number, toDb: number, color: string, alpha: number) => {
       const yFrom = pos(fromDb);
@@ -353,37 +366,36 @@ export class MeterLayer {
     };
     const zoneColor = (v: number) => (v > HIGH ? colors.high : v > MID ? colors.mid : colors.low);
 
-    const scaleW = scale ? 18 : 0;
     ctx.globalAlpha = 1;
     ctx.fillStyle = colors.well;
-    ctx.fillRect(x0, top, w, full);
+    ctx.fillRect(x0 + scaleL, top, w - scaleL - scaleR, full);
     // A monitor meter, and a channel without a direct out, shows no true
     // peak, so no lamp; its space stays.
     if (this.meters.hasTruePeak(s.spec.group, s.spec.id)) {
       const over = this.meters.overs.has(s.key);
       ctx.globalAlpha = over ? 1 : 0.5;
       ctx.fillStyle = over ? colors.high : colors.line;
-      ctx.fillRect(x0 + (scale ? 18 : 0), top, w - (scale ? 18 : 0), LAMP_H);
+      ctx.fillRect(x0 + scaleL, top, w - scaleL - scaleR, LAMP_H);
       ctx.globalAlpha = 1;
     }
     // A channel meter gives its rightmost LOUD_W pixels to one momentary
     // loudness bar; the legs share the rest.
     const loudW = s.loud ? LOUD_W : 0;
-    const inner = w - scaleW;
+    const inner = w - scaleL - scaleR;
     const legsW = inner - (loudW ? loudW + 1 : 0);
     const gap = legs > 1 ? 1 : 0;
     const bw = Math.max(1, (legsW - gap * (legs - 1)) / legs);
     if (s.loud && s.loud.bar > METER_FLOOR_DB) {
-      bar(x0 + w - loudW, loudW, METER_FLOOR_DB, s.loud.bar, colors.loud, 1);
+      bar(x0 + scaleL + inner - loudW, loudW, METER_FLOOR_DB, s.loud.bar, colors.loud, 1);
     }
     if (s.loud) {
       // The loudness target on the loudness bar, read in LUFS.
       ctx.globalAlpha = 1;
       ctx.fillStyle = colors.loud;
-      ctx.fillRect(x0 + w - loudW - 2, Math.round(pos(this.target)) - 0.5, loudW + 2, 1);
+      ctx.fillRect(x0 + scaleL + inner - loudW - 2, Math.round(pos(this.target)) - 0.5, loudW + 2, 1);
     }
     for (let i = 0; i < legs; i++) {
-      const x = x0 + scaleW + i * (bw + gap);
+      const x = x0 + scaleL + i * (bw + gap);
       if (s.rms[i]) {
         zoned(x, bw, s.peak[i]!.bar, 0.45);
         zoned(x, bw, s.rms[i]!.bar, 1);
@@ -407,16 +419,18 @@ export class MeterLayer {
     ctx.fillStyle = colors.line;
     for (const mark of this.marks) {
       const y = Math.round(pos(mark)) + 0.5;
-      ctx.fillRect(x0 + scaleW, y, inner, mark === MID ? 2 : 0.5);
+      // The alignment level is the thick line.
+      ctx.fillRect(x0 + scaleL, mark === MID ? y - 1 : y, inner, mark === MID ? 2 : 0.5);
     }
     if (scale) {
       ctx.fillStyle = colors.text;
-      ctx.font = '8px "JetBrains Mono", monospace';
-      ctx.textAlign = 'right';
+      ctx.font = SCALE_FONT;
       ctx.textBaseline = 'middle';
-      for (const mark of this.marks) {
+      ctx.textAlign = scale === 'left' ? 'right' : 'left';
+      const x = scale === 'left' ? x0 + scaleL - 2 : x0 + w - scaleR + 2;
+      for (const mark of scale === 'left' ? this.marks : this.mainMarks) {
         const y = Math.min(y0 + h - 5, Math.max(y0 + 5, pos(mark)));
-        ctx.fillText(String(mark), x0 + scaleW - 3, y);
+        ctx.fillText(String(mark), x, y);
       }
     }
   }

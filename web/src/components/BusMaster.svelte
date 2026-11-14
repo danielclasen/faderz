@@ -59,7 +59,7 @@
   <div class="fm">
     <Fader path={path('fader')} label={`${element.name} fader`} />
     <div class="meter">
-      <Meter {group} id={element.id} legs={element.width} scale label={`${element.name} meter`} />
+      <Meter {group} id={element.id} legs={element.width} scale="left" label={`${element.name} meter`} />
     </div>
     <!-- Same geometry as the bars the meter layer draws: after the 18 px
          scale, one equal column per leg with a 1 px gap. -->

@@ -107,7 +107,7 @@
   <div class="fm">
     <Fader path={channelPath(channel.id, 'fader')} label={`${channel.name} fader`} />
     <div class="meter">
-      <Meter group="channels" id={channel.id} legs={channel.width} label={`${channel.name} meter, ${TAP_LABEL[st.meterTap]}`} />
+      <Meter group="channels" id={channel.id} legs={channel.width} scale="right" label={`${channel.name} meter, ${TAP_LABEL[st.meterTap]}`} />
       <!-- The meter tap, in the meter's bottom padding. -->
       <span class="tap fixed" aria-hidden="true" data-testid={`tap-${channel.id}`}>{fit(TAP_KEY[st.meterTap], 4)}</span>
     </div>

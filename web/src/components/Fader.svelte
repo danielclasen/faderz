@@ -185,7 +185,7 @@
   }
   .scale {
     position: relative;
-    width: 20px;
+    width: 16px;
     flex: none;
   }
   .scale span {
@@ -196,9 +196,9 @@
        layerization. */
     height: 1em;
     margin-bottom: -0.5em;
-    font-family: var(--font-num);
-    font-size: 8.5px;
-    color: var(--text-faint);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    color: var(--text-dim);
     line-height: 1;
   }
   .scale span.unity {
@@ -228,7 +228,7 @@
   }
   .track {
     position: relative;
-    width: 30px;
+    width: 28px;
     flex: none;
     cursor: ns-resize;
     touch-action: none;

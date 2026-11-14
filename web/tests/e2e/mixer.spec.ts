@@ -938,3 +938,30 @@ test('locks the desk with a hold so nothing on the screen changes the mixer, and
   await patch(request, '/recallSafe/ch3', []);
   await expect(page.getByTestId('iso-ch3')).toBeHidden();
 });
+
+test('labels the channel meter in dBFS on its outer side, apart from the fader scale', async ({ page }) => {
+  await page.addInitScript(() => {
+    const seen: Array<{ text: string; x: number; y: number }> = [];
+    (window as unknown as { __labels: typeof seen }).__labels = seen;
+    const fill = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text: string, x: number, y: number, max?: number) {
+      const m = this.getTransform();
+      seen.push({ text, x: x * m.a / devicePixelRatio, y: y * m.d / devicePixelRatio });
+      return max === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, max);
+    };
+  });
+  await live(page);
+  const meter = (await page.locator('[data-meter="channels/ch1"]').boundingBox())!;
+  const canvas = (await page.locator('.mixer > .meter-layer').boundingBox())!;
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ m, c }) =>
+          [...new Set((window as unknown as { __labels: Array<{ text: string; x: number; y: number }> }).__labels
+            .filter((l) => l.x + c.x >= m.x + m.width - 17 && l.x + c.x <= m.x + m.width && l.y + c.y >= m.y && l.y + c.y <= m.y + m.height)
+            .map((l) => l.text))].sort(),
+        { m: meter, c: canvas },
+      ),
+    )
+    .toEqual(['-18', '-40', '-9', '0']);
+});

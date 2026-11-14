@@ -6,10 +6,10 @@
     group: MeterGroup;
     id: string;
     legs: number;
-    scale?: boolean;
+    scale?: 'left' | 'right' | null;
     label?: string;
   }
-  let { group, id, legs, scale = false, label = 'meter' }: Props = $props();
+  let { group, id, legs, scale = null, label = 'meter' }: Props = $props();
 
   // The view's meter layer draws into this element's box.
   const layer = meterLayer();
