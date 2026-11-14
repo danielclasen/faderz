@@ -348,3 +348,15 @@ test('no text an operator reads is set below 10 px', async ({ page }) => {
   }
   expect([...new Set(small)]).toEqual([]);
 });
+
+test('the dev mock key covers no control and no readout', async ({ page }) => {
+  await live(page);
+  const hits = await page.evaluate(() => {
+    const key = document.querySelector('aside.mock button')!.getBoundingClientRect();
+    const overlap = (r: DOMRect) => r.width > 0 && r.left < key.right && r.right > key.left && r.top < key.bottom && r.bottom > key.top;
+    return [...document.querySelectorAll<HTMLElement>('button, [role="slider"], output, .fixed, .notice-line, [data-testid="session"]')]
+      .filter((el) => !el.closest('aside.mock') && getComputedStyle(el).visibility !== 'hidden' && overlap(el.getBoundingClientRect()))
+      .map((el) => `${el.tagName.toLowerCase()}.${el.className} "${el.textContent?.trim().slice(0, 16)}"`);
+  });
+  expect(hits).toEqual([]);
+});

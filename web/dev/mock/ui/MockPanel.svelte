@@ -67,6 +67,11 @@
 </aside>
 
 <style>
+  /* In the free stretch of the status bar between the engine lamp and the
+     session; where that bar is narrow or gone, over the bank bar's
+     BANKS title instead, clear of every control and readout. A phone
+     has no BANKS title: there the key keeps to the status bar, just
+     before the session box (8ch, after a gap of 8 px). */
   .mock {
     position: fixed;
     right: 320px;
@@ -74,6 +79,47 @@
     z-index: 30;
     font: 11px var(--font-num);
     color: #111;
+  }
+  @media (max-width: 900px), (max-height: 500px) {
+    .mock {
+      right: auto;
+      bottom: auto;
+      left: 2px;
+      top: 49px;
+    }
+    .body {
+      bottom: auto;
+      top: 22px;
+      left: 0;
+      right: auto;
+      max-width: calc(100vw - 8px);
+    }
+  }
+  @media (max-height: 500px) {
+    .mock {
+      top: 41px;
+    }
+  }
+  @media (max-width: 700px) and (min-height: 501px) {
+    .mock {
+      top: auto;
+      left: auto;
+      right: calc(18px + 8ch * 10.5 / 11);
+      bottom: 3px;
+    }
+    .body {
+      position: fixed;
+      top: auto;
+      left: 4px;
+      right: 4px;
+      bottom: 40px;
+      width: auto;
+    }
+  }
+  @media (max-width: 700px) and (min-height: 501px) and (pointer: coarse) {
+    .mock {
+      bottom: 7px;
+    }
   }
   .toggle {
     background: repeating-linear-gradient(45deg, #ffd400 0 6px, #111 6px 12px);
