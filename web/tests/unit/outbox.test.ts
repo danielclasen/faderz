@@ -3,8 +3,8 @@ import { Outbox } from '../../src/lib/sync/outbox';
 import type { CommandMessage } from '../../src/lib/contract/types';
 
 const set = (id: string, path: string, value: unknown): CommandMessage => ({ type: 'set', id, seq: 1, path, value });
-const touch = (id: string, path: string): CommandMessage => ({ type: 'touch', id, path });
-const release = (id: string, path: string): CommandMessage => ({ type: 'release', id, path });
+const touch = (id: string, path: string): CommandMessage => ({ type: 'touch', id, seq: 1, path });
+const release = (id: string, path: string): CommandMessage => ({ type: 'release', id, seq: 1, path });
 const ids = (msgs: CommandMessage[]) => msgs.map((m) => m.id);
 
 describe('outbox', () => {

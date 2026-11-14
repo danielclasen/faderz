@@ -264,8 +264,8 @@ describe('WebSocket messages', () => {
     { type: 'ping', t: 0 },
     { type: 'pong', t: 1731590000000 },
     { type: 'resync' },
-    { type: 'touch', id: cmd, path: '/channels/ch1/fader' },
-    { type: 'release', id: cmd, path: '/channels/ch1/fader' },
+    { type: 'touch', id: cmd, seq: 2, path: '/channels/ch1/fader' },
+    { type: 'release', id: cmd, seq: 3, path: '/channels/ch1/fader' },
   ])('client accepts %j', (msg) => {
     expect(contract.checkClientMessage(msg)).toBeNull();
   });
@@ -298,6 +298,10 @@ describe('WebSocket messages', () => {
     { type: 'credit', n: -1 },
     { type: 'credit', n: 1.5 },
     { type: 'credit', n: 1, channels: ['ch1'] },
+    // Touch and release are ordered on the control's seq counter, like set.
+    { type: 'touch', id: cmd, path: '/channels/ch1/fader' },
+    { type: 'release', id: cmd, path: '/channels/ch1/fader' },
+    { type: 'release', id: cmd, seq: 0, path: '/channels/ch1/fader' },
     { type: 'ping' },
     { type: 'ping', t: -1 },
     { type: 'ping', t: 1, revision: 4 },

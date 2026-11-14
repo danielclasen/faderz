@@ -224,7 +224,7 @@
       }
     },
     "Ack": {
-      "description": "A command that changed nothing. duplicate: its id was already applied (revision is the one it was applied at); stale: a later seq for the same control was already applied; noop: the state already held the value or ownership.",
+      "description": "A command that changed nothing. duplicate: its id was already applied (revision is the one it was applied at); stale: its seq is not above the last one applied from its session for the same control (client-message.schema.json#/$defs/Set); noop: the state already held the value or ownership.",
       "type": "object",
       "required": [
         "type",

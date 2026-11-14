@@ -345,6 +345,24 @@ describe('sync engine: commands', () => {
     expect(b.sockets[0]!.ofType('set')[0]!.seq).toBeGreaterThan(Math.max(...seqA));
   });
 
+  it('orders touch, set and release of a control on one seq counter and resends a touch with its seq', () => {
+    const { engine, primary, standby } = live();
+    engine.input({ type: 'touch', path: F1 });
+    engine.input({ type: 'set', path: F1, value: -5 });
+    engine.input({ type: 'release', path: F1 });
+    engine.input({ type: 'touch', path: F2 });
+    const sent = primary.sent.filter((m) => m.type === 'touch' || m.type === 'set' || m.type === 'release');
+    expect(sent.map((m) => [m.type, m.path, (m as { seq: number }).seq])).toEqual([
+      ['touch', F1, SEQ_BASE + 1],
+      ['set', F1, SEQ_BASE + 2],
+      ['release', F1, SEQ_BASE + 3],
+      ['touch', F2, SEQ_BASE + 1],
+    ]);
+    primary.drop();
+    const resent = standby.sent.filter((m) => m.type === 'touch' || m.type === 'set' || m.type === 'release');
+    expect(resent).toEqual(sent);
+  });
+
   it('limits writes of one control to 50 per second and sends the trailing value', () => {
     const { engine, primary, clock } = live();
     for (let i = 0; i < 100; i++) {

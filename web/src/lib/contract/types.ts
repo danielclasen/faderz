@@ -376,11 +376,15 @@ export interface SetMessage {
 export interface TouchMessage {
   type: 'touch';
   id: CommandId;
+  /** On the counter of the control that set, touch and release share. */
+  seq: number;
   path: string;
 }
 export interface ReleaseMessage {
   type: 'release';
   id: CommandId;
+  /** On the counter of the control that set, touch and release share. */
+  seq: number;
   path: string;
 }
 export interface ResyncMessage {

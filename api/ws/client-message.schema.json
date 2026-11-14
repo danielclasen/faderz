@@ -83,7 +83,7 @@
       }
     },
     "Set": {
-      "description": "Write one control. seq increases per session and control, also across reloads: a web client starts the seq of every control at the Unix time in milliseconds when it loads and adds one per write to that control, and at most 50 writes per second keep it below the clock. A set whose seq is not above the last one applied from this session for the same path is answered with ack result stale. Refused with error 409 while another session owns the control.",
+      "description": "Write one control. seq orders the commands of a session on one control: set, touch and release of a control share one counter, which increases per session and control, also across reloads: a web client starts the seq of every control at the Unix time in milliseconds when it loads and adds one per command to that control, and at most 50 writes per second keep it below the clock. A set, touch or release whose seq is not above the last one applied from this session for the same path is answered with ack result stale and has no effect, so a copy of a command, or a command resent after a later one of the same control was applied, cannot undo the later one. The server keeps the last seq applied per session and path until the session's lifetime has ended plus the deduplication retention of 10 s (model.schema.json#/$defs/CommandId); a session's lifetime ends when its lease expires, after the lease period without a command or renewal of it (model.schema.json#/$defs/Owners). Refused with error 409 while another session owns the control.",
       "type": "object",
       "required": [
         "type",
@@ -112,11 +112,12 @@
       "$ref": "model.schema.json#/$defs/ValueByPath"
     },
     "Touch": {
-      "description": "Take ownership of a control for this session, as on pointer-down or a touched console fader. Held until release or until the session lease expires. Refused with error 409 while another session owns it.",
+      "description": "Take ownership of a control for this session, as on pointer-down or a touched console fader. Held until release or until the session lease expires. Refused with error 409 while another session owns it, and answered with ack result stale when its seq is not above the last applied from this session for the control (#/$defs/Set).",
       "type": "object",
       "required": [
         "type",
         "id",
+        "seq",
         "path"
       ],
       "additionalProperties": false,
@@ -127,17 +128,23 @@
         "id": {
           "$ref": "model.schema.json#/$defs/CommandId"
         },
+        "seq": {
+          "description": "On the counter of the control that set, touch and release share (#/$defs/Set).",
+          "type": "integer",
+          "minimum": 1
+        },
         "path": {
           "$ref": "model.schema.json#/$defs/ControlPath"
         }
       }
     },
     "Release": {
-      "description": "Give up ownership of a control. After a snapshot or resume on a new connection of its session, a client releases every control its session owns that it is not touching (model.schema.json#/$defs/Owners).",
+      "description": "Give up ownership of a control; answered with ack result stale when its seq is not above the last applied from this session for the control (#/$defs/Set). After a snapshot or resume on a new connection of its session, a client releases every control its session owns that it is not touching (model.schema.json#/$defs/Owners).",
       "type": "object",
       "required": [
         "type",
         "id",
+        "seq",
         "path"
       ],
       "additionalProperties": false,
@@ -147,6 +154,11 @@
         },
         "id": {
           "$ref": "model.schema.json#/$defs/CommandId"
+        },
+        "seq": {
+          "description": "On the counter of the control that set, touch and release share (#/$defs/Set).",
+          "type": "integer",
+          "minimum": 1
         },
         "path": {
           "$ref": "model.schema.json#/$defs/ControlPath"

@@ -193,10 +193,19 @@ export class SyncEngine {
 
   // ---- commands -------------------------------------------------------------
 
-  private issueSet(path: string, value: unknown): void {
+  /** Next seq of a control, on the counter that its sets, touches and releases share. */
+  private nextSeq(path: string): number {
     const seq = (this.seq.get(path) ?? this.deps.seqBase) + 1;
     this.seq.set(path, seq);
-    this.issue({ type: 'set', id: uuid(), seq, path, value });
+    return seq;
+  }
+
+  private issueSet(path: string, value: unknown): void {
+    this.issue({ type: 'set', id: uuid(), seq: this.nextSeq(path), path, value });
+  }
+
+  private issueOwnership(type: 'touch' | 'release', path: string): void {
+    this.issue({ type, id: uuid(), seq: this.nextSeq(path), path });
   }
 
   private issue(msg: CommandMessage): void {
@@ -238,7 +247,7 @@ export class SyncEngine {
   private touchEvent(path: string, event: 'down' | 'up'): void {
     const prev = this.touches.get(path) ?? 'Idle';
     if (this.touchStep(path, event) === prev) return;
-    this.issue({ type: event === 'down' ? 'touch' : 'release', id: uuid(), path });
+    this.issueOwnership(event === 'down' ? 'touch' : 'release', path);
   }
 
   private touchStep(path: string, event: TouchEvent): TouchState {
@@ -563,12 +572,12 @@ export class SyncEngine {
     if (this.failoverInfo && this.failoverInfo.to === null) this.failoverInfo = { ...this.failoverInfo, to: replica };
     for (const [path, owner] of Object.entries(this.owners)) {
       if (this.mine(owner) && this.touches.get(path) !== 'Touching' && !this.outbox.has('release', path)) {
-        this.issue({ type: 'release', id: uuid(), path });
+        this.issueOwnership('release', path);
       }
     }
     for (const [path, s] of this.touches) {
       if (s === 'Touching' && !this.mine(this.owners[path]) && !this.outbox.has('touch', path)) {
-        this.issue({ type: 'touch', id: uuid(), path });
+        this.issueOwnership('touch', path);
       }
     }
     this.transmit();

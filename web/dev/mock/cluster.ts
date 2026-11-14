@@ -111,8 +111,7 @@ export interface AppliedCommand {
   owner: Owner;
   commandId: string;
   type: CommandMessage['type'];
-  /** seq of a set; null for touch and release. */
-  seq: number | null;
+  seq: number;
   path: string;
   /** Value of a set; null for touch and release. */
   value: unknown;
@@ -644,7 +643,7 @@ export class Cluster {
         owner,
         commandId: msg.id,
         type: msg.type,
-        seq: set ? msg.seq : null,
+        seq: msg.seq,
         path: msg.path,
         value: set ? msg.value : null,
         revision,
@@ -679,24 +678,27 @@ export class Cluster {
       audit(result, this.revision);
       return { type: 'ack' as const, commandId: msg.id, result, revision: this.revision };
     };
-    const origin: Origin = { owner, commandId: msg.id };
+    // Set, touch and release of a control share one seq counter per session.
+    const seqKey = `${key}\n${msg.path}`;
+    if (msg.seq <= (this.lastSeq.get(seqKey) ?? 0)) return done('stale');
+    const origin: Origin = { owner, commandId: msg.id, seq: msg.seq };
     if (msg.type === 'touch') {
+      this.lastSeq.set(seqKey, msg.seq);
       if (holder !== undefined) return done('noop');
       audit('applied', this.stage({ owners: [{ path: msg.path, owner }], origins: [origin] }).revision);
       return null;
     }
     if (msg.type === 'release') {
+      this.lastSeq.set(seqKey, msg.seq);
       if (holder === undefined || sessionKey(holder) !== key) return done('noop');
       audit('applied', this.stage({ changes: this.momentaryOff([msg.path]), owners: [{ path: msg.path, owner: null }], origins: [origin] }).revision);
       return null;
     }
-    const seqKey = `${key}\n${msg.path}`;
-    if (msg.seq <= (this.lastSeq.get(seqKey) ?? 0)) return done('stale');
     const invalid = this.checkValue(msg.path, msg.value);
     if (invalid) return fail(400, invalid);
     this.lastSeq.set(seqKey, msg.seq);
     if (equal(current, msg.value)) return done('noop');
-    const staged = this.stage({ changes: this.withSideEffects([{ path: msg.path, value: msg.value }]), origins: [{ ...origin, seq: msg.seq }] });
+    const staged = this.stage({ changes: this.withSideEffects([{ path: msg.path, value: msg.value }]), origins: [origin] });
     audit('applied', staged.revision);
     return null;
   }
@@ -1104,12 +1106,12 @@ export class Cluster {
     if (this.owners[path] !== undefined) return;
     const owner = CONSOLE_OWNER;
     const id = () => crypto.randomUUID();
+    let seq = Date.now();
     this.leases.set(sessionKey(owner), Date.now());
-    if (this.command(owner, { type: 'touch', id: id(), path }, 'console')?.type === 'error') return;
+    if (this.command(owner, { type: 'touch', id: id(), seq: ++seq, path }, 'console')?.type === 'error') return;
     const start = this.state.channels[channel.id]!.fader;
     const base = start <= -60 ? -20 : start;
     let step = 0;
-    let seq = Date.now();
     const timer = setInterval(() => {
       step++;
       this.leases.set(sessionKey(owner), Date.now());
@@ -1118,7 +1120,7 @@ export class Cluster {
       if (step >= 20) {
         clearInterval(timer);
         this.command(owner, { type: 'set', id: id(), seq: ++seq, path, value: start }, 'console');
-        this.command(owner, { type: 'release', id: id(), path }, 'console');
+        this.command(owner, { type: 'release', id: id(), seq: ++seq, path }, 'console');
       }
     }, 100);
     this.timers.push(timer);

@@ -154,7 +154,7 @@ export class RawClient {
   /** Sends a command and resolves with what answered it: an ack, an error, or the delta listing it. */
   async command(cmd: { type: 'set'; path: string; value: unknown } | { type: 'touch' | 'release'; path: string }): Promise<Message> {
     const id = crypto.randomUUID();
-    const msg = cmd.type === 'set' ? { ...cmd, id, seq: ++this.seq } : { ...cmd, id };
+    const msg = { ...cmd, id, seq: ++this.seq };
     this.ws.send(JSON.stringify(msg));
     let answer: Message | undefined;
     await expect

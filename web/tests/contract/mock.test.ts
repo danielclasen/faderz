@@ -81,6 +81,9 @@ const randomSession = () => `s-${crypto.randomUUID()}`;
 /** An epoch the mock never has: it draws 64 random bits. */
 const OTHER_EPOCH = '1';
 
+/** One seq counter per session, shared by its connections as a client's is. */
+const counters = new Map<string, number>();
+
 class Client {
   readonly messages: ServerMessage[] = [];
   readonly frames: MeterFrame[] = [];
@@ -97,7 +100,6 @@ class Client {
   heartbeat = true;
   closed!: Promise<void>;
   private waiters: Array<() => void> = [];
-  private seq = Date.now();
   private pinger: ReturnType<typeof setInterval> | null = null;
 
   constructor(session: string = randomSession(), kind: 'ui' | 'console' = 'ui') {
@@ -164,14 +166,21 @@ class Client {
     return answer;
   }
 
-  set(path: string, value: unknown, id: string = crypto.randomUUID(), seq = ++this.seq): string {
+  set(path: string, value: unknown, id: string = crypto.randomUUID(), seq = this.nextSeq()): string {
     this.send({ type: 'set', id, seq, path, value });
     return id;
   }
 
-  command(type: 'touch' | 'release', path: string, id: string = crypto.randomUUID()): string {
-    this.send({ type, id, path });
+  command(type: 'touch' | 'release', path: string, id: string = crypto.randomUUID(), seq = this.nextSeq()): string {
+    this.send({ type, id, seq, path });
     return id;
+  }
+
+  /** Next seq of this session, on the counter its commands share. */
+  nextSeq(): number {
+    const seq = (counters.get(this.session) ?? Date.now()) + 1;
+    counters.set(this.session, seq);
+    return seq;
   }
 
   credit(n: number): void {
@@ -439,7 +448,7 @@ describe('commands', () => {
     const path = '/channels/ch7/fader';
     const touched = await a.answer<DeltaMessage>(a.command('touch', path));
     expect(touched.owners).toEqual([{ path, owner: a.you }]);
-    expect(touched.origins).toEqual([{ owner: a.you, commandId: expect.any(String) }]);
+    expect(touched.origins).toEqual([{ owner: a.you, commandId: expect.any(String), seq: expect.any(Number) }]);
     const refused = await b.answer<ErrorMessage>(b.set(path, 0));
     expect(refused).toMatchObject({ type: 'error', code: 409, path, owner: a.you, current: cluster.state.channels['ch7']!.fader });
     expect((await b.answer<ErrorMessage>(b.command('touch', path))).code).toBe(409);
@@ -452,6 +461,28 @@ describe('commands', () => {
     // The session id is a credential: nothing another client receives carries it.
     for (const m of b.messages) expect(JSON.stringify(m)).not.toContain(a.session);
     expect((await b.answer(b.set(path, -2))).type).toBe('delta');
+  });
+
+  it('refuses a touch or release whose seq is not above the last command of its session on the control as stale', async () => {
+    // A touch not applied (lost on a leader change), the release after it
+    // committed, then the touch resent: it must not take ownership back
+    // from a session that has let go.
+    const a = await new Client().open();
+    await a.hello();
+    const path = '/channels/ch5/mute';
+    const touchSeq = a.nextSeq();
+    const touchId = crypto.randomUUID();
+    expect(await a.answer(a.command('release', path))).toMatchObject({ type: 'ack', result: 'noop' });
+    expect(await a.answer(a.command('touch', path, touchId, touchSeq))).toMatchObject({ type: 'ack', result: 'stale' });
+    expect((await owners())[path]).toBeUndefined();
+    // A touch at a higher seq takes it; a release at an older seq leaves it.
+    const touched = await a.answer<DeltaMessage>(a.command('touch', path));
+    expect(touched.owners).toEqual([{ path, owner: a.you }]);
+    expect(await a.answer(a.command('release', path, undefined, touchSeq))).toMatchObject({ type: 'ack', result: 'stale' });
+    expect((await owners())[path]).toEqual(a.you);
+    // Set, touch and release share the counter: a set below the touch is stale too.
+    expect(await a.answer(a.set(path, true, undefined, touchSeq + 1))).toMatchObject({ type: 'ack', result: 'stale' });
+    expect((await a.answer<DeltaMessage>(a.command('release', path))).owners).toEqual([{ path, owner: null }]);
   });
 
   it('answers an invalid message with error 400', async () => {
