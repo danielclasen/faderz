@@ -58,7 +58,7 @@
   }
   .kind {
     display: block;
-    font-size: 9px;
+    font-size: 10px;
     color: var(--owned);
     font-weight: 600;
     letter-spacing: 0.1em;
@@ -86,7 +86,7 @@
     min-height: 140px;
   }
   .value {
-    font-size: 10.5px;
+    font-size: 11px;
     text-align: center;
     background: var(--well);
     border-radius: 2px;

@@ -159,7 +159,7 @@
     gap: 3px;
   }
   .sources .key {
-    font-size: 9.5px;
+    font-size: 10px;
     letter-spacing: 0.02em;
     padding: 0 3px;
     white-space: nowrap;

@@ -248,7 +248,7 @@
   }
   .replica sup,
   .replica sub {
-    font-size: 8px;
+    font-size: 10px;
   }
   .replica.serving {
     background: var(--ok);

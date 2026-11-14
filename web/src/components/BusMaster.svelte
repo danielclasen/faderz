@@ -34,9 +34,9 @@
   const toned = $derived(tone.on && tone.targets.includes(element.id));
   /**
    * A master of more than two legs grows by LEG_W per leg, so each leg's
-   * column under the meter fits its label ("LFE", "Lrs") at 8.5 px.
+   * column under the meter fits its label ("LFE", "Lrs") at 10 px.
    */
-  const LEG_W = 15;
+  const LEG_W = 18;
   const WIDE_BASE_W = 82;
 </script>
 
@@ -141,7 +141,7 @@
     white-space: nowrap;
     flex: none;
     line-height: 13px;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.08em;
     color: #0b0d10;
@@ -168,8 +168,8 @@
     display: grid;
     column-gap: 1px;
     padding-left: 18px;
-    font-size: 8.5px;
-    line-height: 11px;
+    font-size: 10px;
+    line-height: 13px;
     color: var(--text-faint);
     text-align: center;
   }

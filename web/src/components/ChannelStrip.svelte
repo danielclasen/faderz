@@ -363,7 +363,7 @@
   }
   .fixed {
     display: block;
-    font-size: 9.5px;
+    font-size: 10px;
     color: var(--text-faint);
     text-align: center;
     line-height: 18px;
@@ -399,10 +399,10 @@
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 3px;
-    height: 10px;
-    line-height: 10px;
-    font-size: 7.5px;
+    bottom: 2px;
+    height: 12px;
+    line-height: 12px;
+    font-size: 10px;
     text-align: center;
     color: var(--text-faint);
     contain: strict;
@@ -439,7 +439,7 @@
     outline: 2px solid var(--focus);
   }
   .vca > span {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     padding: 0 3px;
     border-radius: 2px;

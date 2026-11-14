@@ -320,3 +320,31 @@ test('a cut-off label shows its full text on hover, on keyboard focus and on a l
   await expect(head).toHaveAttribute('aria-pressed', 'false');
   await expect(tooltip).toBeHidden({ timeout: 5000 });
 });
+
+test('no text an operator reads is set below 10 px', async ({ page }) => {
+  await live(page);
+  const small: string[] = [];
+  for (const name of ['Mixer', 'Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup']) {
+    await showView(page, name);
+    await page.waitForTimeout(300);
+    if (name === 'Mixer') await page.locator('[data-channel="ch1"] .head').click();
+    small.push(
+      ...(await page.evaluate((view) => {
+        const out: string[] = [];
+        for (const el of document.querySelectorAll<HTMLElement>('body *')) {
+          if (el.closest('.sr-only, aside.mock')) continue;
+          const own = [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+          if (!own) continue;
+          const r = el.getBoundingClientRect();
+          const cs = getComputedStyle(el);
+          if (r.width === 0 || r.height === 0 || cs.visibility === 'hidden') continue;
+          const px = parseFloat(cs.fontSize);
+          // 0 px is the brand folded away on phones: not shown at all.
+          if (px > 0 && px < 10) out.push(`${view}: "${el.textContent?.trim().slice(0, 20)}" ${px}px (${el.tagName.toLowerCase()}.${el.className})`);
+        }
+        return out;
+      }, name)),
+    );
+  }
+  expect([...new Set(small)]).toEqual([]);
+});

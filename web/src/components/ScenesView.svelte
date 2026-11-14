@@ -214,7 +214,7 @@
   }
   .tag {
     visibility: hidden;
-    font-size: 9.5px;
+    font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.08em;
     color: var(--accent-ink);

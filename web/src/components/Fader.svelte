@@ -216,8 +216,8 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     pointer-events: none;
-    font-size: 8px;
-    line-height: 11px;
+    font-size: 10px;
+    line-height: 12px;
     padding: 0 2px;
     border-radius: 2px;
     background: var(--owned);

@@ -188,19 +188,19 @@
   }
   .surfaces {
     position: relative;
-    height: 14px;
+    height: 17px;
     flex: none;
   }
   .surface {
     position: absolute;
     top: 3px;
-    height: 9px;
+    height: 13px;
     margin-left: 2px;
     border: 1px solid var(--owned);
     border-bottom: none;
     border-radius: 3px 3px 0 0;
-    font-size: 8.5px;
-    line-height: 8px;
+    font-size: 10px;
+    line-height: 12px;
     color: var(--owned);
     text-transform: uppercase;
     letter-spacing: 0.08em;

@@ -205,7 +205,7 @@
   }
   .send .key {
     padding: 0 2px;
-    font-size: 9.5px;
+    font-size: 10px;
   }
   .db {
     font-size: 10.5px;

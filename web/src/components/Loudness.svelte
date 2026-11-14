@@ -189,7 +189,7 @@
     text-align: right;
   }
   .unit {
-    font-size: 9px;
+    font-size: 10px;
   }
   .int.ok {
     color: var(--meter-low);
