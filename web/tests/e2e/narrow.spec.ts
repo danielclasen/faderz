@@ -84,3 +84,47 @@ test('moves a strip pan on touch only after the finger rests on it', async ({ pa
   await touch('touchEnd', 0);
   await expect.poll(async () => (await serverState(request)).state.channels['ch1']!.pan.lr).toBeGreaterThan(0);
 });
+
+test('shows the title of what a finger rests on, since touch has no hover', async ({ page }) => {
+  await live(page);
+  const cdp = await page.context().newCDPSession(page);
+  const rest = async (box: { x: number; y: number; width: number; height: number }) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+    await page.waitForTimeout(800);
+  };
+  const info = page.getByTestId('touch-info');
+  // A label with a tooltip of its own shows that one only: the strip's
+  // source is in the tooltip of its head.
+  await rest((await page.locator('[data-channel="ch2"] .head').boundingBox())!);
+  await expect(page.getByRole('tooltip')).toHaveText('Pres 2 (Studio mic 2)');
+  await expect(info).toHaveCount(0);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  await rest((await masters.boundingBox())!);
+  await expect(info).toBeVisible();
+  await expect(info).toHaveText('Show the masters over the strips');
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  // The lift after a long touch reads the title; it does not press the key.
+  await page.waitForTimeout(300);
+  await expect(masters).toHaveAttribute('aria-pressed', 'false');
+  // The next touch anywhere closes it.
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 5, y: 5 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(info).toHaveCount(0);
+});
+
+test('shows no title over a TALK key a finger holds, since that hold talks', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+  const tab = page.getByRole('button', { name: 'Aux / N-1', exact: true });
+  if (await tab.isVisible()) await tab.click();
+  else await page.getByRole('combobox', { name: 'View' }).selectOption({ label: 'Aux / N-1' });
+  const talk = page.getByRole('button', { name: /^N-1 Phone 1 talk/ });
+  await talk.scrollIntoViewIfNeeded();
+  const box = (await talk.boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+  await page.waitForTimeout(800);
+  await expect(page.getByTestId('touch-info')).toHaveCount(0);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+});

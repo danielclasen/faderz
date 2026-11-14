@@ -16,6 +16,7 @@
   import NoticeLine from './components/NoticeLine.svelte';
   import LockKey from './components/LockKey.svelte';
   import Users from './components/Users.svelte';
+  import TouchInfo from './components/TouchInfo.svelte';
   import CommitBanner from './components/CommitBanner.svelte';
 
   const mixer = getMixer();
@@ -146,6 +147,7 @@
 
 
   <StatusBar />
+  <TouchInfo />
 </div>
 
 <style>
