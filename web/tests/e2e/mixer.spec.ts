@@ -263,6 +263,8 @@ test('sets the LFE send and the stereo image of a channel from the processing pa
   await expect(page.getByLabel('LFE', { exact: true })).toBeVisible();
   await patch(request, '/channels/ch1/pan/lfe', -12);
   await expect(page.locator('input[data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuetext', '-12.0');
+  // On the fader taper, as the Aux view's send levels: -12 dB sits at 47.5 % of the travel.
+  await expect(page.locator('input[data-path="/channels/ch1/pan/lfe"]')).toHaveValue('475');
   await patch(request, '/channels/ch1/pan/lfe', -90);
 });
 

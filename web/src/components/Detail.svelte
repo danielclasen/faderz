@@ -127,7 +127,7 @@
         <div class="pan-row"><span class="lbl">Pan</span><Pan path={p('pan', 'lr')} label={`${element.name} pan`} /></div>
         <div class="pan-row"><span class="lbl">F/R</span><Pan path={p('pan', 'fr')} label={`${element.name} front rear`} left="F" right="R" /></div>
         <Param path={p('pan', 'divergence')} label="Diverg" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
-        <Param path={p('pan', 'lfe')} label="LFE" min={-90} max={10} format={(v) => formatDb(v)} />
+        <Param path={p('pan', 'lfe')} label="LFE" min={-90} max={10} fader format={(v) => formatDb(v)} />
       {:else if ch}
         <p class="note">{element.layout} maps leg to leg on {element.layout} buses and folds down (Lo/Ro) on narrower ones.</p>
       {/if}
@@ -210,7 +210,7 @@
           <div class="send">
             <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('sends', aux.id, 'on')} onclick={() => toggle('sends', aux.id, 'on')}>{aux.name}</button>
             <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('sends', aux.id, 'pre')} onclick={() => toggle('sends', aux.id, 'pre')} title="Pre-fader when lit">PRE</button>
-            <Param path={p('sends', aux.id, 'level')} label="Lvl" min={-90} max={10} format={(v) => formatDb(v)} />
+            <Param path={p('sends', aux.id, 'level')} label="Lvl" min={-90} max={10} fader format={(v) => formatDb(v)} />
           </div>
         {/each}
         <h3 class="panel-title">Assign</h3>

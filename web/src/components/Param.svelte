@@ -2,6 +2,7 @@
   import { fit } from '../lib/format';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { parseEntry } from '../lib/audio/entry';
+  import { dbToPosition, positionToDb } from '../lib/audio/db';
 
   interface Props {
     path: string;
@@ -11,9 +12,11 @@
     step?: number;
     unit?: string;
     log?: boolean;
+    /** A level on the fader taper (lib/audio/db.ts), as faders and the Aux view: most travel around 0 dB. */
+    fader?: boolean;
     format?: (v: number) => string;
   }
-  let { path, label, min, max, step = 0.1, unit = '', log = false, format }: Props = $props();
+  let { path, label, min, max, step = 0.1, unit = '', log = false, fader = false, format }: Props = $props();
 
   const mixer = getMixer();
   const value = $derived(mixer.value<number>(path));
@@ -21,8 +24,10 @@
   const id = `p-${Math.random().toString(36).slice(2, 9)}`;
 
   // A log control maps the slider's 0..1000 range onto min..max exponentially.
-  const toSlider = (v: number) => (log ? (Math.log(v / min) / Math.log(max / min)) * 1000 : v);
+  const scaled = $derived(log || fader);
+  const toSlider = (v: number) => (fader ? dbToPosition(v) * 1000 : log ? (Math.log(v / min) / Math.log(max / min)) * 1000 : v);
   const fromSlider = (s: number) => {
+    if (fader) return Math.min(max, Math.max(min, positionToDb(s / 1000)));
     if (!log) return Math.round(s / step) * step;
     const v = min * Math.pow(max / min, s / 1000);
     return Math.round(v / step) * step;
@@ -64,9 +69,9 @@
   <input
     {id}
     type="range"
-    min={log ? 0 : min}
-    max={log ? 1000 : max}
-    step={log ? 1 : step}
+    min={scaled ? 0 : min}
+    max={scaled ? 1000 : max}
+    step={scaled ? 1 : step}
     value={toSlider(value)}
     disabled={mixer.locked}
     oninput={input}
