@@ -10,6 +10,18 @@ import { COMMAND, TERMINAL, step, type CommandEvent, type CommandState } from '.
 
 export const OUTBOX_CAPACITY = 1024;
 
+/**
+ * A continuous control takes a numeric value: fader, pan, send level and
+ * pan, EQ, dynamics, trim and delay values, monitor level, VCA offset.
+ * Only its writes are rate limited and coalesced. Every other write (mute,
+ * solo, routing, send on and pre, scene, AFV, recall-safe, members, monitor
+ * source, dim, cut and mono, EQ band type, enabled flags) is discrete: it
+ * is sent on its own, in order.
+ */
+export function isContinuous(value: unknown): boolean {
+  return typeof value === 'number';
+}
+
 export interface OutboxEntry {
   readonly msg: CommandMessage;
   readonly continuous: boolean;

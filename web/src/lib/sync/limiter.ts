@@ -1,5 +1,5 @@
-// Per-control write rate limit: at most MAX_WRITES_PER_SECOND writes per
-// control. A write inside the interval is held as the control's trailing
+// Per-control write rate limit for continuous controls (outbox.ts
+// isContinuous): at most MAX_WRITES_PER_SECOND writes per control. A write inside the interval is held as the control's trailing
 // value, replaced by later writes, and emitted when the interval ends, so
 // the latest value always goes out.
 

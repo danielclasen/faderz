@@ -342,6 +342,20 @@ describe('sync engine: commands', () => {
     expect(sets.at(-1)!.value).toBe(-9.9);
   });
 
+  it('sends discrete writes of one control within 20 ms each at once, in order, with rising seq', () => {
+    const { engine, primary, clock } = live();
+    const MUTE = '/channels/ch1/mute';
+    for (const value of [true, false, true]) {
+      engine.input({ type: 'set', path: MUTE, value });
+      clock.advance(5);
+    }
+    const sets = primary.ofType('set').filter((m) => m.path === MUTE);
+    expect(sets.map((m) => m.value)).toEqual([true, false, true]);
+    expect(sets[1]!.seq).toBeGreaterThan(sets[0]!.seq);
+    expect(sets[2]!.seq).toBeGreaterThan(sets[1]!.seq);
+    expect(new Set(sets.map((m) => m.id)).size).toBe(3);
+  });
+
   it('queues commands while disconnected, coalescing continuous controls and keeping discrete ones', () => {
     const t = setup();
     t.sockets[0]!.open();

@@ -283,3 +283,24 @@ test('a hidden tab stops meter traffic after at most the credit cap and resumes 
   await expect.poll(async () => (await primary()).meterFramesSent).toBeGreaterThan(later.meterFramesSent + 8);
   expect(await debug(page, 'connection')).toBe('Live');
 });
+
+test('mute toggles within 20 ms are each sent and applied in order', async ({ page, request }) => {
+  await live(page);
+  const path = '/channels/ch1/mute';
+  const before = (await serverState(request)).state.channels['ch1']!.mute;
+  await page.evaluate((p) => {
+    const b = document.querySelector<HTMLButtonElement>(`button[data-path="${p}"]`)!;
+    b.click();
+    b.click();
+    b.click();
+  }, path);
+  await expect
+    .poll(async () => (await audit(request)).entries.filter((e) => e.path === path).map((e) => e.value))
+    .toEqual([!before, before, !before]);
+  const applied = (await audit(request)).entries.filter((e) => e.path === path);
+  for (let i = 1; i < applied.length; i++) {
+    expect(applied[i]!.seq!).toBeGreaterThan(applied[i - 1]!.seq!);
+    expect(applied[i]!.revision).toBeGreaterThanOrEqual(applied[i - 1]!.revision);
+  }
+  expect((await serverState(request)).state.channels['ch1']!.mute).toBe(!before);
+});
