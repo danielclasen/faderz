@@ -49,8 +49,8 @@ describe('connection machine', () => {
     check(LINK, LINK_STATES, LINK_EVENTS, {
       Connecting: ['Syncing', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Connecting', 'Offline', 'Connecting', 'Connecting', 'Connecting'],
       Syncing: ['Syncing', 'Live', 'Syncing', 'Syncing', 'Syncing', 'Connecting', 'Connecting', 'Syncing', 'Syncing', 'Syncing', 'Syncing', 'Syncing', 'Ahead', 'Syncing'],
-      Live: ['Live', 'Live', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Live', 'Live', 'Live', 'Live', 'Live', 'Live'],
-      Suspect: ['Suspect', 'Suspect', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Suspect', 'Suspect', 'Suspect', 'Suspect', 'Suspect', 'Suspect'],
+      Live: ['Live', 'Live', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Live', 'Live', 'Live', 'Live', 'Ahead', 'Live'],
+      Suspect: ['Suspect', 'Suspect', 'Resyncing', 'Suspect', 'Live', 'FailingOver', 'FailingOver', 'FailingOver', 'Suspect', 'Suspect', 'Suspect', 'Suspect', 'Ahead', 'Suspect'],
       FailingOver: ['FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver', 'Resyncing', 'Connecting', 'FailingOver', 'FailingOver', 'FailingOver', 'FailingOver'],
       Resyncing: ['Resyncing', 'Live', 'Resyncing', 'Resyncing', 'Resyncing', 'FailingOver', 'FailingOver', 'FailingOver', 'Resyncing', 'Resyncing', 'Resyncing', 'Resyncing', 'Ahead', 'Resyncing'],
       Ahead: ['Ahead', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Connecting', 'Connecting', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Ahead', 'Resyncing'],

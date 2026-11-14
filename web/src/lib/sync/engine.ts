@@ -640,6 +640,7 @@ export class SyncEngine {
     this.cancelResyncRetry = null;
     this.ahead = { lastRevision: msg.lastRevision, cluster: msg.revision, otherHistory: false };
     this.linkEvent('ahead');
+    this.closeStandby();
   }
 
   /**

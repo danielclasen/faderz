@@ -627,6 +627,55 @@ describe('sync engine: ahead of the cluster', () => {
     expect(t.engine.revision).toBe(3);
   });
 
+  it('goes Ahead from Live on a snapshot of another epoch on the open primary, and applies no delta after it', () => {
+    // A replica that changes its epoch in place catches the connection up
+    // with a snapshot of the new history; its deltas follow.
+    const { engine, primary, standby, tick } = live();
+    primary.deliver(snapshot(R1, 15, {}, YOU, RESTORED));
+    expect(engine.link).toBe('Ahead');
+    expect(tick()!.status?.ahead).toEqual({ lastRevision: 10, cluster: 15, otherHistory: true });
+    expect(standby.closed).toBe(true);
+    primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -40 }] }));
+    primary.deliver(delta(R1, 16, { changes: [{ path: F1, value: -41 }] }));
+    expect(engine.revision).toBe(10);
+    expect(engine.epoch).toBe(EPOCH);
+    expect(getAt(engine.state, F1)).not.toBe(-40);
+    expect(primary.ofType('resync')).toHaveLength(0);
+  });
+
+  it('goes Ahead from Suspect too', () => {
+    const { clock, engine, primary, standby } = live();
+    clock.advance(SUSPECT_MS + 10);
+    standby.deliver({ type: 'ping', replica: R2, t: 1 });
+    expect(engine.link).toBe('Suspect');
+    primary.deliver(snapshot(R1, 15, {}, YOU, RESTORED));
+    expect(engine.link).toBe('Ahead');
+  });
+
+  it('drops a standby whose snapshot is of another epoch, so a delta from it never applies', () => {
+    const t = setup();
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 3));
+    const sb = t.sockets[1]!;
+    sb.open();
+    sb.deliver(replicas(R2));
+    sb.deliver(snapshot(R2, 3, {}, YOU, RESTORED));
+    expect(sb.closed).toBe(true);
+    expect(t.engine.standbyState).toBe('Idle');
+    sb.deliver(delta(R2, 4, { changes: [{ path: F1, value: -40 }] }));
+    expect(t.engine.revision).toBe(3);
+    expect(getAt(t.engine.state, F1)).not.toBe(-40);
+  });
+
+  it('closes the standby when the replica answers ahead', () => {
+    const { engine, primary, standby } = live();
+    primary.deliver({ type: 'ahead', replica: R1, epoch: EPOCH, revision: 7, lastRevision: 10 });
+    expect(engine.link).toBe('Ahead');
+    expect(standby.closed).toBe(true);
+    expect(engine.standbyState).toBe('Idle');
+  });
+
   it('ignores adopt while not ahead', () => {
     const { engine, primary } = live();
     engine.input({ type: 'adopt' });

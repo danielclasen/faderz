@@ -48,8 +48,10 @@ export const LINK_EVENTS: readonly LinkEvent[] = [
 export const LINK: Table<LinkState, LinkEvent> = {
   Connecting: { open: 'Syncing', exhausted: 'Offline' },
   Syncing: { synced: 'Live', lost: 'Connecting', beatsMissed: 'Connecting', ahead: 'Ahead' },
-  Live: { resync: 'Resyncing', beatLate: 'Suspect', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver' },
-  Suspect: { beat: 'Live', resync: 'Resyncing', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver' },
+  // A replica that changes its epoch in place sends a snapshot of the new
+  // one on an open connection: ahead from Live and Suspect too.
+  Live: { resync: 'Resyncing', beatLate: 'Suspect', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver', ahead: 'Ahead' },
+  Suspect: { beat: 'Live', resync: 'Resyncing', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver', ahead: 'Ahead' },
   FailingOver: { promoted: 'Resyncing', noStandby: 'Connecting' },
   Resyncing: { synced: 'Live', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver', ahead: 'Ahead' },
   // Ahead waits for the operator; it never resyncs on its own, and a lost
