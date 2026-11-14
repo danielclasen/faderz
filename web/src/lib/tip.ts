@@ -108,7 +108,10 @@ export const tip: Action<HTMLElement, string> = (node, text) => {
     hide(node);
   };
   const key = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && owner === node) hide(node);
+    if (e.key === 'Escape' && owner === node) {
+      e.preventDefault();
+      hide(node);
+    }
   };
   node.addEventListener('pointerenter', enter);
   node.addEventListener('pointerleave', leave);

@@ -465,3 +465,21 @@ test('types an EQ frequency and a gate threshold into the processing panel', asy
   await patch(request, '/channels/ch5/eq/bands/1/freq', 400);
   await patch(request, '/channels/ch5/gate/threshold', -50);
 });
+
+test('Escape in a typed field restores its value and leaves the processing panel open', async ({ page, request }) => {
+  await live(page);
+  await page.locator('[data-channel="ch5"] .head').click();
+  const panel = page.getByRole('region', { name: 'Guest 3 processing' });
+  for (const field of [page.getByRole('textbox', { name: 'Thr value, type to set' }).first(), panel.getByRole('textbox', { name: /delay in/i })]) {
+    const before = await field.inputValue();
+    await field.fill('-12');
+    await field.press('Escape');
+    await expect(panel).toBeVisible();
+    await expect(field).toHaveValue(before);
+  }
+  expect((await serverState(request)).state.channels['ch5']!.gate.threshold).toBe(-50);
+  // Escape outside a field still closes it.
+  await panel.getByRole('button', { name: 'Close processing' }).focus();
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+});

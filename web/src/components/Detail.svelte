@@ -52,8 +52,11 @@
     const members = mixer.state!.vcas[vcaId]!.members;
     mixer.set(pointer('vcas', vcaId, 'members'), members.includes(id) ? members.filter((m) => m !== id) : [...members, id]);
   }
+  /** Escape in a typed field restores that field (and a tooltip's closes it); only elsewhere does it close the panel. */
   function keydown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') onclose();
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    if (e.target instanceof HTMLElement && e.target.closest('input, select, textarea, [contenteditable="true"]')) return;
+    onclose();
   }
 </script>
 
