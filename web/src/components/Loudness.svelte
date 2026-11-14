@@ -62,9 +62,11 @@
     title={`Short-term loudness against ${target} LUFS, ${settings.scale === 'ebu18' ? '-36 to +18' : '-18 to +9'} LU`}
     aria-hidden="true"
   >
-    <i class="band" style:left={`${at(-tolerance) * 100}%`} style:width={`${(at(tolerance) - at(-tolerance)) * 100}%`}></i>
+    <!-- Bar-wide boxes moved and scaled by transform: a new target,
+         tolerance or scale changes no layout. -->
+    <i class="band" style:transform={`translateX(${at(-tolerance) * 100}%) scaleX(${at(tolerance) - at(-tolerance)})`}></i>
     <i class="fill" class:over={rel !== null && rel > tolerance} style:transform={`scaleX(${rel === null ? 0 : at(rel)})`}></i>
-    <i class="target" style:left={`${at(0) * 100}%`}></i>
+    <i class="target" style:transform={`translateX(${at(0) * 100}%)`}><b></b></i>
   </div>
   <span class="k">M</span><b class="num v"><span>{fmt(l?.momentary)}</span></b><b class="num max" title="Maximum momentary since reset"><span>{fmt(l?.maxMomentary)}</span></b>
   <span class="k">S</span><b class="num v"><span>{fmt(l?.shortTerm)}</span></b><b class="num max" title="Maximum short-term since reset"><span>{fmt(l?.maxShortTerm)}</span></b>
@@ -131,6 +133,9 @@
     bottom: 0;
   }
   .band {
+    left: 0;
+    width: 100%;
+    transform-origin: left;
     background: color-mix(in srgb, var(--meter-low) 30%, transparent);
   }
   .fill {
@@ -143,6 +148,14 @@
     background: var(--meter-mid);
   }
   .target {
+    left: 0;
+    width: 100%;
+  }
+  .target b {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
     width: 1px;
     background: #e6edf3;
   }
