@@ -28,6 +28,11 @@ receives against the contract. `FADERZ_MOCK_AUTOMATION=0` turns off the
 tally and console simulation. The striped MOCK button in the status bar
 kills, hangs and restores replicas.
 
+HTTPS for the dev server: set `FADERZ_DEV_TLS_CERT` and `FADERZ_DEV_TLS_KEY`
+to PEM files, for example a self-signed pair; the UI then uses `wss://`.
+Plain HTTP works too, also on LAN addresses that are not secure
+contexts.
+
 The UI connects to `/api/v1/ws` on its own origin. A list of replica
 endpoints can be given instead:
 `?endpoints=ws://a/api/v1/ws,ws://b/api/v1/ws`.
