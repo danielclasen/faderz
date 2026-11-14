@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/danielclasen/faderz/raw/main/api/ws/server-message.schema.json",
+  "title": "faderz WebSocket server message",
+  "description": "Messages a replica sends on /api/v1/ws. replica names the sending replica. hello is answered with replicas, then snapshot or resume; deltas follow in revision order. A client that sees a revision other than its own plus one sends resync. Meter frames may be dropped for a slow client, deltas never: a client whose queue fills with deltas gets a snapshot instead.",
+  "oneOf": [
+    { "$ref": "#/$defs/Snapshot" },
+    { "$ref": "#/$defs/Resume" },
+    { "$ref": "#/$defs/Delta" },
+    { "$ref": "#/$defs/Ack" },
+    { "$ref": "#/$defs/Replicas" },
+    { "$ref": "#/$defs/Meters" },
+    { "$ref": "#/$defs/Counters" },
+    { "$ref": "#/$defs/Error" }
+  ],
+  "$defs": {
+    "Snapshot": {
+      "description": "Full replicated state at a global revision.",
+      "type": "object",
+      "required": ["type", "clientId", "replica", "revision", "shape", "state", "owners"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "snapshot" },
+        "clientId": { "$ref": "model.schema.json#/$defs/ClientId" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "revision": { "$ref": "model.schema.json#/$defs/Revision" },
+        "shape": { "$ref": "model.schema.json#/$defs/Shape" },
+        "state": { "$ref": "model.schema.json#/$defs/State" },
+        "owners": { "$ref": "model.schema.json#/$defs/Owners" }
+      }
+    },
+    "Resume": {
+      "description": "Answer to hello or resync with lastRevision: every delta after lastRevision, in order. revision is the global revision after the last of them.",
+      "type": "object",
+      "required": ["type", "clientId", "replica", "revision", "deltas"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "resume" },
+        "clientId": { "$ref": "model.schema.json#/$defs/ClientId" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "revision": { "$ref": "model.schema.json#/$defs/Revision" },
+        "deltas": { "type": "array", "items": { "$ref": "#/$defs/Delta" } }
+      }
+    },
+    "Delta": {
+      "description": "One applied change set at global revision `revision`. atIndex is the sample index at which its parameter changes take effect on every replica; absent when only ownership changed. origin names the client command that caused it; absent for server-side changes (tally, console status, ownership timeouts).",
+      "type": "object",
+      "required": ["type", "replica", "revision"],
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["changes"] },
+        { "required": ["owners"] }
+      ],
+      "properties": {
+        "type": { "const": "delta" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "revision": { "$ref": "model.schema.json#/$defs/Revision" },
+        "atIndex": { "$ref": "model.schema.json#/$defs/SampleIndex" },
+        "changes": {
+          "type": "array",
+          "items": { "$ref": "model.schema.json#/$defs/StateChange" },
+          "minItems": 1
+        },
+        "owners": {
+          "type": "array",
+          "items": { "$ref": "model.schema.json#/$defs/OwnershipChange" },
+          "minItems": 1
+        },
+        "origin": {
+          "type": "object",
+          "required": ["clientId", "commandId"],
+          "additionalProperties": false,
+          "properties": {
+            "clientId": { "$ref": "model.schema.json#/$defs/ClientId" },
+            "commandId": { "$ref": "model.schema.json#/$defs/CommandId" },
+            "seq": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "Ack": {
+      "description": "A command that changed nothing. duplicate: its id was already applied (revision is the one it was applied at); stale: a later seq for the same control was already applied; noop: the state already held the value or ownership.",
+      "type": "object",
+      "required": ["type", "replica", "commandId", "result", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "ack" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "commandId": { "$ref": "model.schema.json#/$defs/CommandId" },
+        "result": { "type": "string", "enum": ["duplicate", "stale", "noop"] },
+        "revision": { "$ref": "model.schema.json#/$defs/Revision" }
+      }
+    },
+    "Replicas": {
+      "description": "Replica set as seen by the sending replica. Sent after hello and whenever a role or health changes.",
+      "type": "object",
+      "required": ["type", "replica", "replicas"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "replicas" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "replicas": { "type": "array", "items": { "$ref": "model.schema.json#/$defs/ReplicaStatus" }, "minItems": 1 }
+      }
+    },
+    "Meters": {
+      "description": "Meter frame of the sending replica, 25 per second. Every element of the shape is present. Meter streams of different replicas are measured independently.",
+      "type": "object",
+      "required": ["type", "replica", "channels", "buses", "auxes", "mixMinus"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "meters" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "channels": {
+          "type": "object",
+          "propertyNames": { "$ref": "model.schema.json#/$defs/Id" },
+          "additionalProperties": { "$ref": "model.schema.json#/$defs/ChannelMeter" }
+        },
+        "buses": {
+          "type": "object",
+          "propertyNames": { "$ref": "model.schema.json#/$defs/Id" },
+          "additionalProperties": { "$ref": "model.schema.json#/$defs/BusMeter" }
+        },
+        "auxes": {
+          "type": "object",
+          "propertyNames": { "$ref": "model.schema.json#/$defs/Id" },
+          "additionalProperties": { "$ref": "model.schema.json#/$defs/BusMeter" }
+        },
+        "mixMinus": {
+          "type": "object",
+          "propertyNames": { "$ref": "model.schema.json#/$defs/Id" },
+          "additionalProperties": { "$ref": "model.schema.json#/$defs/BusMeter" }
+        }
+      }
+    },
+    "Counters": {
+      "description": "Engine counters of the sending replica, once per second.",
+      "type": "object",
+      "required": ["type", "replica", "values"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "counters" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "values": { "$ref": "model.schema.json#/$defs/Counters" }
+      }
+    },
+    "Error": {
+      "description": "A client message was refused. commandId names the refused command. For code 409 (control owned by another client) current and owner carry the control's current value and owner.",
+      "type": "object",
+      "required": ["type", "replica", "code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "error" },
+        "replica": { "$ref": "model.schema.json#/$defs/ReplicaRef" },
+        "code": { "type": "integer", "enum": [400, 404, 409] },
+        "message": { "type": "string" },
+        "commandId": { "$ref": "model.schema.json#/$defs/CommandId" },
+        "path": { "type": "string" },
+        "current": { "description": "Current value of the control (code 409)." },
+        "owner": { "$ref": "model.schema.json#/$defs/ClientId" }
+      }
+    }
+  }
+}

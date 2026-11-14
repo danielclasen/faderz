@@ -1,0 +1,385 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: faderz API
+  version: 1.0.0
+  summary: Operated broadcast multichannel mixer.
+  description: |
+    REST reads and writes of the faderz mixer, plus one WebSocket at
+    /api/v1/ws. Shared types live in ws/model.schema.json; WebSocket
+    messages in ws/client-message.schema.json and
+    ws/server-message.schema.json.
+
+    faderz runs as one or more replicas sharing one replicated state with a
+    global revision. Any replica serves any request. Writes carry a
+    client-generated command id; a command id is applied at most once
+    across all replicas, so a client resends it to another replica after a
+    failover. Parameter changes take effect at a sample index chosen by the
+    system (atIndex), the same on every replica.
+
+    State-changing requests without a bearer token need the header
+    `X-Samplez-Request: 1` and `Content-Type: application/json`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: /api/v1
+paths:
+  /state:
+    get:
+      operationId: getState
+      summary: Read shape, live state, owners and the global revision.
+      responses:
+        "200":
+          description: Current state.
+          content:
+            application/json:
+              schema:
+                $ref: "./ws/model.schema.json#/$defs/StateDocument"
+    patch:
+      operationId: patchState
+      summary: Write one or more controls atomically.
+      description: |
+        All changes apply in one revision, or none does. A change to a
+        control owned by a client (touch) is refused with 409 and the
+        current value of every owned control in the request.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [commandId, changes]
+              additionalProperties: false
+              properties:
+                commandId:
+                  $ref: "./ws/model.schema.json#/$defs/CommandId"
+                changes:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: "./ws/model.schema.json#/$defs/Change"
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "200":
+          $ref: "#/components/responses/CommandResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /replicas:
+    get:
+      operationId: getReplicas
+      summary: Replica set as seen by the serving replica.
+      responses:
+        "200":
+          description: Replicas.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [replica, replicas]
+                additionalProperties: false
+                properties:
+                  replica:
+                    $ref: "./ws/model.schema.json#/$defs/ReplicaRef"
+                  replicas:
+                    type: array
+                    minItems: 1
+                    items:
+                      $ref: "./ws/model.schema.json#/$defs/ReplicaStatus"
+  /scenes:
+    post:
+      operationId: createScene
+      summary: Store the current state as a new scene.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [commandId, name]
+              additionalProperties: false
+              properties:
+                commandId:
+                  $ref: "./ws/model.schema.json#/$defs/CommandId"
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "201":
+          $ref: "#/components/responses/SceneResult"
+        "400":
+          $ref: "#/components/responses/Error"
+  /scenes/{sceneId}:
+    parameters:
+      - $ref: "#/components/parameters/SceneId"
+    put:
+      operationId: storeScene
+      summary: Store the current state into an existing scene, optionally renaming it.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [commandId]
+              additionalProperties: false
+              properties:
+                commandId:
+                  $ref: "./ws/model.schema.json#/$defs/CommandId"
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "200":
+          $ref: "#/components/responses/SceneResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteScene
+      summary: Delete a scene.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "200":
+          $ref: "#/components/responses/CommandResult"
+        "404":
+          $ref: "#/components/responses/Error"
+  /scenes/{sceneId}/recall:
+    parameters:
+      - $ref: "#/components/parameters/SceneId"
+    post:
+      operationId: recallScene
+      summary: Recall a scene with a crossfade.
+      description: |
+        Applies the scene to every control, owned ones included, except the
+        recall-safe parameter groups. The state takes the scene values at
+        once; the audio crossfades over crossfadeMs from atIndex.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [commandId, crossfadeMs]
+              additionalProperties: false
+              properties:
+                commandId:
+                  $ref: "./ws/model.schema.json#/$defs/CommandId"
+                crossfadeMs:
+                  type: integer
+                  minimum: 0
+                  maximum: 60000
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "200":
+          $ref: "#/components/responses/CommandResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /afv/tally:
+    post:
+      operationId: postTally
+      summary: Tally change of one source.
+      description: |
+        preview has no audio effect. A tally whose atIndex or at lies in the
+        past applies at the next block and counts in afv_late_total.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, state]
+              additionalProperties: false
+              properties:
+                source:
+                  $ref: "./ws/model.schema.json#/$defs/TallySource"
+                state:
+                  $ref: "./ws/model.schema.json#/$defs/TallyState"
+                atIndex:
+                  $ref: "./ws/model.schema.json#/$defs/SampleIndex"
+                at:
+                  description: TAI time at which the tally takes effect.
+                  type: string
+                  format: date-time
+                transitionMs:
+                  type: integer
+                  minimum: 0
+                  maximum: 10000
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "200":
+          $ref: "#/components/responses/CommandResult"
+        "400":
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putTally
+      summary: Replace the full tally state, so a sender resyncs after downtime.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sources]
+              additionalProperties: false
+              properties:
+                sources:
+                  type: object
+                  propertyNames:
+                    $ref: "./ws/model.schema.json#/$defs/TallySource"
+                  additionalProperties:
+                    $ref: "./ws/model.schema.json#/$defs/TallyState"
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "200":
+          $ref: "#/components/responses/CommandResult"
+        "400":
+          $ref: "#/components/responses/Error"
+  /loudness/reset:
+    post:
+      operationId: resetLoudness
+      summary: Reset integrated loudness and LRA of buses, auxes or mix-minus outputs.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              additionalProperties: false
+              properties:
+                ids:
+                  $ref: "./ws/model.schema.json#/$defs/IdSet"
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "204":
+          description: Reset.
+        "404":
+          $ref: "#/components/responses/Error"
+  /ws:
+    get:
+      operationId: openWebSocket
+      summary: WebSocket upgrade for commands, deltas, meters and counters.
+      description: |
+        Client messages: ws/client-message.schema.json. Server messages:
+        ws/server-message.schema.json. The first client message is hello.
+        The Origin header must be in api.allowedOrigins.
+      responses:
+        "101":
+          description: Switching protocols.
+        "403":
+          description: Origin not allowed.
+components:
+  parameters:
+    RequestHeader:
+      name: X-Samplez-Request
+      in: header
+      required: true
+      description: Required on state-changing requests without a bearer token.
+      schema:
+        type: string
+        const: "1"
+    SceneId:
+      name: sceneId
+      in: path
+      required: true
+      schema:
+        $ref: "./ws/model.schema.json#/$defs/Id"
+  schemas:
+    CommandResult:
+      type: object
+      required: [result, revision]
+      additionalProperties: false
+      properties:
+        commandId:
+          description: Echo of the request's commandId; absent for requests without one.
+          $ref: "./ws/model.schema.json#/$defs/CommandId"
+        result:
+          description: applied, or duplicate when the command id was applied before (revision is the one it was applied at), or noop when nothing changed.
+          type: string
+          enum: [applied, duplicate, noop]
+        revision:
+          $ref: "./ws/model.schema.json#/$defs/Revision"
+        atIndex:
+          $ref: "./ws/model.schema.json#/$defs/SampleIndex"
+    Error:
+      type: object
+      required: [code, message]
+      additionalProperties: false
+      properties:
+        code:
+          type: integer
+          enum: [400, 403, 404, 409]
+        message:
+          type: string
+        conflicts:
+          type: array
+          items:
+            $ref: "./ws/model.schema.json#/$defs/Conflict"
+  responses:
+    CommandResult:
+      description: The command was processed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CommandResult"
+    SceneResult:
+      description: The scene was stored.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [scene, result]
+            additionalProperties: false
+            properties:
+              scene:
+                $ref: "./ws/model.schema.json#/$defs/Scene"
+              result:
+                $ref: "#/components/schemas/CommandResult"
+    Error:
+      description: The request was refused.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: A control in the request is owned by another client.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

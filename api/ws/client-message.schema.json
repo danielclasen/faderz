@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/danielclasen/faderz/raw/main/api/ws/client-message.schema.json",
+  "title": "faderz WebSocket client message",
+  "description": "Messages a client sends on /api/v1/ws. hello is the first message on every connection. Commands (set, touch, release) are applied in the order received and answered by exactly one of: a delta whose origin carries the command id, an ack, or an error.",
+  "oneOf": [
+    { "$ref": "#/$defs/Hello" },
+    { "$ref": "#/$defs/Set" },
+    { "$ref": "#/$defs/Touch" },
+    { "$ref": "#/$defs/Release" },
+    { "$ref": "#/$defs/Resync" }
+  ],
+  "$defs": {
+    "Hello": {
+      "description": "Identifies the client. With lastRevision the server answers with resume when it still holds every delta after it, otherwise with a snapshot. Without it the server answers with a snapshot.",
+      "type": "object",
+      "required": ["type", "clientId"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "hello" },
+        "clientId": { "$ref": "model.schema.json#/$defs/ClientId" },
+        "lastRevision": { "$ref": "model.schema.json#/$defs/Revision" }
+      }
+    },
+    "Set": {
+      "description": "Write one control. seq increases per client and control; a set whose seq is not above the last one applied from this client for the same path is answered with ack result stale. Refused with error 409 while another client owns the control.",
+      "type": "object",
+      "required": ["type", "id", "seq", "path", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "set" },
+        "id": { "$ref": "model.schema.json#/$defs/CommandId" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "path": { "$ref": "model.schema.json#/$defs/ControlPath" },
+        "value": true
+      },
+      "$ref": "model.schema.json#/$defs/ValueByPath"
+    },
+    "Touch": {
+      "description": "Take ownership of a control, as on pointer-down or a touched console fader. Held until release, or until 2 s after the client has no connection to any replica. Refused with error 409 while another client owns it.",
+      "type": "object",
+      "required": ["type", "id", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "touch" },
+        "id": { "$ref": "model.schema.json#/$defs/CommandId" },
+        "path": { "$ref": "model.schema.json#/$defs/ControlPath" }
+      }
+    },
+    "Release": {
+      "description": "Give up ownership of a control.",
+      "type": "object",
+      "required": ["type", "id", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "release" },
+        "id": { "$ref": "model.schema.json#/$defs/CommandId" },
+        "path": { "$ref": "model.schema.json#/$defs/ControlPath" }
+      }
+    },
+    "Resync": {
+      "description": "Sent after a revision gap. Answered like hello.",
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "resync" },
+        "lastRevision": { "$ref": "model.schema.json#/$defs/Revision" }
+      }
+    }
+  }
+}
