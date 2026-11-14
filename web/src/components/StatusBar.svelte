@@ -28,9 +28,13 @@
   <!-- Counts grow without a bound: each is padded to a fixed width, so a
        new digit moves nothing. -->
   <span class="label">counters <span class="fixed">{fit(mixer.countersReplica ?? '-', 3)}</span></span>
-  {#each counters as [name, value] (name)}
-    <span class="c" class:nz={value > 0}><span>{name.replace(/_total$/, '')}</span> <b class="num fixed" data-testid="counter">{fit(value > 999999 ? '>999k' : String(value), 6)}</b></span>
-  {/each}
+  <!-- Counters arrive after load and are clipped at the end of their
+       box, so the session tag after them never moves. -->
+  <div class="counters">
+    {#each counters as [name, value] (name)}
+      <span class="c" class:nz={value > 0}><span>{name.replace(/_total$/, '')}</span> <b class="num fixed" data-testid="counter">{fit(value > 999999 ? '>999k' : String(value), 6)}</b></span>
+    {/each}
+  </div>
   <span class="right num" title="Session tag, as other clients name this screen, and primary endpoint" data-testid="session">{handleTag(mixer.status.handle)} {mixer.endpoint ?? ''}</span>
 </footer>
 
@@ -59,8 +63,15 @@
   .c.nz b {
     color: var(--warn);
   }
+  .counters {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    gap: 12px;
+    overflow: hidden;
+  }
   .right {
-    margin-left: auto;
+    flex: none;
   }
   .notice-line {
     flex: 0 0 min(44%, 560px);
