@@ -310,7 +310,7 @@
       }
     },
     "Error": {
-      "description": "A client message was refused. commandId names the refused command. For code 409 (control owned by another session) current and owner carry the control's current value and owner.",
+      "description": "A client message was refused. commandId names the refused command. For code 409 (control owned by another session) current and owner carry the control's current value and owner. Code 503 means not applied: the replica could not commit the command, for example while it had no leader or quorum; nothing changed, and the client sends the command again with the same id and seq (client-message.schema.json).",
       "type": "object",
       "required": [
         "type",
@@ -331,7 +331,8 @@
           "enum": [
             400,
             404,
-            409
+            409,
+            503
           ]
         },
         "message": {

@@ -463,7 +463,8 @@ export interface CountersMessage {
 export interface ErrorMessage {
   type: 'error';
   replica: ReplicaRef;
-  code: 400 | 404 | 409;
+  /** 503: not applied; the client sends the command again with its id. */
+  code: 400 | 404 | 409 | 503;
   message: string;
   commandId?: CommandId;
   path?: string;

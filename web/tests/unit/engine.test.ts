@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { RESYNC_RETRY_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import { ANSWER_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
 import { ownerHandle } from '../../src/lib/net/handle';
 import type { Patch } from '../../src/lib/sync/messages';
 import { deriveMeterLayout, encodeMeterFrame, type MeterLayout, type MeterValues } from '../../src/lib/contract/meterFrame';
-import { DEAD_MS, HEARTBEAT_MS, METER_CREDIT_CAP, SUSPECT_MS } from '../../src/lib/contract/protocol';
+import { COMMAND_EXPIRY_MS, DEAD_MS, HEARTBEAT_MS, MAX_COMMANDS_IN_FLIGHT, METER_CREDIT_CAP, SUSPECT_MS } from '../../src/lib/contract/protocol';
 import type {
   DeltaMessage,
   Owner,
@@ -410,6 +410,68 @@ describe('sync engine: commands', () => {
       ['/channels/ch1/mute', true],
       ['/channels/ch1/mute', false],
     ]);
+  });
+});
+
+describe('sync engine: unanswered commands', () => {
+  const MUTE = '/channels/ch1/mute';
+
+  it('sends a command without an answer again with its id, then drops it at its expiry so its control shows the committed value', () => {
+    const { engine, primary, standby, clock, tick } = live();
+    tick();
+    engine.input({ type: 'set', path: MUTE, value: true });
+    const [set] = primary.ofType('set');
+    primary.deliver(delta(R1, 11, { changes: [{ path: MUTE, value: false }, { path: F2, value: -3 }] }));
+    beats(clock, ANSWER_TIMEOUT_MS, [primary, R1], [standby, R2]);
+    expect(primary.ofType('set')).toEqual([set, set]);
+    // Held back while the write is unanswered.
+    expect(tick()!.changes).toEqual([[F2, -3]]);
+    beats(clock, COMMAND_EXPIRY_MS - ANSWER_TIMEOUT_MS, [primary, R1], [standby, R2]);
+    expect(engine.outbox.size).toBe(0);
+    const sends = primary.ofType('set').length;
+    expect(sends).toBeGreaterThanOrEqual(3);
+    const p = tick()!;
+    expect(p.changes).toEqual([[MUTE, false]]);
+    expect(p.notices).toEqual([{ kind: 'expired', paths: [MUTE] }]);
+    expect(p.status?.outbox).toBe(0);
+    beats(clock, 5000, [primary, R1], [standby, R2]);
+    expect(primary.ofType('set')).toHaveLength(sends);
+  });
+
+  it('sends a command answered not applied again with its id, after a pause', () => {
+    const { engine, primary, standby, clock } = live();
+    engine.input({ type: 'set', path: MUTE, value: true });
+    const [set] = primary.ofType('set');
+    primary.deliver({ type: 'error', replica: R1, code: 503, message: 'not applied', commandId: set!.id, path: MUTE });
+    expect(primary.ofType('set')).toHaveLength(1);
+    expect(engine.outbox.size).toBe(1);
+    beats(clock, NOT_APPLIED_RETRY_MS + HEARTBEAT_MS, [primary, R1], [standby, R2]);
+    expect(primary.ofType('set')).toEqual([set, set]);
+    primary.deliver(delta(R1, 11, { changes: [{ path: MUTE, value: true }], origins: [{ owner: YOU, commandId: set!.id, seq: set!.seq }] }));
+    expect(engine.outbox.size).toBe(0);
+  });
+
+  it('keeps at most 64 commands in flight on a connection and sends the next as answers come', () => {
+    const { engine, primary } = live();
+    for (let i = 0; i < 100; i++) engine.input({ type: 'set', path: `/channels/ch${(i % 20) + 1}/mute`, value: i % 2 === 0 });
+    const sent = primary.ofType('set');
+    expect(sent).toHaveLength(MAX_COMMANDS_IN_FLIGHT);
+    primary.deliver({ type: 'ack', replica: R1, commandId: sent[0]!.id, result: 'noop', revision: 10 });
+    primary.deliver({ type: 'ack', replica: R1, commandId: sent[1]!.id, result: 'noop', revision: 10 });
+    expect(primary.ofType('set')).toHaveLength(MAX_COMMANDS_IN_FLIGHT + 2);
+    expect(engine.outbox.inFlight).toBe(MAX_COMMANDS_IN_FLIGHT);
+  });
+
+  it('touches again with a new command when an unanswered touch expires while still touching', () => {
+    const { engine, primary, standby, clock } = live();
+    engine.input({ type: 'touch', path: F1 });
+    const [touch] = primary.ofType('touch');
+    beats(clock, COMMAND_EXPIRY_MS + HEARTBEAT_MS, [primary, R1], [standby, R2]);
+    const touches = primary.ofType('touch');
+    const fresh = touches.filter((m) => m.id !== touch!.id);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]!.seq).toBeGreaterThan(touch!.seq);
+    expect(engine.touches.get(F1)).toBe('Touching');
   });
 });
 

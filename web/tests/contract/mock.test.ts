@@ -668,7 +668,7 @@ describe('heartbeats', () => {
 });
 
 describe('replica faults', () => {
-  it('a partitioned replica reports itself not commitable and ignores commands until healed', async () => {
+  it('a partitioned replica reports itself not commitable and answers commands not applied until healed', async () => {
     const c = await new Client().open(onReplica('r3'));
     await c.hello();
     let from = c.messages.length;
@@ -676,17 +676,29 @@ describe('replica faults', () => {
     const status = await c.next<ReplicasMessage>((m) => m.type === 'replicas', from);
     expect(status.replicas.find((r) => r.id === 'r3')).toMatchObject({ healthy: true, commitable: false });
     const before = cluster.state.channels['ch11']!.trim;
-    const id = c.set('/channels/ch11/trim', before + 1);
-    await sleep(300);
-    expect(c.messages.some((m) => answers(m, id))).toBe(false);
+    const seq = c.nextSeq();
+    const id = c.set('/channels/ch11/trim', before + 1, undefined, seq);
+    expect(await c.answer(id, from)).toMatchObject({ type: 'error', code: 503, commandId: id, path: '/channels/ch11/trim' });
     expect(cluster.state.channels['ch11']!.trim).toBe(before);
-    expect(c.count('ping', from)).toBeGreaterThanOrEqual(1);
+    // A touch not applied there, the release after it committed elsewhere, then the touch resent: stale.
+    const touchSeq = c.nextSeq();
+    const touchId = c.command('touch', '/channels/ch11/fader', undefined, touchSeq);
+    expect(await c.answer(touchId, from)).toMatchObject({ type: 'error', code: 503 });
+    // Still serving heartbeats.
+    await c.next((m) => m.type === 'ping', from);
     from = c.messages.length;
     await control('POST', '/replicas/r3/heal');
     const healed = await c.next<ReplicasMessage>((m) => m.type === 'replicas', from);
     expect(healed.replicas.find((r) => r.id === 'r3')!.commitable).toBe(true);
-    c.set('/channels/ch11/trim', before + 1, id);
+    c.set('/channels/ch11/trim', before + 1, id, seq);
     expect((await c.answer(id, from)).type).toBe('delta');
+    const elsewhere = await new Client(c.session).open(onReplica('r1'));
+    await elsewhere.hello();
+    expect(await elsewhere.answer(elsewhere.command('release', '/channels/ch11/fader'))).toMatchObject({ type: 'ack', result: 'noop' });
+    from = c.messages.length;
+    c.command('touch', '/channels/ch11/fader', touchId, touchSeq);
+    expect(await c.answer(touchId, from)).toMatchObject({ type: 'ack', result: 'stale' });
+    expect((await owners())['/channels/ch11/fader']).toBeUndefined();
   });
 
   it('a frozen replica sends nothing and applies nothing until unfrozen', async () => {

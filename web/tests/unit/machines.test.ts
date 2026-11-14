@@ -13,6 +13,7 @@ import {
   TOUCH_EVENTS,
   TOUCH_STATES,
   step,
+  type CommandState,
   type Table,
 } from '../../src/lib/sync/machines';
 
@@ -77,19 +78,21 @@ describe('standby machine', () => {
 
 describe('command machine', () => {
   it('has the expected event and state lists', () => {
-    expect(COMMAND_EVENTS).toEqual(['transmit', 'ack', 'reject', 'stale', 'supersede', 'failover']);
-    expect(COMMAND_STATES).toEqual(['Queued', 'Sent', 'Acked', 'Rejected', 'Stale', 'Superseded']);
+    expect(COMMAND_EVENTS).toEqual(['transmit', 'ack', 'reject', 'stale', 'supersede', 'failover', 'timeout', 'notApplied', 'expire']);
+    expect(COMMAND_STATES).toEqual(['Queued', 'Sent', 'Acked', 'Rejected', 'Stale', 'Superseded', 'Expired']);
   });
 
   it('follows the full transition table', () => {
-    // transmit, ack, reject, stale, supersede, failover
+    // transmit, ack, reject, stale, supersede, failover, timeout, notApplied, expire
+    const end = (s: CommandState) => Array<CommandState>(9).fill(s);
     check(COMMAND, COMMAND_STATES, COMMAND_EVENTS, {
-      Queued: ['Sent', 'Acked', 'Rejected', 'Stale', 'Superseded', 'Queued'],
-      Sent: ['Sent', 'Acked', 'Rejected', 'Stale', 'Sent', 'Queued'],
-      Acked: ['Acked', 'Acked', 'Acked', 'Acked', 'Acked', 'Acked'],
-      Rejected: ['Rejected', 'Rejected', 'Rejected', 'Rejected', 'Rejected', 'Rejected'],
-      Stale: ['Stale', 'Stale', 'Stale', 'Stale', 'Stale', 'Stale'],
-      Superseded: ['Superseded', 'Superseded', 'Superseded', 'Superseded', 'Superseded', 'Superseded'],
+      Queued: ['Sent', 'Acked', 'Rejected', 'Stale', 'Superseded', 'Queued', 'Queued', 'Queued', 'Expired'],
+      Sent: ['Sent', 'Acked', 'Rejected', 'Stale', 'Sent', 'Queued', 'Queued', 'Queued', 'Expired'],
+      Acked: end('Acked'),
+      Rejected: end('Rejected'),
+      Stale: end('Stale'),
+      Superseded: end('Superseded'),
+      Expired: end('Expired'),
     });
   });
 });

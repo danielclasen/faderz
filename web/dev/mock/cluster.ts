@@ -530,8 +530,10 @@ export class Cluster {
       case 'resync':
         return this.sync(conn, this.ownEpoch(msg.epoch, msg.lastRevision), msg.full === true);
     }
-    // A partitioned replica cannot commit; commands sent to it go unanswered.
-    if (r.partitioned) return;
+    // A partitioned replica cannot commit: every command is answered not applied.
+    if (r.partitioned) {
+      return this.emit(conn, { type: 'error', replica: this.ref(r), code: 503, commandId: msg.id, path: msg.path, message: 'not applied: no quorum' });
+    }
     const owner = conn.owner;
     const run = () => {
       const reply = this.command(owner, msg, r.id);

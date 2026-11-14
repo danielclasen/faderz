@@ -2,8 +2,10 @@
 // origins, an ack or an error. Bounded and ordered. A set of a continuous
 // control (contract/continuous.ts) that has not been sent yet is replaced
 // by a newer set of the same control; every other command keeps its
-// place. After a failover every sent command is queued again with its id,
-// which the server applies at most once.
+// place. After a failover, an answer deadline or a not-applied answer a
+// sent command is queued again with its id, which the server applies at
+// most once. A command still unanswered at its expiry is dropped, so none
+// is sent beyond the time the server remembers its id and seq.
 
 import type { CommandId, CommandMessage } from '../contract/types';
 import { COMMAND, TERMINAL, step, type CommandEvent, type CommandState } from './machines';
@@ -14,6 +16,12 @@ export interface OutboxEntry {
   readonly msg: CommandMessage;
   readonly continuous: boolean;
   state: CommandState;
+  /** Clock time it was enqueued. */
+  readonly issuedAt: number;
+  /** Clock time it was last sent. */
+  sentAt: number;
+  /** Not sent again before this clock time (after a not-applied answer). */
+  holdUntil: number;
 }
 
 export type EnqueueResult =
@@ -41,7 +49,12 @@ export class Outbox {
     return this.entries.some((e) => e.msg.type === type && e.msg.path === path);
   }
 
-  enqueue(msg: CommandMessage, continuous: boolean): EnqueueResult {
+  /** Commands sent and not answered yet. */
+  get inFlight(): number {
+    return this.entries.filter((e) => e.state === 'Sent').length;
+  }
+
+  enqueue(msg: CommandMessage, continuous: boolean, now = 0): EnqueueResult {
     let superseded: OutboxEntry | null = null;
     if (msg.type === 'set' && continuous) {
       const last = this.lastFor(msg.path);
@@ -56,18 +69,25 @@ export class Outbox {
       }
     }
     if (this.entries.length >= this.capacity) return { accepted: false };
-    this.entries.push({ msg, continuous, state: 'Queued' });
+    this.entries.push({ msg, continuous, state: 'Queued', issuedAt: now, sentAt: -Infinity, holdUntil: -Infinity });
     this.count(msg, 1);
     return { accepted: true, superseded };
   }
 
-  /** Queued commands in order; each is marked Sent. */
-  transmit(): CommandMessage[] {
+  /**
+   * Queued commands in order, each marked Sent, until `limit` are in
+   * flight; one held after a not-applied answer waits for its time.
+   */
+  transmit(now = 0, limit = Infinity): CommandMessage[] {
     const out: CommandMessage[] = [];
+    let n = this.inFlight;
     for (const e of this.entries) {
-      if (e.state !== 'Queued') continue;
+      if (n >= limit) break;
+      if (e.state !== 'Queued' || e.holdUntil > now) continue;
       e.state = step(COMMAND, e.state, 'transmit');
+      e.sentAt = now;
       out.push(e.msg);
+      n++;
     }
     return out;
   }
@@ -82,6 +102,37 @@ export class Outbox {
     this.entries.splice(i, 1);
     this.count(e.msg, -1);
     return e;
+  }
+
+  /** Not applied (error 503): queued again, sent no earlier than `until`. */
+  notApplied(id: CommandId, until: number): void {
+    const e = this.entries.find((x) => x.msg.id === id);
+    if (!e || e.state !== 'Sent') return;
+    e.state = step(COMMAND, e.state, 'notApplied');
+    e.holdUntil = until;
+  }
+
+  /** Every command sent at or before `before` and still unanswered is queued again. Returns how many. */
+  overdue(before: number): number {
+    let n = 0;
+    for (const e of this.entries) {
+      if (e.state !== 'Sent' || e.sentAt > before) continue;
+      e.state = step(COMMAND, e.state, 'timeout');
+      n++;
+    }
+    return n;
+  }
+
+  /** Drops every command enqueued at or before `before`; returns them in order. */
+  expire(before: number): OutboxEntry[] {
+    const out = this.entries.filter((e) => e.issuedAt <= before);
+    if (out.length === 0) return out;
+    this.entries = this.entries.filter((e) => e.issuedAt > before);
+    for (const e of out) {
+      e.state = step(COMMAND, e.state, 'expire');
+      this.count(e.msg, -1);
+    }
+    return out;
   }
 
   /** The connection failed: every sent command is queued again. Returns how many. */

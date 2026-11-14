@@ -90,6 +90,34 @@ describe('outbox', () => {
     expect(ids(o.transmit())).toEqual(['a', 'c']);
   });
 
+  it('keeps at most `limit` in flight, holds a not-applied command until its time and requeues overdue ones', () => {
+    const o = new Outbox();
+    o.enqueue(set('a', '/a', 1), false, 0);
+    o.enqueue(set('b', '/b', 1), false, 0);
+    o.enqueue(set('c', '/c', 1), false, 0);
+    expect(ids(o.transmit(10, 2))).toEqual(['a', 'b']);
+    expect(o.inFlight).toBe(2);
+    o.notApplied('a', 300);
+    expect(ids(o.transmit(20, 2))).toEqual(['c']);
+    expect(o.transmit(299, 2)).toEqual([]);
+    expect(o.overdue(9)).toBe(0);
+    expect(o.overdue(10)).toBe(1);
+    expect(ids(o.transmit(300, 3))).toEqual(['a', 'b']);
+  });
+
+  it('drops commands issued at or before the expiry, whatever their state', () => {
+    const o = new Outbox();
+    o.enqueue(set('a', '/f', 1), true, 0);
+    o.enqueue(touch('t', '/g'), false, 5);
+    o.transmit(5);
+    o.enqueue(set('b', '/h', 1), false, 6);
+    const dropped = o.expire(5);
+    expect(dropped.map((e) => [e.msg.id, e.state])).toEqual([['a', 'Expired'], ['t', 'Expired']]);
+    expect(o.hasSet('/f')).toBe(false);
+    expect(ids(o.transmit(7))).toEqual(['b']);
+    expect(o.states()).toEqual([{ id: 'b', state: 'Sent' }]);
+  });
+
   it('tracks unanswered sets and commands per control', () => {
     const o = new Outbox();
     o.enqueue(set('a', '/f', 1), true);

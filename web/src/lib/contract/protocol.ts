@@ -17,6 +17,14 @@ export const METER_CREDIT_CAP = 8;
 
 /** A client sends at most this many writes per second to one control. */
 export const MAX_WRITES_PER_SECOND = 50;
+/** Commands a client keeps sent and unanswered per connection; the server reads no further. */
+export const MAX_COMMANDS_IN_FLIGHT = 64;
+/**
+ * A client sends no command, first or again, later than this after
+ * issuing it (its failover bound), well within the 10 s the server
+ * remembers command ids and seqs.
+ */
+export const COMMAND_EXPIRY_MS = 3000;
 
 /** First byte of a binary meter frame, ASCII 'M'. */
 export const METER_FRAME_MAGIC = 0x4d;

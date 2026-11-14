@@ -52,6 +52,8 @@ export interface SyncStatus {
 
 export type WorkerNotice =
   | { kind: 'conflict'; path: string; owner: Owner | null }
+  /** Writes still unanswered at their expiry, dropped: the controls show the committed values. */
+  | { kind: 'expired'; paths: string[] }
   | { kind: 'error'; text: string };
 
 export interface Patch {

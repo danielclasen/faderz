@@ -6,7 +6,7 @@
 // so it runs in a worker and under a fake clock in tests.
 
 import { decodeMeterFrame, deriveMeterLayout, MeterFrameError, type MeterLayout } from '../contract/meterFrame';
-import { DEAD_MS, HEARTBEAT_MS, METER_CREDIT_CAP, SUSPECT_MS } from '../contract/protocol';
+import { COMMAND_EXPIRY_MS, DEAD_MS, HEARTBEAT_MS, MAX_COMMANDS_IN_FLIGHT, METER_CREDIT_CAP, SUSPECT_MS } from '../contract/protocol';
 import type {
   ClientMessage,
   CommandMessage,
@@ -81,6 +81,10 @@ export const STANDBY_RETRY_MS = 100;
 export const STANDBY_BACKOFF_MS = 2000;
 /** Delay before asking again after an answer older than the client's revision. */
 export const RESYNC_RETRY_MS = 250;
+/** A command sent this long ago without an answer is sent again with its id. */
+export const ANSWER_TIMEOUT_MS = 1000;
+/** A command answered not applied is sent again with its id after this. */
+export const NOT_APPLIED_RETRY_MS = 250;
 /** Credits are topped up to the cap once this many or fewer are outstanding. */
 export const CREDIT_REFILL_AT = METER_CREDIT_CAP / 2;
 const NOTICE_LIMIT = 20;
@@ -164,6 +168,7 @@ export class SyncEngine {
     const beat = () => {
       const t = Math.max(0, Math.floor(this.clock.now()));
       for (const l of [this.primary, this.standby]) if (l?.opened) this.send(l, { type: 'ping', t });
+      this.sweep();
       this.clock.schedule(beat, HEARTBEAT_MS);
     };
     this.clock.schedule(beat, HEARTBEAT_MS);
@@ -209,7 +214,7 @@ export class SyncEngine {
   }
 
   private issue(msg: CommandMessage): void {
-    const r = this.outbox.enqueue(msg, msg.type === 'set' && isContinuousPath(msg.path));
+    const r = this.outbox.enqueue(msg, msg.type === 'set' && isContinuousPath(msg.path), this.clock.now());
     if (!r.accepted) {
       this.notice({ kind: 'error', text: `Too many unanswered commands; ${msg.type} of ${msg.path} was not sent` });
       this.settled(msg);
@@ -221,7 +226,7 @@ export class SyncEngine {
   private transmit(): void {
     const p = this.primary;
     if (!p?.opened || !TRANSMITTING.has(this.link)) return;
-    for (const m of this.outbox.transmit()) this.send(p, m);
+    for (const m of this.outbox.transmit(this.clock.now(), MAX_COMMANDS_IN_FLIGHT)) this.send(p, m);
   }
 
   private answer(id: string, event: 'ack' | 'reject' | 'stale'): void {
@@ -231,6 +236,28 @@ export class SyncEngine {
     if (m.type === 'touch' && event === 'reject') this.touchStep(m.path, 'refused');
     if (m.type === 'release' && !this.outbox.has('release', m.path)) this.touchStep(m.path, 'released');
     this.settled(m);
+    this.transmit();
+  }
+
+  /**
+   * Once per heartbeat: a command unanswered for ANSWER_TIMEOUT_MS is sent
+   * again with its id, and one unanswered COMMAND_EXPIRY_MS after it was
+   * issued is dropped, so no command pins its control for longer.
+   */
+  private sweep(): void {
+    const now = this.clock.now();
+    this.outbox.overdue(now - ANSWER_TIMEOUT_MS);
+    const expired = this.outbox.expire(now - COMMAND_EXPIRY_MS);
+    const paths = new Set<string>();
+    for (const { msg } of expired) {
+      if (msg.type === 'set') paths.add(msg.path);
+      if (msg.type === 'release' && !this.outbox.has('release', msg.path)) this.touchStep(msg.path, 'released');
+      this.settled(msg);
+    }
+    if (paths.size > 0) this.notice({ kind: 'expired', paths: [...paths] });
+    // Ownership the dropped touches and releases left unsettled is put right with new commands.
+    if (TRANSMITTING.has(this.link)) for (const { msg } of expired) if (msg.type !== 'set') this.reconcile(msg.path);
+    this.transmit();
   }
 
   /** A set left the outbox: once nothing is pending for its control, the committed value goes out. */
@@ -242,6 +269,17 @@ export class SyncEngine {
 
   private pending(path: string): boolean {
     return this.limiter.holds(path) || this.outbox.hasSet(path);
+  }
+
+  /**
+   * Ownership of a control as this session's touch wants it: released
+   * while it is not touching, touched again while it is.
+   */
+  private reconcile(path: string): void {
+    const touching = this.touches.get(path) === 'Touching';
+    const mine = this.mine(this.owners[path]);
+    if (mine && !touching && !this.outbox.has('release', path)) this.issueOwnership('release', path);
+    if (!mine && touching && !this.outbox.has('touch', path)) this.issueOwnership('touch', path);
   }
 
   private touchEvent(path: string, event: 'down' | 'up'): void {
@@ -570,16 +608,7 @@ export class SyncEngine {
     this.linkEvent('synced');
     const replica = this.primary?.replica?.id ?? null;
     if (this.failoverInfo && this.failoverInfo.to === null) this.failoverInfo = { ...this.failoverInfo, to: replica };
-    for (const [path, owner] of Object.entries(this.owners)) {
-      if (this.mine(owner) && this.touches.get(path) !== 'Touching' && !this.outbox.has('release', path)) {
-        this.issueOwnership('release', path);
-      }
-    }
-    for (const [path, s] of this.touches) {
-      if (s === 'Touching' && !this.mine(this.owners[path]) && !this.outbox.has('touch', path)) {
-        this.issueOwnership('touch', path);
-      }
-    }
+    for (const path of new Set([...Object.keys(this.owners), ...this.touches.keys()])) this.reconcile(path);
     this.transmit();
     if (this.standby && this.standby.replica && !this.standbySuitable(this.standby)) this.dropStandby(this.standby);
     this.startStandby();
@@ -681,6 +710,11 @@ export class SyncEngine {
   }
 
   private error(msg: ErrorMessage): void {
+    if (msg.code === 503 && msg.commandId) {
+      // Not applied: nothing changed, and the command goes out again with its id.
+      this.outbox.notApplied(msg.commandId, this.clock.now() + NOT_APPLIED_RETRY_MS);
+      return;
+    }
     if (msg.commandId) this.answer(msg.commandId, 'reject');
     if (msg.code === 409 && msg.path) this.notice({ kind: 'conflict', path: msg.path, owner: msg.owner ?? null });
     else this.notice({ kind: 'error', text: msg.message });

@@ -336,6 +336,7 @@ describe('WebSocket messages', () => {
     ['ping', { type: 'ping', replica, t: 0 }],
     ['pong', { type: 'pong', replica, t: 5 }],
     ['409 with owner', { type: 'error', replica, code: 409, message: 'owned', commandId: cmd, path: '/channels/ch1/fader', current: -3, owner }],
+    ['503 not applied', { type: 'error', replica, code: 503, message: 'not applied', commandId: cmd, path: '/channels/ch1/fader' }],
     ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 } }],
     ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
   ])('server accepts %s', (_, msg) => {
@@ -363,6 +364,7 @@ describe('WebSocket messages', () => {
     ['replica without commitable', { type: 'replicas', replica, replicas: [{ ...replica, healthy: true }] }],
     ['ping with state', { type: 'ping', replica, t: 1, revision: 3 }],
     ['ping without replica', { type: 'ping', t: 1 }],
+    ['error with a code outside the contract', { type: 'error', replica, code: 500, message: 'oops', commandId: cmd }],
   ])('server refuses %s', (_, msg) => {
     expect(server(msg)).not.toBeNull();
   });
