@@ -28,6 +28,21 @@ export class FakeClock implements Clock {
     };
   }
 
+  /**
+   * The process stalls for `ms`: time moves on and no timer runs. Then the
+   * timers that came due fire late, in time order, but not the ones they
+   * schedule; messages queued during the stall come after them.
+   */
+  stall(ms: number): void {
+    this.t += ms;
+    const due = this.timers.filter((x) => !x.cancelled && x.at <= this.t).sort((a, b) => a.at - b.at || a.order - b.order);
+    for (const x of due) {
+      if (x.cancelled) continue;
+      this.timers.splice(this.timers.indexOf(x), 1);
+      x.fn();
+    }
+  }
+
   /** Advance time, running due timers in time order. */
   advance(ms: number): void {
     const end = this.t + ms;

@@ -207,6 +207,33 @@ describe('sync engine: heartbeat and failure detection', () => {
     expect(primary.closed).toBe(false);
   });
 
+  it('counts no stall of its own as silence of the peers: it yields to the messages queued meanwhile once', () => {
+    const { clock, engine, primary, standby } = live();
+    beats(clock, 500, [primary, R1], [standby, R2]);
+    clock.stall(2000);
+    // The pings the replicas sent during the stall run after the late timers.
+    primary.deliver({ type: 'ping', replica: R1, t: 1 });
+    standby.deliver({ type: 'ping', replica: R2, t: 1 });
+    clock.advance(0);
+    expect(primary.closed).toBe(false);
+    expect(standby.closed).toBe(false);
+    expect(standby.ofType('promote')).toHaveLength(0);
+    beats(clock, 2000, [primary, R1], [standby, R2]);
+    expect(engine.link).toBe('Live');
+    expect(engine.standbyState).toBe('Ready');
+  });
+
+  it('still fails over after a stall when the primary sent nothing meanwhile', () => {
+    const { clock, engine, primary, standby } = live();
+    beats(clock, 500, [primary, R1], [standby, R2]);
+    clock.stall(2000);
+    standby.deliver({ type: 'ping', replica: R2, t: 1 });
+    clock.advance(0);
+    expect(primary.closed).toBe(true);
+    expect(standby.ofType('promote')).toHaveLength(1);
+    expect(engine.status().failover?.reason).toBe('dead');
+  });
+
   it('fails over after three missed beats', () => {
     const { clock, engine, primary, standby, tick } = live();
     beats(clock, DEAD_MS - 50, [standby, R2]);

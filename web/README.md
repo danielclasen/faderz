@@ -82,7 +82,9 @@ The WebSockets run in a Web Worker (`src/lib/sync/worker.ts`) around
 `SyncEngine` (`src/lib/sync/engine.ts`): a primary connection and a
 standby on another replica, heartbeats both ways every 250 ms, failover
 to the standby when the primary closes, misses three beats or reports
-that it cannot commit, the command outbox, meter credits and decoding,
+that it cannot commit (a stall of the worker itself is not counted as
+missed beats: a watch timer that fires late first runs the messages
+that arrived meanwhile), the command outbox, meter credits and decoding,
 and the replicated state. The page only renders: it sends a tick per
 animation frame while visible and applies the one patch the worker
 answers with, leaf by leaf, measured as the `faderz:patch` performance

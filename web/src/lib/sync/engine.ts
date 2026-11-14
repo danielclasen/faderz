@@ -355,11 +355,20 @@ export class SyncEngine {
     return this.state && this.epoch !== null ? { lastRevision: this.revision, epoch: this.epoch } : {};
   }
 
-  /** Re-arms the traffic watch of a link: suspect after SUSPECT_MS, dead after DEAD_MS. */
-  private watch(link: Link): void {
+  /**
+   * Re-arms the traffic watch of a link: suspect after SUSPECT_MS, dead
+   * after DEAD_MS. A watch that fires more than SUSPECT_MS late shows that
+   * the worker itself stalled (garbage collection, a busy CPU), and the
+   * messages received meanwhile may still wait behind it: it yields to
+   * them once before it counts the silence.
+   */
+  private watch(link: Link, yielded = false): void {
     link.cancelWatch?.();
-    const due = link.lastRx + (link.suspect ? DEAD_MS : SUSPECT_MS) - this.clock.now();
+    const now = this.clock.now();
+    const due = link.lastRx + (link.suspect ? DEAD_MS : SUSPECT_MS) - now;
+    const at = now + Math.max(0, due);
     link.cancelWatch = this.clock.schedule(() => {
+      if (!yielded && this.clock.now() - at > SUSPECT_MS) return this.watch(link, true);
       const silence = this.clock.now() - link.lastRx;
       if (silence >= DEAD_MS) return this.closed(link, 'dead');
       if (silence >= SUSPECT_MS && !link.suspect) {
