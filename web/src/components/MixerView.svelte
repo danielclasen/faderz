@@ -3,9 +3,7 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import { MeterLayer, provideMeterLayer } from '../lib/meters/layer';
   import ChannelStrip from './ChannelStrip.svelte';
-  import BusMaster from './BusMaster.svelte';
-  import VcaMaster from './VcaMaster.svelte';
-  import MonitorSection from './MonitorSection.svelte';
+  import Masters from './Masters.svelte';
   import { fit } from '../lib/format';
   import { tip } from '../lib/tip';
 
@@ -38,9 +36,10 @@
   let scroller: HTMLDivElement | undefined = $state();
   let scrollLeft = $state(0);
   const visibleBank = $derived(Math.floor((scrollLeft + STRIP_W / 2) / (STRIP_W * BANK)));
-  const kindTag: Record<string, string> = { program: 'PGM', me: 'M&E', cleanFeed: 'CF' };
   /** Channels whose direct out latched a true-peak over. */
   const channelOvers = $derived(shape.channels.filter((c) => mixer.meters.overs.has(`channels/${c.id}`)));
+  /** Narrow screens only: the masters lie over the strips while this is set. */
+  let mastersOpen = $state(false);
 
   function goto(start: number): void {
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -68,6 +67,13 @@
         use:tip={channelOvers.length > 0 ? `Direct out above ${mixer.state!.metering.zones.truePeakMax} dBTP: ${channelOvers.map((c) => c.name).join(', ')}. Press to clear.` : ''}
         data-testid="channel-overs"><span class="fixed">TP{fit(String(channelOvers.length), 3)}</span></button
       >
+      <button
+        class="key masters-key"
+        aria-pressed={mastersOpen}
+        aria-controls="mixer-masters"
+        onclick={() => (mastersOpen = !mastersOpen)}
+        title="Show the masters over the strips">MASTERS</button
+      >
       <span class="meters-from" title="Replica that measured the meters shown" data-testid="meter-replica">
         meters <b class="num">{mixer.meterReplica ?? '-'}</b>
       </span>
@@ -90,15 +96,7 @@
       </div>
     </div>
   </div>
-  <div class="masters" aria-label="Masters">
-    {#each shape.vcas as vca (vca.id)}
-      <VcaMaster {vca} />
-    {/each}
-    {#each shape.buses as bus (bus.id)}
-      <BusMaster group="buses" element={bus} tag={kindTag[bus.kind]} selected={selected === bus.id} {onselect} />
-    {/each}
-    <MonitorSection />
-  </div>
+  <Masters id="mixer-masters" {selected} {onselect} open={mastersOpen} />
   <canvas class="meter-layer" bind:this={canvas} aria-hidden="true"></canvas>
 </div>
 
@@ -114,6 +112,7 @@
   /* The meter layer stacks above the strips and below anything outside
      the view, such as the processing panel. */
   .mixer {
+    --bankbar-h: 31px;
     position: relative;
     isolation: isolate;
     display: grid;
@@ -127,12 +126,15 @@
     min-width: 0;
     min-height: 0;
   }
+  /* Fixed height: the masters overlay starts right below it. */
   .bankbar {
     display: flex;
     align-items: center;
     gap: 8px;
     white-space: nowrap;
-    padding: 4px 8px;
+    height: var(--bankbar-h);
+    box-sizing: border-box;
+    padding: 0 8px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
   }
@@ -166,14 +168,17 @@
     min-width: 4ch;
     color: var(--text-dim);
   }
+  /* The scroller shows whole strips only: its width is a multiple of a
+     strip, and every scroll ends on a strip edge. */
   .scroller {
     flex: 1;
+    width: round(down, 100%, 86px);
     min-height: 0;
     overflow-x: auto;
     overflow-y: hidden;
     display: flex;
     flex-direction: column;
-    scroll-snap-type: x proximity;
+    scroll-snap-type: x mandatory;
   }
   .surfaces {
     position: relative;
@@ -200,26 +205,22 @@
     min-height: 0;
     display: flex;
   }
-  .strips :global(.strip:nth-child(8n + 1)) {
+  .strips :global(.strip) {
     scroll-snap-align: start;
   }
-  .masters {
-    display: flex;
-    min-height: 0;
-    overflow-x: auto;
-    border-left: 2px solid var(--line-strong);
+  .masters-key {
+    display: none;
   }
-  /* Tablet: strips above masters at fixed heights, the view scrolls. */
-  @media (max-width: 1100px) {
+  @media (max-width: 1399px) {
     .mixer {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: 560px 470px;
-      overflow-y: auto;
-      scrollbar-gutter: stable;
     }
-    .masters {
-      border-left: none;
-      border-top: 2px solid var(--line-strong);
+    .masters-key {
+      display: block;
+      margin-left: auto;
+    }
+    .meters-from {
+      margin-left: 0;
     }
   }
   /* Phones: the bank keys name themselves. */

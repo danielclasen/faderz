@@ -1,0 +1,51 @@
+// Screens narrower than the strips and masters side by side (tablets,
+// phones in landscape): the strip area shows whole strips, at least a
+// bank of 8 where the width allows, and the masters lie over the strips
+// only while MASTERS is lit.
+
+import { expect, test } from '@playwright/test';
+import { live, resetMock } from './support';
+
+const STRIP_W = 86;
+
+test.beforeEach(async ({ request }) => resetMock(request));
+
+test('shows whole strips, a whole bank, and the masters over the strips on request', async ({ page }) => {
+  await live(page);
+  const width = page.viewportSize()!.width;
+  const scroller = page.locator('.scroller');
+  const box = (await scroller.boundingBox())!;
+  expect(box.width % STRIP_W, `scroller ${box.width} px`).toBe(0);
+  if (width >= 8 * STRIP_W + 20) expect(box.width).toBeGreaterThanOrEqual(8 * STRIP_W);
+
+  // Every strip in view is whole, also after a scroll that stops mid-strip.
+  const cut = () =>
+    page.evaluate(() => {
+      const s = document.querySelector('.scroller')!.getBoundingClientRect();
+      return [...document.querySelectorAll<HTMLElement>('.strip')]
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.right > s.left + 1 && r.left < s.right - 1)
+        .filter((r) => r.left < s.left - 1 || r.right > s.right + 1).length;
+    });
+  expect(await cut()).toBe(0);
+  await scroller.evaluate((el) => el.scrollBy({ left: 130 }));
+  await page.waitForTimeout(600);
+  expect(await cut()).toBe(0);
+  await page.getByRole('button', { name: '1-8' }).click();
+  await page.waitForTimeout(600);
+
+  // The masters are an overlay: nothing under them moves when they open.
+  const pgm = page.locator('[data-master="pgm51"]');
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  await expect(pgm).toBeHidden();
+  const strip = page.locator('[data-channel="ch1"]');
+  const before = await strip.boundingBox();
+  await masters.click();
+  await expect(masters).toHaveAttribute('aria-pressed', 'true');
+  await expect(pgm).toBeVisible();
+  await expect(page.getByRole('slider', { name: 'PGM 5.1 fader' })).toBeVisible();
+  expect(await strip.boundingBox()).toEqual(before);
+  // The bank bar stays clear of the overlay, so MASTERS closes it again.
+  await masters.click();
+  await expect(pgm).toBeHidden();
+});

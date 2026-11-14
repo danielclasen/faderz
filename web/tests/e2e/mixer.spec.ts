@@ -244,6 +244,7 @@ test('switches to the light theme and works at tablet width', async ({ page }) =
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width).toBeLessThanOrEqual(1024);
   await expect(page.getByRole('button', { name: 'Pres 1 mute' })).toBeVisible();
+  await page.getByRole('button', { name: 'MASTERS' }).click();
   await expect(page.locator('[data-master="pgm51"]')).toBeVisible();
 });
 

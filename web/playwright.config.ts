@@ -49,7 +49,7 @@ export default defineConfig({
     {
       // perf.spec.ts runs here only, against the PERF_PORT server.
       name: 'desktop',
-      testIgnore: /(mobile|https)\.spec\.ts/,
+      testIgnore: /(mobile|https|narrow)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 1000 } },
     },
     // Phone descriptors on Chromium (the only browser installed), opened
@@ -61,6 +61,10 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], baseURL: `https://127.0.0.1:${TLS_PORT}`, ignoreHTTPSErrors: true },
     },
     { name: 'iphone-14', testMatch: /(mobile|layout)\.spec\.ts/, use: { ...devices['iPhone 14'], browserName: 'chromium', baseURL: LAN_URL } },
+
+    // Below 1400 px the masters lie over the strips.
+    { name: 'tablet', testMatch: /(layout|narrow)\.spec\.ts/, use: { ...devices['iPad Pro 11 landscape'], browserName: 'chromium' } },
+
   ],
   webServer: [
     {

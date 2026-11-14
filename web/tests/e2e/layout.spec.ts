@@ -85,6 +85,7 @@ test('mounts only once the web fonts are in, however late they arrive, so no tex
 });
 
 test('nothing moves on load, live updates, failover and interaction', async ({ page, request }, info) => {
+  test.setTimeout(60_000);
   const phone = (page.viewportSize()?.width ?? 1600) < 600;
   await live(page);
   await page.evaluate(() => document.fonts.ready);
@@ -157,6 +158,14 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     await expectNoShift(page, 'bank change');
   }
 
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  if (await masters.isVisible()) {
+    await masters.click();
+    await page.waitForTimeout(300);
+    await masters.click();
+    await expectNoShift(page, 'masters over the strips');
+  }
+
   await page.locator('[data-channel="ch1"] .head').click();
   await page.waitForTimeout(300);
   await expectNoShift(page, 'open processing');
@@ -206,6 +215,9 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
 
 test('every fader fits its box, VCA masters included', async ({ page }) => {
   await live(page);
+  // Below 1400 px the masters lie over the strips while MASTERS is lit.
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  if (await masters.isVisible()) await masters.click();
   const over = await page.locator('.fader').evaluateAll((list) =>
     list.flatMap((f) => {
       const box = f.parentElement!.getBoundingClientRect();
