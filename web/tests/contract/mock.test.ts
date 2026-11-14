@@ -1049,7 +1049,7 @@ describe('REST', () => {
       changes: [{ path: '/channels/ch1/directOut/tap', value: 'input' }, { path: '/channels/ch1/meterTap', value: 'postFader' }],
     });
     await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 });
-    expect(cluster.state.channels['ch1']!.directOut.tap).toBe('postFader');
+    expect(cluster.state.channels['ch1']!.directOut.tap).toBe('preFader');
     expect(cluster.state.channels['ch1']!.meterTap).toBe('postFader');
     await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch1/meterTap', value: 'preFader' }] });
     await rest('DELETE', `/scenes/${id}`);
