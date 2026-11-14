@@ -66,8 +66,11 @@
     selected = id;
     section = to;
   }
+  /** Closes the processing panel and gives focus back to the head of what it showed. */
   function close(): void {
+    const id = selected;
     selected = null;
+    if (id) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-channel="${id}"] .head, [data-master="${id}"] .head`)?.focus({ preventScroll: true }));
   }
 </script>
 

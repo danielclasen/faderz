@@ -2,6 +2,7 @@
   import type { BusState, ChannelState, EqBandType, RecallGroup, Solo, StereoImage, Tap } from '../lib/contract/types';
   import { TAPS, TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
   import { LAYOUT_LABELS, RECALL_GROUPS, SCRIBBLE_COLORS } from '../lib/contract/types';
+  import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { pointer } from '../lib/state/pointer';
   import { recallSafePath } from '../lib/state/paths';
@@ -21,6 +22,9 @@
   }
   let { id, onclose, onselect, section = null }: Props = $props();
   let drawer: HTMLElement | undefined = $state();
+  let heading: HTMLElement | undefined = $state();
+  // Focus moves into the panel when it opens, so the keyboard continues there.
+  onMount(() => heading?.focus({ preventScroll: true }));
   $effect(() => {
     if (!section || !drawer) return;
     drawer.querySelector<HTMLElement>(`[data-section="${section}"]`)?.scrollIntoView({ block: 'start' });
@@ -78,7 +82,7 @@
 
 <section class="detail" bind:this={drawer} aria-label={`${element.name} processing`}>
   <header>
-    <h2>{element.name}</h2>
+    <h2 tabindex="-1" bind:this={heading}>{element.name}</h2>
     <span class="meta">{element.layout} - {group === 'channels' ? 'input channel' : group === 'buses' ? 'bus' : 'aux'}</span>
     <span class="step">
       <button class="key" disabled={!prev} onclick={() => prev && onselect(prev.id)} aria-label="Previous channel" title={prev ? `Previous: ${prev.name}` : undefined}>&lt; PREV</button>

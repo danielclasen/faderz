@@ -1267,15 +1267,21 @@ test('steps banks with [ and ], jumps to a channel by name or number, and spills
   await expect(page.locator('.strips .strip')).toHaveCount((await serverState(request)).shape.channels.length);
 });
 
-test('opens processing over the strips with the masters and monitor reachable', async ({ page }) => {
+test('opens processing over the strips with the masters and monitor reachable, and moves focus in and back', async ({ page }) => {
   await live(page);
-  await page.locator('[data-channel="ch1"] .head').click();
+  const head = page.locator('[data-channel="ch1"] .head');
+  await head.focus();
+  await page.keyboard.press('Enter');
   const panel = page.getByRole('region', { name: 'Pres 1 processing' });
   await expect(panel).toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Pres 1' })).toBeFocused();
   // Nothing of the masters or the monitor lies under the panel.
   for (const target of [page.getByRole('slider', { name: 'PGM 5.1 fader' }), page.getByRole('button', { name: 'CUT', exact: true })]) {
     const box = (await target.boundingBox())!;
     const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.detail') !== null, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
     expect(hit).toBe(false);
   }
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(head).toBeFocused();
 });
