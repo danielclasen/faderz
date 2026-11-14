@@ -297,3 +297,24 @@ test('switches a presenter channel to its B input and marks the strip', async ({
   await expect(badge).toBeVisible();
   await patch(request, '/channels/ch1/input', 'a');
 });
+
+test('mutes a programme output only after a hold, and a short press does nothing', async ({ page, request }) => {
+  await live(page);
+  const key = page.getByRole('button', { name: 'PGM 2.0 mute, hold to mute' });
+  await key.hover();
+  await page.mouse.down();
+  await page.waitForTimeout(150);
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  await settled(page);
+  expect((await serverState(request)).state.buses['pgm20']!.mute).toBe(false);
+  await page.mouse.down();
+  await page.waitForTimeout(700);
+  await page.mouse.up();
+  await settled(page);
+  expect((await serverState(request)).state.buses['pgm20']!.mute).toBe(true);
+  await expect(key).toHaveAttribute('aria-pressed', 'true');
+  await key.click();
+  await settled(page);
+  expect((await serverState(request)).state.buses['pgm20']!.mute).toBe(false);
+});

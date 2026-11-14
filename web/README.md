@@ -129,7 +129,9 @@ Faders are sliders: the arrows step 0.5 dB from -20 dB up, 1 dB down to
 0 dB and Alt+End closes the fader; no single key jumps a fader, and a
 double-click does nothing to it. Pan controls step with the arrows,
 Home and End go to the ends, `0` and a double-click centre. Escape
-closes the channel processing panel.
+closes the channel processing panel. The mute of an output (bus, aux,
+mix-minus) needs a 0.5 s hold, by pointer, Space or Enter; one press
+unmutes. Channel mutes take one press.
 
 Typed values (delay, the Setup view) are written on Enter or when the
 field is left, and Escape restores the current value. A delay is typed

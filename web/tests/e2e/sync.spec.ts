@@ -409,5 +409,5 @@ test('a client ahead of a rewound cluster shows it at once and takes the cluster
   await banner.getByRole('button', { name: 'TAKE CLUSTER STATE' }).click();
   await expect(banner).toBeHidden();
   await expect.poll(() => debug(page, 'connection')).toBe('Live');
-  expect(await debug(page, 'revision')).toBe((await serverState(request)).revision);
+  await expect.poll(async () => (await debug(page, 'revision')) === (await serverState(request)).revision).toBe(true);
 });

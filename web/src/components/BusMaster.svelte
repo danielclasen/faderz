@@ -11,6 +11,7 @@
   import Meter from './Meter.svelte';
   import Loudness from './Loudness.svelte';
   import TalkKey from './TalkKey.svelte';
+  import HoldMute from './HoldMute.svelte';
 
   interface Props {
     group: Exclude<MeterGroup, 'channels'>;
@@ -40,7 +41,7 @@
   {:else if talkRow}
     <div class="talk-space" aria-hidden="true"></div>
   {/if}
-  <button class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(path('mute'), !mute)} aria-label={`${element.name} mute`}>MUTE</button>
+  <HoldMute path={path('mute')} name={element.name} />
   <div class="fm">
     <Fader path={path('fader')} label={`${element.name} fader`} />
     <div class="meter">
@@ -111,9 +112,6 @@
     background: var(--accent);
     border-radius: 2px;
     padding: 0 3px;
-  }
-  .mute {
-    height: 26px;
   }
   .talk-space {
     height: 53px;
