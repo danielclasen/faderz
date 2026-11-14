@@ -4,7 +4,7 @@
 // only while MASTERS is lit.
 
 import { expect, test } from '@playwright/test';
-import { live, resetMock } from './support';
+import { live, patch, resetMock, serverState } from './support';
 
 const STRIP_W = 86;
 
@@ -59,4 +59,28 @@ test('gives touch screens targets a finger can hit on the controls used most', a
   expect(await h(page.getByRole('button', { name: 'Pres 1 mute' }))).toBeGreaterThanOrEqual(32);
   expect(await h(page.getByRole('button', { name: '1-8' }))).toBeGreaterThanOrEqual(32);
   expect(await h(page.getByRole('slider', { name: 'Pres 1 pan' }))).toBeGreaterThanOrEqual(28);
+});
+
+test('moves a strip pan on touch only after the finger rests on it', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch1/pan/lr', 0);
+  const pan = page.getByRole('slider', { name: 'Pres 1 pan' });
+  await expect(pan).toHaveAttribute('aria-valuenow', '0');
+  const box = (await pan.boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x: number) =>
+    cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y: box.y + box.height / 2 }] });
+  const x0 = box.x + box.width / 4;
+  // A finger brushing across on its way to PFL: nothing moves.
+  await touch('touchStart', x0);
+  for (let i = 1; i <= 4; i++) await touch('touchMove', x0 + i * 8);
+  await touch('touchEnd', 0);
+  await page.waitForTimeout(400);
+  expect((await serverState(request)).state.channels['ch1']!.pan.lr).toBe(0);
+  // Resting first, then moving: the pan follows.
+  await touch('touchStart', x0);
+  await page.waitForTimeout(450);
+  for (let i = 1; i <= 4; i++) await touch('touchMove', x0 + i * 8);
+  await touch('touchEnd', 0);
+  await expect.poll(async () => (await serverState(request)).state.channels['ch1']!.pan.lr).toBeGreaterThan(0);
 });

@@ -13,7 +13,11 @@
   const mixer = getMixer();
   const value = $derived(mixer.value<number>(path) ?? 0);
 
-  let drag: { x: number; v: number; id: number; w: number } | null = null;
+  /** A finger must rest this long before a pan moves: brushing it on the way to PFL or MUTE does nothing. */
+  const TOUCH_HOLD_MS = 300;
+  let drag: { x: number; v: number; id: number; w: number; armed: boolean } | null = null;
+  let arming = $state(false);
+  let armTimer: ReturnType<typeof setTimeout> | null = null;
   let keyRelease: ReturnType<typeof setTimeout> | null = null;
 
   function down(e: PointerEvent): void {
@@ -23,20 +27,45 @@
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     el.focus({ preventScroll: true });
-    drag = { x: e.clientX, v: value, id: e.pointerId, w: el.clientWidth };
-    mixer.touch(path);
+    const touch = e.pointerType === 'touch';
+    drag = { x: e.clientX, v: value, id: e.pointerId, w: el.clientWidth, armed: !touch };
+    if (touch) {
+      arming = true;
+      armTimer = setTimeout(() => {
+        armTimer = null;
+        arming = false;
+        if (!drag) return;
+        // Travel counts from where the finger rests once armed.
+        drag = { ...drag, armed: true };
+        mixer.touch(path);
+      }, TOUCH_HOLD_MS);
+    } else {
+      mixer.touch(path);
+    }
   }
   function move(e: PointerEvent): void {
     if (!drag || e.pointerId !== drag.id) return;
+    if (!drag.armed) {
+      // Moving before the hold ends is a swipe past the pan: give up.
+      if (Math.abs(e.clientX - drag.x) > 6) disarm();
+      return;
+    }
     const scale = e.shiftKey || mixer.fine ? 0.1 : 1;
     const v = Math.max(-1, Math.min(1, drag.v + ((e.clientX - drag.x) / drag.w) * 2 * scale));
     const r = Math.round(v * 100) / 100;
     if (r !== value) mixer.set(path, r);
   }
+  function disarm(): void {
+    if (armTimer) clearTimeout(armTimer);
+    armTimer = null;
+    arming = false;
+    drag = null;
+  }
   function up(e: PointerEvent): void {
     if (!drag || e.pointerId !== drag.id) return;
-    drag = null;
-    mixer.release(path);
+    const armed = drag.armed;
+    disarm();
+    if (armed) mixer.release(path);
   }
   function key(e: KeyboardEvent): void {
     const step = e.shiftKey || mixer.fine ? 0.01 : 0.05;
@@ -78,7 +107,8 @@
   aria-valuemax={1}
   aria-valuenow={value}
   aria-valuetext={formatPan(value, left, right)}
-  title="Drag; Shift for fine; arrows step, Alt+0 centres, Alt+Home/End for full left/right"
+  class:arming
+  title="Drag; on touch, rest the finger a moment first; Shift for fine; arrows step, Alt+0 centres, Alt+Home/End for full left/right"
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}
@@ -113,6 +143,9 @@
     .pan {
       height: 28px;
     }
+  }
+  .arming .bar {
+    border-color: var(--text-dim);
   }
   .centre {
     position: absolute;
