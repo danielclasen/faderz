@@ -154,6 +154,22 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     await showView(page, name);
     await page.waitForTimeout(400);
     await expectNoShift(page, `view ${name}`);
+    if (name === 'AFV') {
+      // Tally cuts while the AFV table is in view.
+      for (const sources of [
+        { CAM1: 'off', CAM2: 'off', CAM3: 'program', CAM4: 'preview' },
+        { CAM1: 'off', CAM2: 'off', CAM3: 'off', CAM4: 'off' },
+        { CAM1: 'program', CAM2: 'preview', CAM3: 'off', CAM4: 'off' },
+      ]) {
+        await request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources } });
+      }
+      await patch(request, '/afv/ch13/enabled', false);
+      await patch(request, '/afv/ch13/source', null);
+      await patch(request, '/afv/ch13/source', 'CAM1');
+      await patch(request, '/afv/ch13/enabled', true);
+      await page.waitForTimeout(600);
+      await expectNoShift(page, 'tally on the AFV view');
+    }
   }
   info.annotations.push({ type: 'viewport', description: phone ? 'phone' : 'desktop' });
 });

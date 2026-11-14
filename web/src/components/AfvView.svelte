@@ -3,6 +3,7 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import { afvPath } from '../lib/state/paths';
   import NumberEntry from './NumberEntry.svelte';
+  import { fit } from '../lib/format';
 
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
@@ -26,7 +27,12 @@
   <section class="bindings">
     <h2 class="panel-title">Audio follows video</h2>
     <div class="wrap">
+      <!-- Fixed columns: a tally or stage change never resizes one. -->
       <table aria-label="AFV bindings">
+        <colgroup>
+          <col style:width="40px" /><col style:width="150px" /><col style:width="66px" /><col style:width="112px" /><col style:width="62px" />
+          <col style:width="72px" /><col style:width="88px" /><col style:width="88px" /><col style:width="88px" /><col style:width="88px" />
+        </colgroup>
         <thead><tr><th>#</th><th>Channel</th><th>AFV</th><th>Source</th><th>Tally</th><th>Stage</th><th>Rise ms</th><th>Hold ms</th><th>Fall ms</th><th>Off dB</th></tr></thead>
         <tbody>
           {#each shape.channels as ch, i (ch.id)}
@@ -36,10 +42,10 @@
             {@const t = source ? tally[source] : undefined}
             <tr>
               <td class="num idx">{i + 1}</td>
-              <td>{ch.name}</td>
+              <td class="name">{ch.name}</td>
               <td>
-                <button class="key" aria-disabled={mixer.locked} aria-pressed={enabled} aria-label={`${ch.name} AFV`} onclick={() => mixer.set(afvPath(ch.id, 'enabled'), !enabled)}>
-                  {enabled ? 'ON' : 'OFF'}
+                <button class="key onoff" aria-disabled={mixer.locked} aria-pressed={enabled} aria-label={`${ch.name} AFV`} onclick={() => mixer.set(afvPath(ch.id, 'enabled'), !enabled)}>
+                  <span class="fixed">{fit(enabled ? 'ON' : 'OFF', 3)}</span>
                 </button>
               </td>
               <td>
@@ -57,8 +63,8 @@
                   {#if source && !sources.includes(source)}<option value={source}>{source}</option>{/if}
                 </select>
               </td>
-              <td><span class="pill {t ?? 'none'}">{t ? label[t] : '-'}</span></td>
-              <td><span class="stage" class:open={b.open}>{b.open ? 'open' : 'closed'}</span></td>
+              <td><span class="pill fixed {t ?? 'none'}">{fit(t ? label[t] : '-', 3)}</span></td>
+              <td><span class="stage fixed" class:open={b.open}>{fit(b.open ? 'open' : 'closed', 6)}</span></td>
               <td><NumberEntry path={afvPath(ch.id, 'riseMs')} label={`${ch.name} AFV rise time`} min={0} max={10000} step={1} unit="ms" compact /></td>
               <td><NumberEntry path={afvPath(ch.id, 'holdMs')} label={`${ch.name} AFV hold time`} min={0} max={10000} step={1} unit="ms" compact /></td>
               <td><NumberEntry path={afvPath(ch.id, 'fallMs')} label={`${ch.name} AFV fall time`} min={0} max={10000} step={1} unit="ms" compact /></td>
@@ -132,8 +138,19 @@
   }
   table {
     border-collapse: collapse;
+    table-layout: fixed;
+    width: 854px;
     font-size: 12px;
-    min-width: 520px;
+  }
+  /* Wraps rather than cuts a long name. */
+  .name {
+    overflow-wrap: anywhere;
+  }
+  .onoff {
+    width: 44px;
+  }
+  select {
+    width: 100%;
   }
   th,
   td {
@@ -154,7 +171,16 @@
     color: var(--text-faint);
     font-size: 10px;
   }
+  /* A block of fixed size with strict containment: its text changes
+     with every tally cut and lays out nothing outside it. */
   .pill {
+    display: block;
+    width: 38px;
+    height: 15px;
+    line-height: 13px;
+    contain: strict;
+    text-align: center;
+    box-sizing: border-box;
     font-size: 10px;
     font-weight: 600;
     padding: 1px 6px;
