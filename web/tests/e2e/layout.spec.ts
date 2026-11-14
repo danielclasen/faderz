@@ -229,54 +229,6 @@ test('every fader fits its box, VCA masters included', async ({ page }) => {
   expect(over).toEqual([]);
 });
 
-test('status-bar counters reserve their width, so a new digit moves nothing', async ({ page }) => {
-  await live(page);
-  await expect(page.getByTestId('counter').first()).toBeAttached();
-  const widths = await page.getByTestId('counter').evaluateAll((list) =>
-    list.map((b) => {
-      const probe = document.createElement('b');
-      probe.className = b.className;
-      probe.style.whiteSpace = 'pre';
-      probe.textContent = '000000';
-      b.parentElement!.append(probe);
-      const want = probe.getBoundingClientRect().width;
-      probe.remove();
-      return Math.abs(b.getBoundingClientRect().width - want);
-    }),
-  );
-  expect(widths.length).toBeGreaterThan(0);
-  for (const d of widths) expect(d).toBeLessThan(0.5);
-});
-
-test('status-bar counters are never cut silently: all in a tooltip, a count when they do not fit', async ({ page }) => {
-  await live(page);
-  const box = page.getByTestId('counters');
-  await expect(page.getByTestId('counter').first()).toBeAttached();
-  const label = await box.getAttribute('aria-label');
-  for (const name of ['deadline_miss', 'overrun_skipped_samples', 'input_late_blocks', 'input_wait_timeout', 'command_late', 'afv_late']) {
-    expect(label).toContain(`${name} `);
-  }
-  expect(await box.getAttribute('data-tip')).toBe(label);
-  // Either every counter shows in full, or the count does.
-  const state = await box.evaluate((b) => {
-    const list = b.querySelector<HTMLElement>('.list')!;
-    const compact = b.querySelector<HTMLElement>('.compact')!;
-    const fits = list.scrollWidth <= b.clientWidth;
-    const shown = (e: HTMLElement) => getComputedStyle(e).visibility === 'visible';
-    return { fits, list: shown(list), compact: shown(compact), compactFits: compact.scrollWidth <= b.clientWidth + 0.5, text: compact.textContent, w: b.clientWidth };
-  });
-  expect(state.w).toBeGreaterThan(0);
-  expect(state.list).toBe(state.fits);
-  expect(state.compact).toBe(!state.fits);
-  expect(state.compactFits).toBe(true);
-  expect(state.text).toMatch(/^6 counters, \d+ nonzero$/);
-  // Reachable by keyboard: focus shows the full list.
-  await box.focus();
-  await page.keyboard.press('Shift+Tab');
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('tooltip')).toHaveText(label!);
-});
-
 test('no visible label is cut off without its full text in a tooltip reachable by keyboard', async ({ page, request }) => {
   // A long channel name (ch8), a long VCA name (vca2) and a listen list
   // longer than the monitor's box.

@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { handleTag, ownerHandle } from '../../src/lib/net/handle';
+import { engineLamp } from '../../src/lib/counters';
 import {
   REPLICAS,
   RawClient,
@@ -1018,4 +1019,34 @@ test('shows the source under the channel name and colours the scribble strip fro
   expect((await head.boundingBox())!.height).toBe(before);
   await page.getByRole('radiogroup', { name: 'Guest 1 strip colour' }).getByRole('radio', { name: 'No colour' }).click();
   await expect.poll(async () => (await serverState(request)).state.channels['ch3']!.color).toBe('none');
+});
+
+test('shows one engine lamp in the status bar and the counters only on request', async ({ page }) => {
+  await live(page);
+  const lamp = page.getByTestId('engine');
+  await expect(lamp).toHaveText(/ENGINE (OK|WARN \d+)/);
+  const width = (await lamp.boundingBox())!.width;
+  await expect(page.locator('footer.bar')).not.toContainText('deadline_miss');
+  await lamp.click();
+  const counters = page.getByRole('region', { name: 'Engine counters' });
+  // Every total is listed in the panel: none is cut.
+  for (const name of ['deadline_miss', 'overrun_skipped_samples', 'input_late_blocks', 'input_wait_timeout', 'command_late', 'afv_late']) {
+    await expect(counters).toContainText(name);
+  }
+  await lamp.click();
+  await expect(counters).toHaveCount(0);
+  expect((await lamp.boundingBox())!.width).toBe(width);
+  // OK and WARN with any count, two digits and capped ones included, give
+  // the lamp one width and fit its text: a change moves nothing.
+  const sizes = await lamp.evaluate((b, texts) => {
+    const text = b.querySelector<HTMLElement>('.fixed')!;
+    const was = text.textContent;
+    const out = texts.map((t) => {
+      text.textContent = t;
+      return { w: b.getBoundingClientRect().width, fits: text.scrollWidth <= text.getBoundingClientRect().width + 0.5 };
+    });
+    text.textContent = was;
+    return out;
+  }, [0, 3, 12, 99, 250].map(engineLamp));
+  for (const s of sizes) expect(s).toEqual({ w: width, fits: true });
 });

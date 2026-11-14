@@ -177,10 +177,9 @@ is stopped there, and the screen names the holder. A latch stopped
 while writes are locked stays shown until the server reports the talk
 off.
 
-A label cut off for lack of room, such as a long channel name or the
-status-bar counters, shows its full text in a tooltip: after a short
-hover, on keyboard focus (Tab to it) and on a touch held for 0.5 s;
-Escape closes it.
+A label cut off for lack of room, such as a long channel name, shows
+its full text in a tooltip: after a short hover, on keyboard focus (Tab
+to it) and on a touch held for 0.5 s; Escape closes it.
 
 Typed values (the readout of every processing parameter, delay, the
 Setup view) are written on Enter or when the field is left, and Escape
