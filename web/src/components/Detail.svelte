@@ -173,6 +173,23 @@
       <Param path={p('comp', 'attack')} label="Att" min={0.1} max={200} log unit=" ms" />
       <Param path={p('comp', 'release')} label="Rel" min={5} max={5000} step={1} log unit=" ms" />
       <Param path={p('comp', 'makeup')} label="Gain" min={0} max={24} unit=" dB" />
+      <div class="row">
+        <span class="lbl">Order</span>
+        <button
+          class="key"
+          aria-disabled={mixer.locked}
+          aria-pressed={flag('dynamicsBeforeEq')}
+          onclick={() => toggle('dynamicsBeforeEq')}
+          title="Lit: gate and compressor before EQ">{flag('dynamicsBeforeEq') ? 'DYN > EQ' : 'EQ > DYN'}</button
+        >
+      </div>
+      {#if !ch}
+        <div class="row">
+          <h3 class="panel-title">Limiter</h3>
+          <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('limiter', 'enabled')} onclick={() => toggle('limiter', 'enabled')} aria-label={`${element.name} true-peak limiter`}>IN</button>
+        </div>
+        <Param path={p('limiter', 'ceiling')} label="Ceil" min={-10} max={0} unit=" dBTP" />
+      {/if}
     </div>
 
     {#if ch}

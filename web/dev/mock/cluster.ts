@@ -170,7 +170,7 @@ export function recallGroup(path: string): RecallGroup | null {
   switch (key) {
     case 'trim': case 'legTrim': case 'polarity': case 'hpf': case 'delay': return 'input';
     case 'eq': return 'eq';
-    case 'gate': case 'comp': return 'dynamics';
+    case 'gate': case 'comp': case 'dynamicsBeforeEq': case 'limiter': return 'dynamics';
     case 'pan': case 'image': return 'pan';
     case 'sends': return 'sends';
     case 'routes': case 'directOut': return 'routing';

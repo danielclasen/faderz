@@ -9,6 +9,7 @@ export const CONTINUOUS_PATH_PATTERNS: readonly string[] = [
   `^/(channels|buses|auxes|mixMinus)/${ID}/fader$`,
   `^/channels/${ID}/(trim|legTrim/[0-7]|hpf/freq|pan/(lr|fr|divergence|lfe)|sends/${ID}/(level|pan))$`,
   `^/(channels|buses|auxes)/${ID}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup)|delay)$`,
+  `^/(buses|auxes)/${ID}/limiter/ceiling$`,
   `^/vcas/${ID}/offset$`,
   '^/monitor/level$',
 ];

@@ -9,6 +9,7 @@ import type {
   ChannelMeter,
   ElementShape,
   Layout,
+  Limiter,
   Loudness,
   StereoImage,
   Shape,
@@ -324,7 +325,7 @@ export class ReplicaMeters {
       return { rms, peak: rms.map((r, i) => Math.max(peaks[i]!, r + 6 + Math.random() * 2)) };
     };
 
-    const busMeter = (id: string, layout: Layout, mix: Mix, fader: number, mute: boolean): BusMeter => {
+    const busMeter = (id: string, layout: Layout, mix: Mix, fader: number, mute: boolean, limiter?: Limiter): BusMeter => {
       const g = mute ? SILENCE : fader <= -90 ? SILENCE : fader;
       const rms = mix.rms.map((r) => (g <= SILENCE ? SILENCE : r + g));
       const peak = mix.peak.map((r) => (g <= SILENCE ? SILENCE : r + g));
@@ -339,9 +340,11 @@ export class ReplicaMeters {
         meter = new LoudnessMeter();
         this.loudness.set(id, meter);
       }
+      // An enabled limiter holds the true peak at its ceiling.
+      const ceiling = limiter?.enabled ? limiter.ceiling : Infinity;
       return {
-        peak: peak.map((v) => r1(v + jitter())),
-        truePeak: peak.map((v) => r1(v + Math.random() * 0.6 + jitter())),
+        peak: peak.map((v) => r1(Math.min(ceiling, v + jitter()))),
+        truePeak: peak.map((v) => r1(Math.min(ceiling, v + Math.random() * 0.6 + jitter()))),
         rms: rms.map((v) => r1(v + jitter())),
         loudness: meter.push(z),
         correlation: correlationOf(layout, rms),
@@ -354,7 +357,7 @@ export class ReplicaMeters {
         .filter((c) => state.channels[c.id]!.routes[b.id])
         .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr, surround: state.channels[c.id]!.pan }));
       const st = state.buses[b.id]!;
-      buses.push(busMeter(b.id, b.layout, mixInto(b.layout, contributions), st.fader, st.mute));
+      buses.push(busMeter(b.id, b.layout, mixInto(b.layout, contributions), st.fader, st.mute, st.limiter));
     }
     const auxes: BusMeter[] = [];
     for (const a of this.shape.auxes) {
@@ -365,7 +368,7 @@ export class ReplicaMeters {
         return [{ id: c.id, gain: base * dbToGain(send.level), pan: send.pan, fr: 0 }];
       });
       const st = state.auxes[a.id]!;
-      auxes.push(busMeter(a.id, a.layout, mixInto(a.layout, contributions), st.fader, st.mute));
+      auxes.push(busMeter(a.id, a.layout, mixInto(a.layout, contributions), st.fader, st.mute, st.limiter));
     }
     const mixMinus: BusMeter[] = [];
     for (const mm of this.shape.mixMinus) {

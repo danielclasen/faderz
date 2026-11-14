@@ -128,6 +128,8 @@ export interface ChannelState {
   eq: Eq;
   gate: Gate;
   comp: Comp;
+  /** Gate and compressor before EQ. */
+  dynamicsBeforeEq: boolean;
   delay: number;
   pan: PanState;
   image: StereoImage;
@@ -139,11 +141,18 @@ export interface ChannelState {
   sends: Record<Id, Send>;
   routes: Record<Id, boolean>;
 }
+export interface Limiter {
+  enabled: boolean;
+  /** dBTP. */
+  ceiling: number;
+}
 export interface BusState {
   polarity: boolean[];
   eq: Eq;
   gate: Gate;
   comp: Comp;
+  dynamicsBeforeEq: boolean;
+  limiter: Limiter;
   delay: number;
   fader: number;
   mute: boolean;

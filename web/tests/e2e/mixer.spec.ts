@@ -180,3 +180,17 @@ test('enters a channel delay in frames and shows it in ms', async ({ page, reque
   expect((await serverState(request)).state.channels['ch2']!.delay).toBe(120000);
   await patch(request, '/channels/ch2/delay', 0);
 });
+
+test('switches a programme bus limiter and the dynamics order from the processing panel', async ({ page, request }) => {
+  await live(page);
+  expect((await serverState(request)).state.buses['pgm20']!.limiter).toEqual({ enabled: true, ceiling: -1 });
+  await page.locator('[data-master="pgm20"] .head').click();
+  await page.getByRole('button', { name: 'PGM 2.0 true-peak limiter' }).click();
+  await page.getByRole('button', { name: 'EQ > DYN' }).click();
+  await settled(page);
+  const bus = (await serverState(request)).state.buses['pgm20']!;
+  expect(bus.limiter.enabled).toBe(false);
+  expect(bus.dynamicsBeforeEq).toBe(true);
+  await patch(request, '/buses/pgm20/limiter/enabled', true);
+  await patch(request, '/buses/pgm20/dynamicsBeforeEq', false);
+});
