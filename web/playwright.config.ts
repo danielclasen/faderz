@@ -11,8 +11,13 @@ const LAN =
     .find((i) => i && i.family === 'IPv4' && !i.internal)?.address ?? '127.0.0.1';
 export const LAN_URL = `http://${LAN}:${PORT}`;
 
-/** Third dev server with 64 input channels, for the load spec. */
+/**
+ * Production build with 64 input channels under `vite preview`, which also
+ * serves the mock, for the load spec: dev mode adds main-thread work that
+ * a deployed client does not do.
+ */
 const PERF_PORT = 5183;
+const PERF_DIST = 'node_modules/.cache/faderz-e2e-perf-dist';
 export const PERF_URL = `http://127.0.0.1:${PERF_PORT}`;
 
 /** Second dev server over HTTPS with a throwaway self-signed certificate. */
@@ -69,8 +74,9 @@ export default defineConfig({
       env: { FADERZ_MOCK_AUTOMATION: '0', FADERZ_DEV_TLS_CERT: `${TLS_DIR}/cert.pem`, FADERZ_DEV_TLS_KEY: `${TLS_DIR}/key.pem` },
     },
     {
-      command: `npm run dev -- --host 127.0.0.1 --port ${PERF_PORT} --strictPort`,
+      command: `npx vite build --outDir ${PERF_DIST} --emptyOutDir && npx vite preview --outDir ${PERF_DIST} --host 127.0.0.1 --port ${PERF_PORT} --strictPort`,
       url: `${PERF_URL}/`,
+      timeout: 180_000,
       reuseExistingServer: false,
       env: { FADERZ_MOCK_AUTOMATION: '0', FADERZ_MOCK_CHANNELS: '64' },
     },

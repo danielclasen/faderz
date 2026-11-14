@@ -21,7 +21,7 @@ npm run dev
 
 serves the UI with a mock faderz server on <http://localhost:5173>.
 The mock (`dev/mock/`) is dev-only: Vite loads it only under
-`npm run dev`, and `npm run build` contains none of it. It simulates
+`npm run dev` and `vite preview`, and `npm run build` contains none of it. It simulates
 three replicas sharing one state, binary meter frames against credit,
 loudness, AFV tally cuts every 8 s and console activity, and validates
 every message it sends and receives against the contract; each meter
@@ -102,10 +102,12 @@ The contract tests compile the schemas, resolve every `$ref` of
 `openapi.yaml` and drive the mock over HTTP and WebSocket, checking
 every message and response with an independent validator.
 
-The e2e tests start three dev servers with `FADERZ_MOCK_AUTOMATION=0`:
-port 5181 (plain HTTP on all interfaces; the phone projects open it
-through a LAN address), 5182 (HTTPS with a generated self-signed
-certificate) and 5183 (`FADERZ_MOCK_CHANNELS=64`, for `perf.spec.ts`).
+The e2e tests start three servers with `FADERZ_MOCK_AUTOMATION=0`:
+dev servers on port 5181 (plain HTTP on all interfaces; the phone
+projects open it through a LAN address) and 5182 (HTTPS with a
+generated self-signed certificate), and on 5183 a production build
+under `vite preview`, which serves the mock too
+(`FADERZ_MOCK_CHANNELS=64`, for `perf.spec.ts`).
 The specs share each server's mock state and run serially; each test
 restores every replica and clears the command logs and counters.
 `perf.spec.ts` and `throttle.spec.ts` run without tracing, whose DOM
