@@ -20,13 +20,18 @@
 </script>
 
 <section class="vca" aria-label={`VCA ${vca.name}`}>
-  <!-- Focusable so that the tooltip with the full name and the members
-       reaches the keyboard too. -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="head" role="note" tabindex="0" use:tip={`VCA ${vca.name}: ${memberNames || 'no members'}`}>
+  <!-- A press spills the VCA: the strip area shows only its members. A
+       button, so the tooltip with the full name and the members reaches
+       the keyboard too. -->
+  <button
+    class="head"
+    onclick={() => document.dispatchEvent(new CustomEvent('faderz:spill', { detail: vca.id }))}
+    aria-label={`Spill VCA ${vca.name}: show only its members`}
+    use:tip={`VCA ${vca.name}: ${memberNames || 'no members'}. Press to show only its members on the strips.`}
+  >
     <span class="kind">VCA</span>
     <span class="name">{vca.name}</span>
-  </div>
+  </button>
   <div class="members">
     {members.length} ch
   </div>
@@ -50,6 +55,10 @@
     border-left: 1px solid var(--line);
   }
   .head {
+    all: unset;
+    box-sizing: border-box;
+    display: block;
+    cursor: pointer;
     background: var(--well);
     border-radius: 3px;
     padding: 3px 4px;

@@ -51,17 +51,92 @@
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
     scroller?.scrollTo({ left: start * STRIP_W, behavior: still ? 'instant' : 'smooth' });
   }
+
+  // [ and ] step through the banks, as bank keys on a surface do; not
+  // while typing.
+  function keydown(e: KeyboardEvent): void {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+    if (e.key !== '[' && e.key !== ']') return;
+    e.preventDefault();
+    const next = Math.min(banks.length - 1, Math.max(0, visibleBank + (e.key === ']' ? 1 : -1)));
+    goto(banks[next]!.start);
+  }
+
+  /** Jump: a strip number or the start of a channel name; the strip scrolls to the left edge. */
+  let jumpText = $state('');
+  let jumpMiss = $state(false);
+  function jump(): void {
+    const q = jumpText.trim().toLowerCase();
+    if (!q) return;
+    const n = Number(q);
+    const index = Number.isInteger(n) && n >= 1 ? n - 1 : shape.channels.findIndex((c) => c.name.toLowerCase().startsWith(q));
+    jumpMiss = index < 0 || index >= shape.channels.length;
+    if (!jumpMiss) {
+      goto(index);
+      jumpText = '';
+    }
+  }
+
+  // VCA spill: the strips show only one VCA's members until EXIT.
+  let spill = $state<string | null>(null);
+  const spillVca = $derived(spill ? shape.vcas.find((v) => v.id === spill) : undefined);
+  const shown = $derived(
+    spill ? shape.channels.filter((c) => mixer.state!.vcas[spill!]?.members.includes(c.id)) : shape.channels,
+  );
+  onMount(() => {
+    const on = (e: Event) => {
+      spill = (e as CustomEvent<string>).detail;
+      mastersOpen = false;
+      scroller?.scrollTo({ left: 0 });
+    };
+    document.addEventListener('faderz:spill', on);
+    return () => document.removeEventListener('faderz:spill', on);
+  });
+
+  // FOLLOW: the strip area follows the first connected surface's bank.
+  let follow = $state(false);
+  const followed = $derived(surfaces[0]?.bankOffset ?? null);
+  $effect(() => {
+    if (follow && followed !== null) goto(followed);
+  });
 </script>
+
+<svelte:window onkeydown={keydown} />
 
 <div class="mixer" bind:this={root}>
   <div class="left">
     <div class="bankbar">
       <span class="panel-title">Banks</span>
-      <div class="banks" role="group" aria-label="Channel banks">
+      {#if spillVca}
+        <button class="key spill" aria-pressed="true" onclick={() => (spill = null)} title="Show every channel again" data-testid="spill"
+          >VCA {spillVca.name} SPILL - EXIT</button
+        >
+      {/if}
+      <div class="banks" role="group" aria-label="Channel banks" class:hidden={spillVca !== undefined}>
         {#each banks as b, i (b.start)}
           <button class="key" aria-pressed={visibleBank === i} onclick={() => goto(b.start)}>{b.start + 1}-{b.end}</button>
         {/each}
       </div>
+      <input
+        class="jump"
+        type="text"
+        bind:value={jumpText}
+        class:miss={jumpMiss}
+        oninput={() => (jumpMiss = false)}
+        onkeydown={(e) => e.key === 'Enter' && jump()}
+        placeholder="Jump"
+        aria-label="Jump to a channel: number or name, Enter"
+        title="Type a strip number or the start of a channel name and press Enter"
+      />
+      <button
+        class="key follow"
+        aria-pressed={follow}
+        disabled={surfaces.length === 0}
+        onclick={() => (follow = !follow)}
+        title={surfaces[0] ? `Follow the bank of ${surfaces[0].name}` : 'No control surface connected'}>FOLLOW</button
+      >
       <button
         class="key overs"
         class:lit={channelOvers.length > 0}
@@ -96,7 +171,7 @@
       </span>
     </div>
     <div class="scroller" role="region" aria-label="Channel strips" bind:this={scroller} onscroll={() => (scrollLeft = scroller?.scrollLeft ?? 0)}>
-      <div class="surfaces" style:width={`${shape.channels.length * STRIP_W}px`} aria-hidden="true">
+      <div class="surfaces" class:hidden={spillVca !== undefined} style:width={`${shape.channels.length * STRIP_W}px`} aria-hidden="true">
         {#each surfaces as s (s.id)}
           <span
             class="surface"
@@ -107,8 +182,8 @@
         {/each}
       </div>
       <div class="strips">
-        {#each shape.channels as channel, index (channel.id)}
-          <ChannelStrip {channel} {index} selected={selected === channel.id} {onselect} />
+        {#each shown as channel (channel.id)}
+          <ChannelStrip {channel} index={shape.channels.indexOf(channel)} selected={selected === channel.id} {onselect} />
         {/each}
       </div>
     </div>
@@ -233,6 +308,32 @@
   }
   .masters-key {
     display: none;
+  }
+  .hidden {
+    display: none;
+  }
+  .surfaces.hidden {
+    display: block;
+    visibility: hidden;
+  }
+  .spill[aria-pressed='true'] {
+    background: var(--owned);
+    border-color: var(--owned);
+    color: #fff;
+  }
+  .jump {
+    width: 9ch;
+    height: 22px;
+    font-size: 11px;
+  }
+  .jump.miss {
+    border-color: var(--err);
+  }
+  @media (max-width: 700px) {
+    .jump,
+    .follow {
+      display: none;
+    }
   }
   @media (max-width: 1399px) {
     .mixer {

@@ -1238,3 +1238,31 @@ test('lists the consoles and every other session with what it holds, each once',
     surface.close();
   }
 });
+
+test('steps banks with [ and ], jumps to a channel by name or number, and spills a VCA', async ({ page, request }) => {
+  await live(page);
+  const scrollLeft = () => page.locator('.scroller').evaluate((el) => el.scrollLeft);
+  await page.locator('body').press(']');
+  await expect(page.getByRole('button', { name: '9-16' })).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('body').press('[');
+  await expect(page.getByRole('button', { name: '1-8' })).toHaveAttribute('aria-pressed', 'true');
+
+  const jump = page.getByRole('textbox', { name: /^Jump to a channel/ });
+  await jump.fill('amb 1');
+  await jump.press('Enter');
+  await expect.poll(scrollLeft).toBe(12 * 86);
+  await jump.fill('3');
+  await jump.press('Enter');
+  await expect.poll(scrollLeft).toBe(2 * 86);
+  await jump.fill('nothing like this');
+  await jump.press('Enter');
+  await expect(jump).toHaveClass(/miss/);
+
+  const members = (await serverState(request)).state.vcas['vca2']!.members;
+  const name = (await serverState(request)).shape.vcas.find((v) => v.id === 'vca2')!.name;
+  await page.getByRole('button', { name: `Spill VCA ${name}: show only its members` }).click();
+  await expect(page.getByTestId('spill')).toBeVisible();
+  await expect(page.locator('.strips .strip')).toHaveCount(members.length);
+  await page.getByTestId('spill').click();
+  await expect(page.locator('.strips .strip')).toHaveCount((await serverState(request)).shape.channels.length);
+});

@@ -181,6 +181,11 @@ A label cut off for lack of room, such as a long channel name, shows
 its full text in a tooltip: after a short hover, on keyboard focus (Tab
 to it) and on a touch held for 0.5 s; Escape closes it.
 
+In the mixer, `[` and `]` step to the previous and next bank, the Jump
+field takes a strip number or the start of a channel name, FOLLOW keeps
+the strips on the first connected surface's bank, and a press on a VCA
+master's name shows only that VCA's members until EXIT.
+
 A strip has five tab stops: its head (select), PFL, AFL, MUTE and the
 fader, and after them its VCA row while it is in a VCA, whose tooltip
 names the VCAs and the effective gain; its chips and pan are edited in
