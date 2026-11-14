@@ -133,6 +133,13 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
   await request.post(`/__mock/replicas/${primary}/restart`);
   await expectNoShift(page, 'failover');
 
+  // A dropped link: the primary endpoint empties while reconnecting.
+  await request.post('/__mock/drop-clients');
+  await expect.poll(() => debug(page, 'connection')).not.toBe('Live');
+  await expect.poll(() => debug(page, 'connection'), { timeout: 10_000 }).toBe('Live');
+  await page.waitForTimeout(300);
+  await expectNoShift(page, 'reconnect');
+
   // Interaction on the mixer.
   await dragFader(page, '/channels/ch2/fader', -40);
   await page.getByRole('button', { name: 'Pres 2 mute' }).click();

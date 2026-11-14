@@ -2,6 +2,7 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import { handleTag } from '../lib/net/handle';
   import { fit } from '../lib/format';
+  import { tip } from '../lib/tip';
   const mixer = getMixer();
   const counters = $derived(Object.entries(mixer.counters));
   const latest = $derived(mixer.notices.at(-1) ?? null);
@@ -35,7 +36,17 @@
       <span class="c" class:nz={value > 0}><span>{name.replace(/_total$/, '')}</span> <b class="num fixed" data-testid="counter">{fit(value > 999999 ? '>999k' : String(value), 6)}</b></span>
     {/each}
   </div>
-  <span class="right num" title="Session tag, as other clients name this screen, and primary endpoint" data-testid="session">{handleTag(mixer.status.handle)} {mixer.endpoint ?? ''}</span>
+  <!-- A fixed box with left-aligned text: the endpoint empties while
+       reconnecting and comes back, and nothing moves. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <span
+    class="right num"
+    role="note"
+    tabindex="0"
+    data-testid="session"
+    use:tip={`${handleTag(mixer.status.handle)} ${mixer.endpoint ?? ''}: session tag, as other clients name this screen, and primary endpoint`}
+    ><span class="tag">{handleTag(mixer.status.handle)}</span> {mixer.endpoint ?? ''}</span
+  >
 </footer>
 
 <style>
@@ -71,7 +82,11 @@
     overflow: hidden;
   }
   .right {
-    flex: none;
+    flex: 0 0 min(34ch, 40%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    contain: layout paint style;
   }
   .notice-line {
     flex: 0 0 min(44%, 560px);
