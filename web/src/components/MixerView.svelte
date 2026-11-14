@@ -9,7 +9,7 @@
 
   interface Props {
     selected: string | null;
-    onselect: (id: string) => void;
+    onselect: (id: string, section?: string) => void;
   }
   let { selected, onselect }: Props = $props();
 

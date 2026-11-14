@@ -16,8 +16,15 @@
     onclose: () => void;
     /** Moves the selection to another element of the same kind. */
     onselect: (id: string) => void;
+    /** Section to scroll into view on open: input, eq or dynamics. */
+    section?: string | null;
   }
-  let { id, onclose, onselect }: Props = $props();
+  let { id, onclose, onselect, section = null }: Props = $props();
+  let drawer: HTMLElement | undefined = $state();
+  $effect(() => {
+    if (!section || !drawer) return;
+    drawer.querySelector<HTMLElement>(`[data-section="${section}"]`)?.scrollIntoView({ block: 'start' });
+  });
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
   const channel = $derived(shape.channels.find((c) => c.id === id));
@@ -69,7 +76,7 @@
 
 <svelte:window onkeydown={keydown} />
 
-<section class="detail" aria-label={`${element.name} processing`}>
+<section class="detail" bind:this={drawer} aria-label={`${element.name} processing`}>
   <header>
     <h2>{element.name}</h2>
     <span class="meta">{element.layout} - {group === 'channels' ? 'input channel' : group === 'buses' ? 'bus' : 'aux'}</span>
@@ -80,7 +87,7 @@
     <button class="key close" onclick={onclose} aria-label="Close processing">CLOSE</button>
   </header>
   <div class="cols">
-    <div class="col">
+    <div class="col" data-section="input">
       <h3 class="panel-title">Input</h3>
       {#if channel?.altInput}
         <div class="taps" role="radiogroup" aria-label={`${element.name} input source`}>
@@ -152,7 +159,7 @@
       {/if}
     </div>
 
-    <div class="col eq">
+    <div class="col eq" data-section="eq">
       <div class="row">
         <h3 class="panel-title">EQ</h3>
         <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('eq', 'enabled')} onclick={() => toggle('eq', 'enabled')}>EQ IN</button>
@@ -177,7 +184,7 @@
       </div>
     </div>
 
-    <div class="col">
+    <div class="col" data-section="dynamics">
       <div class="row">
         <h3 class="panel-title">Gate</h3>
         <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('gate', 'enabled')} onclick={() => toggle('gate', 'enabled')}>IN</button>
@@ -224,7 +231,7 @@
             <Param path={p('sends', aux.id, 'level')} label="Lvl" min={-90} max={10} fader format={(v) => formatDb(v)} />
           </div>
         {/each}
-        <h3 class="panel-title">Assign</h3>
+        <h3 class="panel-title" data-section="assign">Assign</h3>
         <div class="grid">
           {#each shape.buses as bus (bus.id)}
             <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('routes', bus.id)} onclick={() => toggle('routes', bus.id)}>{bus.name}</button>

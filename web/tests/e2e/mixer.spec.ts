@@ -981,3 +981,25 @@ test('moves faders at a tenth of their travel while FINE is lit, without a modif
   await settled(page);
   expect(await fader(request, 'ch2')).toBeLessThan(fine - 3);
 });
+
+test('opens processing at the section of a strip chip and assigns a bus from the strip with a hold', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'Guest 1 Gate,', exact: false }).click();
+  const panel = page.getByRole('region', { name: 'Guest 1 processing' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Gate' })).toBeInViewport();
+
+  const chip = page.locator('[data-path="/channels/ch1/routes/pgm51"]');
+  const before = (await serverState(request)).state.channels['ch1']!.routes['pgm51'];
+  await chip.click();
+  await page.waitForTimeout(400);
+  expect((await serverState(request)).state.channels['ch1']!.routes['pgm51']).toBe(before);
+  const box = (await chip.boundingBox())!;
+  expect(box.height + 6).toBeGreaterThanOrEqual(24);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(700);
+  await page.mouse.up();
+  await expect.poll(async () => (await serverState(request)).state.channels['ch1']!.routes['pgm51']).toBe(!before);
+  await expect(chip).toHaveAttribute('aria-pressed', String(!before));
+});

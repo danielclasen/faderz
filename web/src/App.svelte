@@ -45,6 +45,8 @@
   type View = (typeof VIEWS)[number]['id'];
   let view = $state<View>('mixer');
   let selected = $state<string | null>(null);
+  /** Processing section to show first when a strip's chip selected the channel. */
+  let section = $state<string | null>(null);
   let theme = $state<Theme>((document.documentElement.dataset['theme'] as Theme) ?? 'dark');
 
   function toggleTheme(): void {
@@ -52,8 +54,9 @@
     setTheme(theme);
   }
   /** Selecting never closes: a second press on the selected strip keeps it; CLOSE or Escape closes. */
-  function select(id: string): void {
+  function select(id: string, to: string | null = null): void {
     selected = id;
+    section = to;
   }
 </script>
 
@@ -114,7 +117,7 @@
     </svelte:boundary>
     {#if view === 'mixer' && selected && mixer.state}
       {#key selected}
-        <Detail id={selected} onclose={() => (selected = null)} onselect={select} />
+        <Detail id={selected} {section} onclose={() => (selected = null)} onselect={(id) => select(id)} />
       {/key}
     {/if}
   </main>

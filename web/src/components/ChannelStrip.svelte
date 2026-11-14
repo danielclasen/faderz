@@ -10,12 +10,14 @@
   import EqCurve from './EqCurve.svelte';
   import { TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
   import { tip } from '../lib/tip';
+  import { hold } from '../lib/hold';
+  import { pointer } from '../lib/state/pointer';
 
   interface Props {
     channel: ChannelShape;
     index: number;
     selected: boolean;
-    onselect: (id: string) => void;
+    onselect: (id: string, section?: string) => void;
   }
   let { channel, index, selected, onselect }: Props = $props();
 
@@ -66,19 +68,41 @@
     {/if}
   </div>
 
-  <div class="proc" aria-label="Processing">
-    <span class:on={st.hpf.enabled} title="High-pass filter">HPF</span>
-    <span class:on={st.gate.enabled} title="Gate">G</span>
-    <span class:on={st.comp.enabled} title="Compressor">C</span>
-    <span class:on={st.polarity.some(Boolean)} title="Polarity inverted on a leg">INV</span>
+  <div class="proc" role="group" aria-label={`${channel.name} processing`}>
+    {#each [
+      { key: 'HPF', on: st.hpf.enabled, to: 'input', what: 'High-pass filter' },
+      { key: 'G', on: st.gate.enabled, to: 'dynamics', what: 'Gate' },
+      { key: 'C', on: st.comp.enabled, to: 'dynamics', what: 'Compressor' },
+      { key: 'INV', on: st.polarity.some(Boolean), to: 'input', what: 'Polarity inverted on a leg' },
+    ] as chip (chip.key)}
+      <button
+        class="chip"
+        class:on={chip.on}
+        onclick={() => onselect(channel.id, chip.to)}
+        title={`${chip.what} ${chip.on ? 'in' : 'out'}: open it in the processing panel`}
+        aria-label={`${channel.name} ${chip.what}, ${chip.on ? 'in' : 'out'}`}>{chip.key}</button
+      >
+    {/each}
   </div>
   <button class="eq" onclick={() => onselect(channel.id)} tabindex="-1" aria-hidden="true">
     <EqCurve eq={st.eq} hpf={st.hpf} width={72} height={18} />
   </button>
 
-  <div class="routes" aria-label="Bus assignment">
+  <!-- Every bus is an output that leaves the mixer: assigning or removing
+       a channel takes a hold, as muting an output does. -->
+  <div class="routes" role="group" aria-label={`${channel.name} bus assignment`}>
     {#each mixer.shape!.buses as bus (bus.id)}
-      <span class:on={st.routes[bus.id]} title={bus.name}>{short(bus)}</span>
+      {@const path = pointer('channels', channel.id, 'routes', bus.id)}
+      <button
+        class="chip"
+        class:on={st.routes[bus.id]}
+        aria-pressed={st.routes[bus.id]}
+        aria-disabled={mixer.locked}
+        use:hold={{ ms: 500, fire: () => mixer.set(path, !st.routes[bus.id]) }}
+        title={`${bus.name}: hold to ${st.routes[bus.id] ? 'remove' : 'assign'}`}
+        aria-label={`${channel.name} to ${bus.name}, hold to ${st.routes[bus.id] ? 'remove' : 'assign'}`}
+        data-path={path}>{short(bus)}</button
+      >
     {/each}
   </div>
 
@@ -244,26 +268,54 @@
     display: flex;
     gap: 2px;
   }
-  .proc span,
-  .routes span {
+  /* Chips are buttons: 18 px tall, with a hit area of 24 px. */
+  .chip {
+    all: unset;
+    position: relative;
     flex: 1;
+    min-width: 0;
     text-align: center;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
-    line-height: 14px;
+    line-height: 18px;
     border-radius: 2px;
     color: var(--text-faint);
     background: var(--panel-2);
-    overflow: hidden;
     white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
   }
-  .proc span.on {
+  .chip::before {
+    content: '';
+    position: absolute;
+    inset: -3px 0;
+  }
+  .chip:focus-visible {
+    outline: 2px solid var(--focus);
+  }
+  .proc .chip.on {
     color: #00191c;
     background: var(--afl);
   }
-  .routes span.on {
+  .routes .chip.on {
     color: var(--accent-ink);
     background: var(--accent);
+  }
+  /* A hold fills a bar along the bottom of a route chip; transform only. */
+  .routes .chip::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--text);
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  .routes :global(.chip.arming)::after {
+    transform: scaleX(1);
+    transition: transform var(--hold) linear;
   }
   .eq {
     all: unset;
