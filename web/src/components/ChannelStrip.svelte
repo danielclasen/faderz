@@ -7,6 +7,7 @@
   import Meter from './Meter.svelte';
   import Pan from './Pan.svelte';
   import EqCurve from './EqCurve.svelte';
+  import { TAP_LABEL } from '../lib/audio/taps';
 
   interface Props {
     channel: ChannelShape;
@@ -92,7 +93,7 @@
 
   <div class="fm">
     <Fader path={channelPath(channel.id, 'fader')} label={`${channel.name} fader`} />
-    <div class="meter"><Meter group="channels" id={channel.id} legs={channel.width} label={`${channel.name} input meter`} /></div>
+    <div class="meter"><Meter group="channels" id={channel.id} legs={channel.width} label={`${channel.name} meter, ${TAP_LABEL[st.meterTap]}`} /></div>
   </div>
 
   <div class="foot">

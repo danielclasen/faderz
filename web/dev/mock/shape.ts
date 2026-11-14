@@ -64,7 +64,9 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
     { id: 'mm2', name: 'N-1 Phone 2', bus: 'pgm20', width: 2, layout: 'stereo' },
   ];
   const monitorOutputs: ElementShape[] = [{ id: 'mon', name: 'Monitor', width: 2, layout: 'stereo' }];
-  const outputs: Shape['outputs'] = [...buses, ...auxes, ...mixMinus, ...monitorOutputs].map((e) => ({
+  // Direct outs of the presenter channels, e.g. for an ISO recorder.
+  const directOuts = channels.filter((c) => c.id === 'ch1' || c.id === 'ch2');
+  const outputs: Shape['outputs'] = [...buses, ...auxes, ...mixMinus, ...monitorOutputs, ...directOuts].map((e) => ({
     id: `out-${e.id}`,
     name: `${e.name} out`,
     source: e.id,
@@ -136,6 +138,8 @@ export function initialState(shape: Shape): State {
       fader: FADERS[c.id] ?? -90,
       mute: c.id === 'ch23' || c.id === 'ch24',
       solo: 'off',
+      meterTap: 'preFader',
+      directOut: { tap: 'postFader' },
       sends: Object.fromEntries(
         shape.auxes.map((a) => [
           a.id,

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { BusState, ChannelState, EqBandType, RecallGroup, Solo } from '../lib/contract/types';
+  import type { BusState, ChannelState, EqBandType, RecallGroup, Solo, Tap } from '../lib/contract/types';
+  import { TAPS, TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
   import { LAYOUT_LABELS, RECALL_GROUPS } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { pointer } from '../lib/state/pointer';
@@ -87,6 +88,24 @@
         <Param path={p('hpf', 'freq')} label="HPF" min={20} max={500} step={1} log format={(v) => `${formatFreq(v)} Hz`} />
       {/if}
       <Param path={p('delay')} label="Delay" min={0} max={48000} step={1} format={ms} />
+      {#if ch}
+        {#each [['meterTap', 'Meter'], ['directOut', 'Direct']] as const as [key, caption] (key)}
+          {@const path = key === 'meterTap' ? p('meterTap') : p('directOut', 'tap')}
+          <div class="taps" role="radiogroup" aria-label={`${element.name} ${caption === 'Meter' ? 'meter' : 'direct out'} pick-up point`}>
+            <span class="lbl">{caption}</span>
+            {#each TAPS as tap (tap)}
+              <button
+                class="key"
+                role="radio"
+                aria-disabled={mixer.locked}
+                aria-checked={mixer.value<Tap>(path) === tap}
+                aria-label={TAP_LABEL[tap]}
+                onclick={() => mixer.set(path, tap)}>{TAP_KEY[tap]}</button
+              >
+            {/each}
+          </div>
+        {/each}
+      {/if}
       {#if ch && element.width <= 2}
         <div class="pan-row"><span class="lbl">Pan</span><Pan path={p('pan', 'lr')} label={`${element.name} pan`} /></div>
         <div class="pan-row"><span class="lbl">F/R</span><Pan path={p('pan', 'fr')} label={`${element.name} front rear`} left="F" right="R" /></div>
@@ -258,6 +277,12 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 3px;
+  }
+  .taps {
+    display: grid;
+    grid-template-columns: 52px repeat(3, 1fr);
+    gap: 3px;
+    align-items: center;
   }
   .polarity {
     display: flex;

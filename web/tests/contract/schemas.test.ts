@@ -96,6 +96,8 @@ describe('Change values are constrained by path', () => {
     ['/channels/st1/polarity/1', true],
     ['/channels/sur1/legTrim/5', -3.5],
     ['/buses/pgm51/polarity/3', true],
+    ['/channels/ch1/meterTap', 'input'],
+    ['/channels/ch1/directOut/tap', 'preFader'],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -118,6 +120,9 @@ describe('Change values are constrained by path', () => {
     ['/channels/ch1/polarity/0', 1],
     ['/channels/ch1/legTrim/0', 20.5],
     ['/buses/pgm51/legTrim/0', 0],
+    ['/channels/ch1/meterTap', 'post'],
+    ['/channels/ch1/directOut', { tap: 'input' }],
+    ['/buses/pgm51/meterTap', 'input'],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });

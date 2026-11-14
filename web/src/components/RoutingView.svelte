@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getMixer } from '../lib/state/mixer.svelte';
   import { channelPath, vcaPath } from '../lib/state/paths';
+  import { TAP_LABEL } from '../lib/audio/taps';
   import Matrix from './Matrix.svelte';
 
   const mixer = getMixer();
@@ -45,7 +46,12 @@
       <tbody>
         {#each shape.outputs as o (o.id)}
           {@const src = [...shape.buses, ...shape.auxes, ...shape.mixMinus, ...shape.monitorOutputs].find((e) => e.id === o.source)}
-          <tr><td>{o.name}</td><td>{src?.name ?? o.source}</td><td class="num">{o.layout}</td></tr>
+          {@const direct = shape.channels.find((c) => c.id === o.source)}
+          <tr>
+            <td>{o.name}</td>
+            <td>{#if direct}{direct.name} direct out, {TAP_LABEL[mixer.state!.channels[direct.id]!.directOut.tap]}{:else}{src?.name ?? o.source}{/if}</td>
+            <td class="num">{o.layout}</td>
+          </tr>
         {/each}
       </tbody>
     </table>

@@ -208,6 +208,28 @@
         "afl"
       ]
     },
+    "Tap": {
+      "description": "Pick-up point in a channel: input is the selected input before trim, preFader follows the processing before the fader, postFader follows fader and mute, before the AFV stage.",
+      "type": "string",
+      "enum": [
+        "input",
+        "preFader",
+        "postFader"
+      ]
+    },
+    "DirectOut": {
+      "description": "Direct out of a channel. An output flow of the shape whose source is the channel id carries it.",
+      "type": "object",
+      "required": [
+        "tap"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tap": {
+          "$ref": "#/$defs/Tap"
+        }
+      }
+    },
     "HpfFreq": {
       "description": "Hz",
       "type": "number",
@@ -297,7 +319,7 @@
       ]
     },
     "RecallGroup": {
-      "description": "Parameter group protected from scene recall. input covers trim, leg trim, polarity, HPF and delay; dynamics covers gate and compressor.",
+      "description": "Parameter group protected from scene recall. input covers trim, leg trim, polarity, HPF and delay; dynamics covers gate and compressor; routing covers bus assignment, the direct out tap, mix-minus excludes and VCA membership. The meter tap is not recalled.",
       "type": "string",
       "enum": [
         "input",
@@ -449,7 +471,7 @@
       }
     },
     "OutputShape": {
-      "description": "Output flow carrying a bus, aux, mix-minus or monitor output.",
+      "description": "Output flow carrying a bus, aux, mix-minus or monitor output, or the direct out of a channel.",
       "type": "object",
       "required": [
         "id",
@@ -469,7 +491,8 @@
           "maxLength": 32
         },
         "source": {
-          "$ref": "#/$defs/Id"
+          "$ref": "#/$defs/Id",
+          "description": "Bus, aux, mix-minus, monitor output or channel id."
         },
         "width": {
           "$ref": "#/$defs/Width"
@@ -725,6 +748,8 @@
         "fader",
         "mute",
         "solo",
+        "meterTap",
+        "directOut",
         "sends",
         "routes"
       ],
@@ -765,6 +790,13 @@
         },
         "solo": {
           "$ref": "#/$defs/Solo"
+        },
+        "meterTap": {
+          "description": "Where the channel meter picks up the signal.",
+          "$ref": "#/$defs/Tap"
+        },
+        "directOut": {
+          "$ref": "#/$defs/DirectOut"
         },
         "sends": {
           "description": "Sends keyed by aux id.",
@@ -1164,7 +1196,7 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|pan/(lr|fr)|fader|mute|solo|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|pan/(lr|fr)|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|fader|mute)$"
@@ -1681,6 +1713,23 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "/(meterTap|directOut/tap)$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/Tap"
+              }
+            }
+          }
         }
       ]
     },
@@ -1760,7 +1809,7 @@
       "maxItems": 8
     },
     "ChannelMeter": {
-      "description": "Input channel metering: sample peak and RMS.",
+      "description": "Input channel metering at the channel meterTap: sample peak and RMS.",
       "type": "object",
       "required": [
         "peak",

@@ -172,7 +172,7 @@ export function recallGroup(path: string): RecallGroup | null {
     case 'gate': case 'comp': return 'dynamics';
     case 'pan': return 'pan';
     case 'sends': return 'sends';
-    case 'routes': return 'routing';
+    case 'routes': case 'directOut': return 'routing';
     case 'fader': return 'fader';
     case 'mute': return 'mute';
     default: return null;

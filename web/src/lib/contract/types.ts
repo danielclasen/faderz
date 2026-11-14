@@ -10,6 +10,7 @@ export type Revision = number;
 export type Layout = 'mono' | 'stereo' | '5.1' | '7.1';
 export type Width = 1 | 2 | 6 | 8;
 export type Solo = 'off' | 'pfl' | 'afl';
+export type Tap = 'input' | 'preFader' | 'postFader';
 export type EqBandType = 'lowShelf' | 'peak' | 'highShelf';
 export type TallyState = 'program' | 'preview' | 'off';
 export type RecallGroup =
@@ -122,6 +123,8 @@ export interface ChannelState {
   fader: number;
   mute: boolean;
   solo: Solo;
+  meterTap: Tap;
+  directOut: { tap: Tap };
   sends: Record<Id, Send>;
   routes: Record<Id, boolean>;
 }

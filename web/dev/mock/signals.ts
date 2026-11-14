@@ -212,18 +212,22 @@ export class ReplicaMeters {
     const jitter = () => (Math.random() - 0.5) * 0.4;
     const channelLevels = new Map<string, number[]>();
     const channels: ChannelMeter[] = [];
-    for (const c of this.shape.channels) {
-      const st = state.channels[c.id]!;
-      const legs = (sources.levels.get(c.id) ?? Array(c.width).fill(SILENCE)).map((l) => l + st.trim + (st.comp.enabled ? st.comp.makeup - 2 : 0));
-      channelLevels.set(c.id, legs);
-      channels.push({
-        peak: legs.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
-        rms: legs.map((l) => r1(l + jitter())),
-      });
-    }
     const vcaOffsets = (id: string) =>
       Object.values(state.vcas).filter((v) => v.members.includes(id)).map((v) => v.offset);
     const vcaMuted = (id: string) => Object.values(state.vcas).some((v) => v.mute && v.members.includes(id));
+    for (const c of this.shape.channels) {
+      const st = state.channels[c.id]!;
+      const input = sources.levels.get(c.id) ?? Array<number>(c.width).fill(SILENCE);
+      const legs = input.map((l, i) => l + st.trim + (st.legTrim[i] ?? 0) + (st.comp.enabled ? st.comp.makeup - 2 : 0));
+      channelLevels.set(c.id, legs);
+      const fader = st.mute || vcaMuted(c.id) ? SILENCE : effectiveGainDb(st.fader, vcaOffsets(c.id));
+      const tapped =
+        st.meterTap === 'input' ? input : st.meterTap === 'preFader' ? legs : legs.map((l) => (fader <= SILENCE ? SILENCE : l + fader));
+      channels.push({
+        peak: tapped.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
+        rms: tapped.map((l) => r1(l + jitter())),
+      });
+    }
     const postGains = new Map<string, number>();
     const post = (id: string) => {
       let gain = postGains.get(id);

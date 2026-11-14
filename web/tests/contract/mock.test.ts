@@ -791,6 +791,20 @@ describe('REST', () => {
     await rest('DELETE', `/scenes/${id}`);
   });
 
+  it('recalls the direct out tap with routing and never the meter tap', async () => {
+    const created = await rest('POST', '/scenes', { commandId: crypto.randomUUID(), name: 'Taps' });
+    const id = (created.body!['scene'] as { id: string }).id;
+    await rest('PATCH', '/state', {
+      commandId: crypto.randomUUID(),
+      changes: [{ path: '/channels/ch1/directOut/tap', value: 'input' }, { path: '/channels/ch1/meterTap', value: 'postFader' }],
+    });
+    await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 });
+    expect(cluster.state.channels['ch1']!.directOut.tap).toBe('postFader');
+    expect(cluster.state.channels['ch1']!.meterTap).toBe('postFader');
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch1/meterTap', value: 'preFader' }] });
+    await rest('DELETE', `/scenes/${id}`);
+  });
+
   it('drives AFV stages from tally', async () => {
     await rest('PUT', '/afv/tally', { sources: { CAM1: 'off', CAM2: 'program' } });
     expect(cluster.state.afv['ch14']!.open).toBe(true);
