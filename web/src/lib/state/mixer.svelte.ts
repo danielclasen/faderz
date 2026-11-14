@@ -97,7 +97,7 @@ export class MixerStore {
     return this.status.outbox;
   }
 
-  /** No quorum and no ready standby: write controls are disabled and send nothing. */
+  /** Link not transmitting, or no quorum and no ready standby: write controls are disabled and send nothing. */
   readonly locked = $derived(writesBlocked(this.status));
 
   // ---- reading -----------------------------------------------------------

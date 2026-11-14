@@ -26,6 +26,15 @@ describe('writesBlocked', () => {
     expect(writesBlocked(status({ replicas: replicas(true, false, false), standby: 'Idle' }))).toBe(false);
   });
 
+  it('blocks writes whenever the link transmits no commands, whatever the replicas report', () => {
+    const ok = { replicas: replicas(true, true, true), standby: 'Ready' as const };
+    for (const link of ['Connecting', 'Syncing', 'FailingOver', 'Ahead', 'Offline'] as const) {
+      expect(writesBlocked(status({ ...ok, link })), link).toBe(true);
+      expect(writesBlocked(status({ ...ok, link, replicas: [], primaryReplica: null })), link).toBe(true);
+    }
+    for (const link of ['Live', 'Suspect', 'Resyncing'] as const) expect(writesBlocked(status({ ...ok, link })), link).toBe(false);
+  });
+
   it('does not block before the serving replica is known', () => {
     expect(writesBlocked(status({ replicas: [], standby: 'Idle' }))).toBe(false);
     expect(writesBlocked(status({ primaryReplica: null, replicas: replicas(false, false, false) }))).toBe(false);
@@ -38,7 +47,7 @@ describe('mixer store without quorum', () => {
     const posted: ToWorker[] = [];
     s.attach({ post: (m) => posted.push(m) });
     const shape = exampleShape();
-    s.apply({ type: 'patch', input: 0, snapshot: { shape, state: initialState(shape), owners: {} }, changes: [], owners: [] });
+    s.apply({ type: 'patch', input: 0, snapshot: { shape, state: initialState(shape), owners: {} }, changes: [], owners: [], status: status({ replicas: replicas(true, true, true) }) });
     return { s, posted };
   }
   const lose = (s: MixerStore, commitable: boolean) =>

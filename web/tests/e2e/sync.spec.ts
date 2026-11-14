@@ -378,6 +378,35 @@ test('without quorum and standby the client stays connected and disables every w
   expect((await serverState(request)).state.channels['ch3']!.mute).toBe(!before.state.channels['ch3']!.mute);
 });
 
+test('with every replica down the client disables every write control and sends nothing written then', async ({ page, request }) => {
+  await live(page);
+  const faderPath = '/channels/ch4/fader';
+  const slider = page.locator(`[role="slider"][data-path="${faderPath}"]`);
+  const mute = page.locator('button[data-path="/channels/ch4/mute"]');
+  await expect(slider).toHaveAttribute('aria-disabled', 'false');
+  const before = await serverState(request);
+  for (const r of REPLICAS) expect((await request.post(`/__mock/replicas/${r}/kill`)).ok()).toBe(true);
+  await expect.poll(() => debug(page, 'connection')).toMatch(/^(Connecting|Offline)$/);
+  await expect(slider).toHaveAttribute('aria-disabled', 'true');
+  await expect(mute).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('[role="slider"][aria-disabled="false"]')).toHaveCount(0);
+
+  // force: Playwright waits for an aria-disabled control to become enabled.
+  await mute.click({ force: true });
+  await slider.focus();
+  await page.keyboard.press('PageUp');
+  expect(await debug(page, 'outbox')).toBe(0);
+  await expect(mute).toHaveAttribute('aria-pressed', String(before.state.channels['ch4']!.mute));
+
+  await request.post('/__mock/audit/reset');
+  for (const r of REPLICAS) expect((await request.post(`/__mock/replicas/${r}/restore`)).ok()).toBe(true);
+  await expect.poll(() => debug(page, 'connection'), { timeout: 10_000 }).toBe('Live');
+  await expect(slider).toHaveAttribute('aria-disabled', 'false');
+  await settled(page);
+  expect((await audit(request)).entries).toEqual([]);
+  expect((await serverState(request)).state.channels['ch4']).toEqual(before.state.channels['ch4']);
+});
+
 test('sends the same ?session= on the primary, the standby and the reconnect after a failover', async ({ page, request }) => {
   const urls: string[] = [];
   page.on('websocket', (ws) => {

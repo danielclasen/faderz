@@ -7,6 +7,9 @@ import { ownerHandle } from '../../src/lib/net/handle';
 import { deriveMeterLayout } from '../../src/lib/contract/meterFrame';
 import { exampleShape, initialState } from '../../dev/mock/shape';
 
+/** Status of a synced link: writes are only taken while it transmits. */
+const LIVE = { ...INITIAL_STATUS, link: 'Live' as const };
+
 const F1 = '/channels/ch1/fader';
 const SESSION = 'c2Vzc2lvbi1tZS0xMjM0NTY';
 const ME: Owner = { principal: 'anonymous', handle: ownerHandle(SESSION), kind: 'ui', connection: 'c1' };
@@ -16,7 +19,7 @@ function store() {
   const posted: ToWorker[] = [];
   s.attach({ post: (m) => posted.push(m) });
   const shape = exampleShape();
-  s.apply({ type: 'patch', input: 0, snapshot: { shape, state: initialState(shape), owners: {} }, changes: [], owners: [] });
+  s.apply({ type: 'patch', input: 0, snapshot: { shape, state: initialState(shape), owners: {} }, changes: [], owners: [], status: LIVE });
   return { s, posted };
 }
 
@@ -41,7 +44,7 @@ describe('mixer store: patches', () => {
     const { s } = store();
     const before = s.state;
     const shape = exampleShape();
-    s.apply(patch(0, { snapshot: { shape, state: initialState(shape), owners: {} } }));
+    s.apply(patch(0, { snapshot: { shape, state: initialState(shape), owners: {} }, status: LIVE }));
     expect(s.state).not.toBe(before);
   });
 
@@ -60,7 +63,7 @@ describe('mixer store: patches', () => {
     const { s } = store();
     s.set(F1, -3);
     const shape = exampleShape();
-    s.apply(patch(0, { snapshot: { shape, state: initialState(shape), owners: {} } }));
+    s.apply(patch(0, { snapshot: { shape, state: initialState(shape), owners: {} }, status: LIVE }));
     expect(s.value(F1)).toBe(-3);
   });
 

@@ -475,6 +475,36 @@ describe('sync engine: unanswered commands', () => {
   });
 });
 
+describe('sync engine: offline', () => {
+  it('drops writes queued while every endpoint is down once they outlive the failover bound, and never sends them', () => {
+    const t = setup(['ws://a/ws', 'ws://b/ws']);
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 1));
+    t.tick();
+    t.sockets[0]!.drop();
+    t.engine.input({ type: 'set', path: '/channels/ch1/mute', value: true });
+    t.engine.input({ type: 'set', path: F1, value: -4 });
+    // Every attempt fails until the link is Offline and well past the bound.
+    for (let i = 0; i < 20; i++) {
+      t.clock.advance(500);
+      for (const s of t.sockets) if (s.onclose && !s.closed) s.drop();
+    }
+    expect(t.engine.link === 'Offline' || t.engine.link === 'Connecting').toBe(true);
+    expect(t.engine.outbox.size).toBe(0);
+    const p = t.tick()!;
+    expect(p.notices).toContainEqual({ kind: 'expired', paths: ['/channels/ch1/mute', F1] });
+    const before = t.sockets.length;
+    t.clock.advance(2000);
+    const s = t.sockets.slice(before).find((x) => x.onopen && !x.closed)!;
+    s.open();
+    s.deliver(replicas(R2));
+    s.deliver(resume(R2, 1));
+    expect(t.engine.link).toBe('Live');
+    expect(s.ofType('set')).toEqual([]);
+  });
+});
+
 describe('sync engine: read index', () => {
   it('sends its revision on promote and resync and never applies an older snapshot or resume', () => {
     const { engine, primary, standby, clock } = live();
