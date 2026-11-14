@@ -56,7 +56,7 @@
     <span class:on={st.hpf.enabled} title="High-pass filter">HPF</span>
     <span class:on={st.gate.enabled} title="Gate">G</span>
     <span class:on={st.comp.enabled} title="Compressor">C</span>
-    <span class:on={st.polarity} title="Polarity inverted">INV</span>
+    <span class:on={st.polarity.some(Boolean)} title="Polarity inverted on a leg">INV</span>
   </div>
   <button class="eq" onclick={() => onselect(channel.id)} tabindex="-1" aria-hidden="true">
     <EqCurve eq={st.eq} hpf={st.hpf} width={72} height={18} />

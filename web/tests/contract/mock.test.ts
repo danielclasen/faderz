@@ -769,6 +769,28 @@ describe('REST', () => {
     expect((await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 })).status).toBe(404);
   });
 
+  it('inverts one leg of a stereo channel and leaves the other, and refuses a leg beyond the width', async () => {
+    const ok = await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/st1/polarity/1', value: true }] });
+    expect(ok.status).toBe(200);
+    expect(cluster.state.channels['st1']!.polarity).toEqual([false, true]);
+    const beyond = await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch1/polarity/1', value: true }] });
+    expect(beyond.status).toBe(404);
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/st1/polarity/1', value: false }] });
+  });
+
+  it('recalls a scene as one change per leg', async () => {
+    const created = await rest('POST', '/scenes', { commandId: crypto.randomUUID(), name: 'Legs' });
+    const id = (created.body!['scene'] as { id: string }).id;
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/sur1/legTrim/2', value: 4 }] });
+    const c = await new Client().open();
+    await c.hello();
+    await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 });
+    const delta = await c.next<DeltaMessage>((m) => m.type === 'delta' && (m.changes ?? []).some((x) => x.path.includes('legTrim')));
+    expect(delta.changes).toContainEqual({ path: '/channels/sur1/legTrim/2', value: 0 });
+    expect(cluster.state.channels['sur1']!.legTrim).toEqual([0, 0, 0, 0, 0, 0]);
+    await rest('DELETE', `/scenes/${id}`);
+  });
+
   it('drives AFV stages from tally', async () => {
     await rest('PUT', '/afv/tally', { sources: { CAM1: 'off', CAM2: 'program' } });
     expect(cluster.state.afv['ch14']!.open).toBe(true);

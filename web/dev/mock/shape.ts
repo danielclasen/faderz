@@ -98,9 +98,9 @@ function flatEq(): Eq {
   };
 }
 
-function busState(fader = 0): BusState {
+function busState(width: number, fader = 0): BusState {
   return {
-    polarity: false,
+    polarity: Array<boolean>(width).fill(false),
     eq: flatEq(),
     gate: { enabled: false, threshold: -60, range: 20, attack: 1, release: 200 },
     comp: { enabled: false, threshold: -12, ratio: 2, attack: 10, release: 200, makeup: 0 },
@@ -125,7 +125,8 @@ export function initialState(shape: Shape): State {
     const mic = c.layout === 'mono';
     const s: ChannelState = {
       trim: 0,
-      polarity: false,
+      legTrim: Array<number>(c.width).fill(0),
+      polarity: Array<boolean>(c.width).fill(false),
       hpf: { enabled: mic, freq: mic ? 80 : 40 },
       eq: flatEq(),
       gate: { enabled: false, threshold: -50, range: 20, attack: 1, release: 200 },
@@ -177,8 +178,8 @@ export function initialState(shape: Shape): State {
 
   return {
     channels,
-    buses: Object.fromEntries(shape.buses.map((b) => [b.id, busState()])),
-    auxes: Object.fromEntries(shape.auxes.map((a) => [a.id, busState(a.id === 'aux3' ? -6 : 0)])),
+    buses: Object.fromEntries(shape.buses.map((b) => [b.id, busState(b.width)])),
+    auxes: Object.fromEntries(shape.auxes.map((a) => [a.id, busState(a.width, a.id === 'aux3' ? -6 : 0)])),
     mixMinus: Object.fromEntries(
       shape.mixMinus.map((m, i) => [m.id, { exclude: existing([i === 0 ? 'ch11' : 'ch12']), fader: 0, mute: false }]),
     ),

@@ -92,6 +92,9 @@ describe('Change values are constrained by path', () => {
     ['/monitor/source', 'pgm20'],
     ['/afv/ch13/source', null],
     ['/recallSafe/ch1', ['fader', 'mute']],
+    ['/channels/st1/polarity/1', true],
+    ['/channels/sur1/legTrim/5', -3.5],
+    ['/buses/pgm51/polarity/3', true],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -109,6 +112,11 @@ describe('Change values are constrained by path', () => {
     ['/vcas/vca1/members', ['ch1', 'ch1']],
     ['/recallSafe/ch1', ['everything']],
     ['/monitor/level', 11],
+    ['/channels/ch1/polarity', true],
+    ['/channels/ch1/polarity/8', true],
+    ['/channels/ch1/polarity/0', 1],
+    ['/channels/ch1/legTrim/0', 20.5],
+    ['/buses/pgm51/legTrim/0', 0],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });

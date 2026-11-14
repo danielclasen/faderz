@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { BusState, ChannelState, EqBandType, RecallGroup, Solo } from '../lib/contract/types';
-  import { RECALL_GROUPS } from '../lib/contract/types';
+  import { LAYOUT_LABELS, RECALL_GROUPS } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { pointer } from '../lib/state/pointer';
   import { recallSafePath } from '../lib/state/paths';
@@ -29,6 +29,15 @@
   const BAND_TYPES: EqBandType[] = ['lowShelf', 'peak', 'highShelf'];
   const typeLabel: Record<EqBandType, string> = { lowShelf: 'Low shelf', peak: 'Peak', highShelf: 'High shelf' };
 
+  const legs = $derived(LAYOUT_LABELS[element.layout]);
+  /** All legs inverted, or all back to normal when every leg already is. */
+  function invertAll(): void {
+    const target = !st.polarity.every(Boolean);
+    st.polarity.forEach((v, i) => {
+      if (v !== target) mixer.set(p('polarity', i), target);
+    });
+  }
+
   function toggleSafe(g: RecallGroup): void {
     mixer.set(recallSafePath(id), safe.includes(g) ? safe.filter((x) => x !== g) : [...safe, g]);
   }
@@ -55,10 +64,25 @@
       {#if ch}
         <Param path={p('trim')} label="Trim" min={-20} max={20} unit=" dB" />
       {/if}
-      <div class="row">
-        <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('polarity')} onclick={() => toggle('polarity')}>Polarity INV</button>
-        {#if ch}<button class="key" aria-disabled={mixer.locked} aria-pressed={flag('hpf', 'enabled')} onclick={() => toggle('hpf', 'enabled')}>HPF</button>{/if}
+      {#if ch && element.width > 1}
+        {#each legs as leg, i (i)}
+          <Param path={p('legTrim', i)} label={`Trim ${leg}`} min={-20} max={20} unit=" dB" />
+        {/each}
+      {/if}
+      <div class="polarity" role="group" aria-label={`${element.name} polarity per leg`}>
+        <span class="lbl">Pol</span>
+        {#each legs as leg, i (i)}
+          <button class="key" aria-disabled={mixer.locked} aria-pressed={st.polarity[i]} onclick={() => toggle('polarity', i)} aria-label={`${element.name} ${leg} polarity invert`}>{leg}</button>
+        {/each}
+        {#if element.width > 1}
+          <button class="key" aria-disabled={mixer.locked} aria-pressed={st.polarity.every(Boolean)} onclick={invertAll} aria-label={`${element.name} all legs polarity invert`}>ALL</button>
+        {/if}
       </div>
+      {#if ch}
+        <div class="row">
+          <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('hpf', 'enabled')} onclick={() => toggle('hpf', 'enabled')}>HPF</button>
+        </div>
+      {/if}
       {#if ch}
         <Param path={p('hpf', 'freq')} label="HPF" min={20} max={500} step={1} log format={(v) => `${formatFreq(v)} Hz`} />
       {/if}
@@ -234,6 +258,18 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 3px;
+  }
+  .polarity {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .polarity .lbl {
+    width: 30px;
+  }
+  .polarity .key {
+    min-width: 30px;
   }
   .pan-row {
     display: grid;

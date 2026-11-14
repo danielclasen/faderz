@@ -145,9 +145,12 @@ function equal(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** Leaves of a state subtree; arrays of primitives count as one leaf. */
+/**
+ * Leaves of a state subtree. Arrays of strings (id sets, recall groups)
+ * count as one leaf; per-leg arrays split into one leaf per leg.
+ */
 function leaves(value: unknown, base: string, out: Change[] = []): Change[] {
-  if (Array.isArray(value) && value.every((v) => typeof v !== 'object' || v === null)) {
+  if (Array.isArray(value) && value.every((v) => typeof v === 'string')) {
     out.push({ path: base, value });
   } else if (value !== null && typeof value === 'object') {
     for (const [k, v] of Object.entries(value)) leaves(v, `${base}${pointer(k)}`, out);
@@ -164,7 +167,7 @@ export function recallGroup(path: string): RecallGroup | null {
   if (group === 'mixMinus') return key === 'exclude' ? 'routing' : (key as RecallGroup);
   if (group === 'vcas') return key === 'offset' ? 'fader' : key === 'members' ? 'routing' : 'mute';
   switch (key) {
-    case 'trim': case 'polarity': case 'hpf': case 'delay': return 'input';
+    case 'trim': case 'legTrim': case 'polarity': case 'hpf': case 'delay': return 'input';
     case 'eq': return 'eq';
     case 'gate': case 'comp': return 'dynamics';
     case 'pan': return 'pan';

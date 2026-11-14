@@ -109,7 +109,10 @@ export interface Send {
 }
 export interface ChannelState {
   trim: number;
-  polarity: boolean;
+  /** Per leg, layout order. */
+  legTrim: number[];
+  /** Per leg, layout order; true inverts. */
+  polarity: boolean[];
   hpf: Hpf;
   eq: Eq;
   gate: Gate;
@@ -123,7 +126,7 @@ export interface ChannelState {
   routes: Record<Id, boolean>;
 }
 export interface BusState {
-  polarity: boolean;
+  polarity: boolean[];
   eq: Eq;
   gate: Gate;
   comp: Comp;

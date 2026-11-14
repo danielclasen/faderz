@@ -175,6 +175,24 @@
       "minimum": -20,
       "maximum": 20
     },
+    "Polarity": {
+      "description": "Polarity per leg of the element, in layout order; true inverts that leg. Each leg switches on its own, so one mis-wired leg of a stereo or surround feed is corrected without touching the others.",
+      "type": "array",
+      "items": {
+        "type": "boolean"
+      },
+      "minItems": 1,
+      "maxItems": 8
+    },
+    "LegTrim": {
+      "description": "Trim per leg in dB, in layout order, applied after trim.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TrimDb"
+      },
+      "minItems": 1,
+      "maxItems": 8
+    },
     "Pan": {
       "description": "-1 is full left (or front), 0 centre, 1 full right (or rear).",
       "type": "number",
@@ -279,7 +297,7 @@
       ]
     },
     "RecallGroup": {
-      "description": "Parameter group protected from scene recall. input covers trim, polarity, HPF and delay; dynamics covers gate and compressor.",
+      "description": "Parameter group protected from scene recall. input covers trim, leg trim, polarity, HPF and delay; dynamics covers gate and compressor.",
       "type": "string",
       "enum": [
         "input",
@@ -696,6 +714,7 @@
       "type": "object",
       "required": [
         "trim",
+        "legTrim",
         "polarity",
         "hpf",
         "eq",
@@ -714,9 +733,11 @@
         "trim": {
           "$ref": "#/$defs/TrimDb"
         },
+        "legTrim": {
+          "$ref": "#/$defs/LegTrim"
+        },
         "polarity": {
-          "description": "true inverts the polarity of every channel of the strip.",
-          "type": "boolean"
+          "$ref": "#/$defs/Polarity"
         },
         "hpf": {
           "$ref": "#/$defs/Hpf"
@@ -782,7 +803,7 @@
       "additionalProperties": false,
       "properties": {
         "polarity": {
-          "type": "boolean"
+          "$ref": "#/$defs/Polarity"
         },
         "eq": {
           "$ref": "#/$defs/Eq"
@@ -1143,10 +1164,10 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|polarity|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|pan/(lr|fr)|fader|mute|solo|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|pan/(lr|fr)|fader|mute|solo|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
         },
         {
-          "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|fader|mute)$"
+          "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|delay|fader|mute)$"
         },
         {
           "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|fader|mute)$"
@@ -1223,7 +1244,24 @@
             "properties": {
               "path": {
                 "type": "string",
-                "pattern": "(/(polarity|enabled|mute|on|pre|dim|cut|mono|open)|/routes/[a-z][a-z0-9-]{0,31})$"
+                "pattern": "/legTrim/[0-7]$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/TrimDb"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "(/(enabled|mute|on|pre|dim|cut|mono|open)|/polarity/[0-7]|/routes/[a-z][a-z0-9-]{0,31})$"
               }
             }
           },
