@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { handleTag, ownerHandle } from '../../src/lib/net/handle';
 import {
   RawClient,
+  audit,
   debug,
   dragFader,
   fader,
@@ -165,6 +166,34 @@ test('operates a fader from the keyboard', async ({ page, request }) => {
   await settled(page);
   expect(await fader(request, 'ch21')).toBe(0.4);
   expect(await fader(request, 'ch22')).toBe(-90);
+});
+
+test('operates a pan from the keyboard, with no jump from a lone key or a double-click', async ({ page, request }) => {
+  await live(page);
+  const pan = page.locator('[role="slider"][data-path="/channels/ch21/pan/lr"]');
+  await pan.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Shift+ArrowLeft');
+  await settled(page);
+  await expect(pan).toHaveAttribute('aria-valuenow', '-0.06');
+  // A key write holds the control like a fader key does, then lets go.
+  await expect
+    .poll(async () => (await audit(request)).entries.filter((e) => e.path === '/channels/ch21/pan/lr').map((e) => e.type))
+    .toEqual(['touch', 'set', 'set', 'release']);
+  await page.keyboard.press('0');
+  await page.keyboard.press('Home');
+  await page.keyboard.press('End');
+  await pan.dblclick();
+  await page.waitForTimeout(300);
+  await settled(page);
+  expect((await serverState(request)).state.channels['ch21']!.pan.lr).toBe(-0.06);
+  await pan.focus();
+  await page.keyboard.press('Alt+End');
+  await settled(page);
+  await expect(pan).toHaveAttribute('aria-valuenow', '1');
+  await page.keyboard.press('Alt+0');
+  await settled(page);
+  await expect(pan).toHaveAttribute('aria-valuenow', '0');
 });
 
 test('sets the loudness target from the setup view and judges integrated loudness against it', async ({ page, request }) => {

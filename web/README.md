@@ -147,8 +147,9 @@ snapshots run on the page's main thread.
 Faders are sliders: the arrows step 0.5 dB from -20 dB up, 1 dB down to
 -40 dB and 3 dB below (Shift 0.1 dB), Page Up/Down 5 dB, Alt+0 sets
 0 dB and Alt+End closes the fader; no single key jumps a fader, and a
-double-click does nothing to it. Pan controls step with the arrows,
-Home and End go to the ends, `0` and a double-click centre. Escape
+double-click does nothing to it. Pan controls step with the arrows
+(Shift for fine), Alt+Home and Alt+End go to the ends and Alt+0
+centres; no single key and no double-click moves a pan. Escape
 closes the channel processing panel. The mute of an output (bus, aux,
 mix-minus) needs a 0.5 s hold, by pointer, Space or Enter; one press
 unmutes. Channel mutes take one press.
@@ -161,5 +162,4 @@ in the selected unit (ms, frames at the shape's frame rate, or
 samples) or with a suffix: `40ms`, `2f`, `1.5s`, `1920smp`; the arrow
 keys step one unit, Shift a tenth. Matrix grids move with the arrow keys.
 
-With a pointer: drag a fader, hold Shift (or Ctrl) for fine travel,
-double-click for 0 dB.
+With a pointer: drag a fader, hold Shift (or Ctrl) for fine travel.

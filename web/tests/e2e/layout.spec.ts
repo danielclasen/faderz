@@ -99,6 +99,9 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
     ['/channels/ch4/mute', false],
     ['/channels/ch1/input', 'b'],
     ['/channels/ch1/input', 'a'],
+    ['/channels/ch3/pan/lr', -0.6],
+    ['/channels/ch3/pan/lr', 0.85],
+    ['/channels/ch3/pan/lr', 0],
     ['/vcas/vca2/offset', -12.5],
     ['/vcas/vca2/offset', -2],
   ] as const) await patch(request, path, value);
