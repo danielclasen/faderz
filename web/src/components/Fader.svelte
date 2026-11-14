@@ -182,7 +182,11 @@
   .scale span {
     position: absolute;
     right: 0;
-    transform: translateY(50%);
+    /* Centred on its mark by margin, not transform: a transform is a paint
+       property node per element, and every one adds to each frame's
+       layerization. */
+    height: 1em;
+    margin-bottom: -0.5em;
     font-family: var(--font-num);
     font-size: 8.5px;
     color: var(--text-faint);
@@ -237,8 +241,8 @@
     left: 3px;
     right: 3px;
     height: 1px;
+    margin-bottom: -0.5px;
     background: var(--line-strong);
-    transform: translateY(50%);
   }
   .tick.unity {
     background: var(--text-faint);

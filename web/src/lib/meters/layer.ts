@@ -37,6 +37,8 @@ interface Slot {
   rms: LegBallistics[];
   rect: Rect;
   clip: Rect | null;
+  /** In the viewport, by an IntersectionObserver: only these are measured and drawn. */
+  visible: boolean;
 }
 
 interface Colors {
@@ -59,6 +61,14 @@ export class MeterLayer {
     this.relayout();
   });
   private stop: (() => void) | null = null;
+  /** Reading the box of a meter in a skipped (content-visibility) strip would force its layout. */
+  private readonly io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const s = this.slots.get(e.target as HTMLElement);
+      if (s) s.visible = e.isIntersecting;
+    }
+    this.relayout();
+  });
   private layoutDirty = true;
   private drawn = false;
   private lastReceived = -1;
@@ -85,12 +95,14 @@ export class MeterLayer {
 
   register(el: HTMLElement, spec: MeterSpec): () => void {
     const legs = (n: number) => Array.from({ length: n }, newLeg);
-    this.slots.set(el, { spec, el, clipper: undefined, peak: legs(spec.legs), rms: legs(spec.legs), rect: { x: 0, y: 0, w: 0, h: 0 }, clip: null });
+    this.slots.set(el, { spec, el, clipper: undefined, peak: legs(spec.legs), rms: legs(spec.legs), rect: { x: 0, y: 0, w: 0, h: 0 }, clip: null, visible: false });
     this.ro.observe(el);
+    this.io.observe(el);
     this.relayout();
     return () => {
       this.slots.delete(el);
       this.ro.unobserve(el);
+      this.io.unobserve(el);
       this.relayout();
     };
   }
@@ -98,6 +110,7 @@ export class MeterLayer {
   destroy(): void {
     this.stop?.();
     this.ro.disconnect();
+    this.io.disconnect();
     this.mo.disconnect();
     this.host?.removeEventListener('scroll', this.relayout, { capture: true });
     window.removeEventListener('resize', this.relayout);
@@ -144,6 +157,7 @@ export class MeterLayer {
     const rel = (r: DOMRect): Rect => ({ x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height });
     const clips = new Map<HTMLElement, Rect>();
     for (const s of this.slots.values()) {
+      if (!s.visible) continue;
       s.rect = rel(s.el.getBoundingClientRect());
       if (s.clipper === undefined) s.clipper = this.clipperOf(s.el);
       if (!s.clipper) {
@@ -197,6 +211,7 @@ export class MeterLayer {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.w, this.h);
     for (const s of this.slots.values()) {
+      if (!s.visible) continue;
       const r = s.rect;
       const c = s.clip ?? { x: 0, y: 0, w: this.w, h: this.h };
       const left = Math.max(r.x, c.x);

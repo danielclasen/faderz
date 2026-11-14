@@ -115,6 +115,8 @@
     background: var(--strip);
     border-right: 1px solid var(--line);
     min-height: 0;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 86px auto 600px;
   }
   .strip.alt {
     background: var(--strip-alt);
