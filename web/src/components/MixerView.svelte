@@ -134,6 +134,8 @@
     letter-spacing: 0.08em;
   }
   .meters-from b {
+    display: inline-block;
+    min-width: 4ch;
     color: var(--text-dim);
   }
   .scroller {
@@ -185,6 +187,7 @@
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: 560px 470px;
       overflow-y: auto;
+      scrollbar-gutter: stable;
     }
     .masters {
       border-left: none;

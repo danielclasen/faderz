@@ -119,6 +119,7 @@
     margin: 0;
     padding: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
     border-top: 1px solid var(--line);
   }
   li {
@@ -159,6 +160,7 @@
     .view {
       grid-template-columns: minmax(0, 1fr);
       overflow: auto;
+      scrollbar-gutter: stable;
     }
   }
 </style>

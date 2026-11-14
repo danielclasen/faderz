@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import { getMixer } from '../lib/state/mixer.svelte';
   const mixer = getMixer();
   const consoles = $derived(mixer.state?.consoles ?? []);
@@ -14,15 +15,21 @@
       data-console={c.id}
     >
       <i></i>{c.protocol.toUpperCase()}
-      <span class="num">{c.connected ? `${c.bankOffset + 1}-${Math.min(channels, c.bankOffset + c.strips)}` : 'off'}</span>
+      <span class="num fixed">{fit(c.connected ? `${c.bankOffset + 1}-${Math.min(channels, c.bankOffset + c.strips)}` : 'off', 5)}</span>
     </span>
   {/each}
 </div>
 
 <style>
+  /* The chips are items of the header's right group, so a chip that
+     appears moves none of the others. */
   .consoles {
-    display: flex;
-    gap: 4px;
+    display: contents;
+  }
+  .c .num {
+    display: inline-block;
+    min-width: 5ch;
+    text-align: right;
   }
   .c {
     display: flex;
@@ -52,5 +59,10 @@
   .c .num {
     font-weight: 400;
     color: var(--text-dim);
+  }
+  @media (max-width: 1300px) {
+    .c {
+      display: none;
+    }
   }
 </style>

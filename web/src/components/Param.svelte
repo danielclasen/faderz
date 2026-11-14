@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import { getMixer } from '../lib/state/mixer.svelte';
 
   interface Props {
@@ -51,7 +52,7 @@
     aria-valuetext={shown}
     data-path={path}
   />
-  <output for={id} class="num">{shown}</output>
+  <output for={id} class="num fixed">{fit(shown, 8)}</output>
 </div>
 
 <style>

@@ -242,11 +242,23 @@
 </section>
 
 <style>
+  /* A drawer over the right of the view: opening, closing or switching
+     channels moves and resizes nothing under it, and every fader keeps
+     its full travel. */
   .detail {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    width: min(500px, 100%);
+    box-sizing: border-box;
     background: var(--panel);
-    border-top: 2px solid var(--accent);
-    max-height: 44vh;
-    overflow: auto;
+    border-left: 2px solid var(--accent);
+    box-shadow: -8px 0 24px rgb(0 0 0 / 0.45);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
     padding: 6px 10px 10px;
   }
   header {
@@ -273,17 +285,13 @@
   }
   .cols {
     display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 14px;
   }
   .col {
     display: flex;
     flex-direction: column;
     gap: 5px;
-    width: 230px;
-  }
-  .col.eq {
-    width: 300px;
   }
   h3 {
     margin: 4px 0 0;

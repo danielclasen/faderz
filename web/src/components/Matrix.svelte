@@ -71,6 +71,7 @@
 <style>
   .wrap {
     overflow: auto;
+    scrollbar-gutter: stable;
     max-height: 100%;
   }
   table {

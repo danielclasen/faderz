@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import type { ChannelShape, ChannelState, Solo } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { channelPath } from '../lib/state/paths';
@@ -100,9 +101,9 @@
   </div>
 
   <div class="foot">
-    <output class="num value" data-testid={`fader-value-${channel.id}`}><span>{formatDb(fader)}</span></output>
+    <output class="num value" data-testid={`fader-value-${channel.id}`}><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
     <div class="vca">
-      {#each vcas as v (v.id)}<span title={`${v.name} offset ${formatDb(mixer.state!.vcas[v.id]!.offset)} dB`}>{v.name.slice(0, 4)}</span>{/each}
+      {#each vcas as v (v.id)}<span title={`VCA ${v.name}, offset ${formatDb(mixer.state!.vcas[v.id]!.offset)} dB`}>{v.name}</span>{/each}
       {#if vcas.length > 0 && effective !== fader}<span class="eff num" title="Effective gain">{formatDb(effective)}</span>{/if}
     </div>
   </div>

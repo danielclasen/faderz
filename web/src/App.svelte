@@ -41,6 +41,9 @@
 <div class="app">
   <header class="top">
     <div class="brand" aria-label="faderz"><i></i>faderz</div>
+    <select class="view-menu" aria-label="View" value={view} onchange={(e) => (view = (e.currentTarget as HTMLSelectElement).value as View)}>
+      {#each VIEWS as v (v.id)}<option value={v.id}>{v.label}</option>{/each}
+    </select>
     <nav aria-label="Views">
       {#each VIEWS as v (v.id)}
         <button class="tab" aria-current={view === v.id ? 'page' : undefined} onclick={() => (view = v.id)}>{v.label}</button>
@@ -81,13 +84,13 @@
       </div>
     {/snippet}
     </svelte:boundary>
+    {#if view === 'mixer' && selected && mixer.state}
+      {#key selected}
+        <Detail id={selected} onclose={() => (selected = null)} />
+      {/key}
+    {/if}
   </main>
 
-  {#if view === 'mixer' && selected && mixer.state}
-    {#key selected}
-      <Detail id={selected} onclose={() => (selected = null)} />
-    {/key}
-  {/if}
 
   <StatusBar />
   <Toasts />
@@ -96,7 +99,7 @@
 <style>
   .app {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     height: 100%;
   }
   .top {
@@ -107,7 +110,9 @@
     padding: 0 10px;
     background: var(--panel);
     border-bottom: 1px solid var(--line-strong);
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    height: 44px;
+    box-sizing: border-box;
   }
   .brand {
     display: flex;
@@ -129,6 +134,9 @@
     display: flex;
     gap: 2px;
     overflow-x: auto;
+    min-width: 0;
+    flex: 0 1 auto;
+    scrollbar-width: none;
   }
   .tab {
     appearance: none;
@@ -145,6 +153,26 @@
     border-bottom: 2px solid transparent;
     white-space: nowrap;
   }
+  .view-menu {
+    display: none;
+    height: 30px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  /* Phones: the views are a menu, so the header stays one row with the
+     connection state in view. */
+  @media (max-width: 700px) {
+    nav {
+      display: none;
+    }
+    .view-menu {
+      display: block;
+    }
+    .brand {
+      font-size: 0;
+      gap: 0;
+    }
+  }
   .tab:hover {
     color: var(--text);
   }
@@ -152,13 +180,16 @@
     color: var(--text);
     border-bottom-color: var(--accent);
   }
+  /* The right group fills the rest of the header and packs its items at
+     its end: an item that appears or grows at its start moves nothing. */
   .right {
-    margin-left: auto;
+    flex: 1 0 auto;
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 10px;
-    flex-wrap: wrap;
-    padding: 4px 0;
+    flex-wrap: nowrap;
+    overflow: hidden;
   }
   main {
     position: relative;

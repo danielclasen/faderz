@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { MeterLayer, provideMeterLayer } from '../lib/meters/layer';
@@ -79,7 +80,7 @@
                         onpointercancel={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
                         onlostpointercapture={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
                       />
-                      <span class="num db">{formatDb(lvl)}</span>
+                      <span class="num db fixed">{fit(formatDb(lvl), 5)}</span>
                       <button class="key" aria-disabled={mixer.locked} aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
                     </div>
                   </td>
@@ -158,6 +159,7 @@
   }
   .wrap {
     overflow: auto;
+    scrollbar-gutter: stable;
     min-height: 0;
   }
   table {

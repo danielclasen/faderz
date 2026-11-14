@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import type { MeterGroup, MeterReading } from '../lib/meters/store';
@@ -20,8 +21,8 @@
   });
 
   /** One decimal place at most (EBU Tech 3341); every value fits 5 characters. */
-  const fmt = (v: number | null | undefined) => (v === null || v === undefined ? '--.-' : v <= -100 ? '-inf' : v.toFixed(1));
-  const signed = (v: number | null | undefined) => (v === null || v === undefined ? '--.--' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`);
+  const fmt = (v: number | null | undefined) => fit(v === null || v === undefined ? '--.-' : v <= -100 ? '-inf' : v.toFixed(1), 5);
+  const signed = (v: number | null | undefined) => fit(v === null || v === undefined ? '--.--' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`, 5);
   const settings = $derived(mixer.state!.metering);
   const target = $derived(settings.loudness.target);
   const tolerance = $derived(settings.loudness.tolerance);
@@ -75,9 +76,12 @@
 </div>
 
 <style>
+  /* Fixed tracks: no value, however long, resizes a column. Five
+     characters ("-99.9", "-inf", "--.-") fit a value column. */
   .loud {
     display: grid;
-    grid-template-columns: auto 1fr 1fr;
+    grid-template-columns: 20px 31px 31px;
+    justify-content: space-between;
     column-gap: 3px;
     row-gap: 1px;
     align-items: center;
@@ -129,15 +133,15 @@
   }
   b span {
     display: block;
+    white-space: pre;
     height: 13px;
     line-height: 13px;
     text-align: right;
-    white-space: nowrap;
     contain: size layout style;
   }
   .v {
     color: #e6edf3;
-    font-size: 10.5px;
+    font-size: 10px;
   }
   .max {
     color: #8b96a4;

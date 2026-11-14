@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import type { Solo, VcaShape } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { vcaPath } from '../lib/state/paths';
@@ -28,7 +29,7 @@
   <button class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`VCA ${vca.name} AFL, all members`}>AFL</button>
   <button class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
   <div class="f"><Fader path={vcaPath(vca.id, 'offset')} label={`VCA ${vca.name} offset`} /></div>
-  <output class="num value"><span>{formatDb(offset)}</span></output>
+  <output class="num value"><span class="fixed">{fit(formatDb(offset), 5)}</span></output>
 </section>
 
 <style>

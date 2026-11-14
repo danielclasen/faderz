@@ -125,6 +125,13 @@ select {
   letter-spacing: -0.02em;
 }
 
+/* A readout padded to a fixed width (lib/format.ts fit). */
+.fixed {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

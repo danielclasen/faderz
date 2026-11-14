@@ -1,0 +1,163 @@
+// Owner rule: text length changes, live updates and interactions never
+// move layout. Every layout shift the Layout Instability API reports
+// counts here, including those right after input that CLS itself would
+// excuse, and the total must be 0.
+
+import { expect, test, type Page } from '@playwright/test';
+import { debug, dragFader, live, patch, resetMock } from './support';
+
+interface Shift {
+  value: number;
+  input: boolean;
+  sources: string[];
+}
+
+declare global {
+  interface Window {
+    __shifts?: Shift[];
+  }
+}
+
+test.beforeEach(async ({ page, request }) => {
+  await resetMock(request);
+  await page.addInitScript(() => {
+    const shifts: Shift[] = [];
+    window.__shifts = shifts;
+    const describe = (node: Node | null) => {
+      const n = node instanceof Element ? node : (node?.parentElement ?? null);
+      if (!n) return String(node?.nodeName ?? 'null');
+      const cls = typeof n.className === 'string' && n.className ? `.${n.className.trim().split(/\s+/).join('.')}` : '';
+      const data = [...n.attributes].filter((a) => a.name.startsWith('data-') || a.name === 'aria-label').map((a) => `[${a.name}=${a.value}]`).join('');
+      return `${n.tagName.toLowerCase()}${cls}${data}"${(n.textContent ?? '').trim().slice(0, 16)}"`;
+    };
+    new PerformanceObserver((list) => {
+      type Rect = { x: number; y: number; width: number; height: number };
+      const r = (a: Rect) => `${Math.round(a.x)},${Math.round(a.y)} ${Math.round(a.width)}x${Math.round(a.height)}`;
+      for (const e of list.getEntries() as unknown as Array<{ value: number; hadRecentInput: boolean; sources: Array<{ node: Node | null; previousRect: Rect; currentRect: Rect }> }>) {
+        // The dev mock's control panel is not part of the product.
+        const product = e.sources.filter((s) => !(s.node instanceof Element && s.node.closest('aside.mock')) && !s.node?.parentElement?.closest('aside.mock'));
+        if (product.length === 0) continue;
+        shifts.push({ value: e.value, input: e.hadRecentInput, sources: product.map((s) => `${describe(s.node)} ${r(s.previousRect)} -> ${r(s.currentRect)}`) });
+      }
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
+});
+test.afterEach(async ({ request }) => resetMock(request));
+
+/** Opens a view by its tab, or by the view menu where tabs are folded (phones). */
+async function showView(page: Page, name: string): Promise<void> {
+  const tab = page.getByRole('button', { name, exact: true });
+  if (await tab.isVisible()) await tab.click();
+  else await page.getByRole('combobox', { name: 'View' }).selectOption({ label: name });
+}
+
+async function shifts(page: Page): Promise<Shift[]> {
+  // Let the observer deliver the entries of the last frames.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  return page.evaluate(() => window.__shifts ?? []);
+}
+
+async function expectNoShift(page: Page, step: string): Promise<void> {
+  const list = await shifts(page);
+  expect(list, `${step}: ${JSON.stringify(list.slice(0, 6))}`).toEqual([]);
+}
+
+test('nothing moves on load, live updates, failover and interaction', async ({ page, request }, info) => {
+  const phone = (page.viewportSize()?.width ?? 1600) < 600;
+  await live(page);
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page.locator('[data-testid^="loudness-i-"]').first()).not.toHaveText('--.-', { timeout: 10_000 });
+  await expectNoShift(page, 'load');
+
+  // Live state updates from other clients and the switcher.
+  for (const [path, value] of [
+    ['/channels/ch3/fader', -33.3],
+    ['/channels/ch3/fader', 0],
+    ['/channels/ch4/mute', true],
+    ['/channels/ch4/mute', false],
+    ['/channels/ch1/input', 'b'],
+    ['/channels/ch1/input', 'a'],
+    ['/vcas/vca2/offset', -12.5],
+    ['/vcas/vca2/offset', -2],
+  ] as const) await patch(request, path, value);
+  await request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources: { CAM1: 'off', CAM2: 'program' } } });
+  await page.waitForTimeout(1500);
+  await expectNoShift(page, 'live updates');
+
+  // Failover.
+  const primary = await debug(page, 'primaryReplica');
+  await request.post(`/__mock/replicas/${primary}/kill`);
+  await expect.poll(() => debug(page, 'failovers')).toBeGreaterThan(0);
+  await expect.poll(() => debug(page, 'connection')).toBe('Live');
+  await page.waitForTimeout(500);
+  await request.post(`/__mock/replicas/${primary}/restart`);
+  await expectNoShift(page, 'failover');
+
+  // Interaction on the mixer.
+  await dragFader(page, '/channels/ch2/fader', -40);
+  await page.getByRole('button', { name: 'Pres 2 mute' }).click();
+  await page.getByRole('button', { name: 'Pres 2 PFL' }).click();
+  await page.getByRole('button', { name: 'Pres 2 PFL' }).click();
+  await page.getByRole('button', { name: 'Pres 2 mute' }).click();
+  await expectNoShift(page, 'fader, mute, PFL');
+
+  const bank = page.getByRole('button', { name: '9-16' });
+  if (await bank.isVisible()) {
+    await bank.click();
+    await page.waitForTimeout(600);
+    await page.getByRole('button', { name: '1-8' }).click();
+    await page.waitForTimeout(600);
+    await expectNoShift(page, 'bank change');
+  }
+
+  await page.locator('[data-channel="ch1"] .head').click();
+  await page.waitForTimeout(300);
+  await expectNoShift(page, 'open processing');
+  await page.keyboard.press('Escape');
+  await expectNoShift(page, 'close processing');
+
+  for (const name of ['Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup', 'Mixer']) {
+    await showView(page, name);
+    await page.waitForTimeout(400);
+    await expectNoShift(page, `view ${name}`);
+  }
+  info.annotations.push({ type: 'viewport', description: phone ? 'phone' : 'desktop' });
+});
+
+test('no visible label is cut off without its full text on hover and to assistive technology', async ({ page }) => {
+  await live(page);
+  await page.evaluate(() => document.fonts.ready);
+  const views = ['Mixer', 'Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup'];
+  const problems: string[] = [];
+  for (const name of views) {
+    await showView(page, name);
+    await page.waitForTimeout(300);
+    if (name === 'Mixer') {
+      await page.locator('[data-channel="ch1"] .head').click();
+      await page.waitForTimeout(200);
+    }
+    problems.push(
+      ...(await page.evaluate((view) => {
+        const out: string[] = [];
+        for (const el of document.querySelectorAll<HTMLElement>('body *')) {
+          if (el.children.length > 0 && [...el.childNodes].every((n) => n.nodeType !== Node.TEXT_NODE || !n.textContent?.trim())) continue;
+          const text = el.textContent?.trim() ?? '';
+          if (!text) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0 || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
+          const cs = getComputedStyle(el);
+          if (cs.visibility === 'hidden' || el.closest('.sr-only')) continue;
+          const clipX = cs.overflowX === 'hidden' || cs.overflowX === 'clip' || cs.textOverflow === 'ellipsis';
+          const clipY = cs.overflowY === 'hidden' || cs.overflowY === 'clip';
+          const cut = (clipX && el.scrollWidth > el.clientWidth + 1) || (clipY && el.scrollHeight > el.clientHeight + 1);
+          if (!cut) continue;
+          const holder = el.closest<HTMLElement>('[title]');
+          const titled = holder !== null && holder.title.includes(text);
+          if (!titled) out.push(`${view}: "${text}" (${el.tagName.toLowerCase()}.${el.className})`);
+        }
+        return out;
+      }, name)),
+    );
+  }
+  expect(problems).toEqual([]);
+});

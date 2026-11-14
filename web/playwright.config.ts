@@ -51,13 +51,13 @@ export default defineConfig({
     },
     // Phone descriptors on Chromium (the only browser installed), opened
     // through the LAN address so the page is not a secure context.
-    { name: 'pixel-7', testMatch: /mobile\.spec\.ts/, use: { ...devices['Pixel 7'], baseURL: LAN_URL } },
+    { name: 'pixel-7', testMatch: /(mobile|layout)\.spec\.ts/, use: { ...devices['Pixel 7'], baseURL: LAN_URL } },
     {
       name: 'https',
       testMatch: /https\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], baseURL: `https://127.0.0.1:${TLS_PORT}`, ignoreHTTPSErrors: true },
     },
-    { name: 'iphone-14', testMatch: /mobile\.spec\.ts/, use: { ...devices['iPhone 14'], browserName: 'chromium', baseURL: LAN_URL } },
+    { name: 'iphone-14', testMatch: /(mobile|layout)\.spec\.ts/, use: { ...devices['iPhone 14'], browserName: 'chromium', baseURL: LAN_URL } },
   ],
   webServer: [
     {

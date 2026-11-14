@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import type { ElementShape } from '../lib/contract/types';
   import { LAYOUT_LABELS } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -29,7 +30,7 @@
 </script>
 
 <section class="master" class:wide={element.width > 2} class:selected aria-label={`${element.name} master`} data-master={element.id}>
-  <button class="head" onclick={() => onselect?.(element.id)} disabled={!onselect} aria-pressed={selected}>
+  <button class="head" onclick={() => onselect?.(element.id)} disabled={!onselect} aria-pressed={selected} title={element.name}>
     <span class="name">{element.name}</span>
     {#if tag}<span class="tag">{tag}</span>{/if}
   </button>
@@ -49,7 +50,7 @@
   <div class="legs" style:padding-left="18px">
     {#each labels as l (l)}<span>{l}</span>{/each}
   </div>
-  <output class="num value"><span>{formatDb(fader)}</span></output>
+  <output class="num value"><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
 </section>
 
 <style>
@@ -89,12 +90,16 @@
   .head:focus-visible {
     outline: 2px solid var(--focus);
   }
+  /* Two lines fit the names of the shape; a longer one is clipped and
+     the head carries the full name as its title. */
   .name {
     font-weight: 600;
     font-size: 13px;
-    white-space: nowrap;
+    line-height: 14px;
+    max-height: 28px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
+    text-align: left;
   }
   .tag {
     white-space: nowrap;

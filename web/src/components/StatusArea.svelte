@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fit } from '../lib/format';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import type { LinkState } from '../lib/sync/machines';
@@ -35,26 +36,10 @@
   };
 </script>
 
+<!-- Every slot has a fixed size and keeps it when its text changes or
+     empties; the replica chips, whose count follows the cluster, come
+     first, so in the right-aligned header they move nothing else. -->
 <div class="status" aria-label="Connection" data-testid="status">
-  <div
-    class="link"
-    data-state={status.link}
-    role="status"
-    aria-live="polite"
-    data-testid="link"
-    title={`Primary ${status.primaryReplica ?? '-'}, standby ${status.standbyReplica ?? '-'} (${status.standby})`}
-  >
-    <i></i><b>{LABEL[status.link]}</b>
-    <span class="num rev" title="Global state revision" data-testid="revision"><span>rev {status.revision}</span></span>
-  </div>
-  {#if failover}
-    <div class="failover" role="status" data-testid="failover" title={`Failover after ${failover.reason}`}>
-      FAILOVER {failover.from ?? '-'} -&gt; {failover.to ?? '-'}
-    </div>
-  {/if}
-  {#if status.outbox > 0}
-    <span class="pending num" data-testid="pending" title="Commands waiting for confirmation">{status.outbox} pending</span>
-  {/if}
   <div class="replicas" aria-label="Replicas" data-testid="replicas">
     {#each status.replicas as r (r.id)}
       <span
@@ -70,32 +55,77 @@
         data-healthy={r.healthy}
         data-commitable={r.commitable}
       >
-        {r.id}{#if r.role === 'leader'}<sup>L</sup>{/if}{#if role(r.id) === 'standby'}<sub>SB</sub>{/if}
+        {r.id}<sup class:off={r.role !== 'leader'}>L</sup><sub class:off={role(r.id) !== 'standby'}>SB</sub>
       </span>
     {/each}
   </div>
-  {#if commitable !== null}
-    <span
-      class="quorum"
-      class:lost={!commitable}
-      data-testid="quorum"
-      data-commitable={commitable}
-      role={mixer.locked ? 'alert' : undefined}
-      title={commitable
-        ? 'The serving replica can commit'
-        : mixer.locked
-          ? 'No quorum and no standby: every write control is disabled'
-          : 'The serving replica cannot commit (no quorum)'}
-    >{commitable ? 'Q' : 'NO Q'}</span>
-  {/if}
+  <span class="slot q">
+    {#if commitable !== null}
+      <span
+        class="quorum"
+        class:lost={!commitable}
+        data-testid="quorum"
+        data-commitable={commitable}
+        role={mixer.locked ? 'alert' : undefined}
+        title={commitable
+          ? 'The serving replica can commit'
+          : mixer.locked
+            ? 'No quorum and no standby: every write control is disabled'
+            : 'The serving replica cannot commit (no quorum)'}
+      >{commitable ? 'Q' : 'NO Q'}</span>
+    {/if}
+  </span>
+  <span class="slot pend">
+    {#if status.outbox > 0}
+      <span class="pending fixed" data-testid="pending" title="Commands waiting for confirmation">{fit(`${status.outbox} pending`, 11)}</span>
+    {/if}
+  </span>
+  <span class="slot fo">
+    {#if failover}
+      <span class="failover num" role="status" data-testid="failover" title={`Failover after ${failover.reason}`}>
+        FAILOVER {failover.from ?? '-'}-&gt;{failover.to ?? '-'}
+      </span>
+    {/if}
+  </span>
+  <div
+    class="link"
+    data-state={status.link}
+    role="status"
+    aria-live="polite"
+    data-testid="link"
+    title={`Revision ${status.revision}; primary ${status.primaryReplica ?? '-'}, standby ${status.standbyReplica ?? '-'} (${status.standby})`}
+  >
+    <i></i><b>{LABEL[status.link]}</b>
+  </div>
+  <span class="sr-only" data-testid="revision">rev {status.revision}</span>
 </div>
 
 <style>
+  /* Items of the header's right group: see Consoles. */
   .status {
+    display: contents;
+  }
+  .slot {
+    flex: none;
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
+    justify-content: center;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+  .slot.q {
+    width: 5ch;
+  }
+  .slot.pend {
+    width: 11ch;
+  }
+  .slot.fo {
+    width: 17ch;
+  }
+  .link b {
+    display: inline-block;
+    width: 12ch;
+    white-space: nowrap;
   }
   .link {
     display: flex;
@@ -130,24 +160,6 @@
     box-shadow: 0 0 6px var(--err);
     animation: blink 0.8s steps(2) infinite;
   }
-  .rev {
-    display: inline-block;
-    width: 11ch;
-    color: #8b96a4;
-    font-size: 10.5px;
-    letter-spacing: 0;
-  }
-  /* The text changes with every update. A flex item is never a relayout
-     boundary, so the text sits in a block child of fixed size with strict
-     containment, which lays out nothing outside it. */
-  .rev span {
-    display: block;
-    height: 14px;
-    line-height: 14px;
-    overflow: hidden;
-    white-space: nowrap;
-    contain: strict;
-  }
   .failover {
     height: 24px;
     line-height: 24px;
@@ -165,10 +177,13 @@
     color: var(--warn);
   }
   .replicas {
-    display: flex;
-    gap: 3px;
+    display: contents;
   }
   .replica {
+    display: inline-flex;
+    width: 7ch;
+    justify-content: center;
+    box-sizing: border-box;
     font-family: var(--font-num);
     font-size: 10.5px;
     padding: 0 5px;
@@ -177,6 +192,10 @@
     border-radius: 3px;
     border: 1px solid var(--ok);
     color: var(--ok);
+  }
+  /* Both marks keep their place, shown or not. */
+  .replica .off {
+    visibility: hidden;
   }
   .replica sup,
   .replica sub {
@@ -228,9 +247,6 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 40%, transparent);
   }
   @media (max-width: 600px) {
-    .rev {
-      display: none;
-    }
     .link {
       padding: 0 6px;
       font-size: 10px;
@@ -243,6 +259,17 @@
   @keyframes blink {
     50% {
       opacity: 0.2;
+    }
+  }
+  @media (max-width: 1500px) {
+    .slot.fo,
+    .replica {
+      display: none;
+    }
+  }
+  @media (max-width: 700px) {
+    .slot.pend {
+      display: none;
     }
   }
 </style>

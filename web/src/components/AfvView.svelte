@@ -127,6 +127,7 @@
   }
   .wrap {
     overflow: auto;
+    scrollbar-gutter: stable;
     min-height: 0;
   }
   table {
