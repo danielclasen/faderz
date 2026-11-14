@@ -188,6 +188,10 @@ restores the current value. Parameters take units: `2.5k` or `2.5 kHz`,
 in the selected unit (ms, frames at the shape's frame rate, or
 samples) or with a suffix: `40ms`, `2f`, `1.5s`, `1920smp`; the arrow
 keys step one unit, Shift a tenth. Matrix grids move with the arrow keys.
+The slider of a parameter or a send level moves by the distance dragged,
+from where it was, and never jumps to the touch point; its arrows step a
+hundredth of its travel, Page Up and Page Down a tenth, and every press
+moves the value by at least one step of its resolution.
 
 With a pointer: drag a fader, hold Shift (or Ctrl) for fine travel; the
 FINE key in the bank bar latches fine travel for faders and pans, for

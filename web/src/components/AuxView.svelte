@@ -7,6 +7,7 @@
   import { dbToPosition, formatDb, positionToDb } from '../lib/audio/db';
   import BusMaster from './BusMaster.svelte';
   import Matrix from './Matrix.svelte';
+  import Slider from './Slider.svelte';
 
   const mixer = getMixer();
   const meters = provideMeterLayer(new MeterLayer(mixer.meters));
@@ -21,9 +22,6 @@
   const shape = $derived(mixer.shape!);
   const sendPath = (ch: string, aux: string, key: string) => channelPath(ch, 'sends', aux, key);
 
-  function level(e: Event, ch: string, aux: string): void {
-    mixer.set(sendPath(ch, aux, 'level'), positionToDb(Number((e.currentTarget as HTMLInputElement).value) / 1000));
-  }
   function excluded(row: { id: string }, col: { id: string }): boolean {
     return mixer.value<string[]>(mixMinusPath(col.id, 'exclude')).includes(row.id);
   }
@@ -67,19 +65,12 @@
                   <td class:off={!on}>
                     <div class="send">
                       <button class="key" aria-disabled={mixer.locked} aria-pressed={on} aria-label={`${ch.name} send to ${aux.name}`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'on'), !on)}>ON</button>
-                      <input
-                        type="range"
-                        disabled={mixer.locked}
-                        min="0"
-                        max="1000"
-                        value={dbToPosition(lvl) * 1000}
-                        aria-label={`${ch.name} send level to ${aux.name}`}
-                        aria-valuetext={`${formatDb(lvl)} dB`}
-                        oninput={(e) => level(e, ch.id, aux.id)}
-                        onpointerdown={() => mixer.touch(sendPath(ch.id, aux.id, 'level'))}
-                        onpointerup={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
-                        onpointercancel={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
-                        onlostpointercapture={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
+                      <Slider
+                        path={sendPath(ch.id, aux.id, 'level')}
+                        label={`${ch.name} send level to ${aux.name}`}
+                        toPos={dbToPosition}
+                        fromPos={(p) => Math.round(positionToDb(p) * 10) / 10}
+                        valueText={`${formatDb(lvl)} dB`}
                       />
                       <span class="num db fixed">{fit(formatDb(lvl), 5)}</span>
                       <button class="key" aria-disabled={mixer.locked} aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
@@ -194,7 +185,7 @@
     border-bottom: 1px solid var(--line);
   }
   td.off .db,
-  td.off input {
+  td.off :global(.slider) {
     opacity: 0.45;
   }
   .send {

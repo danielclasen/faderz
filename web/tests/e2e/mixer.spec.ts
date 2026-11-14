@@ -356,9 +356,9 @@ test('sets the LFE send and the stereo image of a channel from the processing pa
   await page.locator('[data-channel="ch1"] .head').click();
   await expect(page.getByLabel('LFE', { exact: true })).toBeVisible();
   await patch(request, '/channels/ch1/pan/lfe', -12);
-  await expect(page.locator('input[data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuetext', '-12.0');
+  await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuetext', '-12.0');
   // On the fader taper, as the Aux view's send levels: -12 dB sits at 47.5 % of the travel.
-  await expect(page.locator('input[data-path="/channels/ch1/pan/lfe"]')).toHaveValue('475');
+  await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuenow', /^4[78]$/);
   await patch(request, '/channels/ch1/pan/lfe', -90);
 });
 
@@ -1109,4 +1109,28 @@ test('says in the header that changes are not committing while the serving repli
   expect(await page.locator('[data-channel="ch1"]').boundingBox()).toEqual(strip);
   for (const r of REPLICAS) await request.post(`/__mock/replicas/${r}/restore`);
   await expect(banner).toHaveCount(0);
+});
+
+test('moves a processing parameter by the drag distance and never jumps it to the touch point', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch1/gate/threshold', -40);
+  await page.locator('[data-channel="ch1"] .head').click();
+  const slider = page.locator('[role="slider"][data-path="/channels/ch1/gate/threshold"]');
+  await expect(slider).toHaveAttribute('aria-valuetext', '-40 dB');
+  const box = (await slider.boundingBox())!;
+  // Press at the far right end and let go without moving: nothing changes.
+  await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  expect((await serverState(request)).state.channels['ch1']!.gate.threshold).toBe(-40);
+  // A drag of a tenth of the width moves the value by a tenth of the range (80 dB).
+  await page.mouse.move(box.x + 10, box.y + box.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 4; i++) await page.mouse.move(box.x + 10 + (box.width / 10) * (i / 4), box.y + box.height / 2);
+  await page.mouse.up();
+  await settled(page);
+  const v = (await serverState(request)).state.channels['ch1']!.gate.threshold;
+  expect(v).toBeGreaterThan(-33);
+  expect(v).toBeLessThan(-31);
 });

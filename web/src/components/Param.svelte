@@ -3,6 +3,7 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import { parseEntry } from '../lib/audio/entry';
   import { dbToPosition, positionToDb } from '../lib/audio/db';
+  import Slider from './Slider.svelte';
 
   interface Props {
     path: string;
@@ -23,15 +24,6 @@
   const foreign = $derived(mixer.ownedByOther(path));
   const id = `p-${Math.random().toString(36).slice(2, 9)}`;
 
-  // A log control maps the slider's 0..1000 range onto min..max exponentially.
-  const scaled = $derived(log || fader);
-  const toSlider = (v: number) => (fader ? dbToPosition(v) * 1000 : log ? (Math.log(v / min) / Math.log(max / min)) * 1000 : v);
-  const fromSlider = (s: number) => {
-    if (fader) return Math.min(max, Math.max(min, positionToDb(s / 1000)));
-    if (!log) return Math.round(s / step) * step;
-    const v = min * Math.pow(max / min, s / 1000);
-    return Math.round(v / step) * step;
-  };
   const shown = $derived(format ? format(value) : `${Number(value.toFixed(step < 1 ? 1 : 0))}${unit}`);
 
   let field: HTMLInputElement | undefined = $state();
@@ -58,29 +50,20 @@
     }
   }
 
-  function input(e: Event): void {
-    const v = Math.min(max, Math.max(min, fromSlider(Number((e.currentTarget as HTMLInputElement).value))));
-    mixer.set(path, Number(v.toFixed(4)));
-  }
 </script>
 
 <div class="param" class:foreign>
-  <label for={id}>{label}</label>
-  <input
-    {id}
-    type="range"
-    min={scaled ? 0 : min}
-    max={scaled ? 1000 : max}
-    step={scaled ? 1 : step}
-    value={toSlider(value)}
-    disabled={mixer.locked}
-    oninput={input}
-    onpointerdown={() => mixer.touch(path)}
-    onpointerup={() => mixer.release(path)}
-    onpointercancel={() => mixer.release(path)}
-    onlostpointercapture={() => mixer.release(path)}
-    aria-valuetext={shown}
-    data-path={path}
+  <span class="label" id={id}>{label}</span>
+  <Slider
+    {path}
+    {label}
+    toPos={(v) => (fader ? dbToPosition(v) : log ? Math.log(v / min) / Math.log(max / min) : (v - min) / (max - min))}
+    fromPos={(p) => {
+      if (fader) return Number(Math.min(max, Math.max(min, positionToDb(p))).toFixed(4));
+      const v = log ? min * Math.pow(max / min, p) : min + p * (max - min);
+      return Number((Math.round(Math.min(max, Math.max(min, v)) / step) * step).toFixed(4));
+    }}
+    valueText={shown}
   />
   <input
     bind:this={field}
@@ -105,7 +88,7 @@
     gap: 6px;
     min-height: 22px;
   }
-  label {
+  .label {
     font-size: 11px;
     color: var(--text-dim);
     text-transform: uppercase;
