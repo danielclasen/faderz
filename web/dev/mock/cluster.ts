@@ -13,6 +13,7 @@ import type {
   CommandMessage,
   CommandResult,
   Conflict,
+  Epoch,
   DeltaMessage,
   ErrorMessage,
   LinkMode,
@@ -208,11 +209,19 @@ const CONSOLE_OWNER: Owner = { principal: 'bridge', session: CONSOLE_SESSIONS['m
 
 const emptyStats = (): ConnStats => ({ meterFramesSent: 0, metersSkippedNoCredit: 0, messagesIn: 0, messagesOut: 0 });
 
+/** A new epoch: 64 random bits in decimal. */
+function newEpoch(): Epoch {
+  const [hi, lo] = crypto.getRandomValues(new Uint32Array(2));
+  return ((BigInt(hi!) << 32n) | BigInt(lo!)).toString();
+}
+
 export class Cluster {
   readonly contract = new Contract();
   readonly shape: Shape;
   state: State;
   owners: Record<string, Owner> = {};
+  /** The state starts empty here, so every cluster starts a new history. */
+  epoch: Epoch = newEpoch();
   revision = 0;
   readonly replicas: Replica[];
   readonly audit: AuditEntry[] = [];
@@ -500,7 +509,7 @@ export class Cluster {
       conn.mode = msg.mode;
       this.renew(conn.owner, r);
       this.emit(conn, { type: 'replicas', replica: this.ref(r), replicas: this.replicaStatus() });
-      return this.sync(conn, msg.lastRevision);
+      return this.sync(conn, this.ownEpoch(msg.epoch, msg.lastRevision));
     }
     if (!conn.owner) {
       return this.emit(conn, { type: 'error', replica: this.ref(r), code: 400, message: 'hello first' });
@@ -513,13 +522,13 @@ export class Cluster {
         return;
       case 'promote':
         conn.mode = 'primary';
-        conn.floor = msg.lastRevision;
+        conn.floor = this.ownEpoch(msg.epoch, msg.lastRevision) ?? 0;
         return;
       case 'credit':
         conn.credit = Math.min(METER_CREDIT_CAP, conn.credit + msg.n);
         return;
       case 'resync':
-        return this.sync(conn, msg.lastRevision, msg.full === true);
+        return this.sync(conn, this.ownEpoch(msg.epoch, msg.lastRevision), msg.full === true);
     }
     // A partitioned replica cannot commit; commands sent to it go unanswered.
     if (r.partitioned) return;
@@ -533,9 +542,18 @@ export class Cluster {
   }
 
   /**
+   * lastRevision when it is of this cluster's epoch; undefined otherwise,
+   * since a revision of another history says nothing about this one.
+   */
+  private ownEpoch(epoch: Epoch | undefined, lastRevision: number | undefined): number | undefined {
+    return epoch === this.epoch ? lastRevision : undefined;
+  }
+
+  /**
    * Answers hello and resync with the replica's own applied state, held
    * until it has applied lastRevision (read index). A lastRevision above
-   * the cluster's revision is answered at once with a snapshot.
+   * the cluster's revision is answered at once with ahead; one of another
+   * epoch arrives here as undefined and gets a snapshot.
    */
   private sync(conn: Conn, lastRevision: number | undefined, full = false): void {
     this.flush();
@@ -549,7 +567,7 @@ export class Cluster {
     if (lastRevision !== undefined && lastRevision > this.revision) {
       // The client holds a revision this cluster never committed.
       conn.synced = false;
-      return this.emit(conn, { type: 'ahead', replica, revision: this.revision, lastRevision });
+      return this.emit(conn, { type: 'ahead', replica, epoch: this.epoch, revision: this.revision, lastRevision });
     }
     const you = conn.owner!;
     const revision = r.applied;
@@ -558,12 +576,13 @@ export class Cluster {
       const deltas = this.log
         .filter((e) => e.revision > lastRevision && e.revision <= revision)
         .map((e): DeltaMessage => ({ type: 'delta', replica, ...e }));
-      return this.emit(conn, { type: 'resume', you, replica, revision, deltas });
+      return this.emit(conn, { type: 'resume', you, replica, epoch: this.epoch, revision, deltas });
     }
     this.emit(conn, {
       type: 'snapshot',
       you,
       replica,
+      epoch: this.epoch,
       revision,
       shape: this.shape,
       state: r.view?.state ?? this.state,
@@ -847,14 +866,17 @@ export class Cluster {
   /** Advance the revision without telling clients; dev control for gap tests. */
   /**
    * Rolls the cluster back by `by` revisions, as a restore from an older
-   * backup would; clients that saw later revisions are then ahead of it.
+   * backup would: a new epoch, and every connection closed. Clients that
+   * held state reconnect with the old epoch and get a snapshot.
    */
   rewind(by: number): void {
     this.flush();
+    this.epoch = newEpoch();
     this.revision = Math.max(0, this.revision - by);
     for (const r of this.replicas) r.applied = Math.min(r.applied, this.revision);
     this.log = this.log.filter((e) => e.revision <= this.revision);
     this.logStart = Math.min(this.logStart, this.revision + 1);
+    for (const c of this.connections()) c.close();
   }
 
   skipRevision(): void {

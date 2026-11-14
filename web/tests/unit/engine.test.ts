@@ -27,6 +27,9 @@ const F1 = '/channels/ch1/fader';
 const F2 = '/channels/ch2/fader';
 const F3 = '/channels/ch3/fader';
 const SEQ_BASE = 1_700_000_000_000;
+/** Above 2^53: an epoch is compared as text, never as a number. */
+const EPOCH = '18446744073709551557';
+const RESTORED = '18446744073709551556';
 
 function setup(endpoints = ['ws://svc/api/v1/ws'], seqBase = SEQ_BASE) {
   const clock = new FakeClock();
@@ -61,13 +64,13 @@ function replicas(from: ReplicaRef, notCommitable: string[] = []): ReplicasMessa
   };
 }
 
-function snapshot(replica: ReplicaRef, revision: number, owners: Owners = {}, you: Owner = YOU): SnapshotMessage {
+function snapshot(replica: ReplicaRef, revision: number, owners: Owners = {}, you: Owner = YOU, epoch = EPOCH): SnapshotMessage {
   const shape = exampleShape();
-  return { type: 'snapshot', you, replica, revision, shape, state: initialState(shape), owners };
+  return { type: 'snapshot', you, replica, epoch, revision, shape, state: initialState(shape), owners };
 }
 
-function resume(replica: ReplicaRef, revision: number, deltas: DeltaMessage[] = []): ResumeMessage {
-  return { type: 'resume', you: { ...YOU, connection: 'c2' }, replica, revision, deltas };
+function resume(replica: ReplicaRef, revision: number, deltas: DeltaMessage[] = [], epoch = EPOCH): ResumeMessage {
+  return { type: 'resume', you: { ...YOU, connection: 'c2' }, replica, epoch, revision, deltas };
 }
 
 function delta(replica: ReplicaRef, revision: number, extra: Partial<DeltaMessage>): DeltaMessage {
@@ -127,7 +130,7 @@ describe('sync engine: connecting', () => {
     expect(engine.link).toBe('Live');
     expect(sockets).toHaveLength(2);
     sockets[1]!.open();
-    expect(sockets[1]!.sent[0]).toEqual({ type: 'hello', session: SESSION, kind: 'ui', mode: 'standby', lastRevision: 4 });
+    expect(sockets[1]!.sent[0]).toEqual({ type: 'hello', session: SESSION, kind: 'ui', mode: 'standby', lastRevision: 4, epoch: EPOCH });
     const p = tick()!;
     expect(p.snapshot?.state.channels['ch1']).toBeDefined();
     expect(p.status).toMatchObject({ link: 'Live', primaryReplica: 'r1', standby: 'Syncing', revision: 4, session: SESSION });
@@ -211,7 +214,7 @@ describe('sync engine: heartbeat and failure detection', () => {
     beats(clock, 100, [standby, R2]);
     expect(primary.closed).toBe(true);
     expect(standby.ofType('promote')).toHaveLength(1);
-    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10 }]);
+    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10, epoch: EPOCH }]);
     expect(engine.link).toBe('Resyncing');
     expect(tick()!.status!.failover).toEqual({ n: 1, from: 'r1', to: 'r2', reason: 'dead' });
   });
@@ -274,7 +277,7 @@ describe('sync engine: heartbeat and failure detection', () => {
     t.clock.advance(1000);
     const again = t.sockets.find((s, i) => i > 0 && s.url === `ws://b/ws?session=${SESSION}` && s.onopen)!;
     again.open();
-    expect(again.sent[0]).toEqual({ type: 'hello', session: SESSION, kind: 'ui', mode: 'primary', lastRevision: 3 });
+    expect(again.sent[0]).toEqual({ type: 'hello', session: SESSION, kind: 'ui', mode: 'primary', lastRevision: 3, epoch: EPOCH });
   });
 });
 
@@ -396,8 +399,8 @@ describe('sync engine: read index', () => {
     const { engine, primary, standby, clock } = live();
     primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -3 }] }));
     primary.drop();
-    expect(standby.ofType('promote')).toEqual([{ type: 'promote', lastRevision: 11 }]);
-    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 11 }]);
+    expect(standby.ofType('promote')).toEqual([{ type: 'promote', lastRevision: 11, epoch: EPOCH }]);
+    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 11, epoch: EPOCH }]);
     standby.deliver(snapshot(R2, 10));
     standby.deliver(resume(R2, 10));
     expect(engine.revision).toBe(11);
@@ -405,7 +408,7 @@ describe('sync engine: read index', () => {
     expect(engine.link).toBe('Resyncing');
     clock.advance(RESYNC_RETRY_MS);
     expect(standby.ofType('resync')).toHaveLength(2);
-    expect(standby.ofType('resync')[1]).toEqual({ type: 'resync', lastRevision: 11 });
+    expect(standby.ofType('resync')[1]).toEqual({ type: 'resync', lastRevision: 11, epoch: EPOCH });
     standby.deliver(resume(R2, 11));
     expect(engine.link).toBe('Live');
     expect(getAt(engine.state, F1)).toBe(-3);
@@ -414,13 +417,13 @@ describe('sync engine: read index', () => {
 
 describe('sync engine: ahead of the cluster', () => {
   it('stops in Ahead without retrying when the replica says this client is ahead, and takes the cluster state on adopt', () => {
-    const { engine, primary, standby, clock, tick } = live();
+    const { engine, primary, standby, sockets, clock, tick } = live();
     primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -3 }] }));
     primary.drop();
-    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 11 }]);
-    standby.deliver({ type: 'ahead', replica: R2, revision: 7, lastRevision: 11 });
+    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 11, epoch: EPOCH }]);
+    standby.deliver({ type: 'ahead', replica: R2, epoch: EPOCH, revision: 7, lastRevision: 11 });
     expect(engine.link).toBe('Ahead');
-    expect(tick()!.status?.ahead).toEqual({ lastRevision: 11, cluster: 7 });
+    expect(tick()!.status?.ahead).toEqual({ lastRevision: 11, cluster: 7, otherHistory: false });
     beats(clock, 5 * RESYNC_RETRY_MS, [standby, R2]);
     expect(engine.link).toBe('Ahead');
     expect(standby.ofType('resync')).toHaveLength(1);
@@ -431,6 +434,86 @@ describe('sync engine: ahead of the cluster', () => {
     expect(engine.revision).toBe(7);
     expect(getAt(engine.state, F1)).not.toBe(-3);
     expect(tick()!.status?.ahead).toBeNull();
+    // The standby opened during the failover is replaced by a new one.
+    const next = sockets.at(-1)!;
+    next.open();
+    expect(next.sent[0]).toMatchObject({ type: 'hello', mode: 'standby', lastRevision: 7, epoch: EPOCH });
+    expect(engine.standbyState).toBe('Syncing');
+  });
+
+  it('goes Ahead on a snapshot of another epoch even above its revision, applies none of its deltas and takes it on adopt', () => {
+    // A cluster restored from a backup that has since committed past this
+    // client: the revision numbers alone would let it resume onto the new
+    // history.
+    const { engine, primary, standby, sockets, clock, tick } = live();
+    primary.deliver(delta(R1, 11, { changes: [{ path: F1, value: -3 }] }));
+    primary.drop();
+    expect(standby.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 11, epoch: EPOCH }]);
+    standby.deliver(snapshot(R2, 15, {}, YOU, RESTORED));
+    expect(engine.link).toBe('Ahead');
+    expect(tick()!.status?.ahead).toEqual({ lastRevision: 11, cluster: 15, otherHistory: true });
+    standby.deliver(delta(R2, 12, { changes: [{ path: F1, value: -40 }] }));
+    expect(engine.revision).toBe(11);
+    expect(engine.epoch).toBe(EPOCH);
+    expect(getAt(engine.state, F1)).toBe(-3);
+    beats(clock, 5 * RESYNC_RETRY_MS, [standby, R2]);
+    expect(engine.link).toBe('Ahead');
+    expect(standby.ofType('resync')).toHaveLength(1);
+    engine.input({ type: 'adopt' });
+    expect(standby.ofType('resync').at(-1)).toEqual({ type: 'resync' });
+    standby.deliver(snapshot(R2, 16, {}, YOU, RESTORED));
+    expect(engine.link).toBe('Live');
+    expect(engine.revision).toBe(16);
+    expect(engine.epoch).toBe(RESTORED);
+    expect(getAt(engine.state, F1)).not.toBe(-3);
+    const next = sockets.at(-1)!;
+    expect(next).not.toBe(standby);
+    next.open();
+    expect(next.sent[0]).toEqual({ type: 'hello', session: SESSION, kind: 'ui', mode: 'standby', lastRevision: 16, epoch: RESTORED });
+  });
+
+  it('reconnects with its epoch and goes Ahead on a snapshot of another one', () => {
+    const t = setup();
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 3));
+    t.sockets[0]!.drop();
+    t.clock.advance(1000);
+    const again = t.sockets.find((s, i) => i > 0 && s.onopen)!;
+    again.open();
+    expect(again.sent[0]).toMatchObject({ type: 'hello', mode: 'primary', lastRevision: 3, epoch: EPOCH });
+    again.deliver(snapshot(R1, 2, {}, YOU, RESTORED));
+    expect(t.engine.link).toBe('Ahead');
+    expect(t.engine.revision).toBe(3);
+  });
+
+  it('never applies a resume of another epoch and asks for a snapshot instead', () => {
+    const t = setup();
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 3));
+    t.sockets[0]!.drop();
+    t.clock.advance(1000);
+    const again = t.sockets.find((s, i) => i > 0 && s.onopen)!;
+    again.open();
+    again.deliver(resume(R1, 4, [delta(R1, 4, { changes: [{ path: F1, value: -40 }] })], RESTORED));
+    expect(t.engine.revision).toBe(3);
+    expect(getAt(t.engine.state, F1)).not.toBe(-40);
+    expect(again.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 3, epoch: EPOCH, full: true }]);
+  });
+
+  it('drops a standby that syncs on another epoch, so its deltas never reach this state', () => {
+    const t = setup();
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 3));
+    const sb = t.sockets[1]!;
+    sb.open();
+    sb.deliver(replicas(R2));
+    sb.deliver(resume(R2, 4, [delta(R2, 4, { changes: [{ path: F1, value: -40 }] })], RESTORED));
+    expect(sb.closed).toBe(true);
+    expect(t.engine.standbyState).toBe('Idle');
+    expect(t.engine.revision).toBe(3);
   });
 
   it('ignores adopt while not ahead', () => {
@@ -529,7 +612,7 @@ describe('sync engine: patches', () => {
   it('sends resync with lastRevision on a revision gap', () => {
     const { engine, primary } = live();
     primary.deliver(delta(R1, 12, { changes: [{ path: F1, value: 1 }] }));
-    expect(primary.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10 }]);
+    expect(primary.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10, epoch: EPOCH }]);
     expect(engine.link).toBe('Resyncing');
   });
 });
@@ -577,6 +660,6 @@ describe('sync engine: meters', () => {
     const other = deriveMeterLayout(exampleShape(3));
     primary.deliver(frame(1, other));
     primary.deliver(frame(2, other));
-    expect(primary.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10, full: true }]);
+    expect(primary.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10, epoch: EPOCH, full: true }]);
   });
 });

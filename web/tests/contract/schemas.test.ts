@@ -249,12 +249,15 @@ describe('WebSocket messages', () => {
   const owner = { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', connection: 'c1' };
   const cmd = '0b6e3a4c-5d1f-4c2a-9e8b-7f6a5d4c3b2a';
   const cmd2 = '1c7f4b5d-6e2a-4d3b-8f9c-8a7b6e5d4c3b';
+  /** The largest uint64. */
+  const epoch = '18446744073709551615';
 
   it.each([
     { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', mode: 'primary' },
-    { type: 'hello', session: 'Y29uc29sZS1tY3UtMS1zZXNz', kind: 'console', mode: 'standby', lastRevision: 12 },
-    { type: 'promote', lastRevision: 4 },
-    { type: 'resync', lastRevision: 4, full: true },
+    { type: 'hello', session: 'Y29uc29sZS1tY3UtMS1zZXNz', kind: 'console', mode: 'standby', lastRevision: 12, epoch },
+    { type: 'hello', session: 'Y29uc29sZS1tY3UtMS1zZXNz', kind: 'ui', mode: 'primary', lastRevision: 0, epoch: '0' },
+    { type: 'promote', lastRevision: 4, epoch },
+    { type: 'resync', lastRevision: 4, epoch, full: true },
     { type: 'credit', n: 1 },
     { type: 'credit', n: 8 },
     { type: 'credit', n: 100 },
@@ -278,7 +281,18 @@ describe('WebSocket messages', () => {
     { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA==', kind: 'ui', mode: 'primary' },
     { type: 'promote', mode: 'primary' },
     { type: 'promote' },
-    { type: 'resync', lastRevision: 4, full: false },
+    { type: 'resync', lastRevision: 4, epoch, full: false },
+    // A revision means nothing without its epoch, and the reverse.
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', mode: 'primary', lastRevision: 12 },
+    { type: 'hello', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui', mode: 'primary', epoch },
+    { type: 'promote', lastRevision: 4 },
+    { type: 'resync', lastRevision: 4 },
+    { type: 'resync', epoch },
+    // Text, so that no uint64 loses digits in a JSON number.
+    { type: 'resync', lastRevision: 4, epoch: 7 },
+    { type: 'resync', lastRevision: 4, epoch: '07' },
+    { type: 'resync', lastRevision: 4, epoch: '-1' },
+    { type: 'resync', lastRevision: 4, epoch: '123456789012345678901' },
     { type: 'credit' },
     { type: 'credit', n: 0 },
     { type: 'credit', n: -1 },
@@ -312,22 +326,25 @@ describe('WebSocket messages', () => {
   it.each([
     ['delta with several origins', delta],
     ['delta releasing ownership', { type: 'delta', replica, revision: 8, owners: [{ path: '/channels/ch1/fader', owner: null }] }],
-    ['resume', { type: 'resume', you: owner, replica, revision: 7, deltas: [delta] }],
+    ['resume', { type: 'resume', you: owner, replica, epoch, revision: 7, deltas: [delta] }],
     ['script owner', { type: 'delta', replica, revision: 9, owners: [{ path: '/buses/pgm/fader', owner: { ...owner, kind: 'script' } }] }],
     ['replicas', { type: 'replicas', replica, replicas: [{ ...replica, healthy: true, commitable: true }, { id: 'r2', role: 'follower', healthy: true, commitable: false }] }],
     ['ping', { type: 'ping', replica, t: 0 }],
     ['pong', { type: 'pong', replica, t: 5 }],
     ['409 with owner', { type: 'error', replica, code: 409, message: 'owned', commandId: cmd, path: '/channels/ch1/fader', current: -3, owner }],
     ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 } }],
-    ['ahead', { type: 'ahead', replica, revision: 120, lastRevision: 245 }],
+    ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
   ])('server accepts %s', (_, msg) => {
     expect(server(msg)).toBeNull();
   });
 
   it.each([
     ['meters', { type: 'meters', replica, channels: {}, buses: {}, auxes: {}, mixMinus: {} }],
-    ['resume without you', { type: 'resume', replica, revision: 7, deltas: [] }],
-    ['you as a client id', { type: 'resume', you: 'dGFiLTEtc2Vzc2lvbi1pZA', replica, revision: 7, deltas: [] }],
+    ['resume without you', { type: 'resume', replica, epoch, revision: 7, deltas: [] }],
+    ['you as a client id', { type: 'resume', you: 'dGFiLTEtc2Vzc2lvbi1pZA', replica, epoch, revision: 7, deltas: [] }],
+    ['resume without epoch', { type: 'resume', you: owner, replica, revision: 7, deltas: [] }],
+    ['ahead without epoch', { type: 'ahead', replica, revision: 120, lastRevision: 245 }],
+    ['epoch as a number', { type: 'ahead', replica, epoch: 7, revision: 120, lastRevision: 245 }],
     ['owner as a client id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: 'dGFiLTEtc2Vzc2lvbi1pZA' }] }],
     ['owner without connection', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', session: 'dGFiLTEtc2Vzc2lvbi1pZA', kind: 'ui' } }] }],
     ['owner of unknown kind', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, kind: 'robot' } }] }],

@@ -11,6 +11,7 @@ import type {
   ClientMessage,
   CommandMessage,
   DeltaMessage,
+  Epoch,
   ErrorMessage,
   Owner,
   Owners,
@@ -112,6 +113,8 @@ export class SyncEngine {
   shape: Shape | null = null;
   owners: Owners = {};
   revision = 0;
+  /** Epoch of revision, set with the state by the first snapshot. */
+  epoch: Epoch | null = null;
   you: Owner | null = null;
   /** Meter credits outstanding on the primary connection. */
   credits = 0;
@@ -288,12 +291,17 @@ export class SyncEngine {
         session: this.deps.session,
         kind: 'ui',
         mode: 'primary',
-        ...(this.state ? { lastRevision: this.revision } : {}),
+        ...this.position(),
       });
     } else {
       this.standbyEvent('open');
-      this.send(link, { type: 'hello', session: this.deps.session, kind: 'ui', mode: 'standby', lastRevision: this.revision });
+      this.send(link, { type: 'hello', session: this.deps.session, kind: 'ui', mode: 'standby', ...this.position() });
     }
+  }
+
+  /** Where this client is in the cluster history; empty before the first snapshot. */
+  private position(): { lastRevision: number; epoch: Epoch } | Record<string, never> {
+    return this.state && this.epoch !== null ? { lastRevision: this.revision, epoch: this.epoch } : {};
   }
 
   /** Re-arms the traffic watch of a link: suspect after SUSPECT_MS, dead after DEAD_MS. */
@@ -369,7 +377,8 @@ export class SyncEngine {
       this.primaryIndex = sb.endpoint;
       this.primaryAttempts = 0;
       this.failoverInfo = { n, from, to: sb.replica?.id ?? null, reason };
-      this.send(sb, { type: 'promote', lastRevision: this.revision });
+      // Failover happens only after a snapshot, so the state and epoch are set.
+      this.send(sb, { type: 'promote', lastRevision: this.revision, epoch: this.epoch! });
       this.linkEvent('promoted');
       this.transmit();
       this.resync(false);
@@ -465,7 +474,9 @@ export class SyncEngine {
         }
         return this.checkCommitable();
       case 'snapshot':
-        return link === this.primary ? this.primarySnapshot(msg) : this.standbySynced(link);
+        if (link === this.primary) return this.primarySnapshot(msg);
+        // A standby on another history would hand this state foreign deltas.
+        return msg.epoch === this.epoch ? this.standbySynced(link) : this.dropStandby(link);
       case 'resume':
         return link === this.primary ? this.primaryResume(msg) : this.standbyResume(link, msg);
       case 'delta':
@@ -484,10 +495,13 @@ export class SyncEngine {
   }
 
   private primarySnapshot(msg: SnapshotMessage): void {
-    // Taking the cluster state is the one case where state moves backwards.
+    // Taking the cluster state is the one case where state moves backwards
+    // or onto another history.
+    if (!this.adopting && this.state && msg.epoch !== this.epoch) return this.otherHistory(msg);
     if (!this.adopting && this.older(msg.revision)) return;
     this.adopting = false;
     this.ahead = null;
+    this.epoch = msg.epoch;
     this.you = msg.you;
     this.shape = msg.shape;
     this.state = msg.state;
@@ -506,6 +520,7 @@ export class SyncEngine {
   }
 
   private primaryResume(msg: ResumeMessage): void {
+    if (this.state && msg.epoch !== this.epoch) return this.resync(true);
     if (this.older(msg.revision)) return;
     this.you = msg.you;
     if (!this.state) return this.resync(true);
@@ -519,6 +534,7 @@ export class SyncEngine {
   }
 
   private standbyResume(link: Link, msg: ResumeMessage): void {
+    if (msg.epoch !== this.epoch) return this.dropStandby(link);
     for (const d of msg.deltas) this.delta(d, link);
     this.standbySynced(link);
   }
@@ -568,7 +584,7 @@ export class SyncEngine {
     this.cancelResyncRetry = this.clock.schedule(() => {
       this.cancelResyncRetry = null;
       const p = this.primary;
-      if (p && (this.link === 'Resyncing' || this.link === 'Syncing')) this.send(p, { type: 'resync', lastRevision: this.revision });
+      if (p && (this.link === 'Resyncing' || this.link === 'Syncing')) this.send(p, { type: 'resync', ...this.position() });
     }, RESYNC_RETRY_MS);
     return true;
   }
@@ -580,8 +596,22 @@ export class SyncEngine {
   private primaryAhead(msg: AheadMessage): void {
     this.cancelResyncRetry?.();
     this.cancelResyncRetry = null;
-    this.ahead = { lastRevision: msg.lastRevision, cluster: msg.revision };
+    this.ahead = { lastRevision: msg.lastRevision, cluster: msg.revision, otherHistory: false };
     this.linkEvent('ahead');
+  }
+
+  /**
+   * The cluster answered with a snapshot of another epoch: it was restored
+   * from a backup or started empty, and this state is not in its history,
+   * whatever the revision numbers say. Same as ahead: nothing is applied
+   * and nothing is retried until the operator takes the cluster state.
+   */
+  private otherHistory(msg: SnapshotMessage): void {
+    this.cancelResyncRetry?.();
+    this.cancelResyncRetry = null;
+    this.ahead = { lastRevision: this.revision, cluster: msg.revision, otherHistory: true };
+    this.linkEvent('ahead');
+    this.closeStandby();
   }
 
   /** Takes the cluster state: a resync without lastRevision, whose snapshot replaces this state. */
@@ -591,19 +621,30 @@ export class SyncEngine {
     this.adopting = true;
     this.send(p, { type: 'resync' });
     this.linkEvent('adopt');
-    if (this.standby) this.dropStandby(this.standby);
+    this.closeStandby();
+  }
+
+  /**
+   * Closes the standby in whatever state it is in; the snapshot that ends
+   * Ahead opens a new one.
+   */
+  private closeStandby(): void {
+    if (!this.standby) return;
+    this.detach(this.standby);
+    this.standby = null;
+    this.standbyEvent('lost');
   }
 
   private resync(full: boolean): void {
     const p = this.primary;
     if (!p) return;
-    if (!this.state) this.send(p, { type: 'resync' });
-    else this.send(p, { type: 'resync', lastRevision: this.revision, ...(full ? { full: true as const } : {}) });
+    this.send(p, { type: 'resync', ...this.position(), ...(full && this.state ? { full: true as const } : {}) });
     this.linkEvent('resync');
   }
 
   private delta(d: DeltaMessage, link: Link): void {
-    if (!this.state || d.revision <= this.revision) return;
+    // While Ahead the connections may carry another history's deltas.
+    if (!this.state || this.link === 'Ahead' || d.revision <= this.revision) return;
     if (d.revision !== this.revision + 1) {
       if (link === this.primary && (this.link === 'Live' || this.link === 'Suspect')) this.resync(false);
       return;

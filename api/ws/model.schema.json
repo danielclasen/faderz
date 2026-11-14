@@ -61,6 +61,11 @@
       "type": "integer",
       "minimum": 0
     },
+    "Epoch": {
+      "description": "Id of the history of the replicated state: an unsigned 64-bit integer in decimal digits, carried as a string because JSON numbers in JavaScript hold integers exactly only up to 2^53. A state that starts empty or is restored from a backup gets a new epoch, so a revision names one state only together with its epoch, and revisions of two epochs are not comparable. A replica closes every WebSocket connection when its epoch changes, so the deltas on one connection belong to the epoch of its snapshot or resume.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
     "CommandId": {
       "description": "Client-generated UUID of a command. A command id is applied at most once across all replicas, so a client may resend it after a failover.",
       "type": "string",

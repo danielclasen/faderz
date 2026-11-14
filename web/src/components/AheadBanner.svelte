@@ -1,6 +1,7 @@
 <script lang="ts">
   // Shown while this client holds a revision the cluster never committed,
-  // e.g. after the cluster was restored from an older backup. The client
+  // or a history (epoch) the cluster no longer has after a restore from a
+  // backup or an empty start. The client
   // never resyncs on its own then; the operator takes the cluster state.
   // An overlay over the top of the view: it moves nothing below it.
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -13,9 +14,14 @@
   <div class="ahead" role="alert" data-testid="ahead">
     <b>AHEAD OF CLUSTER</b>
     <span>
-      This screen shows revision <span class="num">{ahead.lastRevision}</span>; the cluster has only
-      <span class="num">{ahead.cluster}</span>. Audio follows the cluster. Changes made here are held until you take the
-      cluster state.
+      {#if ahead.otherHistory}
+        This screen shows revision <span class="num">{ahead.lastRevision}</span> of an earlier history; the cluster was
+        restored or started empty and is at revision <span class="num">{ahead.cluster}</span> of a new one.
+      {:else}
+        This screen shows revision <span class="num">{ahead.lastRevision}</span>; the cluster has only
+        <span class="num">{ahead.cluster}</span>.
+      {/if}
+      Audio follows the cluster. Changes made here are held until you take the cluster state.
     </span>
     <button class="key take" onclick={() => mixer.adopt()}>TAKE CLUSTER STATE</button>
   </div>

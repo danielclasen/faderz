@@ -77,6 +77,8 @@ afterEach(async () => {
 });
 
 const randomSession = () => `s-${crypto.randomUUID()}`;
+/** An epoch the mock never has: it draws 64 random bits. */
+const OTHER_EPOCH = '1';
 
 class Client {
   readonly messages: ServerMessage[] = [];
@@ -152,9 +154,10 @@ class Client {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
   }
 
-  async hello(mode: LinkMode = 'primary', lastRevision?: number): Promise<ServerMessage> {
+  /** Says hello, with the position (revision and epoch, the cluster's by default) when lastRevision is given. */
+  async hello(mode: LinkMode = 'primary', lastRevision?: number, epoch = cluster.epoch): Promise<ServerMessage> {
     const from = this.messages.length;
-    this.send({ type: 'hello', session: this.session, kind: this.kind, mode, ...(lastRevision === undefined ? {} : { lastRevision }) });
+    this.send({ type: 'hello', session: this.session, kind: this.kind, mode, ...(lastRevision === undefined ? {} : { lastRevision, epoch }) });
     const answer = await this.next((m) => m.type === 'snapshot' || m.type === 'resume' || m.type === 'ahead', from);
     if (this.heartbeat) this.pinger = setInterval(() => this.send({ type: 'ping', t: Date.now() }), HEARTBEAT_MS);
     return answer;
@@ -295,7 +298,7 @@ describe('hello', () => {
     await sleep(300);
     expect(c.frames).toHaveLength(0);
     expect((await statsOf(c)).creditsOutstanding).toBe(5);
-    c.send({ type: 'promote', lastRevision: cluster.revision });
+    c.send({ type: 'promote', lastRevision: cluster.revision, epoch: cluster.epoch });
     await sleep(500);
     expect(c.frames).toHaveLength(5);
     await c.next((m) => m.type === 'counters', 0, 1500);
@@ -370,8 +373,8 @@ describe('commands', () => {
     expect(old.revision).toBeLessThan(delta.revision);
     expect(old.state.channels['ch7']!.fader).toBe(before);
     const from = sb.messages.length;
-    sb.send({ type: 'promote', lastRevision: delta.revision });
-    sb.send({ type: 'resync', lastRevision: delta.revision, full: true });
+    sb.send({ type: 'promote', lastRevision: delta.revision, epoch: cluster.epoch });
+    sb.send({ type: 'resync', lastRevision: delta.revision, epoch: cluster.epoch, full: true });
     const answer = await sb.next<SnapshotMessage>((m) => m.type === 'snapshot', from);
     expect(answer.revision).toBeGreaterThanOrEqual(delta.revision);
     expect(answer.state.channels['ch7']!.fader).toBe(written);
@@ -384,12 +387,22 @@ describe('commands', () => {
     await sb.hello('standby');
     expect((await control('POST', '/replicas/r2/lag?ms=300')).status).toBe(200);
     const delta = await a.answer<DeltaMessage>(a.set('/channels/ch8/fader', -40 - Math.random()));
-    sb.send({ type: 'promote', lastRevision: delta.revision });
+    sb.send({ type: 'promote', lastRevision: delta.revision, epoch: cluster.epoch });
     const id = sb.set('/channels/ch8/mute', !cluster.state.channels['ch8']!.mute);
     await new Promise((r) => setTimeout(r, 50));
     expect(cluster.applies.some((e) => e.commandId === id)).toBe(false);
     const answer = await sb.answer<DeltaMessage>(id);
     expect(answer.revision).toBeGreaterThan(delta.revision);
+  });
+
+  it('does not hold commands after a promote carrying another epoch, whose revision says nothing here', async () => {
+    const a = await new Client().open(onReplica('r1'));
+    await a.hello();
+    const sb = await new Client(a.session).open(onReplica('r2'));
+    await sb.hello('standby');
+    sb.send({ type: 'promote', lastRevision: cluster.revision + 1000, epoch: OTHER_EPOCH });
+    const answer = await sb.answer<DeltaMessage>(sb.set('/channels/ch8/fader', -41 - Math.random()));
+    expect(answer.type).toBe('delta');
   });
 
   it('applies a resent command id once and acks every resend as duplicate', async () => {
@@ -498,24 +511,44 @@ describe('leases', () => {
 });
 
 describe('ahead of the cluster', () => {
-  it('answers a hello above the committed revision with ahead, and a resync without lastRevision with a snapshot', async () => {
+  it('answers a hello above the committed revision of its epoch with ahead, and a resync without lastRevision with a snapshot', async () => {
     const committed = cluster.revision;
     const c = await new Client().open();
     const answer = await c.hello('primary', committed + 50);
-    expect(answer).toMatchObject({ type: 'ahead', revision: committed, lastRevision: committed + 50 });
+    expect(answer).toMatchObject({ type: 'ahead', epoch: cluster.epoch, revision: committed, lastRevision: committed + 50 });
     c.send({ type: 'resync' });
     const snap = await c.next<SnapshotMessage>((m) => m.type === 'snapshot');
-    expect(snap.revision).toBe(committed);
+    expect(snap).toMatchObject({ epoch: cluster.epoch, revision: committed });
   });
 
-  it('rewinds the cluster through /__mock/rewind', async () => {
-    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch20/fader', value: -7 }] });
-    await control('POST', '/blocks/flush');
-    const before = cluster.revision;
-    expect((await control('POST', '/rewind?by=1')).status).toBe(200);
-    expect(cluster.revision).toBe(before - 1);
+  it('answers a position of another epoch with a snapshot at once, never with resume or ahead', async () => {
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch20/fader', value: -8 }] });
+    const below = await new Client().open();
+    expect(await below.hello('primary', cluster.revision - 1, OTHER_EPOCH)).toMatchObject({ type: 'snapshot', epoch: cluster.epoch, revision: cluster.revision });
+    const above = await new Client().open();
+    expect(await above.hello('primary', cluster.revision + 50, OTHER_EPOCH)).toMatchObject({ type: 'snapshot', epoch: cluster.epoch });
+    above.send({ type: 'resync', lastRevision: cluster.revision - 1, epoch: OTHER_EPOCH });
+    expect(await above.next((m) => m.type !== 'ping' && m.type !== 'pong', above.messages.length)).toMatchObject({ type: 'snapshot', epoch: cluster.epoch });
+  });
+
+  it('rewinds to a new epoch through /__mock/rewind and closes every connection, so no client resumes across the restore', async () => {
     const c = await new Client().open();
-    expect(await c.hello('primary', before)).toMatchObject({ type: 'ahead', revision: before - 1 });
+    const snap = (await c.hello()) as SnapshotMessage;
+    expect(snap.epoch).toBe(cluster.epoch);
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch20/fader', value: -7 }] });
+    const before = cluster.revision;
+    const old = cluster.epoch;
+    expect((await control('POST', '/rewind?by=1')).status).toBe(200);
+    await c.closed;
+    expect(cluster.revision).toBe(before - 1);
+    expect(cluster.epoch).not.toBe(old);
+    expect(cluster.epoch).toMatch(/^(0|[1-9][0-9]{0,19})$/);
+    // The restored cluster commits past the old position: by revision
+    // alone the client would be resumed onto the new history.
+    for (const v of [-9, -10, -11]) await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch20/fader', value: v }] });
+    expect(cluster.revision).toBeGreaterThan(before);
+    const back = await new Client(c.session).open();
+    expect(await back.hello('primary', before, old)).toMatchObject({ type: 'snapshot', epoch: cluster.epoch, revision: cluster.revision });
   });
 });
 

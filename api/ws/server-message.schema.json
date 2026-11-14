@@ -43,6 +43,7 @@
         "type",
         "you",
         "replica",
+        "epoch",
         "revision",
         "shape",
         "state",
@@ -59,6 +60,10 @@
         },
         "replica": {
           "$ref": "model.schema.json#/$defs/ReplicaRef"
+        },
+        "epoch": {
+          "description": "Epoch of revision. A client holding state of another epoch learns from it that the cluster was restored or started empty: that state is not in the cluster history.",
+          "$ref": "model.schema.json#/$defs/Epoch"
         },
         "revision": {
           "$ref": "model.schema.json#/$defs/Revision"
@@ -81,6 +86,7 @@
         "type",
         "you",
         "replica",
+        "epoch",
         "revision",
         "deltas"
       ],
@@ -96,6 +102,10 @@
         "replica": {
           "$ref": "model.schema.json#/$defs/ReplicaRef"
         },
+        "epoch": {
+          "description": "Epoch of revision, the one the hello or resync carried: a resume never crosses epochs.",
+          "$ref": "model.schema.json#/$defs/Epoch"
+        },
         "revision": {
           "$ref": "model.schema.json#/$defs/Revision"
         },
@@ -108,11 +118,12 @@
       }
     },
     "Ahead": {
-      "description": "Answers a hello or resync whose lastRevision is above the highest revision the cluster has committed, in place of holding it: the client holds state the cluster does not have, for example after the cluster was restored from an older backup or redeployed empty. The replica holds nothing for the connection. A client takes the cluster state with a resync without lastRevision, which the replica answers with a snapshot at revision.",
+      "description": "Answers a hello or resync whose epoch is the cluster epoch and whose lastRevision is above the highest revision the cluster has committed in it, in place of holding it: the client holds state the cluster does not have. A restore from a backup or an empty start gives the cluster a new epoch, so a client of the earlier history is answered with a snapshot of the new epoch instead. The replica holds nothing for the connection. A client takes the cluster state with a resync without lastRevision, which the replica answers with a snapshot at revision.",
       "type": "object",
       "required": [
         "type",
         "replica",
+        "epoch",
         "revision",
         "lastRevision"
       ],
@@ -123,6 +134,10 @@
         },
         "replica": {
           "$ref": "model.schema.json#/$defs/ReplicaRef"
+        },
+        "epoch": {
+          "description": "The cluster epoch, the one the hello or resync carried.",
+          "$ref": "model.schema.json#/$defs/Epoch"
         },
         "revision": {
           "description": "Highest revision the cluster has committed.",

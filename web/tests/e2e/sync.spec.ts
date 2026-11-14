@@ -394,22 +394,46 @@ test('sends the same ?session= on the primary, the standby and the reconnect aft
   expect([...sessions][0]).toBe(await debug(page, 'session'));
 });
 
-test('a client ahead of a rewound cluster shows it at once and takes the cluster state on request', async ({ page, request }) => {
+test('a client of a rewound cluster shows it is ahead at once and takes the cluster state on request', async ({ page, request }) => {
   await live(page);
   await patch(request, '/channels/ch19/fader', -11);
-  await expect.poll(() => debug(page, 'revision')).toBe((await serverState(request)).revision);
-  const ahead = (await debug(page, 'revision')) as number;
-  // Far enough back that background revisions (lease expiries) cannot catch up during the test.
-  const by = Math.min(50, ahead);
-  await request.post(`/__mock/rewind?by=${by}`);
-  await request.post('/__mock/drop-clients');
+  const written = (await serverState(request)).revision;
+  await expect.poll(() => debug(page, 'revision')).toBeGreaterThanOrEqual(written);
+  const mine = (await debug(page, 'revision')) as number;
+  // A restore from an older backup: a new epoch, and every socket closed.
+  await request.post('/__mock/rewind?by=2');
   const banner = page.getByTestId('ahead');
-  await expect(banner).toBeVisible({ timeout: 15_000 });
-  await expect(banner).toContainText(String(ahead));
-  await expect(banner).toContainText(String(ahead - by));
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText(`revision ${mine} of an earlier history`);
   expect(await debug(page, 'connection')).toBe('Ahead');
+  expect(await debug(page, 'revision')).toBe(mine);
   await banner.getByRole('button', { name: 'TAKE CLUSTER STATE' }).click();
   await expect(banner).toBeHidden();
   await expect.poll(() => debug(page, 'connection')).toBe('Live');
+  await expect.poll(async () => (await debug(page, 'revision')) === (await serverState(request)).revision).toBe(true);
+});
+
+test('a client never resumes onto a restored cluster that has committed past its revision', async ({ page, request }) => {
+  await live(page);
+  await patch(request, '/channels/ch19/fader', -11);
+  const written = (await serverState(request)).revision;
+  await expect.poll(() => debug(page, 'revision')).toBeGreaterThanOrEqual(written);
+  await expect(page.getByTestId('fader-value-ch19')).toHaveText(formatDb(-11));
+  const mine = (await debug(page, 'revision')) as number;
+  for (const id of REPLICAS) expect((await request.post(`/__mock/replicas/${id}/kill`)).ok()).toBe(true);
+  await request.post('/__mock/rewind?by=2');
+  for (const v of [-30, -31, -32]) await patch(request, '/channels/ch19/fader', v);
+  const restored = (await serverState(request)).revision;
+  expect(restored).toBeGreaterThan(mine);
+  for (const id of REPLICAS) expect((await request.post(`/__mock/replicas/${id}/restore`)).ok()).toBe(true);
+  const banner = page.getByTestId('ahead');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText(`revision ${mine} of an earlier history`);
+  expect(await debug(page, 'connection')).toBe('Ahead');
+  expect(await debug(page, 'revision')).toBe(mine);
+  await expect(page.getByTestId('fader-value-ch19')).toHaveText(formatDb(-11));
+  await banner.getByRole('button', { name: 'TAKE CLUSTER STATE' }).click();
+  await expect.poll(() => debug(page, 'connection')).toBe('Live');
+  await expect(page.getByTestId('fader-value-ch19')).toHaveText(formatDb(-32));
   await expect.poll(async () => (await debug(page, 'revision')) === (await serverState(request)).revision).toBe(true);
 });

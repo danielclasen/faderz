@@ -40,8 +40,12 @@ export interface SyncStatus {
   touching: string[];
   lastSync: 'snapshot' | 'resume' | null;
   meterCredits: number;
-  /** While the link is Ahead: this client's revision and the cluster's. */
-  ahead: { lastRevision: Revision; cluster: Revision } | null;
+  /**
+   * While the link is Ahead: this client's revision and the cluster's, and
+   * whether the cluster is on another history (epoch), restored or started
+   * empty, so the two revisions are not comparable.
+   */
+  ahead: { lastRevision: Revision; cluster: Revision; otherHistory: boolean } | null;
 }
 
 export type WorkerNotice =

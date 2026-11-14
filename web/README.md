@@ -55,7 +55,7 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `POST /__mock/audit/reset` | clears both command logs |
 | `POST /__mock/drop-clients` | closes every socket |
 | `POST /__mock/skip-revision` | advances the revision without a delta |
-| `POST /__mock/rewind?by=<n>` | rolls the cluster back `n` revisions, as a restore from an older backup would; a client holding a later revision is answered with `ahead` |
+| `POST /__mock/rewind?by=<n>` | rolls the cluster back `n` revisions, as a restore from an older backup would: a new epoch and every socket closed, so a client that held state reconnects with the old epoch and gets a snapshot of the new one |
 
 `/__mock/replicas/<id>/api/v1/ws` connects to one replica;
 `/api/v1/ws` picks a serving replica at random.
@@ -85,10 +85,14 @@ animation frame while visible and applies the one patch the worker
 answers with, leaf by leaf, measured as the `faderz:patch` performance
 measure. A hidden page sends no ticks, so the worker grants no meter
 credits. The state machines are in `src/lib/sync/machines.ts`.
-A client holding a revision the cluster never committed (a cluster
-restored from an older backup) gets `ahead` instead of state: the link
-shows AHEAD, a banner over the view names both revisions, nothing is
-retried, and TAKE CLUSTER STATE loads the cluster's snapshot.
+Every snapshot and resume carries the cluster's epoch, the id of its
+history; a cluster restored from a backup or started empty has a new one.
+The client sends its epoch with its revision in hello, resync and
+promote, and is resumed only within that epoch. A client whose state is
+not in the cluster's history, a snapshot of another epoch or `ahead` (a
+revision above the committed one in the same epoch), applies nothing:
+the link shows AHEAD, a banner over the view names both revisions,
+nothing is retried, and TAKE CLUSTER STATE loads the cluster's snapshot.
 
 When the serving replica cannot commit and no standby is ready, the client stays connected, the status area shows NO Q, and every write control is `aria-disabled` and sends nothing until quorum returns (`src/lib/state/writes.ts`).
 

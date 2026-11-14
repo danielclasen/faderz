@@ -7,6 +7,8 @@ export type SessionKind = 'ui' | 'console' | 'script';
 export type LinkMode = 'primary' | 'standby';
 export type CommandId = string;
 export type Revision = number;
+/** History of the replicated state: a uint64 in decimal digits. Revisions of two epochs are not comparable. */
+export type Epoch = string;
 export type Layout = 'mono' | 'stereo' | '5.1' | '7.1';
 export type Width = 1 | 2 | 6 | 8;
 export type Solo = 'off' | 'pfl' | 'afl';
@@ -338,12 +340,17 @@ export interface HelloMessage {
   session: SessionId;
   kind: 'ui' | 'console';
   mode: LinkMode;
+  /** Sent together with epoch. */
   lastRevision?: Revision;
+  /** Epoch of lastRevision. */
+  epoch?: Epoch;
 }
 export interface PromoteMessage {
   type: 'promote';
   /** Highest revision the client has applied; commands wait until the replica has applied it. */
   lastRevision: Revision;
+  /** Epoch of lastRevision: the replica waits for it only in its own epoch. */
+  epoch: Epoch;
 }
 export interface CreditMessage {
   type: 'credit';
@@ -378,6 +385,8 @@ export interface ResyncMessage {
   type: 'resync';
   /** Highest revision the client has applied; the answer waits until the replica has applied it. */
   lastRevision?: Revision;
+  /** Epoch of lastRevision; sent together with it. */
+  epoch?: Epoch;
   /** Answer with a snapshot. */
   full?: true;
 }
@@ -396,6 +405,7 @@ export interface SnapshotMessage {
   type: 'snapshot';
   you: Owner;
   replica: ReplicaRef;
+  epoch: Epoch;
   revision: Revision;
   shape: Shape;
   state: State;
@@ -413,6 +423,8 @@ export interface DeltaMessage {
 export interface AheadMessage {
   type: 'ahead';
   replica: ReplicaRef;
+  /** The cluster epoch, the one the hello or resync carried. */
+  epoch: Epoch;
   /** Highest revision the cluster has committed. */
   revision: Revision;
   lastRevision: Revision;
@@ -421,6 +433,7 @@ export interface ResumeMessage {
   type: 'resume';
   you: Owner;
   replica: ReplicaRef;
+  epoch: Epoch;
   revision: Revision;
   deltas: DeltaMessage[];
 }
