@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
+  import { MeterLayer, provideMeterLayer } from '../lib/meters/layer';
   import ChannelStrip from './ChannelStrip.svelte';
   import BusMaster from './BusMaster.svelte';
   import VcaMaster from './VcaMaster.svelte';
@@ -14,6 +16,13 @@
   const STRIP_W = 86;
   const BANK = 8;
   const mixer = getMixer();
+  const meters = provideMeterLayer(new MeterLayer(mixer.meters));
+  let root: HTMLDivElement | undefined = $state();
+  let canvas: HTMLCanvasElement | undefined = $state();
+  onMount(() => {
+    meters.attach(root!, canvas!);
+    return () => meters.destroy();
+  });
   const shape = $derived(mixer.shape!);
   const banks = $derived(
     Array.from({ length: Math.ceil(shape.channels.length / BANK) }, (_, i) => ({
@@ -32,7 +41,7 @@
   }
 </script>
 
-<div class="mixer">
+<div class="mixer" bind:this={root}>
   <div class="left">
     <div class="bankbar">
       <span class="panel-title">Banks</span>
@@ -72,10 +81,23 @@
     {/each}
     <MonitorSection />
   </div>
+  <canvas class="meter-layer" bind:this={canvas} aria-hidden="true"></canvas>
 </div>
 
 <style>
+  .meter-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+  /* The meter layer stacks above the strips and below anything outside
+     the view, such as the processing panel. */
   .mixer {
+    position: relative;
+    isolation: isolate;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     height: 100%;
