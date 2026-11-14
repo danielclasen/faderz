@@ -535,6 +535,20 @@
   .vca .eff.shown {
     visibility: visible;
   }
+  @media (pointer: coarse) {
+    .ctl .key {
+      height: 36px;
+    }
+    .chip {
+      line-height: 24px;
+    }
+    .chip::before {
+      inset: 0;
+    }
+    .pan {
+      min-height: 28px;
+    }
+  }
   /* Short screens (a phone in landscape): the processing, EQ and route
      rows, which the processing panel shows in full, give their height to
      the fader; the name takes one line and PFL, AFL and MUTE one row. */

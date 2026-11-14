@@ -202,6 +202,14 @@ select {
   opacity: 0.4;
   cursor: default;
 }
+/* Touch screens: keys at least 32 px tall (WCAG 2.5.8 asks 24 px; a
+   finger on a console screen needs more). Sizes follow the pointer, not
+   the state, so nothing changes size while operating. */
+@media (pointer: coarse) {
+  .key {
+    height: 32px;
+  }
+}
 /* Write controls while writes are blocked: no quorum and no standby. */
 [aria-disabled='true'],
 input:disabled,

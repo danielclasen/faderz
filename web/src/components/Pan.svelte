@@ -109,7 +109,11 @@
     touch-action: none;
     border-radius: 2px;
   }
-
+  @media (pointer: coarse) {
+    .pan {
+      height: 28px;
+    }
+  }
   .centre {
     position: absolute;
     left: 50%;

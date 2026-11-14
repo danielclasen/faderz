@@ -49,3 +49,14 @@ test('shows whole strips, a whole bank, and the masters over the strips on reque
   await masters.click();
   await expect(pgm).toBeHidden();
 });
+
+test('gives touch screens targets a finger can hit on the controls used most', async ({ page }) => {
+  await live(page);
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+  const h = async (loc: ReturnType<typeof page.locator>) => (await loc.boundingBox())!.height;
+  expect(await h(page.getByRole('button', { name: 'Pres 1 PFL' }))).toBeGreaterThanOrEqual(36);
+  expect(await h(page.getByRole('button', { name: 'Pres 1 AFL' }))).toBeGreaterThanOrEqual(36);
+  expect(await h(page.getByRole('button', { name: 'Pres 1 mute' }))).toBeGreaterThanOrEqual(32);
+  expect(await h(page.getByRole('button', { name: '1-8' }))).toBeGreaterThanOrEqual(32);
+  expect(await h(page.getByRole('slider', { name: 'Pres 1 pan' }))).toBeGreaterThanOrEqual(28);
+});
