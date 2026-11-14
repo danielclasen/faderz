@@ -166,7 +166,7 @@ function leaves(value: unknown, base: string, out: Change[] = []): Change[] {
 export function recallGroup(path: string): RecallGroup | null {
   const [group, , key] = parsePointer(path);
   if (group === 'afv') return key === 'open' ? null : 'afv';
-  if (group === 'mixMinus') return key === 'exclude' ? 'routing' : (key as RecallGroup);
+  if (group === 'mixMinus') return key === 'exclude' ? 'routing' : key === 'interrupt' ? null : (key as RecallGroup);
   if (group === 'vcas') return key === 'offset' ? 'fader' : key === 'members' ? 'routing' : 'mute';
   switch (key) {
     case 'trim': case 'legTrim': case 'polarity': case 'hpf': case 'delay': return 'input';
@@ -656,7 +656,7 @@ export class Cluster {
     }
     if (msg.type === 'release') {
       if (holder === undefined || sessionKey(holder) !== key) return done('noop');
-      audit('applied', this.stage({ owners: [{ path: msg.path, owner: null }], origins: [origin] }).revision);
+      audit('applied', this.stage({ changes: this.momentaryOff([msg.path]), owners: [{ path: msg.path, owner: null }], origins: [origin] }).revision);
       return null;
     }
     const seqKey = `${key}\n${msg.path}`;
@@ -1003,7 +1003,12 @@ export class Cluster {
     const released: OwnershipChange[] = Object.entries(this.owners)
       .filter(([, o]) => now - (this.leases.get(sessionKey(o)) ?? 0) > LEASE_MS)
       .map(([path]) => ({ path, owner: null }));
-    if (released.length > 0) this.stage({ owners: released });
+    if (released.length > 0) this.stage({ changes: this.momentaryOff(released.map((r) => r.path)), owners: released });
+  }
+
+  /** Momentary controls (IFB interrupt) among released paths go back to false. */
+  private momentaryOff(paths: string[]): Change[] {
+    return paths.filter((p) => /^\/mixMinus\/[^/]+\/interrupt\/active$/.test(p) && getAt(this.state, p) === true).map((path) => ({ path, value: false }));
   }
 
   resetLoudness(ids: string[]): void {

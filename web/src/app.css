@@ -45,6 +45,8 @@
   --meter-high: #ff3b47;
   --meter-rms: rgba(255, 255, 255, 0.16);
   --meter-loud: #8fb3ff;
+  --talk: #c58bff;
+  --talk-ink: #160624;
 
   color-scheme: dark;
 }

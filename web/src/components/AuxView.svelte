@@ -35,7 +35,7 @@
   <div class="masters-wrap" bind:this={root}>
   <div class="masters">
     {#each shape.auxes as aux (aux.id)}
-      <BusMaster group="auxes" element={aux} tag="AUX" />
+      <BusMaster group="auxes" element={aux} tag="AUX" talkRow={shape.mixMinus.length > 0} />
     {/each}
     {#each shape.mixMinus as mm (mm.id)}
       <BusMaster group="mixMinus" element={mm} tag="N-1" />

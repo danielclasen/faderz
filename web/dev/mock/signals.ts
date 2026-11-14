@@ -375,6 +375,13 @@ export class ReplicaMeters {
     const mixMinus: BusMeter[] = [];
     for (const mm of this.shape.mixMinus) {
       const st = state.mixMinus[mm.id]!;
+      const talk = st.interrupt.active ? st.interrupt.source : null;
+      if (talk !== null && state.channels[talk]) {
+        // The interrupt replaces the mix: the talkback channel before its fader.
+        const pan = state.channels[talk]!.pan;
+        mixMinus.push(busMeter(mm.id, mm.layout, mixInto(mm.layout, [{ id: talk, gain: 1, pan: pan.lr, fr: pan.fr }]), st.fader, st.mute));
+        continue;
+      }
       const contributions = this.shape.channels
         .filter((c) => state.channels[c.id]!.routes[mm.bus] && !st.exclude.includes(c.id))
         .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr, surround: state.channels[c.id]!.pan }));

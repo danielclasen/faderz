@@ -17,7 +17,7 @@
     ...shape.mixMinus.map((e) => ({ ...e, group: 'mixMinus' as MeterGroup })),
   ]);
   const current = $derived(sources.find((s) => s.id === source));
-  const flag = (key: 'dim' | 'cut' | 'mono') => mixer.value<boolean>(monitorPath(key));
+  const flag = (key: 'dim' | 'cut' | 'mono' | 'talkbackDim') => mixer.value<boolean>(monitorPath(key));
 </script>
 
 <section class="monitor" aria-label="Monitor">
@@ -55,6 +55,14 @@
       <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('dim')} onclick={() => mixer.set(monitorPath('dim'), !flag('dim'))}>DIM</button>
       <button class="key mute" aria-disabled={mixer.locked} aria-pressed={flag('cut')} onclick={() => mixer.set(monitorPath('cut'), !flag('cut'))}>CUT</button>
       <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('mono')} onclick={() => mixer.set(monitorPath('mono'), !flag('mono'))}>MONO</button>
+      <button
+        class="key"
+        aria-disabled={mixer.locked}
+        aria-pressed={flag('talkbackDim')}
+        aria-label="Dim the monitor while talkback is active"
+        title="Dim the monitor while talkback is active"
+        onclick={() => mixer.set(monitorPath('talkbackDim'), !flag('talkbackDim'))}>TB DIM</button
+      >
     </div>
   </div>
 </section>

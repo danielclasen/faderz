@@ -9,6 +9,7 @@
   import Fader from './Fader.svelte';
   import Meter from './Meter.svelte';
   import Loudness from './Loudness.svelte';
+  import TalkKey from './TalkKey.svelte';
 
   interface Props {
     group: Exclude<MeterGroup, 'channels'>;
@@ -16,8 +17,10 @@
     tag?: string;
     selected?: boolean;
     onselect?: (id: string) => void;
+    /** Keep the height of the talkback row, so masters beside mix-minus masters line up. */
+    talkRow?: boolean;
   }
-  let { group, element, tag = '', selected = false, onselect }: Props = $props();
+  let { group, element, tag = '', selected = false, onselect, talkRow = false }: Props = $props();
   const mixer = getMixer();
   const path = (key: string) => pointer(group, element.id, key);
   const mute = $derived(mixer.value<boolean>(path('mute')));
@@ -31,6 +34,11 @@
     {#if tag}<span class="tag">{tag}</span>{/if}
   </button>
   <Loudness {group} id={element.id} stereo={element.layout === 'stereo'} onreset={() => resetLoudness(mixer, [element.id])} />
+  {#if group === 'mixMinus'}
+    <TalkKey id={element.id} name={element.name} />
+  {:else if talkRow}
+    <div class="talk-space" aria-hidden="true"></div>
+  {/if}
   <button class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(path('mute'), !mute)} aria-label={`${element.name} mute`}>MUTE</button>
   <div class="fm">
     <Fader path={path('fader')} label={`${element.name} fader`} />
@@ -101,6 +109,9 @@
   }
   .mute {
     height: 26px;
+  }
+  .talk-space {
+    height: 53px;
   }
   .fm {
     flex: 1;

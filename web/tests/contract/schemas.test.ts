@@ -114,6 +114,10 @@ describe('Change values are constrained by path', () => {
     ['/afv/ch13/fallMs', 400],
     ['/afv/ch13/holdMs', 250],
     ['/afv/ch13/offLevel', -20],
+    ['/mixMinus/mm1/interrupt/source', 'ch1'],
+    ['/mixMinus/mm1/interrupt/source', null],
+    ['/mixMinus/mm1/interrupt/active', true],
+    ['/monitor/talkbackDim', false],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -157,6 +161,9 @@ describe('Change values are constrained by path', () => {
     ['/afv/ch13/riseMs', 12.5],
     ['/afv/ch13/holdMs', 10001],
     ['/afv/ch13/offLevel', 3],
+    ['/mixMinus/mm1/interrupt/active', 'on'],
+    ['/mixMinus/mm1/interrupt', { source: 'ch1', active: true }],
+    ['/auxes/aux1/interrupt/active', true],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });

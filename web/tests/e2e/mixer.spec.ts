@@ -209,3 +209,19 @@ test('sets AFV rise, hold, fall and closed level from the AFV view', async ({ pa
   await patch(request, '/afv/ch13/holdMs', 0);
   await patch(request, '/afv/ch13/offLevel', -90);
 });
+
+test('talks into a mix-minus output while TALK is held and stops on release', async ({ page, request }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'Aux / N-1' }).click();
+  await page.getByRole('combobox', { name: 'N-1 Phone 1 talkback source' }).selectOption('ch1');
+  await settled(page);
+  const talk = page.getByRole('button', { name: 'N-1 Phone 1 talk, hold' });
+  await talk.hover();
+  await page.mouse.down();
+  await expect.poll(async () => (await serverState(request)).state.mixMinus['mm1']!.interrupt.active).toBe(true);
+  await expect(talk).toHaveAttribute('aria-pressed', 'true');
+  await page.mouse.up();
+  await expect.poll(async () => (await serverState(request)).state.mixMinus['mm1']!.interrupt.active).toBe(false);
+  await expect.poll(async () => (await serverState(request)).owners['/mixMinus/mm1/interrupt/active']).toBeUndefined();
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});

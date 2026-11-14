@@ -497,6 +497,30 @@ describe('leases', () => {
   }, 10_000);
 });
 
+describe('IFB interrupt', () => {
+  it('clears an active interrupt when its owner releases it', async () => {
+    const c = await new Client().open();
+    await c.hello();
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/mixMinus/mm1/interrupt/source', value: 'ch1' }] });
+    await c.answer(c.command('touch', '/mixMinus/mm1/interrupt/active'));
+    await c.answer(c.set('/mixMinus/mm1/interrupt/active', true));
+    expect(cluster.state.mixMinus['mm1']!.interrupt.active).toBe(true);
+    await c.answer(c.command('release', '/mixMinus/mm1/interrupt/active'));
+    expect(cluster.state.mixMinus['mm1']!.interrupt.active).toBe(false);
+  });
+
+  it('clears an active interrupt when its owner session lease runs out', async () => {
+    const c = await new Client().open();
+    await c.hello();
+    await c.answer(c.command('touch', '/mixMinus/mm2/interrupt/active'));
+    await c.answer(c.set('/mixMinus/mm2/interrupt/active', true));
+    await c.close();
+    cluster.expireLeases(Date.now() + LEASE_MS + 1);
+    expect(cluster.state.mixMinus['mm2']!.interrupt.active).toBe(false);
+    expect(cluster.owners['/mixMinus/mm2/interrupt/active']).toBeUndefined();
+  });
+});
+
 describe('heartbeats', () => {
   it('pings every connection at the heartbeat period and answers a ping with pong', async () => {
     const c = await new Client().open();

@@ -190,13 +190,13 @@ export function initialState(shape: Shape): State {
     buses: Object.fromEntries(shape.buses.map((b) => [b.id, busState(b.width, 0, b.kind === 'program' || b.kind === 'cleanFeed')])),
     auxes: Object.fromEntries(shape.auxes.map((a) => [a.id, busState(a.width, a.id === 'aux3' ? -6 : 0)])),
     mixMinus: Object.fromEntries(
-      shape.mixMinus.map((m, i) => [m.id, { exclude: existing([i === 0 ? 'ch11' : 'ch12']), fader: 0, mute: false }]),
+      shape.mixMinus.map((m, i) => [m.id, { exclude: existing([i === 0 ? 'ch11' : 'ch12']), fader: 0, mute: false, interrupt: { source: null, active: false } }]),
     ),
     vcas: {
       vca1: { offset: 0, mute: false, members: existing(['ch1', 'ch2']) },
       vca2: { offset: -2, mute: false, members: existing(['ch3', 'ch4', 'ch5', 'ch6']) },
     },
-    monitor: { source: 'pgm20', level: -10, dim: false, cut: false, mono: false },
+    monitor: { source: 'pgm20', level: -10, dim: false, cut: false, mono: false, talkbackDim: true },
     afv: Object.fromEntries(
       shape.channels.map((c, i) => {
         const cam = i >= 12 && i < 16 ? `CAM${i - 11}` : null;

@@ -157,10 +157,17 @@ export interface BusState {
   fader: number;
   mute: boolean;
 }
+export interface Interrupt {
+  /** Channel id that talks into the output. */
+  source: Id | null;
+  /** Momentary: reset by the server when its owner releases it or the lease ends. */
+  active: boolean;
+}
 export interface MixMinusState {
   exclude: Id[];
   fader: number;
   mute: boolean;
+  interrupt: Interrupt;
 }
 export interface VcaState {
   offset: number;
@@ -173,6 +180,7 @@ export interface MonitorState {
   dim: boolean;
   cut: boolean;
   mono: boolean;
+  talkbackDim: boolean;
 }
 export interface AfvBinding {
   enabled: boolean;

@@ -952,7 +952,8 @@
       "required": [
         "exclude",
         "fader",
-        "mute"
+        "mute",
+        "interrupt"
       ],
       "additionalProperties": false,
       "properties": {
@@ -964,6 +965,34 @@
           "$ref": "#/$defs/FaderDb"
         },
         "mute": {
+          "type": "boolean"
+        },
+        "interrupt": {
+          "$ref": "#/$defs/Interrupt"
+        }
+      }
+    },
+    "Interrupt": {
+      "description": "IFB interrupt (talkback) of a mix-minus output: while active, the output carries the input channel source, at its trim and processing but before its fader, in place of the mix-minus, so a presenter hears the producer in the earpiece. active is momentary: the server sets it back to false when the session that owns /active releases it or its lease runs out, so a lost client never leaves an output interrupted. Setting active with source null changes nothing audible.",
+      "type": "object",
+      "required": [
+        "source",
+        "active"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Channel id."
+        },
+        "active": {
           "type": "boolean"
         }
       }
@@ -998,7 +1027,8 @@
         "level",
         "dim",
         "cut",
-        "mono"
+        "mono",
+        "talkbackDim"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1016,6 +1046,10 @@
           "type": "boolean"
         },
         "mono": {
+          "type": "boolean"
+        },
+        "talkbackDim": {
+          "description": "Dims the monitor while any mix-minus interrupt is active, so talkback does not feed back through the control room speakers.",
           "type": "boolean"
         }
       }
@@ -1323,13 +1357,13 @@
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
         },
         {
-          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|fader|mute)$"
+          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|fader|mute|interrupt/(source|active))$"
         },
         {
           "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/(offset|mute|members)$"
         },
         {
-          "pattern": "^/monitor/(source|level|dim|cut|mono)$"
+          "pattern": "^/monitor/(source|level|dim|cut|mono|talkbackDim)$"
         },
         {
           "pattern": "^/afv/[a-z][a-z0-9-]{0,31}/(enabled|source|riseMs|fallMs|holdMs|offLevel)$"
@@ -2060,6 +2094,47 @@
             "properties": {
               "value": {
                 "$ref": "#/$defs/AfvOffLevel"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/interrupt/source$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Id"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "(/interrupt/active|/monitor/talkbackDim)$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
               }
             }
           }
