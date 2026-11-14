@@ -44,7 +44,11 @@ export interface ElementShape {
   width: Width;
   layout: Layout;
 }
-export type ChannelShape = ElementShape;
+export interface ChannelShape extends ElementShape {
+  /** A second (B) input source is configured. */
+  altInput: boolean;
+}
+export type InputSelect = 'a' | 'b';
 export interface BusShape extends ElementShape {
   kind: BusKind;
 }
@@ -119,6 +123,7 @@ export interface Send {
   pre: boolean;
 }
 export interface ChannelState {
+  input: InputSelect;
   trim: number;
   /** Per leg, layout order. */
   legTrim: number[];

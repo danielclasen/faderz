@@ -68,6 +68,14 @@
   <div class="cols">
     <div class="col">
       <h3 class="panel-title">Input</h3>
+      {#if channel?.altInput}
+        <div class="taps" role="radiogroup" aria-label={`${element.name} input source`}>
+          <span class="lbl">Source</span>
+          {#each ['a', 'b'] as const as src (src)}
+            <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={ch?.input === src} aria-label={`Input ${src.toUpperCase()}`} onclick={() => mixer.set(p('input'), src)}>{src.toUpperCase()}</button>
+          {/each}
+        </div>
+      {/if}
       {#if ch}
         <Param path={p('trim')} label="Trim" min={-20} max={20} unit=" dB" />
       {/if}

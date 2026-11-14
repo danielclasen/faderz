@@ -41,7 +41,10 @@
 <section class="strip" class:selected class:alt={index % 2 === 1} aria-label={`Channel ${index + 1} ${channel.name}`} data-channel={channel.id}>
   <button class="head" onclick={() => onselect(channel.id)} aria-pressed={selected} title="Open channel processing">
     <span class="no num">{index + 1}</span>
-    {#if badge}<span class="badge">{badge}</span>{/if}
+    <span class="badges">
+      <span class="badge alt" class:shown={st.input === 'b'} title="Fed from its B input" aria-hidden={st.input !== 'b'}>B</span>
+      {#if badge}<span class="badge">{badge}</span>{/if}
+    </span>
     <span class="name">{channel.name}</span>
   </button>
 
@@ -155,6 +158,19 @@
     border-radius: 2px;
     padding: 0 3px;
     line-height: 13px;
+  }
+  .badges {
+    justify-self: end;
+    display: flex;
+    gap: 2px;
+  }
+  /* Reserved space: shown or not, the B badge never moves the head. */
+  .badge.alt {
+    visibility: hidden;
+    background: var(--listen);
+  }
+  .badge.alt.shown {
+    visibility: visible;
   }
   .name {
     grid-column: 1 / -1;

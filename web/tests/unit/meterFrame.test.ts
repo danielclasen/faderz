@@ -22,7 +22,7 @@ function shape(channels: Width[], buses: Width[], auxes: Width[], mixMinus: Widt
   return {
     sampleRate: 48000,
     frameRate: { numerator: 25, denominator: 1 },
-    channels: channels.map((w, i) => el(`ch${i + 1}`, w)),
+    channels: channels.map((w, i) => ({ ...el(`ch${i + 1}`, w), altInput: false })),
     buses: buses.map((w, i) => ({ ...el(`bus${i + 1}`, w), kind: 'program' as const })),
     auxes: auxes.map((w, i) => el(`aux${i + 1}`, w)),
     mixMinus: mixMinus.map((w, i) => ({ ...el(`mm${i + 1}`, w), bus: 'bus1' })),
@@ -79,7 +79,7 @@ function expectModelValid(v: MeterValues): void {
 // One mono channel ch1 and one stereo bus pgm, replica "rep" (odd length,
 // so one padding byte), sequence 258.
 const TINY = deriveMeterLayout({
-  channels: [el('ch1', 1)],
+  channels: [{ ...el('ch1', 1), altInput: false }],
   buses: [{ ...el('pgm', 2), kind: 'program' }],
   auxes: [],
   mixMinus: [],

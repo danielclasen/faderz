@@ -275,3 +275,15 @@ test('listens to every member of a VCA with its PFL key', async ({ page, request
   await expect(page.getByRole('region', { name: 'Monitor' }).getByText('VCA PRES')).toBeVisible();
   await patch(request, '/vcas/vca1/solo', 'off');
 });
+
+test('switches a presenter channel to its B input and marks the strip', async ({ page, request }) => {
+  await live(page);
+  const badge = page.locator('[data-channel="ch1"] .badge.alt');
+  await expect(badge).toBeHidden();
+  await page.locator('[data-channel="ch1"] .head').click();
+  await page.getByRole('radio', { name: 'Input B' }).click();
+  await settled(page);
+  expect((await serverState(request)).state.channels['ch1']!.input).toBe('b');
+  await expect(badge).toBeVisible();
+  await patch(request, '/channels/ch1/input', 'a');
+});

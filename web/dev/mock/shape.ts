@@ -2,6 +2,7 @@
 
 import type {
   BusState,
+  ChannelShape,
   ChannelState,
   ConsoleStatus,
   Eq,
@@ -17,12 +18,12 @@ const MONO_NAMES = [
   'Lav 3', 'Lav 4', 'Hand 1', 'Hand 2', 'Spot 1', 'Spot 2',
 ];
 
-const WIDE_CHANNELS: ElementShape[] = [
-  { id: 'st1', name: 'Music', width: 2, layout: 'stereo' },
-  { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo' },
-  { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo' },
-  { id: 'st4', name: 'FX', width: 2, layout: 'stereo' },
-  { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1' },
+const WIDE_CHANNELS: ChannelShape[] = [
+  { id: 'st1', name: 'Music', width: 2, layout: 'stereo', altInput: false },
+  { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo', altInput: false },
+  { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo', altInput: false },
+  { id: 'st4', name: 'FX', width: 2, layout: 'stereo', altInput: false },
+  { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1', altInput: true },
 ];
 
 /** Channel count of the example shape when none is given. */
@@ -38,12 +39,14 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
     throw new RangeError(`channel count must be a positive integer: ${channelCount}`);
   }
   const mono = Math.max(0, channelCount - WIDE_CHANNELS.length);
-  const channels: ElementShape[] = [
+  // The presenter microphones have a redundant B input.
+  const channels: ChannelShape[] = [
     ...Array.from({ length: mono }, (_, i) => ({
       id: `ch${i + 1}`,
       name: MONO_NAMES[i] ?? `Input ${i + 1}`,
       width: 1 as const,
       layout: 'mono' as const,
+      altInput: i < 2,
     })),
     ...WIDE_CHANNELS.slice(0, channelCount - mono).map((c) => ({ ...c })),
   ];
@@ -129,6 +132,7 @@ export function initialState(shape: Shape): State {
   shape.channels.forEach((c, i) => {
     const mic = c.layout === 'mono';
     const s: ChannelState = {
+      input: 'a',
       trim: 0,
       legTrim: Array<number>(c.width).fill(0),
       polarity: Array<boolean>(c.width).fill(false),

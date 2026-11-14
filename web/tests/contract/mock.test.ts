@@ -853,6 +853,14 @@ describe('REST', () => {
     await rest('DELETE', `/scenes/${id}`);
   });
 
+  it('switches a channel to its B input and refuses B where none is configured', async () => {
+    const write = (path: string, value: unknown) => rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path, value }] });
+    expect((await write('/channels/ch1/input', 'b')).status).toBe(200);
+    expect(cluster.state.channels['ch1']!.input).toBe('b');
+    expect((await write('/channels/ch5/input', 'b')).status).toBe(400);
+    await write('/channels/ch1/input', 'a');
+  });
+
   it('drives AFV stages from tally', async () => {
     await rest('PUT', '/afv/tally', { sources: { CAM1: 'off', CAM2: 'program' } });
     expect(cluster.state.afv['ch14']!.open).toBe(true);

@@ -356,7 +356,7 @@
       ]
     },
     "RecallGroup": {
-      "description": "Parameter group protected from scene recall. input covers trim, leg trim, polarity, HPF and delay; dynamics covers gate and compressor; routing covers bus assignment, the direct out tap, mix-minus excludes and VCA membership. The meter tap is not recalled.",
+      "description": "Parameter group protected from scene recall. input covers the A/B input select, trim, leg trim, polarity, HPF and delay; dynamics covers gate and compressor; routing covers bus assignment, the direct out tap, mix-minus excludes and VCA membership. The meter tap is not recalled.",
       "type": "string",
       "enum": [
         "input",
@@ -376,7 +376,8 @@
         "id",
         "name",
         "width",
-        "layout"
+        "layout",
+        "altInput"
       ],
       "additionalProperties": false,
       "properties": {
@@ -393,8 +394,20 @@
         },
         "layout": {
           "$ref": "#/$defs/Layout"
+        },
+        "altInput": {
+          "description": "true when the channel has a second (B) input source configured, e.g. a redundant flow.",
+          "type": "boolean"
         }
       }
+    },
+    "InputSelect": {
+      "description": "Which input source feeds the channel. Switching keeps every processing setting; b needs altInput in the channel shape.",
+      "type": "string",
+      "enum": [
+        "a",
+        "b"
+      ]
     },
     "BusShape": {
       "type": "object",
@@ -808,6 +821,7 @@
     "ChannelState": {
       "type": "object",
       "required": [
+        "input",
         "trim",
         "legTrim",
         "polarity",
@@ -829,6 +843,9 @@
       ],
       "additionalProperties": false,
       "properties": {
+        "input": {
+          "$ref": "#/$defs/InputSelect"
+        },
         "trim": {
           "$ref": "#/$defs/TrimDb"
         },
@@ -1412,7 +1429,7 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
@@ -2318,6 +2335,23 @@
             "properties": {
               "value": {
                 "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/input$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/InputSelect"
               }
             }
           }

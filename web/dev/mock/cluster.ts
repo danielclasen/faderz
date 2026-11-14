@@ -169,7 +169,7 @@ export function recallGroup(path: string): RecallGroup | null {
   if (group === 'mixMinus') return key === 'exclude' ? 'routing' : key === 'interrupt' ? null : (key as RecallGroup);
   if (group === 'vcas') return key === 'offset' ? 'fader' : key === 'members' ? 'routing' : key === 'solo' ? null : 'mute';
   switch (key) {
-    case 'trim': case 'legTrim': case 'polarity': case 'hpf': case 'delay': return 'input';
+    case 'input': case 'trim': case 'legTrim': case 'polarity': case 'hpf': case 'delay': return 'input';
     case 'eq': return 'eq';
     case 'gate': case 'comp': case 'dynamicsBeforeEq': case 'limiter': return 'dynamics';
     case 'pan': case 'image': return 'pan';
@@ -706,6 +706,10 @@ export class Cluster {
     if (/\/(exclude|members)$/.test(path)) {
       const bad = (value as string[]).find((id) => !channelIds.has(id));
       return bad ? `unknown channel ${bad}` : null;
+    }
+    const input = /^\/channels\/([^/]+)\/input$/.exec(path);
+    if (input && value === 'b' && !this.shape.channels.find((c) => c.id === input[1])?.altInput) {
+      return `channel ${input[1]} has no B input`;
     }
     if (path === '/tone/targets') {
       const outputs = new Set([...this.shape.buses, ...this.shape.auxes, ...this.shape.mixMinus].map((e) => e.id));
