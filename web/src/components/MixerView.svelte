@@ -80,7 +80,12 @@
         onclick={() => (mastersOpen = !mastersOpen)}
         title="Show the masters over the strips">MASTERS</button
       >
-      <span class="meters-from" title="Replica that measured the meters shown" data-testid="meter-replica">
+      <!-- Shown only while the meters come from another replica than the state. -->
+      <span
+        class="meters-from"
+        class:other={mixer.meterReplica !== null && mixer.meterReplica !== mixer.status.primaryReplica}
+        title="Replica that measured the meters shown, not the one serving the state"
+        data-testid="meter-replica">
         meters <b class="num">{mixer.meterReplica ?? '-'}</b>
       </span>
     </div>
@@ -169,6 +174,12 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
+  .meters-from {
+    visibility: hidden;
+  }
+  .meters-from.other {
+    visibility: visible;
+  }
   .meters-from b {
     display: inline-block;
     min-width: 4ch;
@@ -229,8 +240,12 @@
       margin-left: 0;
     }
   }
-  /* Phones: the bank keys name themselves. */
+  /* Phones: the bank keys name themselves, and the meter replica, in the
+     connection details too, gives its slot to the keys. */
   @media (max-width: 700px) {
+    .meters-from {
+      display: none;
+    }
     .bankbar .panel-title {
       display: none;
     }

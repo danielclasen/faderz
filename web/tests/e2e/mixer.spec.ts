@@ -1163,3 +1163,17 @@ test('resets a running loudness measurement only after a one second hold', async
   await expect.poll(() => resets.length).toBe(1);
   expect(JSON.parse(resets[0]!)).toEqual({ ids: ['pgm20'] });
 });
+
+test('keeps replica detail out of the sightline behind one connection lamp', async ({ page }) => {
+  await live(page);
+  const primary = (await debug(page, 'primaryReplica'))!;
+  await expect(page.locator(`[data-replica="${primary}"]`)).toBeHidden();
+  await expect(page.getByTestId('meter-replica')).toBeHidden();
+  await page.getByRole('button', { name: /^Connection LIVE, details$/ }).click();
+  const details = page.getByRole('region', { name: 'Connection details' });
+  await expect(details).toBeVisible();
+  await expect(details).toContainText(String(await debug(page, 'revision')).slice(0, 1));
+  await expect(page.locator(`[data-replica="${primary}"]`)).toBeVisible();
+  await page.getByRole('button', { name: /^Connection LIVE, details$/ }).click();
+  await expect(details).toBeHidden();
+});
