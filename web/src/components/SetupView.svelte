@@ -87,8 +87,9 @@
 
   <section class="card" aria-labelledby="setup-zones">
     <h2 class="panel-title" id="setup-zones">Meter zones</h2>
-    <NumberEntry path="/metering/zones/alignment" label="Alignment" min={-40} max={0} step={1} unit="dBFS" />
-    <NumberEntry path="/metering/zones/permittedMax" label="Permitted max" min={-40} max={0} step={1} unit="dBFS" />
+    <!-- Alignment stays below the permitted maximum, so the colours never invert. -->
+    <NumberEntry path="/metering/zones/alignment" label="Alignment" min={-40} max={metering.zones.permittedMax - 1} step={1} unit="dBFS" />
+    <NumberEntry path="/metering/zones/permittedMax" label="Permitted max" min={metering.zones.alignment + 1} max={0} step={1} unit="dBFS" />
     <NumberEntry path="/metering/zones/truePeakMax" label="True-peak max" min={-40} max={0} step={0.5} unit="dBTP" />
     <p class="hint">Shared by every client of this mixer.</p>
   </section>
