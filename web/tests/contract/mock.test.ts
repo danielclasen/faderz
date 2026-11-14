@@ -799,6 +799,22 @@ describe('REST', () => {
     expect(res.body).toMatchObject({ revision: cluster.pendingRevision });
   });
 
+  it('answers a write once it has committed and reads only committed state, even inside an open block', async () => {
+    const c = await new Client().open();
+    await c.hello();
+    await control('POST', '/blocks/hold');
+    const id = c.set('/channels/ch12/fader', -21);
+    while (!cluster.applies.some((e) => e.commandId === id)) await sleep(1);
+    const read = await rest('GET', '/state');
+    const delta = await c.answer<DeltaMessage>(id);
+    expect(read.body!['revision']).toBe(delta.revision);
+    expect((read.body!['state'] as { channels: Record<string, { fader: number }> }).channels['ch12']!.fader).toBe(-21);
+    await control('POST', '/blocks/hold');
+    const write = await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch12/fader', value: -22 }] });
+    expect(cluster.revision).toBe(write.body!['revision']);
+    expect((await rest('GET', '/state')).body!['revision']).toBe(write.body!['revision']);
+  });
+
   it('patches atomically, once per command id', async () => {
     const commandId = crypto.randomUUID();
     const body = { commandId, changes: [{ path: '/channels/ch15/fader', value: -4 }, { path: '/channels/ch15/mute', value: true }] };

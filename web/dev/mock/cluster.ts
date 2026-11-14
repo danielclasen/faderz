@@ -225,7 +225,7 @@ export class Cluster {
   private logStart = 1;
   private batch: Batch | null = null;
   private batchTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Blocks end only on flush(), a hello or a resync: dev control for batching tests. */
+  /** Blocks end only on flush(), a hello, a resync or a REST request: dev control for batching tests. */
   private holdBlocks = false;
   private lagTimers = new Set<ReturnType<typeof setTimeout>>();
   private applied = new Map<string, number>();

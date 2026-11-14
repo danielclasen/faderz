@@ -17,7 +17,9 @@ info:
     failover. Parameter changes take effect at a sample index chosen by the
     system (atIndex), the same on every replica. The server batches the
     commands arriving within one processing block into one log entry, so
-    one revision may carry changes of several commands.
+    one revision may carry changes of several commands. A write is answered
+    once the log entry carrying it has committed, and a read returns the
+    state at a committed revision.
 
     WebSocket clients keep a primary connection and a standby connection
     to another replica, exchange heartbeats every 250 ms on both and fail

@@ -46,7 +46,7 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `POST /__mock/replicas/<id>/partition` | reports `commitable: false`, ignores commands, renews no lease |
 | `POST /__mock/replicas/<id>/heal` | ends the partition |
 | `POST /__mock/replicas/<id>/lag?ms=<n>` | log entries reach the replica `n` ms late; it answers a hello or resync carrying `lastRevision`, and runs commands after a promote, only once it has applied that revision; `ms=0` catches up |
-| `POST /__mock/blocks/hold` | keeps the current processing block open, so every command joins one log entry |
+| `POST /__mock/blocks/hold` | keeps the current processing block open, so every WebSocket command joins one log entry until a REST request or a hello or resync ends it |
 | `POST /__mock/blocks/flush` | ends the hold and commits the open block |
 | `GET /__mock/stats` | per live connection: `connection, session, kind, mode, replica, meterFramesSent, metersSkippedNoCredit, creditsOutstanding, messagesIn, messagesOut, openedAt`; `totals` over all connections since start or reset |
 | `POST /__mock/stats/reset` | zeroes the counters |

@@ -142,7 +142,11 @@ export class MockServer {
       if (problem) return reply(route.template, 400, { code: 400, message: `invalid request: ${problem}` });
       const params = route.pattern.exec(path)!.slice(1);
       try {
+        // A request sees no block left open, and its own block commits before
+        // it is answered: reads and answers carry committed revisions only.
+        this.cluster.flush();
         const out = route.handler(body, params);
+        this.cluster.flush();
         reply(route.template, out.status, out.body);
       } catch (e) {
         if (!(e instanceof CommandError)) throw e;
@@ -168,7 +172,7 @@ export class MockServer {
     const result = (commandId: string | undefined, result: CommandResult['result'], atIndex?: number): CommandResult => ({
       ...(commandId ? { commandId } : {}),
       result,
-      revision: c.revision,
+      revision: c.pendingRevision,
       ...(atIndex !== undefined ? { atIndex } : {}),
     });
     const duplicate = (commandId: string, revision: number): CommandResult => ({ commandId, result: 'duplicate', revision });
