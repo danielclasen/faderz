@@ -1092,3 +1092,21 @@ test('writes the tally on the strip in words: PGM, PVW, and CLOSED when the AFV 
   await expect(page.getByTestId('tally-ch15')).toHaveText('CLOSED CAM3');
   await expect(page.getByTestId('tally-ch15')).not.toHaveCSS('text-decoration-line', 'line-through');
 });
+
+test('says in the header that changes are not committing while the serving replica has no quorum', async ({ page, request }) => {
+  test.setTimeout(60_000);
+  await live(page);
+  const banner = page.getByTestId('commit-banner');
+  await expect(banner).toHaveCount(0);
+  const strip = (await page.locator('[data-channel="ch1"]').boundingBox())!;
+  const primary = (await debug(page, 'primaryReplica'))!;
+  for (const r of REPLICAS.filter((x) => x !== primary)) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('CHANGES NOT COMMITTING');
+  await expect(banner).toContainText('audio continues');
+  // In the header: nothing under it moved, and the controls stay reachable.
+  expect((await banner.boundingBox())!.y).toBeLessThan(strip.y);
+  expect(await page.locator('[data-channel="ch1"]').boundingBox()).toEqual(strip);
+  for (const r of REPLICAS) await request.post(`/__mock/replicas/${r}/restore`);
+  await expect(banner).toHaveCount(0);
+});

@@ -16,6 +16,7 @@
   import { tip } from './lib/tip';
   import NoticeLine from './components/NoticeLine.svelte';
   import LockKey from './components/LockKey.svelte';
+  import CommitBanner from './components/CommitBanner.svelte';
 
   const mixer = getMixer();
   /** A phone in landscape: notices move from the status bar into the header. */
@@ -33,6 +34,7 @@
     const max = mixer.state?.metering.zones.truePeakMax;
     if (max !== undefined) mixer.meters.truePeakMax = max;
   });
+  const commitable = $derived(mixer.status.replicas.find((r) => r.id === mixer.status.primaryReplica)?.commitable ?? true);
 
   const VIEWS = [
     { id: 'mixer', label: 'Mixer' },
@@ -71,8 +73,13 @@
         <button class="tab" aria-current={view === v.id ? 'page' : undefined} onclick={() => (view = v.id)}>{v.label}</button>
       {/each}
     </nav>
-    {#if short.current}<div class="header-notices"><NoticeLine /></div>{/if}
     <div class="right">
+      <!-- Free header space: the commit banner when it is up, otherwise
+           the notices on a short screen. It grows into the room the fixed
+           items leave, so what it shows moves none of them. -->
+      <div class="mid">
+        {#if mixer.shape && !commitable}<CommitBanner />{:else if short.current}<NoticeLine />{/if}
+      </div>
       <Consoles />
       <StatusArea />
       <!-- Reserved: shown or not, the tone lamp moves nothing. -->
@@ -222,12 +229,9 @@
       font-size: 0;
       gap: 0;
     }
-    .header-notices {
+    .right {
       flex: 1 1 0;
       min-width: 0;
-    }
-    .right {
-      flex: 0 0 auto;
     }
   }
   .tab:hover {
@@ -239,6 +243,10 @@
   }
   /* The right group fills the rest of the header and packs its items at
      its end: an item that appears or grows at its start moves nothing. */
+  .mid {
+    flex: 1 1 0;
+    min-width: 0;
+  }
   .right {
     flex: 1 0 auto;
     display: flex;
