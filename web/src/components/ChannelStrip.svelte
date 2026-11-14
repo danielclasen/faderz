@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fit } from '../lib/format';
+  import { centre, fit } from '../lib/format';
   import type { ChannelShape, ChannelState, Solo } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { channelPath } from '../lib/state/paths';
@@ -83,8 +83,8 @@
     data-testid={`tally-${channel.id}`}
   >
     {#if afv?.enabled && afv.source}
-      <span title={`Audio follows video: ${afv.source}, ${tally ?? 'no tally'}, ${afv.open ? 'open' : 'closed'}`}
-        >{tally === 'program' ? 'PGM' : tally === 'preview' ? 'PVW' : afv.open ? 'AFV' : 'CLOSED'} {afv.source}</span
+      <span class="fixed" title={`Audio follows video: ${afv.source}, ${tally ?? 'no tally'}, ${afv.open ? 'open' : 'closed'}`}
+        >{centre(`${tally === 'program' ? 'PGM' : tally === 'preview' ? 'PVW' : afv.open ? 'AFV' : 'CLOSED'} ${afv.source}`, 12)}</span
       >
     {:else}
       <span class="none">-</span>
@@ -319,15 +319,18 @@
     border-color: var(--pvw);
     color: var(--pvw);
   }
-  .afv.program span::before {
+  .afv.program {
+    position: relative;
+  }
+  .afv.program::before {
     content: '';
-    display: inline-block;
+    position: absolute;
+    left: 3px;
+    top: 4px;
     width: 6px;
     height: 6px;
-    margin-right: 4px;
     border-radius: 50%;
     background: #fff;
-    vertical-align: 1px;
   }
   .afv.closed:not(.preview) {
     border-style: dashed;

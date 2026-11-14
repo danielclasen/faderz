@@ -26,3 +26,9 @@ export function levelText(v: number | null | undefined, target?: number): string
   const d = r - target;
   return fit(`${d >= 0 ? '+' : ''}${d.toFixed(1)}`, 5);
 }
+
+/** `text` centred in `width` characters, the extra space at the end when odd. */
+export function centre(text: string, width: number): string {
+  const pad = Math.max(0, width - text.length);
+  return ' '.repeat(Math.floor(pad / 2)) + text + ' '.repeat(Math.ceil(pad / 2));
+}

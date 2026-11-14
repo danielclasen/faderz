@@ -1086,10 +1086,10 @@ test('writes the tally on the strip in words: PGM, PVW, and CLOSED when the AFV 
   const tally = (sources: Record<string, string>) =>
     request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources } });
   await tally({ CAM1: 'program', CAM2: 'preview', CAM3: 'off' });
-  await expect(page.getByTestId('tally-ch13')).toHaveText('PGM CAM1');
-  await expect(page.getByTestId('tally-ch14')).toHaveText('PVW CAM2');
+  await expect(page.getByTestId('tally-ch13')).toHaveText(/^\s*PGM CAM1\s*$/);
+  await expect(page.getByTestId('tally-ch14')).toHaveText(/^\s*PVW CAM2\s*$/);
   await expect.poll(async () => (await serverState(request)).state.afv['ch15']!.open).toBe(false);
-  await expect(page.getByTestId('tally-ch15')).toHaveText('CLOSED CAM3');
+  await expect(page.getByTestId('tally-ch15')).toHaveText(/^\s*CLOSED CAM3\s*$/);
   await expect(page.getByTestId('tally-ch15')).not.toHaveCSS('text-decoration-line', 'line-through');
 });
 
