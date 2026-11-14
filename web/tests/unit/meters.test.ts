@@ -119,6 +119,7 @@ describe('flattened meter frames', () => {
       buses: layout.buses.map((e, i) => bus(e.legs, i)),
       auxes: layout.auxes.map((e, i) => bus(e.legs, i + 1)),
       mixMinus: layout.mixMinus.map((e, i) => bus(e.legs, i)),
+      monitor: layout.monitor.map((e) => ({ peak: legs(e.legs) })),
     };
     const frame = decodeMeterFrame(layout, encodeMeterFrame(layout, { sequence: 9, replica: 'r3' }, values));
     const store = new MeterStore();

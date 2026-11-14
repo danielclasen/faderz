@@ -3,21 +3,22 @@
 // truePeak legs, momentary (NaN for null). Per bus, aux and mix-minus
 // output: peak, truePeak and rms legs, then momentary, shortTerm,
 // integrated, lra, maxMomentary, maxShortTerm, correlation (NaN for null)
-// and flags (bit 0 integratedValid, bit 1 lraStable).
+// and flags (bit 0 integratedValid, bit 1 lraStable). Per monitor output:
+// peak legs.
 
 import type { MeterFrame, MeterLayout } from '../contract/meterFrame';
 import type { BusMeter, Loudness } from '../contract/types';
 
-export type MeterGroup = 'channels' | 'buses' | 'auxes' | 'mixMinus';
+export type MeterGroup = 'channels' | 'buses' | 'auxes' | 'mixMinus' | 'monitor';
 
 export interface MeterSlot {
   offset: number;
   legs: number;
-  bus: boolean;
+  kind: 'channel' | 'bus' | 'monitor';
 }
 
-const GROUPS: readonly MeterGroup[] = ['channels', 'buses', 'auxes', 'mixMinus'];
-const BUS_TAIL = 8;
+const GROUPS: readonly MeterGroup[] = ['channels', 'buses', 'auxes', 'mixMinus', 'monitor'];
+const SIZE = { channel: (legs: number) => 2 * legs + 1, bus: (legs: number) => 3 * legs + 8, monitor: (legs: number) => legs };
 
 export const slotKey = (group: MeterGroup, id: string) => `${group}/${id}`;
 
@@ -26,10 +27,10 @@ export function meterSlots(layout: MeterLayout): Map<string, MeterSlot> {
   const slots = new Map<string, MeterSlot>();
   let offset = 0;
   for (const group of GROUPS) {
-    const bus = group !== 'channels';
+    const kind = group === 'channels' ? 'channel' : group === 'monitor' ? 'monitor' : 'bus';
     for (const e of layout[group]) {
-      slots.set(slotKey(group, e.id), { offset, legs: e.legs, bus });
-      offset += bus ? 3 * e.legs + BUS_TAIL : 2 * e.legs + 1;
+      slots.set(slotKey(group, e.id), { offset, legs: e.legs, kind });
+      offset += SIZE[kind](e.legs);
     }
   }
   return slots;
@@ -58,5 +59,6 @@ export function flattenMeterFrame(layout: MeterLayout, frame: MeterFrame): Float
     put(b.rms);
     loud(b.loudness, b.correlation);
   }
+  for (const m of frame.monitor) put(m.peak);
   return out;
 }

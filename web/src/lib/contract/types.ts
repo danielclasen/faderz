@@ -335,6 +335,10 @@ export interface BusMeter {
   /** Phase correlation of a stereo element, -1..1; null otherwise. */
   correlation: number | null;
 }
+/** What the monitor plays before level, dim and cut: the listen sum (PFL over AFL) or the source. */
+export interface MonitorMeter {
+  peak: number[];
+}
 
 // WebSocket client messages
 export interface HelloMessage {

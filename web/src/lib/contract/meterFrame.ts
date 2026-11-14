@@ -3,7 +3,7 @@
 // Web Worker and Node alike.
 
 import { METER_FRAME_MAGIC, METER_FRAME_VERSION, METER_MAX, METER_MIN, METER_NULL } from './protocol.ts';
-import type { BusMeter, ChannelMeter, Id, Loudness, Shape } from './types';
+import type { BusMeter, ChannelMeter, Id, Loudness, MonitorMeter, Shape } from './types';
 
 /** Header bytes before the replica id. */
 const FIXED_HEADER = 12;
@@ -29,6 +29,7 @@ export interface MeterLayout {
   readonly buses: readonly MeterElement[];
   readonly auxes: readonly MeterElement[];
   readonly mixMinus: readonly MeterElement[];
+  readonly monitor: readonly MeterElement[];
   /** FNV-1a 32-bit of the layout text; the frame header carries it. */
   readonly fingerprint: number;
   /** Int16 values per frame. */
@@ -48,6 +49,7 @@ export interface MeterValues {
   buses: BusMeter[];
   auxes: BusMeter[];
   mixMinus: BusMeter[];
+  monitor: MonitorMeter[];
 }
 
 export type MeterFrame = MeterFrameHeader & MeterValues;
@@ -69,7 +71,7 @@ export class MeterFrameError extends Error {
   }
 }
 
-type MeteredShape = Pick<Shape, 'channels' | 'buses' | 'auxes' | 'mixMinus'>;
+type MeteredShape = Pick<Shape, 'channels' | 'buses' | 'auxes' | 'mixMinus' | 'monitorOutputs'>;
 
 /** Layout of the meter frames of a replica running with this shape. */
 export function deriveMeterLayout(shape: MeteredShape): MeterLayout {
@@ -78,6 +80,7 @@ export function deriveMeterLayout(shape: MeteredShape): MeterLayout {
   const buses = elements(shape.buses);
   const auxes = elements(shape.auxes);
   const mixMinus = elements(shape.mixMinus);
+  const monitor = elements(shape.monitorOutputs);
 
   let text = '';
   let valueCount = 0;
@@ -91,7 +94,11 @@ export function deriveMeterLayout(shape: MeteredShape): MeterLayout {
       valueCount += 3 * e.legs + BUS_TAIL;
     }
   }
-  return { channels, buses, auxes, mixMinus, fingerprint: fnv1a(text), valueCount };
+  for (const e of monitor) {
+    text += `o/${e.id}/${e.legs};`;
+    valueCount += e.legs;
+  }
+  return { channels, buses, auxes, mixMinus, monitor, fingerprint: fnv1a(text), valueCount };
 }
 
 /** FNV-1a 32-bit over the char codes of an ASCII string. */
@@ -176,6 +183,7 @@ export function encodeMeterFrame(layout: MeterLayout, header: MeterFrameHeader, 
   section('buses', layout.buses, values.buses, bus);
   section('auxes', layout.auxes, values.auxes, bus);
   section('mixMinus', layout.mixMinus, values.mixMinus, bus);
+  section('monitor', layout.monitor, values.monitor, (m, e) => legs(`${e.id} peak`, m.peak, e.legs));
   return bytes;
 }
 
@@ -266,5 +274,6 @@ export function decodeMeterFrame(layout: MeterLayout, data: ArrayBuffer | ArrayB
   const buses = layout.buses.map(bus);
   const auxes = layout.auxes.map(bus);
   const mixMinus = layout.mixMinus.map(bus);
-  return { sequence: view.getUint32(4, true), replica, channels, buses, auxes, mixMinus };
+  const monitor = layout.monitor.map((e): MonitorMeter => ({ peak: legs(e.legs) }));
+  return { sequence: view.getUint32(4, true), replica, channels, buses, auxes, mixMinus, monitor };
 }

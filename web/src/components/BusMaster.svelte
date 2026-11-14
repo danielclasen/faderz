@@ -15,7 +15,7 @@
   import { tip } from '../lib/tip';
 
   interface Props {
-    group: Exclude<MeterGroup, 'channels'>;
+    group: Exclude<MeterGroup, 'channels' | 'monitor'>;
     element: ElementShape;
     tag?: string;
     selected?: boolean;

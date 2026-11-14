@@ -3,7 +3,6 @@
   import { monitorPath } from '../lib/state/paths';
   import { pointer } from '../lib/state/pointer';
   import { LAYOUT_LABELS, type StereoImage } from '../lib/contract/types';
-  import type { MeterGroup } from '../lib/meters/store';
   import Fader from './Fader.svelte';
   import Meter from './Meter.svelte';
   import { tip } from '../lib/tip';
@@ -24,9 +23,9 @@
     listenMode === null ? '' : `${listenMode}: ${heard}${pfl.length > 0 && afl.length > 0 ? `; AFL held while PFL is on: ${afl.map((l) => l.name).join(', ')}` : ''}`,
   );
   const sources = $derived([
-    ...shape.buses.map((e) => ({ ...e, group: 'buses' as MeterGroup })),
-    ...shape.auxes.map((e) => ({ ...e, group: 'auxes' as MeterGroup })),
-    ...shape.mixMinus.map((e) => ({ ...e, group: 'mixMinus' as MeterGroup })),
+    ...shape.buses,
+    ...shape.auxes,
+    ...shape.mixMinus,
   ]);
   const current = $derived(sources.find((s) => s.id === source));
   const output = $derived(shape.monitorOutputs[0]);
@@ -95,11 +94,15 @@
   {/if}
   <div class="body">
     <div class="f"><Fader path={monitorPath('level')} label="Monitor level" /></div>
+    <!-- What the monitor plays: the listen sum while anyone listens, else the source. -->
     <div class="meter">
-      {#if current}
-        {#key current.id}
-          <Meter group={current.group} id={current.id} legs={current.width} label={`Monitor source ${current.name} meter`} />
-        {/key}
+      {#if output}
+        <Meter
+          group="monitor"
+          id={output.id}
+          legs={output.width}
+          label={listenMode ? `Monitor meter, ${listenMode} listen sum` : `Monitor meter, source ${current?.name ?? source}`}
+        />
       {/if}
     </div>
     <div class="flags">

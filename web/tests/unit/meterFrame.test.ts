@@ -18,7 +18,7 @@ import { API_DIR, Contract } from '../../dev/mock/contract';
 const LAYOUT_OF: Record<Width, Layout> = { 1: 'mono', 2: 'stereo', 6: '5.1', 8: '7.1' };
 const el = (id: string, width: Width) => ({ id, name: id, width, layout: LAYOUT_OF[width] });
 
-function shape(channels: Width[], buses: Width[], auxes: Width[], mixMinus: Width[]): Shape {
+function shape(channels: Width[], buses: Width[], auxes: Width[], mixMinus: Width[], monitor: Width[] = []): Shape {
   return {
     sampleRate: 48000,
     frameRate: { numerator: 25, denominator: 1 },
@@ -27,7 +27,7 @@ function shape(channels: Width[], buses: Width[], auxes: Width[], mixMinus: Widt
     auxes: auxes.map((w, i) => el(`aux${i + 1}`, w)),
     mixMinus: mixMinus.map((w, i) => ({ ...el(`mm${i + 1}`, w), bus: 'bus1' })),
     vcas: [],
-    monitorOutputs: [],
+    monitorOutputs: monitor.map((w, i) => el(`mon${i + 1}`, w)),
     outputs: [],
   };
 }
@@ -63,6 +63,7 @@ function values(layout: MeterLayout, seed = 1): MeterValues {
     buses: layout.buses.map(bus),
     auxes: layout.auxes.map(bus),
     mixMinus: layout.mixMinus.map(bus),
+    monitor: layout.monitor.map((e) => ({ peak: legs(e.legs) })),
   };
 }
 
@@ -70,10 +71,12 @@ const contract = new Contract();
 const MODEL = 'https://github.com/danielclasen/faderz/raw/main/api/ws/model.schema.json';
 const channelMeter = contract.ajv.compile({ $ref: `${MODEL}#/$defs/ChannelMeter` });
 const busMeter = contract.ajv.compile({ $ref: `${MODEL}#/$defs/BusMeter` });
+const monitorMeter = contract.ajv.compile({ $ref: `${MODEL}#/$defs/MonitorMeter` });
 
 function expectModelValid(v: MeterValues): void {
   for (const m of v.channels) expect(channelMeter(m), JSON.stringify(channelMeter.errors)).toBe(true);
   for (const m of [...v.buses, ...v.auxes, ...v.mixMinus]) expect(busMeter(m), JSON.stringify(busMeter.errors)).toBe(true);
+  for (const m of v.monitor) expect(monitorMeter(m), JSON.stringify(monitorMeter.errors)).toBe(true);
 }
 
 // One mono channel ch1 and one stereo bus pgm, replica "rep" (odd length,
@@ -83,6 +86,7 @@ const TINY = deriveMeterLayout({
   buses: [{ ...el('pgm', 2), kind: 'program' }],
   auxes: [],
   mixMinus: [],
+  monitorOutputs: [],
 });
 const TINY_VALUES: MeterValues = {
   channels: [{ peak: [-6.5], truePeak: [-5.9], momentary: -20.004 }],
@@ -106,10 +110,11 @@ const TINY_VALUES: MeterValues = {
   ],
   auxes: [],
   mixMinus: [],
+  monitor: [],
 };
 // prettier-ignore
 const TINY_BYTES = [
-  0x4d, 0x02, 0x03, 0x00, // magic 'M', version 2, replica id length 3, reserved
+  0x4d, 0x03, 0x03, 0x00, // magic 'M', version 3, replica id length 3, reserved
   0x02, 0x01, 0x00, 0x00, // sequence 258
   0xf5, 0x1d, 0xdd, 0xbd, // fingerprint FNV-1a("c/ch1/1;b/pgm/2;") = 0xbddd1df5
   0x72, 0x65, 0x70, 0x00, // "rep", padding
@@ -169,6 +174,7 @@ describe('meter frame byte layout', () => {
       ],
       auxes: [],
       mixMinus: [],
+      monitor: [],
     });
     expectModelValid(frame);
   });
@@ -181,12 +187,12 @@ describe('meter frame byte layout', () => {
 });
 
 describe('meter layout', () => {
-  it('orders channels, buses, auxes, mix-minus with their legs', () => {
-    const layout = deriveMeterLayout(shape([1, 2, 6, 8], [2], [1], [2]));
+  it('orders channels, buses, auxes, mix-minus and monitor outputs with their legs', () => {
+    const layout = deriveMeterLayout(shape([1, 2, 6, 8], [2], [1], [2], [2]));
     expect(layout.channels.map((e) => e.legs)).toEqual([1, 2, 6, 8]);
-    expect(layout.valueCount).toBe(2 * 17 + 4 + (3 * 2 + 8) + (3 * 1 + 8) + (3 * 2 + 8));
+    expect(layout.valueCount).toBe(2 * 17 + 4 + (3 * 2 + 8) + (3 * 1 + 8) + (3 * 2 + 8) + 2);
     expect(layout.fingerprint).toBe(
-      fnv1a('c/ch1/1;c/ch2/2;c/ch3/6;c/ch4/8;b/bus1/2;a/aux1/1;m/mm1/2;'),
+      fnv1a('c/ch1/1;c/ch2/2;c/ch3/6;c/ch4/8;b/bus1/2;a/aux1/1;m/mm1/2;o/mon1/2;'),
     );
   });
 
@@ -200,9 +206,9 @@ describe('meter layout', () => {
 describe('meter frame round trip', () => {
   it.each([
     ['empty', shape([], [], [], [])],
-    ['one of each', shape([1], [2], [2], [1])],
+    ['one of each', shape([1], [2], [2], [1], [2])],
     ['every width', shape([1, 2, 6, 8], [2, 6, 8], [1, 2], [2, 2])],
-    ['64 channels', shape(Array<Width>(64).fill(2), [2, 6, 2], Array<Width>(8).fill(2), Array<Width>(4).fill(2))],
+    ['64 channels', shape(Array<Width>(64).fill(2), [2, 6, 2], Array<Width>(8).fill(2), Array<Width>(4).fill(2), [6, 2])],
   ])('%s', (_, s) => {
     const layout = deriveMeterLayout(s);
     for (const seed of [1, 2, 3]) {
@@ -259,6 +265,7 @@ describe('meter values', () => {
     ],
     auxes: [],
     mixMinus: [],
+    monitor: [],
   });
   const wire = (bytes: Uint8Array) => {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

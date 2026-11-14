@@ -322,11 +322,14 @@ export class MeterLayer {
     ctx.globalAlpha = 1;
     ctx.fillStyle = colors.well;
     ctx.fillRect(x0, top, w, full);
-    const over = this.meters.overs.has(s.key);
-    ctx.globalAlpha = over ? 1 : 0.5;
-    ctx.fillStyle = over ? colors.high : colors.line;
-    ctx.fillRect(x0 + (scale ? 18 : 0), top, w - (scale ? 18 : 0), LAMP_H);
-    ctx.globalAlpha = 1;
+    // A monitor meter carries no true peak, so no lamp; its space stays.
+    if (s.spec.group !== 'monitor') {
+      const over = this.meters.overs.has(s.key);
+      ctx.globalAlpha = over ? 1 : 0.5;
+      ctx.fillStyle = over ? colors.high : colors.line;
+      ctx.fillRect(x0 + (scale ? 18 : 0), top, w - (scale ? 18 : 0), LAMP_H);
+      ctx.globalAlpha = 1;
+    }
     // A channel meter gives its rightmost LOUD_W pixels to one momentary
     // loudness bar; the legs share the rest.
     const loudW = s.loud ? LOUD_W : 0;

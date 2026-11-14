@@ -391,6 +391,20 @@ test('mutes and solos monitor speakers and sets monitor image and dim depth', as
   ] as const) await patch(request, path, value);
 });
 
+test('meters the listen sum on the monitor while a PFL is on, PFL over AFL', async ({ page, request }) => {
+  await live(page);
+  const meter = page.locator('[data-meter="monitor/mon"]');
+  await expect(meter).toHaveAttribute('aria-label', /source/);
+  await patch(request, '/channels/ch3/solo', 'afl');
+  await expect(meter).toHaveAttribute('aria-label', 'Monitor meter, AFL listen sum');
+  await patch(request, '/channels/ch1/solo', 'pfl');
+  await expect(meter).toHaveAttribute('aria-label', 'Monitor meter, PFL listen sum');
+  await expect(page.locator('.listen b')).toHaveText('PFL (AFL held)');
+  await patch(request, '/channels/ch1/solo', 'off');
+  await patch(request, '/channels/ch3/solo', 'off');
+  await expect(meter).toHaveAttribute('aria-label', /source/);
+});
+
 test('listens to every member of a VCA with its PFL key', async ({ page, request }) => {
   await live(page);
   await page.getByRole('button', { name: 'VCA PRES PFL, all members' }).click();

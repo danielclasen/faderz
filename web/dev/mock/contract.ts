@@ -65,13 +65,13 @@ export class Contract {
     const meter = (def: string) => ({ type: 'array', items: { $ref: `${ID_BASE}ws/model.schema.json#/$defs/${def}` } });
     this.meterValues = this.ajv.compile({
       type: 'object',
-      required: ['channels', 'buses', 'auxes', 'mixMinus'],
-      properties: { channels: meter('ChannelMeter'), buses: meter('BusMeter'), auxes: meter('BusMeter'), mixMinus: meter('BusMeter') },
+      required: ['channels', 'buses', 'auxes', 'mixMinus', 'monitor'],
+      properties: { channels: meter('ChannelMeter'), buses: meter('BusMeter'), auxes: meter('BusMeter'), mixMinus: meter('BusMeter'), monitor: meter('MonitorMeter') },
     });
   }
 
   /** Throws when decoded meter values do not match model.schema.json ChannelMeter and BusMeter. */
-  assertMeterValues(values: { channels: unknown[]; buses: unknown[]; auxes: unknown[]; mixMinus: unknown[] }): void {
+  assertMeterValues(values: { channels: unknown[]; buses: unknown[]; auxes: unknown[]; mixMinus: unknown[]; monitor: unknown[] }): void {
     if (!this.meterValues(values)) {
       throw new ContractViolation(`meter frame values violate the contract: ${describe(this.meterValues)}`);
     }

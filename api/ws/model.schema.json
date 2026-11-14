@@ -2777,6 +2777,19 @@
         }
       }
     },
+    "MonitorMeter": {
+      "description": "Monitor output metering: sample peak per leg of what the monitor plays before level, dim, cut, mono and speaker mutes. While any channel or VCA listens, that is the listen sum, and PFL takes priority over AFL: while any PFL is on, only the PFL listens are summed. Otherwise it is the monitor source, folded to the monitor layout by downmix.",
+      "type": "object",
+      "required": [
+        "peak"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "peak": {
+          "$ref": "#/$defs/MeterLegs"
+        }
+      }
+    },
     "Counters": {
       "description": "Engine counters by metric name, as exported on /metrics.",
       "type": "object",

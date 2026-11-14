@@ -11,6 +11,7 @@ export type { MeterGroup } from './flat';
 
 export interface MeterReading {
   peak: number[];
+  /** Empty for a monitor output, which carries peak only. */
   truePeak: number[];
   /** Bus, aux and mix-minus only. */
   rms?: number[];
@@ -56,7 +57,7 @@ export class MeterStore {
     this.history.push({ at: now, values });
     if (this.history.length > HISTORY) this.history.shift();
     for (const [key, slot] of this.slots) {
-      if (this.overs.has(key)) continue;
+      if (slot.kind === 'monitor' || this.overs.has(key)) continue;
       const tp = slot.offset + slot.legs;
       for (let i = 0; i < slot.legs; i++) {
         if (values[tp + i]! > this.truePeakMax) {
@@ -79,7 +80,7 @@ export class MeterStore {
    */
   maxSince(group: MeterGroup, id: string, kind: 'peak' | 'truePeak', since: number, out: number[]): boolean {
     const slot = this.slots.get(slotKey(group, id));
-    if (!slot) return false;
+    if (!slot || (kind === 'truePeak' && slot.kind === 'monitor')) return false;
     const base = slot.offset + (kind === 'truePeak' ? slot.legs : 0);
     let any = false;
     for (let f = this.history.length - 1; f >= 0; f--) {
@@ -104,7 +105,9 @@ export class MeterStore {
     const legs = (i: number) => Array.from(v.subarray(slot.offset + i * slot.legs, slot.offset + (i + 1) * slot.legs));
     const opt = (x: number) => (Number.isNaN(x) ? null : x);
     let reading: MeterReading;
-    if (!slot.bus) {
+    if (slot.kind === 'monitor') {
+      reading = { peak: legs(0), truePeak: [] };
+    } else if (slot.kind === 'channel') {
       reading = { peak: legs(0), truePeak: legs(1), momentary: opt(v[slot.offset + 2 * slot.legs]!) };
     } else {
       const t = slot.offset + 3 * slot.legs;

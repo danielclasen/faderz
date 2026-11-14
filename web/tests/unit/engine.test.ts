@@ -116,6 +116,7 @@ function meterValues(layout: MeterLayout, db: number): MeterValues {
     buses: layout.buses.map((e) => bus(e.legs)),
     auxes: layout.auxes.map((e) => bus(e.legs)),
     mixMinus: layout.mixMinus.map((e) => bus(e.legs)),
+    monitor: layout.monitor.map((e) => ({ peak: legs(e.legs) })),
   };
 }
 

@@ -252,6 +252,28 @@ interface Mix {
   peak: number[];
 }
 
+/**
+ * Peak legs of a `from` element on a `to` monitor layout: equal layouts
+ * copy, a mono source feeds every leg, loRo folds by the BS.775 Lo/Ro
+ * equations (centre and surrounds at -3 dB, LFE dropped), lr keeps L and R.
+ */
+function foldPeaks(from: Layout, peaks: number[], to: Layout, downmix: 'loRo' | 'lr'): number[] {
+  const src = LAYOUT_LABELS[from];
+  const dst = LAYOUT_LABELS[to];
+  if (from === to) return [...peaks];
+  if (src.length === 1) return dst.map(() => peaks[0]!);
+  const at = (label: string) => {
+    const i = src.indexOf(label);
+    return i < 0 ? SILENCE : peaks[i]!;
+  };
+  return dst.map((label) => {
+    if (label === 'LFE') return SILENCE;
+    const side = label.startsWith('R') ? 'R' : label.startsWith('L') ? 'L' : label;
+    const parts = downmix === 'lr' ? [at(side)] : [at(side), at('C') - 3, at(`${side}s`) - 3];
+    return r1(toDb(parts.reduce((a, d) => a + power(d), 0)));
+  });
+}
+
 /** Metering of one replica. */
 export class ReplicaMeters {
   private readonly loudness = new Map<string, LoudnessMeter>();
@@ -401,6 +423,35 @@ export class ReplicaMeters {
       tone(auxes, this.shape.auxes);
       tone(mixMinus, this.shape.mixMinus);
     }
-    return { channels, buses, auxes, mixMinus };
+
+    // Monitor feed: the listen sum, PFL over AFL, else the source folded.
+    const monitor = this.shape.monitorOutputs.map((out) => {
+      const solo = (id: string) => {
+        const own = state.channels[id]!.solo;
+        if (own !== 'off') return own;
+        const vca = Object.values(state.vcas).find((v) => v.solo !== 'off' && v.members.includes(id));
+        return vca?.solo ?? 'off';
+      };
+      const listens = this.shape.channels.map((c) => ({ id: c.id, mode: solo(c.id) })).filter((l) => l.mode !== 'off');
+      const pfl = listens.some((l) => l.mode === 'pfl');
+      if (listens.length > 0) {
+        const heard = listens.filter((l) => l.mode === (pfl ? 'pfl' : 'afl'));
+        const gain = (id: string) => {
+          const st = state.channels[id]!;
+          if (pfl) return 1;
+          return st.mute || vcaMuted(id) ? 0 : dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
+        };
+        const mix = mixInto(out.layout, heard.map((l) => ({ id: l.id, gain: gain(l.id), pan: state.channels[l.id]!.pan.lr, fr: state.channels[l.id]!.pan.fr, surround: state.channels[l.id]!.pan })));
+        return { peak: mix.peak.map((v) => r1(Math.max(SILENCE, v + jitter()))) };
+      }
+      const all: Array<[ElementShape, BusMeter]> = [
+        ...this.shape.buses.map((e, i) => [e, buses[i]!] as [ElementShape, BusMeter]),
+        ...this.shape.auxes.map((e, i) => [e, auxes[i]!] as [ElementShape, BusMeter]),
+        ...this.shape.mixMinus.map((e, i) => [e, mixMinus[i]!] as [ElementShape, BusMeter]),
+      ];
+      const found = all.find(([e]) => e.id === state.monitor.source);
+      return { peak: found ? foldPeaks(found[0].layout, found[1].peak, out.layout, state.monitor.downmix) : LAYOUT_LABELS[out.layout].map(() => SILENCE) };
+    });
+    return { channels, buses, auxes, mixMinus, monitor };
   }
 }

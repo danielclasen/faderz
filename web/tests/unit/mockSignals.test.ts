@@ -65,3 +65,41 @@ describe('mock line-up tone', () => {
     expect(frame.buses[me]!.peak).not.toEqual([-20, -20]);
   });
 });
+
+describe('mock monitor meter', () => {
+  const setup = () => {
+    const shape = exampleShape();
+    const state = initialState(shape);
+    const sources = new SourceModel(shape);
+    for (const c of shape.channels) sources.levels.set(c.id, Array<number>(c.width).fill(-120));
+    sources.levels.set('ch1', [-10]);
+    sources.levels.set('ch2', [-40]);
+    for (const c of Object.values(state.channels)) {
+      c.fader = -90;
+      c.trim = 0;
+      c.legTrim = c.legTrim.map(() => 0);
+      c.comp.enabled = false;
+    }
+    return { shape, state, sources, meters: new ReplicaMeters(shape) };
+  };
+  const top = (peak: number[]) => Math.max(...peak);
+
+  it('meters the source while nobody listens and the listen sum while somebody does', () => {
+    const { state, sources, meters } = setup();
+    expect(top(meters.frame(state, sources).monitor[0]!.peak)).toBeLessThan(-100);
+    // PFL listens before the fader: ch1 is heard though its fader is closed.
+    state.channels['ch1']!.solo = 'pfl';
+    expect(top(meters.frame(state, sources).monitor[0]!.peak)).toBeGreaterThan(-20);
+  });
+
+  it('gives PFL priority over AFL', () => {
+    const { state, sources, meters } = setup();
+    state.channels['ch2']!.solo = 'pfl';
+    state.channels['ch1']!.solo = 'afl';
+    state.channels['ch1']!.fader = 0;
+    // Only ch2 (-40 dB) is summed while its PFL is on, not ch1 at -10 dB.
+    expect(top(meters.frame(state, sources).monitor[0]!.peak)).toBeLessThan(-20);
+    state.channels['ch2']!.solo = 'off';
+    expect(top(meters.frame(state, sources).monitor[0]!.peak)).toBeGreaterThan(-20);
+  });
+});
