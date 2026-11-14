@@ -124,9 +124,12 @@ snapshots run on the page's main thread.
 
 ## Keyboard
 
-Faders and pan controls are sliders: arrows step 1 dB (Shift 0.1 dB),
-Page Up/Down 5 dB, Home +10 dB, End off, `0` to 0 dB. Escape closes the
-channel processing panel.
+Faders are sliders: the arrows step 0.5 dB from -20 dB up, 1 dB down to
+-40 dB and 3 dB below (Shift 0.1 dB), Page Up/Down 5 dB, Alt+0 sets
+0 dB and Alt+End closes the fader; no single key jumps a fader, and a
+double-click does nothing to it. Pan controls step with the arrows,
+Home and End go to the ends, `0` and a double-click centre. Escape
+closes the channel processing panel.
 
 Typed values (delay, the Setup view) are written on Enter or when the
 field is left, and Escape restores the current value. A delay is typed

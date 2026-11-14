@@ -9,6 +9,7 @@ import {
   formatDb,
   formatPan,
   positionToDb,
+  keyStepDb,
   stepDb,
 } from '../../src/lib/audio/db';
 
@@ -60,6 +61,7 @@ describe('keyboard steps', () => {
     expect(stepDb(FADER_OFF_DB, 1)).toBe(-60);
     expect(stepDb(-60, -1)).toBe(FADER_OFF_DB);
     expect(stepDb(10, 1)).toBe(10);
+    expect([keyStepDb(0), keyStepDb(-19.5), keyStepDb(-30), keyStepDb(-50)]).toEqual([0.5, 0.5, 1, 3]);
   });
 });
 

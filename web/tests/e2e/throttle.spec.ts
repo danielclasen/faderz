@@ -21,7 +21,7 @@ test('keeps the link live under 4x CPU throttling without a false failover', asy
   const path = '/channels/ch15/fader';
   const slider = page.locator(`[role="slider"][data-path="${path}"]`);
   await slider.focus();
-  await page.keyboard.press('0');
+  await page.keyboard.press('Alt+0');
   await settled(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
   try {

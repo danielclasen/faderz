@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getMixer } from '../lib/state/mixer.svelte';
-  import { FADER_MARKS, FADER_OFF_DB, dbToPosition, dragDb, formatDb, stepDb } from '../lib/audio/db';
+  import { FADER_MARKS, FADER_OFF_DB, dbToPosition, dragDb, formatDb, keyStepDb, stepDb } from '../lib/audio/db';
 
   interface Props {
     path: string;
@@ -83,11 +83,11 @@
     switch (e.key) {
       case 'ArrowUp':
       case 'ArrowRight':
-        next = stepDb(value, fine ? 0.1 : 1);
+        next = stepDb(value, fine ? 0.1 : keyStepDb(value));
         break;
       case 'ArrowDown':
       case 'ArrowLeft':
-        next = stepDb(value, fine ? -0.1 : -1);
+        next = stepDb(value, fine ? -0.1 : -keyStepDb(value));
         break;
       case 'PageUp':
         next = stepDb(value, 5);
@@ -95,13 +95,13 @@
       case 'PageDown':
         next = stepDb(value, -5);
         break;
-      case 'Home':
-        next = 10;
-        break;
+      // Jumps need Alt: a single stray key never opens or closes a fader on air.
       case 'End':
+        if (!e.altKey) return;
         next = FADER_OFF_DB;
         break;
       case '0':
+        if (!e.altKey) return;
         next = 0;
         break;
       default:
@@ -143,13 +143,12 @@
     aria-valuemax={10}
     aria-valuenow={value}
     aria-valuetext={`${formatDb(value)} dB${foreign ? `, held by ${ownerName}` : ''}`}
-    title={foreign ? `Held by ${ownerName}` : 'Drag; Shift for fine; double-click for 0 dB'}
+    title={foreign ? `Held by ${ownerName}` : 'Drag; Shift for fine; arrows step, Alt+0 for 0 dB, Alt+End closes'}
     onpointerdown={pointerdown}
     onpointermove={pointermove}
     onpointerup={pointerup}
     onpointercancel={pointerup}
     onlostpointercapture={pointerup}
-    ondblclick={() => mixer.set(path, 0)}
     onkeydown={keydown}
     onblur={blur}
     data-path={path}

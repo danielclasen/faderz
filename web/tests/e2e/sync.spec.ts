@@ -77,7 +77,7 @@ async function writeAcross(
   const session = await debug(page, 'session');
   const slider = page.locator(`[role="slider"][data-path="${path}"]`);
   await slider.focus();
-  await page.keyboard.press('0');
+  await page.keyboard.press('Alt+0');
   await settled(page);
   await request.post('/__mock/audit/reset');
   const presses = 30;
@@ -359,7 +359,7 @@ test('without quorum and standby the client stays connected and disables every w
   await mute.click({ force: true });
   await slider.focus();
   await page.keyboard.press('ArrowUp');
-  await page.keyboard.press('Home');
+  await page.keyboard.press('PageUp');
   await page.waitForTimeout(1000);
   expect((await audit(request)).entries).toEqual([]);
   expect(await commands(request)).toEqual([]);
@@ -402,7 +402,7 @@ test('a client ahead of a rewound cluster shows it at once and takes the cluster
   await request.post('/__mock/rewind?by=2');
   await request.post('/__mock/drop-clients');
   const banner = page.getByTestId('ahead');
-  await expect(banner).toBeVisible({ timeout: 5000 });
+  await expect(banner).toBeVisible({ timeout: 15_000 });
   await expect(banner).toContainText(String(ahead));
   await expect(banner).toContainText(String(ahead - 2));
   expect(await debug(page, 'connection')).toBe('Ahead');

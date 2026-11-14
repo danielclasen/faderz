@@ -122,12 +122,22 @@ test('operates a fader from the keyboard', async ({ page, request }) => {
   await live(page);
   const slider = page.locator('[role="slider"][data-path="/channels/ch21/fader"]');
   await slider.focus();
-  await page.keyboard.press('0');
+  await page.keyboard.press('Alt+0');
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('Shift+ArrowDown');
   await settled(page);
-  await expect(slider).toHaveAttribute('aria-valuenow', '0.9');
-  expect(await fader(request, 'ch21')).toBe(0.9);
+  await expect(slider).toHaveAttribute('aria-valuenow', '0.4');
+  expect(await fader(request, 'ch21')).toBe(0.4);
+  // Neither a lone key nor a double-click jumps a fader.
+  await page.keyboard.press('0');
+  await page.keyboard.press('Home');
+  await page.keyboard.press('End');
+  const closed = page.locator('[role="slider"][data-path="/channels/ch22/fader"]');
+  await closed.dblclick();
+  await page.waitForTimeout(300);
+  await settled(page);
+  expect(await fader(request, 'ch21')).toBe(0.4);
+  expect(await fader(request, 'ch22')).toBe(-90);
 });
 
 test('sets the loudness target from the setup view and judges integrated loudness against it', async ({ page, request }) => {
