@@ -19,6 +19,7 @@
   function down(e: PointerEvent): void {
     if (e.button !== 0) return;
     e.preventDefault();
+    if (mixer.refuseIfHeld(path)) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     el.focus({ preventScroll: true });
@@ -48,6 +49,7 @@
     else if (e.key === '0' && e.altKey) v = 0;
     if (v === null) return;
     e.preventDefault();
+    if (mixer.refuseIfHeld(path)) return;
     mixer.touch(path);
     const next = Math.round(Math.max(-1, Math.min(1, v)) * 100) / 100;
     if (next !== value) mixer.set(path, next);

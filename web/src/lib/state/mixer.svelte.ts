@@ -156,6 +156,19 @@ export class MixerStore {
     this.post({ type: 'touch', path });
   }
 
+  /**
+   * A gesture on a control another session holds: nothing is sent, the
+   * control flashes and the notice names the holder, at once rather than
+   * after a refused round trip. Returns true when the control is held.
+   */
+  refuseIfHeld(path: string): boolean {
+    const owner = this.ownerOf(path);
+    if (owner === null || this.isMine(owner)) return false;
+    this.conflicts.set(path, Date.now());
+    this.notify('conflict', `${describePath(path, this.shape)} is held by ${this.ownerLabel(owner)}`, path);
+    return true;
+  }
+
   /** Sent also while locked: it ends a touch made before, and changes no value. */
   release(path: string): void {
     if (!this.held.delete(path)) return;

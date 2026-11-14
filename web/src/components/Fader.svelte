@@ -49,6 +49,7 @@
   function pointerdown(e: PointerEvent): void {
     if (e.button !== 0) return;
     e.preventDefault();
+    if (mixer.refuseIfHeld(path)) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     el.focus({ preventScroll: true });
@@ -110,6 +111,7 @@
         return;
     }
     e.preventDefault();
+    if (mixer.refuseIfHeld(path)) return;
     mixer.touch(path);
     if (next !== value) mixer.set(path, next);
     if (keyRelease) clearTimeout(keyRelease);

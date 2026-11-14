@@ -5,6 +5,7 @@ import {
   REPLICAS,
   RawClient,
   audit,
+  commands,
   debug,
   dragFader,
   fader,
@@ -173,7 +174,7 @@ test('arms and confirms a scene store and delete from the keyboard alone, within
   await expect(page.getByText(name)).toBeHidden();
 });
 
-test('refuses a fader held by another session with 409 and shows its value and owner', async ({ page, baseURL, request }) => {
+test('refuses a fader held by another session at the gesture and shows its value and owner', async ({ page, baseURL, request }) => {
   const frames: string[] = [];
   page.on('websocket', (ws) => ws.on('framereceived', (f) => typeof f.payload === 'string' && frames.push(f.payload)));
   await live(page);
@@ -193,7 +194,9 @@ test('refuses a fader held by another session with 409 and shows its value and o
     await dragFader(page, path, 40);
     await expect(notice).toHaveCount(1);
     await expect(notice.locator('.count')).toBeVisible();
-    // The strip names the holder in words.
+    // The held fader refuses the gesture itself: no write left this client,
+    // and the strip names the holder in words.
+    expect((await commands(request)).filter((c) => c.path === path && c.type === 'set')).toEqual([]);
     await expect(page.getByTestId('holder-ch4')).toHaveText(`web client ${tag}`);
     // The notice sits in the status bar, clear of the monitor and masters.
     const box = (await notice.boundingBox())!;
