@@ -1186,6 +1186,27 @@
         }
       ]
     },
+    "ContinuousPath": {
+      "description": "Control paths whose writes are continuous: a client moving one of these controls may coalesce its writes and send only the latest value of a control at a limited rate. Every other ControlPath is discrete: each write is sent, in order. The declaration is per path, not per value type.",
+      "type": "string",
+      "anyOf": [
+        {
+          "pattern": "^/(channels|buses|auxes|mixMinus)/[a-z][a-z0-9-]{0,31}/fader$"
+        },
+        {
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|hpf/freq|pan/(lr|fr)|sends/[a-z][a-z0-9-]{0,31}/(level|pan))$"
+        },
+        {
+          "pattern": "^/(channels|buses|auxes)/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup)|delay)$"
+        },
+        {
+          "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/offset$"
+        },
+        {
+          "pattern": "^/monitor/level$"
+        }
+      ]
+    },
     "ReadOnlyPath": {
       "description": "JSON Pointer to a part of State that only the server changes.",
       "type": "string",

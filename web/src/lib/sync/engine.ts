@@ -41,7 +41,8 @@ import {
   type TouchState,
 } from './machines';
 import type { FailoverInfo, Patch, SyncStatus, ToWorker, WorkerNotice } from './messages';
-import { isContinuous, Outbox } from './outbox';
+import { isContinuousPath } from '../contract/continuous';
+import { Outbox } from './outbox';
 
 export interface SocketLike {
   binaryType: string;
@@ -161,7 +162,7 @@ export class SyncEngine {
     switch (msg.type) {
       case 'set':
         this.localValue.set(msg.path, msg.value);
-        if (isContinuous(msg.value)) this.limiter.write(msg.path, msg.value);
+        if (isContinuousPath(msg.path)) this.limiter.write(msg.path, msg.value);
         else this.issueSet(msg.path, msg.value);
         return;
       case 'touch':
@@ -185,7 +186,7 @@ export class SyncEngine {
   }
 
   private issue(msg: CommandMessage): void {
-    const r = this.outbox.enqueue(msg, msg.type === 'set' && isContinuous(msg.value));
+    const r = this.outbox.enqueue(msg, msg.type === 'set' && isContinuousPath(msg.path));
     if (!r.accepted) {
       this.notice({ kind: 'error', text: `Too many unanswered commands; ${msg.type} of ${msg.path} was not sent` });
       this.settled(msg);

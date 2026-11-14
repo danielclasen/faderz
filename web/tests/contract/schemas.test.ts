@@ -5,6 +5,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormatsModule from 'ajv-formats';
 import { parse as parseYaml } from 'yaml';
 import { API_DIR, Contract } from '../../dev/mock/contract';
+import { CONTINUOUS_PATH_PATTERNS, isContinuousPath } from '../../src/lib/contract/continuous';
 
 const addFormats = addFormatsModule as unknown as (ajv: Ajv2020) => Ajv2020;
 const FILES = ['model.schema.json', 'client-message.schema.json', 'server-message.schema.json'];
@@ -119,6 +120,45 @@ describe('Change values are constrained by path', () => {
     ['/buses/pgm51/legTrim/0', 0],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
+  });
+});
+
+describe('ContinuousPath', () => {
+  const model = read('model.schema.json') as { $defs: Record<string, { anyOf: Array<{ pattern: string }> }> };
+  const ajv = new Ajv2020({ strict: true });
+  for (const f of FILES) ajv.addSchema(read(f));
+  const controlPath = ajv.compile({ $ref: 'https://github.com/danielclasen/faderz/raw/main/api/ws/model.schema.json#/$defs/ControlPath' });
+
+  it('is declared in the contract with the patterns the client coalesces', () => {
+    expect(model.$defs['ContinuousPath']!.anyOf.map((p) => p.pattern)).toEqual(CONTINUOUS_PATH_PATTERNS);
+  });
+
+  it.each([
+    '/channels/ch1/fader',
+    '/channels/sur1/legTrim/3',
+    '/channels/ch1/sends/aux1/level',
+    '/channels/ch1/eq/bands/2/q',
+    '/buses/pgm51/comp/makeup',
+    '/auxes/aux1/delay',
+    '/mixMinus/mm1/fader',
+    '/vcas/vca1/offset',
+    '/monitor/level',
+  ])('%s is a continuous control path', (path) => {
+    expect(controlPath(path)).toBe(true);
+    expect(isContinuousPath(path)).toBe(true);
+  });
+
+  it.each([
+    '/channels/ch1/mute',
+    '/channels/ch1/polarity/0',
+    '/channels/ch1/eq/bands/0/type',
+    '/channels/ch1/sends/aux1/pre',
+    '/monitor/source',
+    '/vcas/vca1/members',
+    '/afv/ch13/source',
+  ])('%s is a discrete control path', (path) => {
+    expect(controlPath(path)).toBe(true);
+    expect(isContinuousPath(path)).toBe(false);
   });
 });
 

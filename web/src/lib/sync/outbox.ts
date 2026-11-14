@@ -1,26 +1,14 @@
 // Commands awaiting their answer: a delta listing the command id among its
 // origins, an ack or an error. Bounded and ordered. A set of a continuous
-// control (a numeric value: fader, pan, send level, gain...) that has not
-// been sent yet is replaced by a newer set of the same control; every
-// other command keeps its place. After a failover every sent command is
-// queued again with its id, which the server applies at most once.
+// control (contract/continuous.ts) that has not been sent yet is replaced
+// by a newer set of the same control; every other command keeps its
+// place. After a failover every sent command is queued again with its id,
+// which the server applies at most once.
 
 import type { CommandId, CommandMessage } from '../contract/types';
 import { COMMAND, TERMINAL, step, type CommandEvent, type CommandState } from './machines';
 
 export const OUTBOX_CAPACITY = 1024;
-
-/**
- * A continuous control takes a numeric value: fader, pan, send level and
- * pan, EQ, dynamics, trim and delay values, monitor level, VCA offset.
- * Only its writes are rate limited and coalesced. Every other write (mute,
- * solo, routing, send on and pre, scene, AFV, recall-safe, members, monitor
- * source, dim, cut and mono, EQ band type, enabled flags) is discrete: it
- * is sent on its own, in order.
- */
-export function isContinuous(value: unknown): boolean {
-  return typeof value === 'number';
-}
 
 export interface OutboxEntry {
   readonly msg: CommandMessage;
