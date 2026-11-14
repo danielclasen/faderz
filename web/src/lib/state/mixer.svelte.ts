@@ -97,9 +97,12 @@ export class MixerStore {
     return this.status.outbox;
   }
 
+  /** The operator locked this screen: it shows everything and changes nothing. */
+  deskLock = $state(false);
   /** Why write controls are disabled and send nothing (link not transmitting, or no quorum and no ready standby), or null. */
   readonly lockReason = $derived(writesLockReason(this.status));
-  readonly locked = $derived(this.lockReason !== null);
+  /** Write controls are disabled and send nothing: for lockReason, or the desk is locked. */
+  readonly locked = $derived(this.lockReason !== null || this.deskLock);
 
   // ---- reading -----------------------------------------------------------
 

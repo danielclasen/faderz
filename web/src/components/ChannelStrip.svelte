@@ -36,6 +36,8 @@
       ? ''
       : `${vcas.map((v) => `VCA ${v.name} ${formatDb(mixer.state!.vcas[v.id]!.offset)} dB`).join(', ')}; effective gain ${formatDb(effective)} dB`,
   );
+  /** Recall-safe groups: a scene recall leaves these alone (an isolate on a console). */
+  const safe = $derived(mixer.state!.recallSafe[channel.id] ?? []);
   const badge = $derived(channel.layout === 'mono' ? '' : channel.layout === 'stereo' ? 'ST' : channel.layout);
   const short = (bus: { name: string; kind: string }) =>
     bus.kind === 'cleanFeed' ? 'CF' : bus.kind === 'me' ? 'ME' : (bus.name.split(' ').at(-1) ?? bus.name).slice(0, 4);
@@ -49,6 +51,7 @@
   <button class="head" onclick={() => onselect(channel.id)} aria-pressed={selected} use:tip={channel.name}>
     <span class="no num">{index + 1}</span>
     <span class="badges">
+      <span class="badge iso" class:shown={safe.length > 0} title={`Recall safe: ${safe.join(', ')}`} aria-hidden={safe.length === 0} data-testid={`iso-${channel.id}`}>ISO</span>
       <span class="badge alt" class:shown={st.input === 'b'} title="Fed from its B input" aria-hidden={st.input !== 'b'}>B</span>
       {#if badge}<span class="badge">{badge}</span>{/if}
     </span>
@@ -183,11 +186,15 @@
     gap: 2px;
   }
   /* Reserved space: shown or not, the B badge never moves the head. */
-  .badge.alt {
+  .badge.alt,
+  .badge.iso {
     visibility: hidden;
     background: var(--listen);
   }
-  .badge.alt.shown {
+  .badge.iso {
+    background: #c9d1db;
+  }
+  .badge.shown {
     visibility: visible;
   }
   .name {

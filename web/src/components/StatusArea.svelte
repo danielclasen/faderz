@@ -85,10 +85,10 @@
         data-testid="quorum"
         data-commitable={commitable}
         data-locked={mixer.lockReason}
-        role={mixer.locked ? 'alert' : undefined}
+        role={mixer.lockReason !== null ? 'alert' : undefined}
         title={commitable
           ? 'The serving replica can commit'
-          : mixer.locked
+          : mixer.lockReason !== null
             ? `Every write control is disabled: ${mixer.lockReason}`
             : 'The serving replica cannot commit (no quorum)'}
       >{commitable ? 'Q' : 'NO Q'}</span>

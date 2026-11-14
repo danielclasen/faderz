@@ -9,6 +9,8 @@ test('renders the mixer on a phone over a plain-HTTP LAN origin', async ({ page,
   expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
   expect(await page.evaluate(() => typeof (crypto as { randomUUID?: unknown }).randomUUID)).toBe('undefined');
   await expect(page.getByTestId('link')).toContainText('LIVE');
+  // No horizontal page scroll: the header and the bank bar fit the phone.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width);
   await expect(page.getByRole('button', { name: 'Pres 1 mute' })).toBeVisible();
   expect(await uiFontLoaded(page)).toBe(true);
   await expect(page.getByTestId('fatal')).toHaveCount(0);

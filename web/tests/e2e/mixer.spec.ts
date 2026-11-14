@@ -906,3 +906,35 @@ test('keeps the processing panel open on a second press and steps to the next an
   await page.getByRole('button', { name: 'Close processing' }).click();
   await expect(panel('Pres 1')).toHaveCount(0);
 });
+
+test('locks the desk with a hold so nothing on the screen changes the mixer, and marks recall-safe strips', async ({ page, request }) => {
+  await live(page);
+  const lock = page.getByTestId('desk-lock');
+  // A press shorter than the hold does nothing.
+  await lock.click();
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  const box = (await lock.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(700);
+  await page.mouse.up();
+  await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  const mute = page.getByRole('button', { name: 'Pres 1 mute' });
+  const before = (await serverState(request)).state.channels['ch1']!.mute;
+  await mute.click({ force: true });
+  await page.waitForTimeout(500);
+  expect((await serverState(request)).state.channels['ch1']!.mute).toBe(before);
+  await expect(mute).toHaveAttribute('aria-disabled', 'true');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(700);
+  await page.mouse.up();
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  await expect(mute).toHaveAttribute('aria-disabled', 'false');
+
+  await patch(request, '/recallSafe/ch3', ['fader', 'mute']);
+  await expect(page.getByTestId('iso-ch3')).toBeVisible();
+  await expect(page.getByTestId('iso-ch3')).toHaveAttribute('title', 'Recall safe: fader, mute');
+  await patch(request, '/recallSafe/ch3', []);
+  await expect(page.getByTestId('iso-ch3')).toBeHidden();
+});

@@ -25,7 +25,7 @@ function client(): RestClient {
 
 async function run<T>(mixer: MixerStore, what: string, fn: () => Promise<T>): Promise<T | null> {
   if (mixer.locked) {
-    mixer.notify('error', `${what} not sent: ${mixer.lockReason}`);
+    mixer.notify('error', `${what} not sent: ${mixer.lockReason ?? 'the desk is locked'}`);
     return null;
   }
   try {

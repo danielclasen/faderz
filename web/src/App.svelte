@@ -15,6 +15,7 @@
   import AheadBanner from './components/AheadBanner.svelte';
   import { tip } from './lib/tip';
   import NoticeLine from './components/NoticeLine.svelte';
+  import LockKey from './components/LockKey.svelte';
 
   const mixer = getMixer();
   /** A phone in landscape: notices move from the status bar into the header. */
@@ -78,6 +79,7 @@
           >TONE<span class="sr-only">{toneOn ? ` on: ${toneText}` : ''}</span></span
         >
       </span>
+      <LockKey />
       <button class="key" onclick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
         {theme === 'dark' ? 'LIGHT' : 'DARK'}
       </button>
