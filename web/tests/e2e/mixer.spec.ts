@@ -19,6 +19,16 @@ import {
   uiFontLoaded,
 } from './support';
 
+/** RESET takes a one second hold. */
+async function holdReset(page: Page, master: string): Promise<void> {
+  const key = page.locator(`[data-master="${master}"]`).getByRole('button', { name: 'Reset loudness, hold for one second' });
+  const box = (await key.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(1100);
+  await page.mouse.up();
+}
+
 test.beforeEach(async ({ request }) => resetMock(request));
 test.afterEach(async ({ request }) => resetMock(request));
 
@@ -713,7 +723,7 @@ test('latches a true-peak over on a master until RESET, however short it was', a
   await expect(lamp).toHaveClass(/over/);
   await page.waitForTimeout(500);
   await expect(lamp).toHaveClass(/over/);
-  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await holdReset(page, 'pgm20');
   await expect(lamp).not.toHaveClass(/over/);
   await patch(request, '/tone/level', -18);
   await patch(request, '/tone/targets', []);
@@ -737,7 +747,7 @@ test('shows a channel true peak only on channels with a direct out', async ({ pa
 test('reads the highest true peak since RESET, not the last tenth of a second', async ({ page, request }) => {
   await live(page);
   const tp = page.getByTestId('tp-pgm20');
-  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await holdReset(page, 'pgm20');
   await patch(request, '/tone/level', 0);
   await patch(request, '/tone/targets', ['pgm20']);
   await patch(request, '/tone/on', true);
@@ -746,7 +756,7 @@ test('reads the highest true peak since RESET, not the last tenth of a second', 
   await expect(tp).toHaveText(/^\s*-?0\.\d$/);
   await page.waitForTimeout(1500);
   await expect(tp).toHaveText(/^\s*-?0\.\d$/);
-  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await holdReset(page, 'pgm20');
   await expect(tp).not.toHaveText(/^\s*-?0\.\d$/);
   await patch(request, '/tone/level', -18);
   await patch(request, '/tone/targets', []);
@@ -768,7 +778,7 @@ test('a RESET on one screen clears the true-peak over on every screen', async ({
   // as it would on a desk; a RESET while the momentary level is at its
   // maximum shows only in integrated and LRA (unit tests).
   await page.waitForTimeout(600);
-  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await holdReset(page, 'pgm20');
   await expect(page.getByTestId('tp-over-pgm20')).not.toHaveClass(/over/);
   await expect(page2.getByTestId('tp-over-pgm20')).not.toHaveClass(/over/);
   await expect(page2.getByTestId('tp-pgm20')).not.toHaveText(/^\s*-?0\.\d$/);
@@ -1133,4 +1143,23 @@ test('moves a processing parameter by the drag distance and never jumps it to th
   const v = (await serverState(request)).state.channels['ch1']!.gate.threshold;
   expect(v).toBeGreaterThan(-33);
   expect(v).toBeLessThan(-31);
+});
+
+test('resets a running loudness measurement only after a one second hold', async ({ page }) => {
+  await live(page);
+  const resets: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith('/loudness/reset')) resets.push(r.postData() ?? '');
+  });
+  const key = page.locator('[data-master="pgm20"]').getByRole('button', { name: 'Reset loudness, hold for one second' });
+  await key.click();
+  await page.waitForTimeout(400);
+  expect(resets).toEqual([]);
+  const box = (await key.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(1200);
+  await page.mouse.up();
+  await expect.poll(() => resets.length).toBe(1);
+  expect(JSON.parse(resets[0]!)).toEqual({ ids: ['pgm20'] });
 });

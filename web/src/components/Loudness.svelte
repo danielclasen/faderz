@@ -4,6 +4,7 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import type { MeterGroup, MeterReading } from '../lib/meters/store';
   import { loudnessUnit } from '../lib/loudnessUnit.svelte';
+  import { hold } from '../lib/hold';
 
   /** Readout period, ms. */
   const READOUT_MS = 100;
@@ -16,6 +17,7 @@
     onreset?: () => void;
   }
   let { group, id, stereo = false, onreset }: Props = $props();
+  const RESET_HOLD_MS = 1000;
   const mixer = getMixer();
   let reading = $state<MeterReading | undefined>();
   /** Highest true peak since the last reset, dBTP, as the over lamp latches it. */
@@ -100,7 +102,14 @@
   {/if}
   <span class="max unit"></span>
   {#if onreset}
-    <button class="key reset" aria-disabled={mixer.locked} onclick={reset} title="Reset integrated loudness, LRA, maxima and the true-peak over">RESET</button>
+    <!-- Resetting mid-programme loses the running measurement: it takes a hold. -->
+    <button
+      class="key reset"
+      aria-disabled={mixer.locked}
+      use:hold={{ ms: RESET_HOLD_MS, fire: reset }}
+      aria-label="Reset loudness, hold for one second"
+      title="Hold for one second to reset integrated loudness, LRA, maxima and the true-peak over">RESET</button
+    >
   {/if}
 </div>
 
@@ -220,9 +229,26 @@
     color: #fff;
   }
   .reset {
+    position: relative;
+    touch-action: none;
     grid-column: 1 / -1;
     margin-top: 2px;
     height: 20px;
     font-size: 10px;
+  }
+  .reset::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: var(--text);
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  .reset:global(.arming)::after {
+    transform: scaleX(1);
+    transition: transform var(--hold) linear;
   }
 </style>
