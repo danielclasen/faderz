@@ -1,0 +1,285 @@
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { DEAD_MS } from '../../src/lib/contract/protocol';
+import {
+  RawClient,
+  audit,
+  commands,
+  debug,
+  dragFader,
+  fader,
+  faderCenter,
+  formatDb,
+  live,
+  patch,
+  resetMock,
+  serverState,
+  settled,
+  standbyReady,
+  stats,
+} from './support';
+
+test.beforeEach(async ({ request }) => resetMock(request));
+test.afterEach(async ({ request }) => resetMock(request));
+
+/** Records the page time at which the primary is a replica other than `from` and the link is Live. */
+async function watchSwitch(page: Page, from: string): Promise<void> {
+  await page.evaluate((from) => {
+    const w = window as unknown as { __switchedAt?: number };
+    delete w.__switchedAt;
+    const poll = () => {
+      const f = window.__faderz!;
+      if (f.primaryReplica !== null && f.primaryReplica !== from && f.connection === 'Live') w.__switchedAt = Date.now();
+      else setTimeout(poll, 1);
+    };
+    poll();
+  }, from);
+}
+
+async function switchedAt(page: Page): Promise<number> {
+  await page.waitForFunction(() => (window as unknown as { __switchedAt?: number }).__switchedAt !== undefined);
+  return page.evaluate(() => (window as unknown as { __switchedAt: number }).__switchedAt);
+}
+
+/**
+ * Every set of `session` on `path` that reached a replica was applied
+ * exactly once, in seq order, and resends were answered as duplicates.
+ * Returns the values applied, in apply order.
+ */
+async function expectAppliedOnce(request: APIRequestContext, session: string, path: string): Promise<number[]> {
+  const report = await audit(request);
+  expect(report.summary.duplicates).toBe(0);
+  const outcomes = (await commands(request)).filter((c) => c.owner?.session === session && c.path === path && c.type === 'set');
+  const applied = outcomes.filter((c) => c.result === 'applied').map((c) => c.commandId);
+  expect(new Set(applied).size).toBe(applied.length);
+  for (const c of outcomes) {
+    expect(c.result === 'applied' || c.result === 'duplicate').toBe(true);
+    if (c.result === 'duplicate') expect(applied).toContain(c.commandId);
+  }
+  const sets = report.entries.filter((e) => e.owner.session === session && e.path === path && e.type === 'set');
+  expect(sets.map((e) => e.commandId)).toEqual(applied);
+  for (let i = 1; i < sets.length; i++) expect(sets[i]!.seq!).toBeGreaterThan(sets[i - 1]!.seq!);
+  return sets.map((e) => e.value as number);
+}
+
+/**
+ * Sends `presses` keyboard steps of -0.1 dB from 0 dB to a fader, runs
+ * `fault` after the first third of them, and checks that every write was
+ * applied once and the last written value is the committed one.
+ */
+async function writeAcross(
+  page: Page,
+  request: APIRequestContext,
+  channel: string,
+  fault: () => Promise<void>,
+): Promise<void> {
+  const path = `/channels/${channel}/fader`;
+  const session = await debug(page, 'session');
+  const slider = page.locator(`[role="slider"][data-path="${path}"]`);
+  await slider.focus();
+  await page.keyboard.press('0');
+  await settled(page);
+  await request.post('/__mock/audit/reset');
+  const presses = 30;
+  let faulted: Promise<void> = Promise.resolve();
+  for (let i = 0; i < presses; i++) {
+    if (i === presses / 3) faulted = fault();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.waitForTimeout(15);
+  }
+  await faulted;
+  await expect(slider).toHaveAttribute('aria-valuenow', '-3');
+  await settled(page);
+  const values = await expectAppliedOnce(request, session, path);
+  expect(values.length).toBeGreaterThan(0);
+  for (let i = 1; i < values.length; i++) expect(values[i]!).toBeLessThan(values[i - 1]!);
+  expect(values.at(-1)).toBe(-3);
+  expect(await fader(request, channel)).toBe(-3);
+  await expect(page.getByTestId(`fader-value-${channel}`)).toHaveText('-3.0');
+}
+
+test('two clients move different faders at the same time and see each other', async ({ browser, baseURL, request }) => {
+  await patch(request, '/channels/ch5/fader', -20);
+  await patch(request, '/channels/ch6/fader', -20);
+  const contexts = await Promise.all([0, 1].map(() => browser.newContext({ baseURL, viewport: { width: 1600, height: 1000 } })));
+  try {
+    const [a, b] = await Promise.all(contexts.map((c) => c.newPage()));
+    await Promise.all([live(a!), live(b!)]);
+    const sessions = await Promise.all([debug(a!, 'session'), debug(b!, 'session')]);
+    expect(sessions[0]).not.toBe(sessions[1]);
+    await Promise.all([dragFader(a!, '/channels/ch5/fader', -40), dragFader(b!, '/channels/ch6/fader', -70)]);
+    await Promise.all([settled(a!), settled(b!)]);
+    const ch5 = await fader(request, 'ch5');
+    const ch6 = await fader(request, 'ch6');
+    expect(ch5).toBeGreaterThan(-20);
+    expect(ch6).toBeGreaterThan(ch5);
+    for (const p of [a!, b!]) {
+      await expect(p.getByTestId('fader-value-ch5')).toHaveText(formatDb(ch5));
+      await expect(p.getByTestId('fader-value-ch6')).toHaveText(formatDb(ch6));
+    }
+    const entries = (await audit(request)).entries.filter((e) => e.type === 'set');
+    expect(new Set(entries.filter((e) => e.path === '/channels/ch5/fader').map((e) => e.owner.session))).toEqual(new Set([sessions[0]]));
+    expect(new Set(entries.filter((e) => e.path === '/channels/ch6/fader').map((e) => e.owner.session))).toEqual(new Set([sessions[1]]));
+  } finally {
+    await Promise.all(contexts.map((c) => c.close()));
+  }
+});
+
+test('a fader held across a reload stays owned by the session and is released after resync', async ({ page, baseURL, request }) => {
+  await live(page);
+  const path = '/channels/ch9/fader';
+  const session = await debug(page, 'session');
+  const { x, y } = await faderCenter(page, path);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 30);
+  await expect.poll(async () => (await serverState(request)).owners[path]?.session).toBe(session);
+  await page.waitForFunction(() => window.__faderz?.outbox === 0);
+  const value = await fader(request, 'ch9');
+  await expect(page.getByTestId('fader-value-ch9')).toHaveText(formatDb(value));
+  const other = await RawClient.open(baseURL!);
+  try {
+    // The reloaded document waits for its entry module until the other
+    // client has been refused: the old page is gone, the new one has not
+    // connected, and only the session lease holds the fader.
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    let blocked!: () => void;
+    const reached = new Promise<void>((r) => (blocked = r));
+    await page.route(/\/src\/main\.ts(\?|$)/, async (route) => {
+      blocked();
+      await gate;
+      await route.continue();
+    });
+    const reload = page.reload();
+    await reached;
+    await expect.poll(async () => (await stats(request)).filter((c) => c.session === session)).toEqual([]);
+    const refused = await other.command({ type: 'set', path, value: value - 6 });
+    expect(refused).toMatchObject({ type: 'error', code: 409, path, owner: { principal: 'anonymous', session, kind: 'ui' } });
+    open();
+    await reload;
+    await page.unrouteAll();
+    await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
+    expect(await debug(page, 'session')).toBe(session);
+    await expect.poll(async () => (await serverState(request)).owners[path]).toBeUndefined();
+    const releases = (await audit(request)).entries.filter((e) => e.type === 'release' && e.path === path);
+    expect(releases.map((e) => e.owner.session)).toEqual([session]);
+    expect(await fader(request, 'ch9')).toBe(value);
+    await expect(page.getByTestId('fader-value-ch9')).toHaveText(formatDb(value));
+    expect(await debug(page, 'touching')).toEqual([]);
+  } finally {
+    await page.mouse.up();
+    other.close();
+  }
+});
+
+test('fails over to the standby within 500 ms when the primary is killed, without losing or duplicating commands', async ({ page, request }) => {
+  await live(page);
+  const from = (await debug(page, 'primaryReplica'))!;
+  const standby = (await debug(page, 'standbyReplica'))!;
+  const failovers = await debug(page, 'failovers');
+  let killedAt = 0;
+  await writeAcross(page, request, 'ch10', async () => {
+    await watchSwitch(page, from);
+    killedAt = Date.now();
+    expect((await request.post(`/__mock/replicas/${from}/kill`)).ok()).toBe(true);
+  });
+  const ms = (await switchedAt(page)) - killedAt;
+  test.info().annotations.push({ type: 'failover-ms', description: String(ms) });
+  expect(ms).toBeLessThan(500);
+  expect(await debug(page, 'primaryReplica')).toBe(standby);
+  expect(await debug(page, 'failovers')).toBe(failovers + 1);
+  expect(await debug(page, 'lastFailover')).toEqual({ from, to: standby, reason: 'lost' });
+  await expect(page.locator(`[data-replica="${from}"]`)).toHaveAttribute('data-healthy', 'false');
+  await standbyReady(page);
+});
+
+const faults = [
+  { name: 'a hung replica that drops input', action: 'freeze', reason: 'dead', channel: 'ch12' },
+  { name: 'a hung replica that still applies', action: 'freeze?mode=apply', reason: 'dead', channel: 'ch13' },
+  { name: 'a partitioned replica', action: 'partition', reason: 'notCommitable', channel: 'ch14' },
+] as const;
+
+for (const f of faults) {
+  test(`fails over from ${f.name} without losing or duplicating commands`, async ({ page, request }) => {
+    await live(page);
+    const from = (await debug(page, 'primaryReplica'))!;
+    const standby = (await debug(page, 'standbyReplica'))!;
+    const failovers = await debug(page, 'failovers');
+    let faultAt = 0;
+    await writeAcross(page, request, f.channel, async () => {
+      await watchSwitch(page, from);
+      faultAt = Date.now();
+      expect((await request.post(`/__mock/replicas/${from}/${f.action}`)).ok()).toBe(true);
+    });
+    const ms = (await switchedAt(page)) - faultAt;
+    test.info().annotations.push({ type: 'failover-ms', description: String(ms) });
+    // A dead primary is detected DEAD_MS after its last message.
+    expect(ms).toBeLessThan(f.reason === 'dead' ? DEAD_MS + 500 : 500);
+    expect(await debug(page, 'failovers')).toBe(failovers + 1);
+    expect(await debug(page, 'lastFailover')).toEqual({ from, to: standby, reason: f.reason });
+    await expect(page.getByTestId('failover')).toBeVisible();
+    if (f.action === 'partition') {
+      await expect(page.locator(`[data-replica="${from}"]`)).toHaveAttribute('data-commitable', 'false');
+      await expect(page.getByTestId('quorum')).toHaveAttribute('data-commitable', 'true');
+    }
+  });
+}
+
+test('keeps a held fader owned across a replica kill', async ({ page, request }) => {
+  await live(page);
+  const path = '/channels/ch20/fader';
+  const session = await debug(page, 'session');
+  const from = (await debug(page, 'primaryReplica'))!;
+  const { x, y } = await faderCenter(page, path);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 20);
+  await expect.poll(async () => (await serverState(request)).owners[path]?.session).toBe(session);
+  await request.post(`/__mock/replicas/${from}/kill`);
+  await expect(page.getByTestId('failover')).toBeVisible();
+  await page.mouse.move(x, y - 60);
+  await expect(page.locator(`[data-replica="${from}"]`)).toHaveAttribute('data-healthy', 'false');
+  // Longer than the 2 s session lease: the new primary connection renews it.
+  await page.waitForTimeout(2500);
+  expect((await serverState(request)).owners[path]).toMatchObject({ session, kind: 'ui' });
+  await page.mouse.up();
+  await settled(page);
+  await expect.poll(async () => (await serverState(request)).owners[path]).toBeUndefined();
+  await expect(page.getByTestId('fader-value-ch20')).toHaveText(formatDb(await fader(request, 'ch20')));
+});
+
+test('a hidden tab stops meter traffic after at most the credit cap and resumes when visible', async ({ page, request }) => {
+  await page.addInitScript(() => {
+    let hidden = false;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    (window as unknown as { __setHidden: (h: boolean) => void }).__setHidden = (h) => {
+      hidden = h;
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+  });
+  await live(page);
+  const session = await debug(page, 'session');
+  const primary = async () => {
+    const mine = (await stats(request)).filter((c) => c.session === session && c.mode === 'primary');
+    expect(mine).toHaveLength(1);
+    return mine[0]!;
+  };
+  await expect.poll(async () => (await primary()).meterFramesSent).toBeGreaterThan(10);
+  await page.evaluate(() => (window as unknown as { __setHidden: (h: boolean) => void }).__setHidden(true));
+  await page.waitForFunction(() => window.__faderz?.ticking === false);
+  const atHide = await primary();
+  await expect.poll(async () => (await primary()).creditsOutstanding).toBe(0);
+  const drained = await primary();
+  expect(drained.meterFramesSent - atHide.meterFramesSent).toBeLessThanOrEqual(8);
+  // Ten meter periods with no credit: nothing is sent, every period is skipped.
+  await page.waitForTimeout(400);
+  const later = await primary();
+  expect(later.connection).toBe(atHide.connection);
+  expect(later.meterFramesSent).toBe(drained.meterFramesSent);
+  expect(later.metersSkippedNoCredit).toBeGreaterThanOrEqual(drained.metersSkippedNoCredit + 5);
+  await page.evaluate(() => (window as unknown as { __setHidden: (h: boolean) => void }).__setHidden(false));
+  await page.waitForFunction(() => window.__faderz?.ticking === true);
+  await expect.poll(async () => (await primary()).meterFramesSent).toBeGreaterThan(later.meterFramesSent + 8);
+  expect(await debug(page, 'connection')).toBe('Live');
+});

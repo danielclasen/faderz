@@ -1,31 +1,22 @@
-// Client-side replica of the mixer state. Applies snapshots, resumes and
-// deltas in global revision order, keeps unanswered commands for resend
-// after a failover and shows local values of in-flight writes so controls
-// do not jump while their commands travel.
+// Page-side view of the mixer. The sync worker owns the connections and the
+// replicated state; this store renders it. It applies the worker's patches
+// leaf by leaf to the Svelte state proxy and forwards the operator's
+// writes, touches and releases. A write shows its local value at once; the
+// worker holds back server values of a control while a write of it is
+// unanswered, and a patch built before the worker saw a write does not
+// overwrite that write's value.
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getContext } from 'svelte';
-import type {
-  ClientMessage,
-  CommandMessage,
-  DeltaMessage,
-  Owners,
-  ReplicaRef,
-  ReplicaStatus,
-  ServerMessage,
-  Shape,
-  State,
-} from '../contract/types';
-import { CommandLedger } from '../net/ledger';
-import { uuid } from '../net/ids';
+import type { Owner, Owners, Shape, State } from '../contract/types';
 import { MeterStore } from '../meters/store';
+import type { Patch, SyncStatus, ToWorker } from '../sync/messages';
+import { sessionTag } from '../sync/session';
 import { getAt, setAt } from './pointer';
 import { describePath } from './paths';
 
-export type LinkState = 'connecting' | 'syncing' | 'live';
-
-export interface Transport {
-  send(msg: ClientMessage): boolean;
+export interface Port {
+  post(msg: ToWorker): void;
 }
 
 export interface Notice {
@@ -34,168 +25,189 @@ export interface Notice {
   text: string;
 }
 
-export interface Failover {
-  from: string;
-  to: string;
-  at: number;
+export interface PatchStats {
+  /** Duration of the last patch application, ms. */
+  last: number;
+  max: number;
+  count: number;
 }
 
+export const INITIAL_STATUS: SyncStatus = {
+  link: 'Connecting',
+  standby: 'Idle',
+  session: '',
+  you: null,
+  primaryReplica: null,
+  primaryEndpoint: null,
+  standbyReplica: null,
+  replicas: [],
+  revision: 0,
+  outbox: 0,
+  failover: null,
+  touching: [],
+  lastSync: null,
+  meterCredits: 0,
+};
+
+const NOTICE_LIMIT = 5;
+
 export class MixerStore {
-  readonly clientId: string;
   shape = $state.raw<Shape | null>(null);
   state = $state<State | null>(null);
   owners = $state<Owners>({});
-  revision = $state(0);
-  replica = $state.raw<ReplicaRef | null>(null);
-  replicas = $state.raw<ReplicaStatus[]>([]);
+  status = $state.raw<SyncStatus>(INITIAL_STATUS);
   counters = $state.raw<Record<string, number>>({});
   countersReplica = $state<string | null>(null);
   meterReplica = $state<string | null>(null);
-  link = $state<LinkState>('connecting');
-  endpoint = $state<string | null>(null);
-  lastSync = $state<'snapshot' | 'resume' | null>(null);
-  failover = $state.raw<Failover | null>(null);
   notices = $state<Notice[]>([]);
-  pendingCount = $state(0);
-  /** Local value of every control with a write in flight. */
-  readonly overlay = new SvelteMap<string, { value: unknown; commandId: string }>();
-  /** Controls this client holds (pointer down or keyboard adjust). */
+  /** Page time (Date.now()) when the worker last reported a failover. */
+  failoverAt = $state<number | null>(null);
+  /** Controls under the pointer or a keyboard adjust. */
   readonly held = new SvelteSet<string>();
-  /** Controls whose last write was refused because another client owns them. */
+  /** Controls whose last write was refused because another session owns them. */
   readonly conflicts = new SvelteMap<string, number>();
   readonly meters = new MeterStore();
+  readonly patchStats: PatchStats = { last: 0, max: 0, count: 0 };
 
-  private readonly ledger = new CommandLedger();
-  private transport: Transport | null = null;
-  private synced = false;
-  private seq = 0;
-  private servedBy: string | null = null;
+  private port: Port | null = null;
+  private posted = 0;
+  /** Writes by page message number; a patch built before that message does not overwrite them. */
+  private readonly localWrites = new Map<string, { input: number; value: unknown }>();
   private noticeId = 0;
 
-  constructor(clientId: string = uuid()) {
-    this.clientId = clientId;
+  attach(port: Port): void {
+    this.port = port;
   }
 
-  attach(transport: Transport): void {
-    this.transport = transport;
+  get revision(): number {
+    return this.status.revision;
+  }
+
+  get endpoint(): string | null {
+    return this.status.primaryEndpoint;
+  }
+
+  get pendingCount(): number {
+    return this.status.outbox;
   }
 
   // ---- reading -----------------------------------------------------------
 
   value<T>(path: string): T {
-    const o = this.overlay.get(path);
-    return (o ? o.value : getAt(this.state, path)) as T;
+    return getAt(this.state, path) as T;
   }
 
-  ownerOf(path: string): string | null {
+  ownerOf(path: string): Owner | null {
     return this.owners[path] ?? null;
   }
 
+  isMine(owner: Owner | null): boolean {
+    const you = this.status.you;
+    if (!owner) return false;
+    if (you) return owner.principal === you.principal && owner.session === you.session;
+    return owner.session === this.status.session;
+  }
+
   ownedByOther(path: string): boolean {
-    const o = this.owners[path];
-    return o !== undefined && o !== this.clientId;
+    const o = this.ownerOf(path);
+    return o !== null && !this.isMine(o);
+  }
+
+  /** Display name of an owner: "you", a console's name, or kind and session tag. */
+  ownerLabel(owner: Owner | null): string {
+    if (!owner) return 'another session';
+    if (this.isMine(owner)) return 'you';
+    const principal = owner.principal === 'anonymous' ? '' : `${owner.principal} `;
+    if (owner.kind === 'console') {
+      const c = this.state?.consoles.find((x) => x.session === owner.session);
+      if (c) return c.name;
+    }
+    return `${principal}${owner.kind} ${sessionTag(owner.session)}`;
   }
 
   // ---- writing -----------------------------------------------------------
 
   set(path: string, value: unknown): void {
     if (!this.state) return;
-    const msg: CommandMessage = { type: 'set', id: uuid(), seq: ++this.seq, path, value };
-    this.overlay.set(path, { value, commandId: msg.id });
-    this.issue(msg);
+    setAt(this.state as unknown as Record<string, unknown>, path, value);
+    this.post({ type: 'set', path, value });
+    this.localWrites.set(path, { input: this.posted, value });
   }
 
   touch(path: string): void {
     if (this.held.has(path)) return;
     this.held.add(path);
-    if (this.owners[path] === this.clientId) return;
-    this.issue({ type: 'touch', id: uuid(), path });
+    this.post({ type: 'touch', path });
   }
 
   release(path: string): void {
     if (!this.held.delete(path)) return;
-    this.issue({ type: 'release', id: uuid(), path });
+    this.post({ type: 'release', path });
   }
 
-  private issue(msg: CommandMessage): void {
-    this.ledger.add(msg);
-    this.pendingCount = this.ledger.size;
-    if (this.synced && this.transport?.send(msg)) this.ledger.markSent(msg.id);
+  /** Called once per animation frame while the page is visible. */
+  tick(): void {
+    this.post({ type: 'tick' });
   }
 
-  // ---- link events -------------------------------------------------------
-
-  opened(endpoint: string): void {
-    this.endpoint = endpoint;
-    this.link = 'syncing';
-    this.synced = false;
-    this.transport?.send(
-      this.state
-        ? { type: 'hello', clientId: this.clientId, lastRevision: this.revision }
-        : { type: 'hello', clientId: this.clientId },
-    );
+  private post(msg: ToWorker): void {
+    this.posted++;
+    this.port?.post(msg);
   }
 
-  closed(): void {
-    this.synced = false;
-    this.link = 'connecting';
-  }
+  // ---- worker patches ------------------------------------------------------
 
-  receive(raw: unknown): void {
-    const msg = (typeof raw === 'string' ? JSON.parse(raw) : raw) as ServerMessage;
-    switch (msg.type) {
-      case 'snapshot':
-        this.shape = msg.shape;
-        this.state = msg.state;
-        this.owners = msg.owners;
-        this.revision = msg.revision;
-        this.serving(msg.replica);
-        this.synchronised('snapshot');
-        break;
-      case 'resume':
-        this.serving(msg.replica);
-        for (const d of msg.deltas) {
-          if (d.revision <= this.revision) continue;
-          if (d.revision !== this.revision + 1) return this.resync();
-          this.apply(d);
-        }
-        if (msg.revision !== this.revision) return this.resync();
-        this.synchronised('resume');
-        break;
-      case 'delta':
-        if (!this.synced || msg.revision <= this.revision) return;
-        if (msg.revision !== this.revision + 1) return this.resync();
-        this.apply(msg);
-        if (this.replica?.role !== msg.replica.role) this.replica = msg.replica;
-        break;
-      case 'ack':
-        this.resolve(msg.commandId);
-        break;
-      case 'error':
-        if (msg.commandId) this.resolve(msg.commandId);
-        if (msg.code === 409 && msg.path) {
-          this.conflicts.set(msg.path, Date.now());
-          this.notify(
-            'conflict',
-            `${describePath(msg.path, this.shape)} is held by ${msg.owner ?? 'another client'}`,
-          );
-        } else {
-          this.notify('error', msg.message);
-        }
-        break;
-      case 'replicas':
-        this.replicas = msg.replicas;
-        if (this.replica?.role !== msg.replica.role) this.replica = msg.replica;
-        break;
-      case 'meters':
-        this.meters.ingest(msg, typeof performance === 'undefined' ? Date.now() : performance.now());
-        if (this.meterReplica !== msg.replica.id) this.meterReplica = msg.replica.id;
-        break;
-      case 'counters':
-        this.counters = msg.values;
-        this.countersReplica = msg.replica.id;
-        break;
+  apply(p: Patch, now: number = performance.now()): void {
+    performance.mark('faderz:patch-start');
+    const fresh = (path: string) => (this.localWrites.get(path)?.input ?? 0) <= p.input;
+    if (p.snapshot) {
+      this.shape = p.snapshot.shape;
+      this.state = p.snapshot.state;
+      this.owners = p.snapshot.owners;
+      this.meters.setShape(p.snapshot.shape);
+      for (const [path, w] of this.localWrites) {
+        if (!fresh(path)) setAt(this.state as unknown as Record<string, unknown>, path, w.value);
+      }
     }
+    const state = this.state as unknown as Record<string, unknown> | null;
+    if (state) {
+      for (const [path, value] of p.changes) {
+        if (!fresh(path) || Object.is(getAt(state, path), value)) continue;
+        setAt(state, path, value);
+      }
+    }
+    for (const [path, owner] of p.owners) {
+      if (owner === null) delete this.owners[path];
+      else this.owners[path] = owner;
+    }
+    for (const [path, w] of this.localWrites) if (w.input <= p.input) this.localWrites.delete(path);
+    if (p.status) {
+      if (p.status.failover && p.status.failover.n !== this.status.failover?.n) this.failoverAt = Date.now();
+      this.status = p.status;
+    }
+    if (p.meters) {
+      this.meters.ingest(p.meters.replica, p.meters.values, now);
+      if (this.meterReplica !== p.meters.replica) this.meterReplica = p.meters.replica;
+    }
+    if (p.counters) {
+      this.counters = p.counters.values;
+      this.countersReplica = p.counters.replica;
+    }
+    for (const n of p.notices ?? []) {
+      if (n.kind === 'conflict') {
+        this.conflicts.set(n.path, Date.now());
+        this.notify('conflict', `${describePath(n.path, this.shape)} is held by ${this.ownerLabel(n.owner)}`);
+      } else {
+        this.notify('error', n.text);
+      }
+    }
+    performance.clearMeasures('faderz:patch');
+    const m = performance.measure('faderz:patch', 'faderz:patch-start');
+    performance.clearMarks('faderz:patch-start');
+    const s = this.patchStats;
+    s.last = m.duration;
+    s.max = Math.max(s.max, m.duration);
+    s.count++;
   }
 
   dismiss(id: number): void {
@@ -203,65 +215,7 @@ export class MixerStore {
   }
 
   notify(kind: Notice['kind'], text: string): void {
-    this.notices = [...this.notices.slice(-4), { id: ++this.noticeId, kind, text }];
-  }
-
-  // ---- internals ---------------------------------------------------------
-
-  private serving(replica: ReplicaRef): void {
-    if (this.servedBy !== null && this.servedBy !== replica.id) {
-      this.failover = { from: this.servedBy, to: replica.id, at: Date.now() };
-      this.meters.clear();
-    }
-    this.servedBy = replica.id;
-    this.replica = replica;
-  }
-
-  private synchronised(kind: 'snapshot' | 'resume'): void {
-    this.synced = true;
-    this.link = 'live';
-    this.lastSync = kind;
-    for (const msg of this.ledger.pending()) {
-      if (this.transport?.send(msg)) this.ledger.markSent(msg.id);
-    }
-    // Ownership expires 2 s after a client loses every replica; take back
-    // any control still held under the pointer.
-    const touching = new Set(
-      this.ledger.pending().flatMap((m) => (m.type === 'touch' ? [m.path] : [])),
-    );
-    for (const path of this.held) {
-      if (this.owners[path] !== this.clientId && !touching.has(path)) {
-        this.issue({ type: 'touch', id: uuid(), path });
-      }
-    }
-  }
-
-  private resync(): void {
-    this.synced = false;
-    this.link = 'syncing';
-    this.transport?.send({ type: 'resync', lastRevision: this.revision });
-  }
-
-  private apply(d: DeltaMessage): void {
-    if (d.changes && this.state) {
-      for (const c of d.changes) setAt(this.state as unknown as Record<string, unknown>, c.path, c.value);
-    }
-    if (d.owners) {
-      for (const o of d.owners) {
-        if (o.owner === null) delete this.owners[o.path];
-        else this.owners[o.path] = o.owner;
-      }
-    }
-    this.revision = d.revision;
-    if (d.origin?.clientId === this.clientId) this.resolve(d.origin.commandId);
-  }
-
-  private resolve(commandId: string): void {
-    const msg = this.ledger.resolve(commandId);
-    this.pendingCount = this.ledger.size;
-    if (msg?.type === 'set' && this.overlay.get(msg.path)?.commandId === commandId) {
-      this.overlay.delete(msg.path);
-    }
+    this.notices = [...this.notices.slice(-(NOTICE_LIMIT - 1)), { id: ++this.noticeId, kind, text }];
   }
 }
 

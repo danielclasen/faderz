@@ -22,7 +22,7 @@
   </div>
   <button class="key mute" aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
   <div class="f"><Fader path={vcaPath(vca.id, 'offset')} label={`VCA ${vca.name} offset`} /></div>
-  <output class="num value">{formatDb(offset)}</output>
+  <output class="num value"><span>{formatDb(offset)}</span></output>
 </section>
 
 <style>
@@ -79,5 +79,13 @@
     border-radius: 2px;
     color: #e6edf3;
     line-height: 18px;
+  }
+  /* The text changes with every update. A flex item is never a relayout
+     boundary, so the text sits in a block child of fixed size with strict
+     containment, which lays out nothing outside it. */
+  .value span {
+    display: block;
+    height: 18px;
+    contain: strict;
   }
 </style>

@@ -41,7 +41,7 @@
   <div class="legs" style:padding-left="18px">
     {#each labels as l (l)}<span>{l}</span>{/each}
   </div>
-  <output class="num value">{formatDb(fader)}</output>
+  <output class="num value"><span>{formatDb(fader)}</span></output>
 </section>
 
 <style>
@@ -127,5 +127,13 @@
     border-radius: 2px;
     color: #e6edf3;
     line-height: 18px;
+  }
+  /* The text changes with every update. A flex item is never a relayout
+     boundary, so the text sits in a block child of fixed size with strict
+     containment, which lays out nothing outside it. */
+  .value span {
+    display: block;
+    height: 18px;
+    contain: strict;
   }
 </style>

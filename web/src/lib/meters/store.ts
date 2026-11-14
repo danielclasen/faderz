@@ -1,9 +1,12 @@
-// Latest meter frame per element. Kept outside Svelte reactivity: canvases
-// read it from one animation-frame loop instead of re-rendering at 25 Hz.
+// Latest meter frame, as the flattened values the sync worker transfers
+// (meters/flat.ts). Kept outside Svelte reactivity: canvases read it from
+// one animation-frame loop instead of re-rendering at 25 Hz.
 
-import type { BusMeter, ChannelMeter, MetersMessage } from '../contract/types';
+import { deriveMeterLayout } from '../contract/meterFrame';
+import type { BusMeter, Shape } from '../contract/types';
+import { meterSlots, slotKey, type MeterGroup, type MeterSlot } from './flat';
 
-export type MeterGroup = 'channels' | 'buses' | 'auxes' | 'mixMinus';
+export type { MeterGroup } from './flat';
 
 export interface MeterReading {
   peak: number[];
@@ -13,30 +16,61 @@ export interface MeterReading {
 }
 
 export class MeterStore {
-  private latest = new Map<string, MeterReading>();
-  /** Replica that produced the latest frame. */
+  private slots = new Map<string, MeterSlot>();
+  private values: Float32Array | null = null;
+  private readings = new Map<string, MeterReading>();
+  /** Replica that measured the latest frame. */
   replica: string | null = null;
   receivedAt = 0;
 
-  ingest(msg: MetersMessage, now: number): void {
-    this.replica = msg.replica.id;
+  /** Meter frames follow the shape of the last snapshot. */
+  setShape(shape: Shape): void {
+    this.slots = meterSlots(deriveMeterLayout(shape));
+    this.clear();
+  }
+
+  ingest(replica: string, values: Float32Array, now: number): void {
+    this.replica = replica;
     this.receivedAt = now;
-    const put = (group: MeterGroup, map: Record<string, ChannelMeter | BusMeter>) => {
-      for (const [id, m] of Object.entries(map)) this.latest.set(`${group}/${id}`, m);
-    };
-    put('channels', msg.channels);
-    put('buses', msg.buses);
-    put('auxes', msg.auxes);
-    put('mixMinus', msg.mixMinus);
+    this.values = values;
+    this.readings.clear();
   }
 
   get(group: MeterGroup, id: string): MeterReading | undefined {
-    return this.latest.get(`${group}/${id}`);
+    const key = slotKey(group, id);
+    const cached = this.readings.get(key);
+    if (cached) return cached;
+    const v = this.values;
+    const slot = this.slots.get(key);
+    if (!v || !slot) return undefined;
+    const legs = (i: number) => Array.from(v.subarray(slot.offset + i * slot.legs, slot.offset + (i + 1) * slot.legs));
+    let reading: MeterReading;
+    if (!slot.bus) {
+      reading = { peak: legs(0), rms: legs(1) };
+    } else {
+      const t = slot.offset + 3 * slot.legs;
+      const opt = (x: number) => (Number.isNaN(x) ? null : x);
+      reading = {
+        peak: legs(0),
+        truePeak: legs(1),
+        rms: legs(2),
+        loudness: {
+          momentary: opt(v[t]!),
+          shortTerm: opt(v[t + 1]!),
+          integrated: opt(v[t + 2]!),
+          lra: opt(v[t + 3]!),
+          integratedValid: v[t + 4] === 1,
+        },
+      };
+    }
+    this.readings.set(key, reading);
+    return reading;
   }
 
-  /** Forget all readings, e.g. after switching replica, so stale bars fall. */
+  /** Forget the latest frame, so bars fall. */
   clear(): void {
-    this.latest.clear();
+    this.values = null;
+    this.readings.clear();
   }
 }
 
@@ -53,7 +87,7 @@ function tick(now: number): void {
   frame = draws.size > 0 ? requestAnimationFrame(tick) : 0;
 }
 
-/** Register a draw callback on the shared animation-frame loop. */
+/** Register a callback on the shared animation-frame loop. */
 export function onAnimationFrame(draw: Draw): () => void {
   draws.add(draw);
   if (frame === 0 && typeof requestAnimationFrame === 'function') {

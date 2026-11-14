@@ -113,3 +113,120 @@ describe('Change values are constrained by path', () => {
     expect(set(path, value)).not.toBeNull();
   });
 });
+
+describe('WebSocket messages', () => {
+  const contract = new Contract();
+  const server = (msg: unknown) => {
+    try {
+      contract.assertServerMessage(msg);
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  const replica = { id: 'r1', role: 'leader' };
+  const owner = { principal: 'anonymous', session: 'tab-1', kind: 'ui', connection: 'c1' };
+  const cmd = '0b6e3a4c-5d1f-4c2a-9e8b-7f6a5d4c3b2a';
+  const cmd2 = '1c7f4b5d-6e2a-4d3b-8f9c-8a7b6e5d4c3b';
+
+  it.each([
+    { type: 'hello', session: 'tab-1', kind: 'ui', mode: 'primary' },
+    { type: 'hello', session: 'console:mcu-1', kind: 'console', mode: 'standby', lastRevision: 12 },
+    { type: 'promote' },
+    { type: 'credit', n: 1 },
+    { type: 'credit', n: 8 },
+    { type: 'credit', n: 100 },
+    { type: 'ping', t: 0 },
+    { type: 'pong', t: 1731590000000 },
+    { type: 'resync' },
+    { type: 'touch', id: cmd, path: '/channels/ch1/fader' },
+    { type: 'release', id: cmd, path: '/channels/ch1/fader' },
+  ])('client accepts %j', (msg) => {
+    expect(contract.checkClientMessage(msg)).toBeNull();
+  });
+
+  it.each([
+    { type: 'hello', clientId: 'tab-1', kind: 'ui', mode: 'primary' },
+    { type: 'hello', session: 'tab-1', kind: 'ui' },
+    { type: 'hello', session: 'tab-1', mode: 'primary' },
+    { type: 'hello', session: 'tab-1', kind: 'script', mode: 'primary' },
+    { type: 'hello', session: 'tab-1', kind: 'ui', mode: 'backup' },
+    { type: 'hello', session: 'tab 1', kind: 'ui', mode: 'primary' },
+    { type: 'promote', mode: 'primary' },
+    { type: 'credit' },
+    { type: 'credit', n: 0 },
+    { type: 'credit', n: -1 },
+    { type: 'credit', n: 1.5 },
+    { type: 'credit', n: 1, channels: ['ch1'] },
+    { type: 'ping' },
+    { type: 'ping', t: -1 },
+    { type: 'ping', t: 1, revision: 4 },
+    { type: 'pong', t: 1, replica },
+    { type: 'meters' },
+  ])('client refuses %j', (msg) => {
+    expect(contract.checkClientMessage(msg)).not.toBeNull();
+  });
+
+  const delta = {
+    type: 'delta',
+    replica,
+    revision: 7,
+    atIndex: 480000,
+    changes: [
+      { path: '/channels/ch1/fader', value: -5 },
+      { path: '/channels/ch2/mute', value: true },
+    ],
+    owners: [{ path: '/channels/ch1/fader', owner }],
+    origins: [
+      { owner, commandId: cmd, seq: 1731590000001 },
+      { owner: { ...owner, session: 'console:mcu-1', kind: 'console', connection: 'c2' }, commandId: cmd2 },
+    ],
+  };
+
+  it.each([
+    ['delta with several origins', delta],
+    ['delta releasing ownership', { type: 'delta', replica, revision: 8, owners: [{ path: '/channels/ch1/fader', owner: null }] }],
+    ['resume', { type: 'resume', you: owner, replica, revision: 7, deltas: [delta] }],
+    ['script owner', { type: 'delta', replica, revision: 9, owners: [{ path: '/buses/pgm/fader', owner: { ...owner, kind: 'script' } }] }],
+    ['replicas', { type: 'replicas', replica, replicas: [{ ...replica, healthy: true, commitable: true }, { id: 'r2', role: 'follower', healthy: true, commitable: false }] }],
+    ['ping', { type: 'ping', replica, t: 0 }],
+    ['pong', { type: 'pong', replica, t: 5 }],
+    ['409 with owner', { type: 'error', replica, code: 409, message: 'owned', commandId: cmd, path: '/channels/ch1/fader', current: -3, owner }],
+    ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 } }],
+  ])('server accepts %s', (_, msg) => {
+    expect(server(msg)).toBeNull();
+  });
+
+  it.each([
+    ['meters', { type: 'meters', replica, channels: {}, buses: {}, auxes: {}, mixMinus: {} }],
+    ['resume without you', { type: 'resume', replica, revision: 7, deltas: [] }],
+    ['you as a client id', { type: 'resume', you: 'tab-1', replica, revision: 7, deltas: [] }],
+    ['owner as a client id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: 'tab-1' }] }],
+    ['owner without connection', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { principal: 'anonymous', session: 'tab-1', kind: 'ui' } }] }],
+    ['owner of unknown kind', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, kind: 'robot' } }] }],
+    ['owner with empty principal', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, principal: '' } }] }],
+    ['origin without owner', { ...delta, origins: [{ commandId: cmd }] }],
+    ['origin with seq 0', { ...delta, origins: [{ owner, commandId: cmd, seq: 0 }] }],
+    ['empty origins', { ...delta, origins: [] }],
+    ['replica without commitable', { type: 'replicas', replica, replicas: [{ ...replica, healthy: true }] }],
+    ['ping with state', { type: 'ping', replica, t: 1, revision: 3 }],
+    ['ping without replica', { type: 'ping', t: 1 }],
+  ])('server refuses %s', (_, msg) => {
+    expect(server(msg)).not.toBeNull();
+  });
+
+  it('carry meters only as binary frames', () => {
+    const s = read('server-message.schema.json') as { oneOf: Array<{ $ref: string }>; $defs: Record<string, { examples?: unknown[] }> };
+    expect(s.$defs['Meters']).toBeUndefined();
+    expect(s.oneOf.map((o) => o.$ref)).not.toContain('#/$defs/MeterFrame');
+    expect(JSON.stringify(s)).not.toContain('"const":"meters"');
+    expect(s.$defs['MeterFrame']?.examples).toHaveLength(1);
+  });
+
+  it('owners map control paths to owner records', () => {
+    const owners = contract.ajv.compile({ $ref: 'https://github.com/danielclasen/faderz/raw/main/api/ws/model.schema.json#/$defs/Owners' });
+    expect(owners({ '/channels/ch1/fader': owner })).toBe(true);
+    expect(owners({ '/channels/ch1/fader': 'tab-1' })).toBe(false);
+    expect(owners({ '/channels/ch1/peak': owner })).toBe(false);
+  });
+});

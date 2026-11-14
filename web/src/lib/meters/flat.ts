@@ -1,0 +1,58 @@
+// Decoded meter frame as one Float32Array in layout order, so the worker
+// can transfer it to the page without copying. Per channel: peak legs, rms
+// legs. Per bus, aux and mix-minus output: peak, truePeak and rms legs,
+// then momentary, shortTerm, integrated, lra (NaN for null) and
+// integratedValid (1 or 0).
+
+import type { MeterFrame, MeterLayout } from '../contract/meterFrame';
+import type { BusMeter, Loudness } from '../contract/types';
+
+export type MeterGroup = 'channels' | 'buses' | 'auxes' | 'mixMinus';
+
+export interface MeterSlot {
+  offset: number;
+  legs: number;
+  bus: boolean;
+}
+
+const GROUPS: readonly MeterGroup[] = ['channels', 'buses', 'auxes', 'mixMinus'];
+const BUS_TAIL = 5;
+
+export const slotKey = (group: MeterGroup, id: string) => `${group}/${id}`;
+
+/** Offset of every element in a flattened frame of this layout. */
+export function meterSlots(layout: MeterLayout): Map<string, MeterSlot> {
+  const slots = new Map<string, MeterSlot>();
+  let offset = 0;
+  for (const group of GROUPS) {
+    const bus = group !== 'channels';
+    for (const e of layout[group]) {
+      slots.set(slotKey(group, e.id), { offset, legs: e.legs, bus });
+      offset += bus ? 3 * e.legs + BUS_TAIL : 2 * e.legs;
+    }
+  }
+  return slots;
+}
+
+export function flattenMeterFrame(layout: MeterLayout, frame: MeterFrame): Float32Array {
+  const out = new Float32Array(layout.valueCount);
+  let o = 0;
+  const put = (values: readonly number[]) => {
+    for (const v of values) out[o++] = v;
+  };
+  for (const c of frame.channels) {
+    put(c.peak);
+    put(c.rms);
+  }
+  const loud = (l: Loudness) => {
+    for (const v of [l.momentary, l.shortTerm, l.integrated, l.lra]) out[o++] = v ?? Number.NaN;
+    out[o++] = l.integratedValid ? 1 : 0;
+  };
+  for (const b of [...frame.buses, ...frame.auxes, ...frame.mixMinus] as BusMeter[]) {
+    put(b.peak);
+    put(b.truePeak);
+    put(b.rms);
+    loud(b.loudness);
+  }
+  return out;
+}

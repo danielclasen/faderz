@@ -25,13 +25,13 @@
 </script>
 
 <div class="loud" aria-label="Loudness">
-  <div class="cell"><span>M</span><b class="num">{fmt(l?.momentary)}</b></div>
-  <div class="cell"><span>S</span><b class="num">{fmt(l?.shortTerm)}</b></div>
+  <div class="cell"><span>M</span><b class="num"><span>{fmt(l?.momentary)}</span></b></div>
+  <div class="cell"><span>S</span><b class="num"><span>{fmt(l?.shortTerm)}</span></b></div>
   <div class="cell int" class:ok={dev !== null && Math.abs(dev) <= 1} class:off={dev !== null && Math.abs(dev) > 1} class:invalid={l && !l.integratedValid}>
-    <span>I</span><b class="num" data-testid={`loudness-i-${id}`}>{fmt(l?.integrated)}</b>
+    <span>I</span><b class="num" data-testid={`loudness-i-${id}`}><span>{fmt(l?.integrated)}</span></b>
   </div>
-  <div class="cell"><span>LRA</span><b class="num">{fmt(l?.lra)}</b></div>
-  <div class="cell" class:hot={tp !== null && tp > -1}><span>TP</span><b class="num">{fmt(tp)}</b></div>
+  <div class="cell"><span>LRA</span><b class="num"><span>{fmt(l?.lra)}</span></b></div>
+  <div class="cell" class:hot={tp !== null && tp > -1}><span>TP</span><b class="num"><span>{fmt(tp)}</span></b></div>
   {#if onreset}
     <button class="key reset" onclick={onreset} title="Reset integrated loudness and LRA">RST</button>
   {/if}
@@ -54,10 +54,24 @@
     padding: 1px 4px;
     color: #8b96a4;
   }
+  /* The text changes with every update. A flex item is never a relayout
+     boundary, so the text sits in a block child of fixed size with size and
+     layout containment, which lays out nothing outside it; it paints
+     beyond its box when a narrow strip squeezes it. */
   .cell b {
+    flex: 0 1 5.5ch;
+    min-width: 0;
     color: #e6edf3;
     font-weight: 400;
     font-size: 10.5px;
+  }
+  .cell b span {
+    display: block;
+    height: 13px;
+    line-height: 13px;
+    text-align: right;
+    white-space: nowrap;
+    contain: size layout style;
   }
   .int.ok b {
     color: var(--meter-low);

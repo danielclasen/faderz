@@ -6,6 +6,7 @@
     role: string;
     healthy: boolean;
     frozen: 'none' | 'drop' | 'apply';
+    partitioned: boolean;
     clients: number;
   }
   let open = $state(false);
@@ -37,12 +38,21 @@
             <tr>
               <td><b>{r.id}</b></td>
               <td>{r.role}</td>
-              <td>{!r.healthy ? 'down' : r.frozen !== 'none' ? `hung (${r.frozen})` : 'up'}</td>
+              <td>{!r.healthy ? 'down' : r.frozen !== 'none' ? `hung (${r.frozen})` : r.partitioned ? 'partitioned' : 'up'}</td>
               <td>{r.clients}c</td>
               <td>
                 <button onclick={() => act(`/__mock/replicas/${r.id}/kill`)} disabled={!r.healthy}>kill</button>
-                <button onclick={() => act(`/__mock/replicas/${r.id}/freeze?mode=drop`)} disabled={!r.healthy || r.frozen !== 'none'}>hang</button>
-                <button onclick={() => act(`/__mock/replicas/${r.id}/restore`)} disabled={r.healthy && r.frozen === 'none'}>restore</button>
+                {#if r.frozen === 'none'}
+                  <button onclick={() => act(`/__mock/replicas/${r.id}/freeze?mode=drop`)} disabled={!r.healthy}>hang</button>
+                {:else}
+                  <button onclick={() => act(`/__mock/replicas/${r.id}/unfreeze`)}>unhang</button>
+                {/if}
+                {#if r.partitioned}
+                  <button onclick={() => act(`/__mock/replicas/${r.id}/heal`)}>heal</button>
+                {:else}
+                  <button onclick={() => act(`/__mock/replicas/${r.id}/partition`)} disabled={!r.healthy}>partition</button>
+                {/if}
+                <button onclick={() => act(`/__mock/replicas/${r.id}/restore`)} disabled={r.healthy && r.frozen === 'none' && !r.partitioned}>restore</button>
               </td>
             </tr>
           {/each}
@@ -80,7 +90,7 @@
     position: absolute;
     right: 0;
     bottom: 22px;
-    width: 400px;
+    width: 480px;
     background: #ffd400;
     border-radius: 4px;
     padding: 8px;

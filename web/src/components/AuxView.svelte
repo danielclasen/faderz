@@ -62,6 +62,8 @@
                         oninput={(e) => level(e, ch.id, aux.id)}
                         onpointerdown={() => mixer.touch(sendPath(ch.id, aux.id, 'level'))}
                         onpointerup={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
+                        onpointercancel={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
+                        onlostpointercapture={() => mixer.release(sendPath(ch.id, aux.id, 'level'))}
                       />
                       <span class="num db">{formatDb(lvl)}</span>
                       <button class="key" aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>

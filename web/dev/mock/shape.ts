@@ -17,14 +17,35 @@ const MONO_NAMES = [
   'Lav 3', 'Lav 4', 'Hand 1', 'Hand 2', 'Spot 1', 'Spot 2',
 ];
 
-export function exampleShape(): Shape {
+const WIDE_CHANNELS: ElementShape[] = [
+  { id: 'st1', name: 'Music', width: 2, layout: 'stereo' },
+  { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo' },
+  { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo' },
+  { id: 'st4', name: 'FX', width: 2, layout: 'stereo' },
+  { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1' },
+];
+
+/** Channel count of the example shape when none is given. */
+export const DEFAULT_CHANNELS = MONO_NAMES.length + WIDE_CHANNELS.length;
+
+/**
+ * Example shape with `channelCount` input channels: mono channels ch1 to
+ * chN, then the stereo and 5.1 channels st1 to st4 and sur1, as many of
+ * those as fit.
+ */
+export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
+  if (!Number.isInteger(channelCount) || channelCount < 1) {
+    throw new RangeError(`channel count must be a positive integer: ${channelCount}`);
+  }
+  const mono = Math.max(0, channelCount - WIDE_CHANNELS.length);
   const channels: ElementShape[] = [
-    ...MONO_NAMES.map((name, i) => ({ id: `ch${i + 1}`, name, width: 1 as const, layout: 'mono' as const })),
-    { id: 'st1', name: 'Music', width: 2, layout: 'stereo' },
-    { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo' },
-    { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo' },
-    { id: 'st4', name: 'FX', width: 2, layout: 'stereo' },
-    { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1' },
+    ...Array.from({ length: mono }, (_, i) => ({
+      id: `ch${i + 1}`,
+      name: MONO_NAMES[i] ?? `Input ${i + 1}`,
+      width: 1 as const,
+      layout: 'mono' as const,
+    })),
+    ...WIDE_CHANNELS.slice(0, channelCount - mono).map((c) => ({ ...c })),
   ];
   const buses: Shape['buses'] = [
     { id: 'pgm51', name: 'PGM 5.1', kind: 'program', width: 6, layout: '5.1' },
@@ -89,6 +110,9 @@ function busState(fader = 0): BusState {
   };
 }
 
+/** Session id each console uses as a client (ConsoleStatus.session). */
+export const CONSOLE_SESSIONS: Record<string, string> = { 'mcu-1': 'console-mcu-1', 'ext-1': 'console-ext-1', 'osc-1': 'console-osc-1' };
+
 const FADERS: Record<string, number> = {
   ch1: 0, ch2: -2.5, ch3: -4, ch4: -3, ch5: -6, ch6: -90, ch7: -5, ch8: -90, ch9: -90, ch10: -90,
   ch11: -3, ch12: -90, ch13: -12, ch14: -14, ch15: -18, ch16: -90, ch17: -4, ch18: -4, ch19: -90,
@@ -126,23 +150,29 @@ export function initialState(shape: Shape): State {
     };
     channels[c.id] = s;
   });
-  const ch1 = channels['ch1']!;
-  ch1.eq.enabled = true;
-  ch1.eq.bands[1].gain = -3;
-  ch1.eq.bands[1].freq = 300;
-  ch1.eq.bands[2].gain = 2.5;
-  ch1.eq.bands[2].freq = 3200;
-  channels['ch2']!.eq.enabled = true;
-  channels['ch2']!.eq.bands[3].gain = 2;
-  channels['ch11']!.eq.enabled = true;
-  channels['ch11']!.eq.bands[0].gain = -6;
-  channels['ch13']!.gate.enabled = true;
-  channels['ch14']!.gate.enabled = true;
+  const ch1 = channels['ch1'];
+  if (ch1) {
+    ch1.eq.enabled = true;
+    ch1.eq.bands[1].gain = -3;
+    ch1.eq.bands[1].freq = 300;
+    ch1.eq.bands[2].gain = 2.5;
+    ch1.eq.bands[2].freq = 3200;
+  }
+  if (channels['ch2']) {
+    channels['ch2'].eq.enabled = true;
+    channels['ch2'].eq.bands[3].gain = 2;
+  }
+  if (channels['ch11']) {
+    channels['ch11'].eq.enabled = true;
+    channels['ch11'].eq.bands[0].gain = -6;
+  }
+  for (const id of ['ch13', 'ch14']) if (channels[id]) channels[id].gate.enabled = true;
+  const existing = (ids: string[]) => ids.filter((id) => channels[id] !== undefined);
 
   const consoles: ConsoleStatus[] = [
-    { id: 'mcu-1', name: 'MCU Pro', protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 0, strips: 8 },
-    { id: 'ext-1', name: 'MCU Extender', protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 8, strips: 8 },
-    { id: 'osc-1', name: 'OSC tablet', protocol: 'osc', transport: 'osc-udp', connected: false, bankOffset: 0, strips: 16 },
+    { id: 'mcu-1', name: 'MCU Pro', session: CONSOLE_SESSIONS['mcu-1']!, protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 0, strips: 8 },
+    { id: 'ext-1', name: 'MCU Extender', session: CONSOLE_SESSIONS['ext-1']!, protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 8, strips: 8 },
+    { id: 'osc-1', name: 'OSC tablet', session: CONSOLE_SESSIONS['osc-1']!, protocol: 'osc', transport: 'osc-udp', connected: false, bankOffset: 0, strips: 16 },
   ];
 
   return {
@@ -150,11 +180,11 @@ export function initialState(shape: Shape): State {
     buses: Object.fromEntries(shape.buses.map((b) => [b.id, busState()])),
     auxes: Object.fromEntries(shape.auxes.map((a) => [a.id, busState(a.id === 'aux3' ? -6 : 0)])),
     mixMinus: Object.fromEntries(
-      shape.mixMinus.map((m, i) => [m.id, { exclude: [i === 0 ? 'ch11' : 'ch12'], fader: 0, mute: false }]),
+      shape.mixMinus.map((m, i) => [m.id, { exclude: existing([i === 0 ? 'ch11' : 'ch12']), fader: 0, mute: false }]),
     ),
     vcas: {
-      vca1: { offset: 0, mute: false, members: ['ch1', 'ch2'] },
-      vca2: { offset: -2, mute: false, members: ['ch3', 'ch4', 'ch5', 'ch6'] },
+      vca1: { offset: 0, mute: false, members: existing(['ch1', 'ch2']) },
+      vca2: { offset: -2, mute: false, members: existing(['ch3', 'ch4', 'ch5', 'ch6']) },
     },
     monitor: { source: 'pgm20', level: -10, dim: false, cut: false, mono: false },
     afv: Object.fromEntries(
@@ -164,7 +194,7 @@ export function initialState(shape: Shape): State {
       }),
     ),
     tally: { CAM1: 'program', CAM2: 'preview', CAM3: 'off', CAM4: 'off' },
-    recallSafe: { ch11: ['fader', 'mute'], ch12: ['fader', 'mute'] },
+    recallSafe: Object.fromEntries(existing(['ch11', 'ch12']).map((id) => [id, ['fader', 'mute']])),
     scenes: [],
     consoles,
   };

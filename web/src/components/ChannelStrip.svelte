@@ -95,7 +95,7 @@
   </div>
 
   <div class="foot">
-    <output class="num value" data-testid={`fader-value-${channel.id}`}>{formatDb(fader)}</output>
+    <output class="num value" data-testid={`fader-value-${channel.id}`}><span>{formatDb(fader)}</span></output>
     <div class="vca">
       {#each vcas as v (v.id)}<span title={`${v.name} offset ${formatDb(mixer.state!.vcas[v.id]!.offset)} dB`}>{v.name.slice(0, 4)}</span>{/each}
       {#if vcas.length > 0 && effective !== fader}<span class="eff num" title="Effective gain">{formatDb(effective)}</span>{/if}
@@ -271,6 +271,14 @@
     border-radius: 2px;
     color: #e6edf3;
     line-height: 18px;
+  }
+  /* The text changes with every update. A flex item is never a relayout
+     boundary, so the text sits in a block child of fixed size with strict
+     containment, which lays out nothing outside it. */
+  .value span {
+    display: block;
+    height: 18px;
+    contain: strict;
   }
   .vca {
     display: flex;

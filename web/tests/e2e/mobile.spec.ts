@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { uiFontLoaded } from './support';
 
 test('renders the mixer on a phone over a plain-HTTP LAN origin', async ({ page, baseURL }) => {
   const errors: string[] = [];
@@ -9,6 +10,7 @@ test('renders the mixer on a phone over a plain-HTTP LAN origin', async ({ page,
   expect(await page.evaluate(() => typeof (crypto as { randomUUID?: unknown }).randomUUID)).toBe('undefined');
   await expect(page.getByTestId('link')).toContainText('LIVE');
   await expect(page.getByRole('button', { name: 'Pres 1 mute' })).toBeVisible();
+  expect(await uiFontLoaded(page)).toBe(true);
   await expect(page.getByTestId('fatal')).toHaveCount(0);
   // Phone projects share one mock server, so toggle relative to what is there.
   const mute = page.getByRole('button', { name: 'Pres 1 mute' });

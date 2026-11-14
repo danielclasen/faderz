@@ -2,7 +2,9 @@
 // mock traffic typed with these interfaces against the schemas.
 
 export type Id = string;
-export type ClientId = string;
+export type SessionId = string;
+export type SessionKind = 'ui' | 'console' | 'script';
+export type LinkMode = 'primary' | 'standby';
 export type CommandId = string;
 export type Revision = number;
 export type Layout = 'mono' | 'stereo' | '5.1' | '7.1';
@@ -159,6 +161,7 @@ export interface Scene {
 export interface ConsoleStatus {
   id: Id;
   name: string;
+  session: SessionId;
   protocol: 'mcu' | 'hui' | 'osc';
   transport: 'alsa-midi' | 'bridge' | 'osc-udp';
   connected: boolean;
@@ -178,7 +181,13 @@ export interface State {
   scenes: Scene[];
   consoles: ConsoleStatus[];
 }
-export type Owners = Record<string, ClientId>;
+export interface Owner {
+  principal: string;
+  session: SessionId;
+  kind: SessionKind;
+  connection: string;
+}
+export type Owners = Record<string, Owner>;
 
 export interface ReplicaRef {
   id: Id;
@@ -186,6 +195,7 @@ export interface ReplicaRef {
 }
 export interface ReplicaStatus extends ReplicaRef {
   healthy: boolean;
+  commitable: boolean;
 }
 export interface StateDocument {
   revision: Revision;
@@ -201,19 +211,61 @@ export interface Change {
 }
 export interface OwnershipChange {
   path: string;
-  owner: ClientId | null;
+  owner: Owner | null;
 }
 export interface Conflict {
   path: string;
   current: unknown;
-  owner: ClientId;
+  owner: Owner;
+}
+export interface Origin {
+  owner: Owner;
+  commandId: CommandId;
+  seq?: number;
+}
+
+// Meter values. On the WebSocket they travel in binary meter frames,
+// encoded and decoded by meterFrame.ts.
+export interface ChannelMeter {
+  peak: number[];
+  rms: number[];
+}
+export interface Loudness {
+  momentary: number | null;
+  shortTerm: number | null;
+  integrated: number | null;
+  lra: number | null;
+  integratedValid: boolean;
+}
+export interface BusMeter {
+  peak: number[];
+  truePeak: number[];
+  rms: number[];
+  loudness: Loudness;
 }
 
 // WebSocket client messages
 export interface HelloMessage {
   type: 'hello';
-  clientId: ClientId;
+  session: SessionId;
+  kind: 'ui' | 'console';
+  mode: LinkMode;
   lastRevision?: Revision;
+}
+export interface PromoteMessage {
+  type: 'promote';
+}
+export interface CreditMessage {
+  type: 'credit';
+  n: number;
+}
+export interface PingMessage {
+  type: 'ping';
+  t: number;
+}
+export interface PongMessage {
+  type: 'pong';
+  t: number;
 }
 export interface SetMessage {
   type: 'set';
@@ -237,12 +289,19 @@ export interface ResyncMessage {
   lastRevision?: Revision;
 }
 export type CommandMessage = SetMessage | TouchMessage | ReleaseMessage;
-export type ClientMessage = HelloMessage | CommandMessage | ResyncMessage;
+export type ClientMessage =
+  | HelloMessage
+  | PromoteMessage
+  | CommandMessage
+  | ResyncMessage
+  | CreditMessage
+  | PingMessage
+  | PongMessage;
 
-// WebSocket server messages
+// WebSocket server messages (JSON text); meter frames are binary
 export interface SnapshotMessage {
   type: 'snapshot';
-  clientId: ClientId;
+  you: Owner;
   replica: ReplicaRef;
   revision: Revision;
   shape: Shape;
@@ -256,11 +315,11 @@ export interface DeltaMessage {
   atIndex?: number;
   changes?: Change[];
   owners?: OwnershipChange[];
-  origin?: { clientId: ClientId; commandId: CommandId; seq?: number };
+  origins?: Origin[];
 }
 export interface ResumeMessage {
   type: 'resume';
-  clientId: ClientId;
+  you: Owner;
   replica: ReplicaRef;
   revision: Revision;
   deltas: DeltaMessage[];
@@ -277,31 +336,6 @@ export interface ReplicasMessage {
   replica: ReplicaRef;
   replicas: ReplicaStatus[];
 }
-export interface ChannelMeter {
-  peak: number[];
-  rms: number[];
-}
-export interface Loudness {
-  momentary: number | null;
-  shortTerm: number | null;
-  integrated: number | null;
-  lra: number | null;
-  integratedValid: boolean;
-}
-export interface BusMeter {
-  peak: number[];
-  truePeak: number[];
-  rms: number[];
-  loudness: Loudness;
-}
-export interface MetersMessage {
-  type: 'meters';
-  replica: ReplicaRef;
-  channels: Record<Id, ChannelMeter>;
-  buses: Record<Id, BusMeter>;
-  auxes: Record<Id, BusMeter>;
-  mixMinus: Record<Id, BusMeter>;
-}
 export interface CountersMessage {
   type: 'counters';
   replica: ReplicaRef;
@@ -315,7 +349,12 @@ export interface ErrorMessage {
   commandId?: CommandId;
   path?: string;
   current?: unknown;
-  owner?: ClientId;
+  owner?: Owner;
+}
+export interface ServerPing {
+  type: 'ping' | 'pong';
+  replica: ReplicaRef;
+  t: number;
 }
 export type ServerMessage =
   | SnapshotMessage
@@ -323,9 +362,9 @@ export type ServerMessage =
   | DeltaMessage
   | AckMessage
   | ReplicasMessage
-  | MetersMessage
   | CountersMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | ServerPing;
 
 // REST
 export interface CommandResult {

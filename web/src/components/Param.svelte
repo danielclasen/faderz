@@ -46,6 +46,7 @@
     onpointerdown={() => mixer.touch(path)}
     onpointerup={() => mixer.release(path)}
     onpointercancel={() => mixer.release(path)}
+    onlostpointercapture={() => mixer.release(path)}
     aria-valuetext={shown}
     data-path={path}
   />

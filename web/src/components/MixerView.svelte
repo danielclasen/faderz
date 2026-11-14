@@ -41,7 +41,7 @@
           <button class="key" aria-pressed={visibleBank === i} onclick={() => goto(b.start)}>{b.start + 1}-{b.end}</button>
         {/each}
       </div>
-      <span class="meters-from" title="Meters are measured by the replica serving this client">
+      <span class="meters-from" title="Replica that measured the meters shown" data-testid="meter-replica">
         meters <b class="num">{mixer.meterReplica ?? '-'}</b>
       </span>
     </div>

@@ -3,7 +3,8 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import { MixerStore, mixerContext } from './lib/state/mixer.svelte';
 import { configureRest } from './lib/state/actions';
-import { Connection, resolveEndpoints } from './lib/net/connection';
+import { resolveEndpoints } from './lib/sync/endpoints';
+import { startSync } from './lib/sync/client';
 import { initTheme } from './lib/theme';
 import { renderFatal } from './lib/fatal';
 
@@ -19,14 +20,8 @@ try {
 
   const mixer = new MixerStore();
   const endpoints = resolveEndpoints(new URLSearchParams(location.search).get('endpoints'), location);
-  const connection = new Connection(endpoints, {
-    open: (endpoint) => mixer.opened(endpoint),
-    message: (data) => mixer.receive(data),
-    close: () => mixer.closed(),
-  });
-  mixer.attach(connection);
   configureRest(endpoints, mixer);
-  connection.start();
+  startSync(mixer, endpoints);
 
   mount(App, { target: root, context: mixerContext(mixer) });
 } catch (e) {

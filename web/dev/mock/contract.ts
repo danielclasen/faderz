@@ -46,6 +46,8 @@ export class Contract {
   private readonly cache = new Map<string, ValidateFunction | null>();
   readonly clientMessage: ValidateFunction;
   readonly serverMessage: ValidateFunction;
+  /** Decoded meter frame values: arrays of ChannelMeter and BusMeter. */
+  readonly meterValues: ValidateFunction;
 
   constructor() {
     // strict is off because openapi.yaml is registered whole and carries
@@ -60,6 +62,19 @@ export class Contract {
     this.ajv.addSchema({ ...(this.openapi as object), $id: `${ID_BASE}openapi.yaml` });
     this.clientMessage = this.ajv.getSchema(`${ID_BASE}ws/client-message.schema.json`)!;
     this.serverMessage = this.ajv.getSchema(`${ID_BASE}ws/server-message.schema.json`)!;
+    const meter = (def: string) => ({ type: 'array', items: { $ref: `${ID_BASE}ws/model.schema.json#/$defs/${def}` } });
+    this.meterValues = this.ajv.compile({
+      type: 'object',
+      required: ['channels', 'buses', 'auxes', 'mixMinus'],
+      properties: { channels: meter('ChannelMeter'), buses: meter('BusMeter'), auxes: meter('BusMeter'), mixMinus: meter('BusMeter') },
+    });
+  }
+
+  /** Throws when decoded meter values do not match model.schema.json ChannelMeter and BusMeter. */
+  assertMeterValues(values: { channels: unknown[]; buses: unknown[]; auxes: unknown[]; mixMinus: unknown[] }): void {
+    if (!this.meterValues(values)) {
+      throw new ContractViolation(`meter frame values violate the contract: ${describe(this.meterValues)}`);
+    }
   }
 
   checkClientMessage(msg: unknown): string | null {

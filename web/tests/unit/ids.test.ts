@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { uuid } from '../../src/lib/net/ids';
-import { MixerStore } from '../../src/lib/state/mixer.svelte';
+import { sessionId } from '../../src/lib/sync/session';
 
 const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -17,10 +17,9 @@ describe('uuid on a non-secure origin', () => {
     expect(new Set(ids).size).toBe(1000);
   });
 
-  it('lets the mixer store start without crypto.randomUUID', () => {
+  it('creates a session id without crypto.randomUUID', () => {
     const real = globalThis.crypto;
     vi.stubGlobal('crypto', { getRandomValues: (a: Uint8Array<ArrayBuffer>) => real.getRandomValues(a) });
-    const store = new MixerStore();
-    expect(store.clientId).toMatch(V4);
+    expect(sessionId(null, 'navigate')).toMatch(V4);
   });
 });

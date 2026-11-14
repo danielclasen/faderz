@@ -1,8 +1,9 @@
 // Dev-only mock of a faderz replica set: one replicated state with a
-// global revision, several replicas serving clients, touch ownership keyed
-// by client id, idempotent command ids, scenes, AFV tally and console
-// status. Every message it sends or receives is checked against the
-// committed contract.
+// global revision, several replicas serving primary and standby
+// connections, heartbeats, session leases for touch ownership, commands
+// batched per block into log entries, idempotent command ids, scenes, AFV
+// tally and console clients. Every message it sends or receives is
+// checked against the committed contract.
 
 import type {
   AckMessage,
@@ -13,6 +14,9 @@ import type {
   Conflict,
   DeltaMessage,
   ErrorMessage,
+  LinkMode,
+  Origin,
+  Owner,
   OwnershipChange,
   RecallGroup,
   ReplicaRef,
@@ -24,12 +28,21 @@ import type {
   State,
   TallyState,
 } from '../../src/lib/contract/types.ts';
+import { decodeMeterFrame, deriveMeterLayout, encodeMeterFrame, type MeterLayout } from '../../src/lib/contract/meterFrame.ts';
+import {
+  DEAD_MS,
+  HEARTBEAT_MS,
+  LEASE_MS,
+  METER_CREDIT_CAP,
+  METER_PERIOD_MS,
+} from '../../src/lib/contract/protocol.ts';
 import { getAt, parsePointer, pointer, setAt } from '../../src/lib/state/pointer.ts';
-import { Contract } from './contract.ts';
-import { exampleShape, initialState } from './shape.ts';
+import { Contract, ContractViolation } from './contract.ts';
+import { CONSOLE_SESSIONS, exampleShape, initialState } from './shape.ts';
 import { ReplicaMeters, SourceModel } from './signals.ts';
 
-export const OWNER_TIMEOUT_MS = 2000;
+/** Commands arriving within one block share a log entry. */
+export const BLOCK_MS = 5;
 const LOG_LIMIT = 1000;
 const SAMPLES_PER_MS = 48;
 /** Scheduling margin between accepting a change and the sample it applies at. */
@@ -37,11 +50,28 @@ const APPLY_MARGIN_SAMPLES = 480;
 
 type LogEntry = Omit<DeltaMessage, 'type' | 'replica'>;
 
+/** Traffic counters of one connection, reset by resetStats(). */
+export interface ConnStats {
+  meterFramesSent: number;
+  /** Meter periods in which this primary connection held no credit. */
+  metersSkippedNoCredit: number;
+  messagesIn: number;
+  messagesOut: number;
+}
+
 export interface Conn {
+  id: string;
   replica: Replica;
-  clientId: string | null;
+  owner: Owner | null;
+  mode: LinkMode;
   synced: boolean;
-  send(text: string): void;
+  /** Outstanding meter credits, 0 to METER_CREDIT_CAP. */
+  credit: number;
+  /** Date.now() of the last message received on the connection. */
+  lastSeen: number;
+  openedAt: number;
+  stats: ConnStats;
+  send(data: string | Uint8Array): void;
   close(): void;
 }
 
@@ -51,14 +81,32 @@ export interface Replica {
   healthy: boolean;
   /** none: serving; drop: hung, ignores input; apply: hung after replicating input. */
   frozen: 'none' | 'drop' | 'apply';
+  /** Cut off from the quorum: serves reads and heartbeats but cannot commit. */
+  partitioned: boolean;
   conns: Set<Conn>;
   meters: ReplicaMeters;
+  /** Meter period counter, uint32, sent as the frame sequence. */
+  meterSequence: number;
   counters: Record<string, number>;
+}
+
+/** One command applied to the state, as GET /__mock/audit lists it. */
+export interface AppliedCommand {
+  owner: Owner;
+  commandId: string;
+  type: CommandMessage['type'];
+  /** seq of a set; null for touch and release. */
+  seq: number | null;
+  path: string;
+  /** Value of a set; null for touch and release. */
+  value: unknown;
+  revision: number;
+  replica: string;
 }
 
 export interface AuditEntry {
   commandId: string;
-  clientId: string;
+  owner: Owner | null;
   type: CommandMessage['type'] | 'rest';
   path: string | null;
   result: 'applied' | 'duplicate' | 'stale' | 'noop' | 'conflict';
@@ -76,6 +124,8 @@ export class CommandError extends Error {
     this.conflicts = conflicts;
   }
 }
+
+export const sessionKey = (o: Pick<Owner, 'principal' | 'session'>) => `${o.principal}\n${o.session}`;
 
 function sampleIndexNow(): number {
   return Math.floor(Date.now() * SAMPLES_PER_MS) + APPLY_MARGIN_SAMPLES;
@@ -123,30 +173,54 @@ interface StoredScene {
 
 export interface ClusterOptions {
   replicas?: number;
+  /** Scripted tally cuts and console activity; off for deterministic tests. */
   automation?: boolean;
+  /** Input channels of the generated shape. */
+  channels?: number;
 }
+
+interface Batch {
+  revision: number;
+  atIndex?: number;
+  changes: Change[];
+  owners: OwnershipChange[];
+  origins: Origin[];
+}
+
+const CONSOLE_OWNER: Owner = { principal: 'bridge', session: CONSOLE_SESSIONS['mcu-1']!, kind: 'console', connection: 'bridge-mcu-1' };
+
+const emptyStats = (): ConnStats => ({ meterFramesSent: 0, metersSkippedNoCredit: 0, messagesIn: 0, messagesOut: 0 });
 
 export class Cluster {
   readonly contract = new Contract();
   readonly shape: Shape;
   state: State;
-  owners: Record<string, string> = {};
+  owners: Record<string, Owner> = {};
   revision = 0;
   readonly replicas: Replica[];
   readonly audit: AuditEntry[] = [];
+  /** Every command applied to the state, in apply order. */
+  readonly applies: AppliedCommand[] = [];
+  /** Counters over every connection since start or resetStats(). */
+  readonly totals: ConnStats = emptyStats();
+  readonly meterLayout: MeterLayout;
   private log: LogEntry[] = [];
   private logStart = 1;
+  private batch: Batch | null = null;
+  private batchTimer: ReturnType<typeof setTimeout> | null = null;
   private applied = new Map<string, number>();
   private lastSeq = new Map<string, number>();
+  private leases = new Map<string, number>();
   private scenes = new Map<string, StoredScene>();
   private sceneCounter = 0;
-  private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private connCounter = 0;
   private timers: Array<ReturnType<typeof setInterval>> = [];
   private readonly sources: SourceModel;
   private readonly automation: boolean;
 
   constructor(options: ClusterOptions = {}) {
-    this.shape = exampleShape();
+    this.shape = exampleShape(options.channels);
+    this.meterLayout = deriveMeterLayout(this.shape);
     this.state = initialState(this.shape);
     this.sources = new SourceModel(this.shape);
     this.automation = options.automation ?? true;
@@ -156,8 +230,10 @@ export class Cluster {
       role: i === 0 ? 'leader' : 'follower',
       healthy: true,
       frozen: 'none',
+      partitioned: false,
       conns: new Set<Conn>(),
       meters: new ReplicaMeters(this.shape),
+      meterSequence: 0,
       counters: {
         deadline_miss_total: 0,
         overrun_skipped_samples_total: 0,
@@ -169,13 +245,15 @@ export class Cluster {
     }));
     this.storeScene('Opening', null);
     this.storeScene('Interview', null);
+    this.flush();
   }
 
   // ---- lifecycle ----------------------------------------------------------
 
   start(): void {
-    this.timers.push(setInterval(() => this.meterTick(), 40));
+    this.timers.push(setInterval(() => this.meterTick(), METER_PERIOD_MS));
     this.timers.push(setInterval(() => this.counterTick(), 1000));
+    this.timers.push(setInterval(() => this.heartbeatTick(), HEARTBEAT_MS));
     if (this.automation) {
       let cam = 1;
       this.timers.push(
@@ -196,8 +274,7 @@ export class Cluster {
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
-    for (const t of this.disconnectTimers.values()) clearTimeout(t);
-    this.disconnectTimers.clear();
+    if (this.batchTimer) clearTimeout(this.batchTimer);
     for (const r of this.replicas) for (const c of r.conns) c.close();
   }
 
@@ -205,15 +282,25 @@ export class Cluster {
     return { id: r.id, role: r.role };
   }
 
-  replicaStatus(): ReplicaStatus[] {
-    return this.replicas.map((r) => ({ id: r.id, role: r.role, healthy: r.healthy && r.frozen === 'none' }));
+  private ready(r: Replica): boolean {
+    return r.healthy && r.frozen === 'none';
   }
 
-  /** Replica a service endpoint routes a new connection to. */
+  replicaStatus(): ReplicaStatus[] {
+    const quorum = this.replicas.filter((r) => this.ready(r) && !r.partitioned).length > this.replicas.length / 2;
+    return this.replicas.map((r) => ({
+      id: r.id,
+      role: r.role,
+      healthy: this.ready(r),
+      commitable: this.ready(r) && !r.partitioned && quorum,
+    }));
+  }
+
+  /** Replica a service endpoint routes a new connection to: any ready one. */
   route(): Replica | null {
-    const ready = this.replicas.filter((r) => r.healthy && r.frozen === 'none');
+    const ready = this.replicas.filter((r) => this.ready(r) && !r.partitioned);
     if (ready.length === 0) return null;
-    return ready.reduce((a, b) => (b.conns.size < a.conns.size ? b : a));
+    return ready[Math.floor(Math.random() * ready.length)]!;
   }
 
   replica(id: string): Replica | undefined {
@@ -240,108 +327,188 @@ export class Cluster {
     return true;
   }
 
-  restore(id: string): boolean {
+  /** A hung replica resumes on its open connections; what it skipped stays skipped. */
+  unfreeze(id: string): boolean {
     const r = this.replica(id);
-    if (!r) return false;
-    for (const c of [...r.conns]) if (r.frozen !== 'none') c.close();
-    r.healthy = true;
+    if (!r || !r.healthy) return false;
     r.frozen = 'none';
     this.elect();
     this.broadcastReplicas();
     return true;
   }
 
+  partition(id: string): boolean {
+    const r = this.replica(id);
+    if (!r || !r.healthy) return false;
+    r.partitioned = true;
+    this.elect();
+    this.broadcastReplicas();
+    return true;
+  }
+
+  heal(id: string): boolean {
+    const r = this.replica(id);
+    if (!r) return false;
+    r.partitioned = false;
+    this.elect();
+    this.broadcastReplicas();
+    return true;
+  }
+
+  /** Back to serving: restarts a killed replica, closes the connections of a hung one, heals a partition. */
+  restore(id: string): boolean {
+    const r = this.replica(id);
+    if (!r) return false;
+    for (const c of [...r.conns]) if (r.frozen !== 'none') c.close();
+    if (!r.healthy) r.meterSequence = 0;
+    r.healthy = true;
+    r.frozen = 'none';
+    r.partitioned = false;
+    this.elect();
+    this.broadcastReplicas();
+    return true;
+  }
+
   private elect(): void {
-    const ready = (r: Replica) => r.healthy && r.frozen === 'none';
+    const ok = (r: Replica) => this.ready(r) && !r.partitioned;
     const leader = this.replicas.find((r) => r.role === 'leader');
-    if (leader && ready(leader)) return;
-    const next = this.replicas.find(ready);
+    if (leader && ok(leader)) return;
+    const next = this.replicas.find(ok);
     if (!next) return;
     for (const r of this.replicas) r.role = r === next ? 'leader' : 'follower';
   }
 
   // ---- connections --------------------------------------------------------
 
-  connect(replica: Replica, send: (text: string) => void, close: () => void): Conn {
-    const conn: Conn = { replica, clientId: null, synced: false, send, close };
+  connect(replica: Replica, send: (data: string | Uint8Array) => void, close: () => void): Conn {
+    const now = Date.now();
+    const conn: Conn = {
+      id: `c${++this.connCounter}`,
+      replica,
+      owner: null,
+      mode: 'primary',
+      synced: false,
+      credit: 0,
+      lastSeen: now,
+      openedAt: now,
+      stats: emptyStats(),
+      send,
+      close,
+    };
     replica.conns.add(conn);
     return conn;
   }
 
+  /** The session's lease runs on; nothing is released when one connection goes. */
   disconnect(conn: Conn): void {
     conn.replica.conns.delete(conn);
-    const clientId = conn.clientId;
-    if (!clientId || this.connected(clientId)) return;
-    this.disconnectTimers.set(
-      clientId,
-      setTimeout(() => {
-        this.disconnectTimers.delete(clientId);
-        if (this.connected(clientId)) return;
-        const released: OwnershipChange[] = Object.entries(this.owners)
-          .filter(([, owner]) => owner === clientId)
-          .map(([path]) => ({ path, owner: null }));
-        if (released.length > 0) this.commit({ owners: released });
-      }, OWNER_TIMEOUT_MS),
-    );
-  }
-
-  private connected(clientId: string): boolean {
-    return this.replicas.some((r) => r.healthy && [...r.conns].some((c) => c.clientId === clientId));
   }
 
   emit(conn: Conn, msg: ServerMessage): void {
-    if (conn.replica.frozen !== 'none' || !conn.replica.healthy) return;
+    if (!this.ready(conn.replica)) return;
     this.contract.assertServerMessage(msg);
+    this.count(conn, 'messagesOut');
     conn.send(JSON.stringify(msg));
   }
 
-  receive(conn: Conn, text: string): void {
-    if (!conn.replica.healthy || conn.replica.frozen === 'drop') return;
+  private count(conn: Conn, key: keyof ConnStats): void {
+    conn.stats[key]++;
+    this.totals[key]++;
+  }
+
+  /** Zero the counters of every connection and the totals. */
+  resetStats(): void {
+    for (const r of this.replicas) for (const c of r.conns) c.stats = emptyStats();
+    Object.assign(this.totals, emptyStats());
+  }
+
+  /** Clear the command logs of GET /__mock/commands and /__mock/audit. */
+  resetAudit(): void {
+    this.audit.length = 0;
+    this.applies.length = 0;
+  }
+
+  connections(): Conn[] {
+    return this.replicas.flatMap((r) => [...r.conns]);
+  }
+
+  private renew(owner: Owner, replica: Replica): void {
+    if (replica.partitioned) return;
+    this.leases.set(sessionKey(owner), Date.now());
+  }
+
+  /** A message from a client; binary messages are not part of the contract. */
+  receive(conn: Conn, text: string, binary = false): void {
+    const r = conn.replica;
+    this.count(conn, 'messagesIn');
+    // Input a hung replica has not read yet still shows the peer alive once it resumes.
+    conn.lastSeen = Date.now();
+    if (!r.healthy || r.frozen === 'drop') return;
+    if (binary) {
+      return this.emit(conn, { type: 'error', replica: this.ref(r), code: 400, message: 'binary messages are not accepted' });
+    }
     let msg: ClientMessage;
     try {
       msg = JSON.parse(text) as ClientMessage;
     } catch {
-      return this.emit(conn, { type: 'error', replica: this.ref(conn.replica), code: 400, message: 'not JSON' });
+      return this.emit(conn, { type: 'error', replica: this.ref(r), code: 400, message: 'not JSON' });
     }
     const problem = this.contract.checkClientMessage(msg);
     if (problem) {
       const commandId = (msg as { id?: unknown }).id;
       return this.emit(conn, {
         type: 'error',
-        replica: this.ref(conn.replica),
+        replica: this.ref(r),
         code: 400,
         message: `invalid message: ${problem}`,
         ...(typeof commandId === 'string' && /^[0-9a-f-]{36}$/i.test(commandId) ? { commandId } : {}),
       });
     }
     if (msg.type === 'hello') {
-      conn.clientId = msg.clientId;
-      const timer = this.disconnectTimers.get(msg.clientId);
-      if (timer) clearTimeout(timer);
-      this.disconnectTimers.delete(msg.clientId);
-      this.emit(conn, { type: 'replicas', replica: this.ref(conn.replica), replicas: this.replicaStatus() });
+      conn.owner = { principal: 'anonymous', session: msg.session, kind: msg.kind, connection: conn.id };
+      conn.mode = msg.mode;
+      this.renew(conn.owner, r);
+      this.emit(conn, { type: 'replicas', replica: this.ref(r), replicas: this.replicaStatus() });
       return this.sync(conn, msg.lastRevision);
     }
-    if (!conn.clientId) {
-      return this.emit(conn, { type: 'error', replica: this.ref(conn.replica), code: 400, message: 'hello first' });
+    if (!conn.owner) {
+      return this.emit(conn, { type: 'error', replica: this.ref(r), code: 400, message: 'hello first' });
     }
-    if (msg.type === 'resync') return this.sync(conn, msg.lastRevision);
-    const reply = this.command(conn.clientId, msg, conn.replica.id);
-    if (reply) this.emit(conn, { ...reply, replica: this.ref(conn.replica) } as ServerMessage);
+    this.renew(conn.owner, r);
+    switch (msg.type) {
+      case 'ping':
+        return this.emit(conn, { type: 'pong', replica: this.ref(r), t: msg.t });
+      case 'pong':
+        return;
+      case 'promote':
+        conn.mode = 'primary';
+        return;
+      case 'credit':
+        conn.credit = Math.min(METER_CREDIT_CAP, conn.credit + msg.n);
+        return;
+      case 'resync':
+        return this.sync(conn, msg.lastRevision);
+    }
+    // A partitioned replica cannot commit; commands sent to it go unanswered.
+    if (r.partitioned) return;
+    const reply = this.command(conn.owner, msg, r.id);
+    if (reply) this.emit(conn, { ...reply, replica: this.ref(r) } as ServerMessage);
   }
 
   private sync(conn: Conn, lastRevision: number | undefined): void {
+    this.flush();
     const replica = this.ref(conn.replica);
+    const you = conn.owner!;
     conn.synced = true;
     if (lastRevision !== undefined && lastRevision <= this.revision && lastRevision + 1 >= this.logStart) {
       const deltas = this.log
         .filter((e) => e.revision > lastRevision)
         .map((e): DeltaMessage => ({ type: 'delta', replica, ...e }));
-      return this.emit(conn, { type: 'resume', clientId: conn.clientId!, replica, revision: this.revision, deltas });
+      return this.emit(conn, { type: 'resume', you, replica, revision: this.revision, deltas });
     }
     this.emit(conn, {
       type: 'snapshot',
-      clientId: conn.clientId!,
+      you,
       replica,
       revision: this.revision,
       shape: this.shape,
@@ -353,24 +520,34 @@ export class Cluster {
   // ---- commands -----------------------------------------------------------
 
   /**
-   * Apply one WebSocket command from `clientId`. Returns the ack or error to
-   * send back (without replica), or null when the resulting delta answers it.
+   * Apply one WebSocket command. Returns the ack or error to send back
+   * (without replica), or null when the delta carrying it answers it.
    */
-  command(
-    clientId: string,
-    msg: CommandMessage,
-    replica: string,
-  ): Omit<AckMessage, 'replica'> | Omit<ErrorMessage, 'replica'> | null {
-    const audit = (result: AuditEntry['result'], revision: number) =>
-      this.audit.push({ commandId: msg.id, clientId, type: msg.type, path: msg.path, result, revision, replica });
+  command(owner: Owner, msg: CommandMessage, replica: string): Omit<AckMessage, 'replica'> | Omit<ErrorMessage, 'replica'> | null {
+    const audit = (result: AuditEntry['result'], revision: number) => {
+      this.audit.push({ commandId: msg.id, owner, type: msg.type, path: msg.path, result, revision, replica });
+      if (result !== 'applied') return;
+      const set = msg.type === 'set';
+      this.applies.push({
+        owner,
+        commandId: msg.id,
+        type: msg.type,
+        seq: set ? msg.seq : null,
+        path: msg.path,
+        value: set ? msg.value : null,
+        revision,
+        replica,
+      });
+    };
     const prior = this.applied.get(msg.id);
     if (prior !== undefined) {
       audit('duplicate', prior);
       return { type: 'ack', commandId: msg.id, result: 'duplicate', revision: prior };
     }
-    const owner = this.owners[msg.path];
+    const key = sessionKey(owner);
+    const holder = this.owners[msg.path];
     const current = getAt(this.state, msg.path);
-    if (msg.type !== 'release' && owner !== undefined && owner !== clientId) {
+    if (msg.type !== 'release' && holder !== undefined && sessionKey(holder) !== key) {
       audit('conflict', this.revision);
       return {
         type: 'error',
@@ -378,8 +555,8 @@ export class Cluster {
         commandId: msg.id,
         path: msg.path,
         current: current ?? null,
-        owner,
-        message: `owned by ${owner}`,
+        owner: holder,
+        message: `owned by ${holder.principal}/${holder.session}`,
       };
     }
     const fail = (code: 400 | 404, message: string) => ({ type: 'error' as const, code, commandId: msg.id, path: msg.path, message });
@@ -390,27 +567,25 @@ export class Cluster {
       audit(result, this.revision);
       return { type: 'ack' as const, commandId: msg.id, result, revision: this.revision };
     };
-    const origin = { clientId, commandId: msg.id };
+    const origin: Origin = { owner, commandId: msg.id };
     if (msg.type === 'touch') {
-      if (owner === clientId) return done('noop');
-      this.commit({ owners: [{ path: msg.path, owner: clientId }], origin });
-      audit('applied', this.revision);
+      if (holder !== undefined) return done('noop');
+      audit('applied', this.stage({ owners: [{ path: msg.path, owner }], origins: [origin] }).revision);
       return null;
     }
     if (msg.type === 'release') {
-      if (owner !== clientId) return done('noop');
-      this.commit({ owners: [{ path: msg.path, owner: null }], origin });
-      audit('applied', this.revision);
+      if (holder === undefined || sessionKey(holder) !== key) return done('noop');
+      audit('applied', this.stage({ owners: [{ path: msg.path, owner: null }], origins: [origin] }).revision);
       return null;
     }
-    const seqKey = `${clientId}\n${msg.path}`;
+    const seqKey = `${key}\n${msg.path}`;
     if (msg.seq <= (this.lastSeq.get(seqKey) ?? 0)) return done('stale');
     const invalid = this.checkValue(msg.path, msg.value);
     if (invalid) return fail(400, invalid);
     this.lastSeq.set(seqKey, msg.seq);
     if (equal(current, msg.value)) return done('noop');
-    this.commit({ changes: this.withSideEffects([{ path: msg.path, value: msg.value }]), origin: { ...origin, seq: msg.seq } });
-    audit('applied', this.revision);
+    const staged = this.stage({ changes: this.withSideEffects([{ path: msg.path, value: msg.value }]), origins: [{ ...origin, seq: msg.seq }] });
+    audit('applied', staged.revision);
     return null;
   }
 
@@ -421,7 +596,7 @@ export class Cluster {
     const conflicts: Conflict[] = changes
       .filter((c) => this.owners[c.path] !== undefined)
       .map((c) => ({ path: c.path, current: getAt(this.state, c.path) ?? null, owner: this.owners[c.path]! }));
-    if (conflicts.length > 0) throw new CommandError(409, 'controls are owned by other clients', conflicts);
+    if (conflicts.length > 0) throw new CommandError(409, 'controls are owned by other sessions', conflicts);
     for (const c of changes) {
       const known = this.checkPath(c.path);
       if (known) throw new CommandError(404, known);
@@ -429,17 +604,13 @@ export class Cluster {
       if (invalid) throw new CommandError(400, invalid);
     }
     const effective = changes.filter((c) => !equal(getAt(this.state, c.path), c.value));
-    const record = (result: AuditEntry['result']) =>
-      this.audit.push({ commandId, clientId: 'rest', type: 'rest', path: null, result, revision: this.revision, replica: 'rest' });
     if (effective.length === 0) {
-      this.applied.set(commandId, this.revision);
-      record('noop');
+      this.markApplied(commandId, 'noop');
       return { commandId, result: 'noop', revision: this.revision };
     }
-    const atIndex = this.commit({ changes: this.withSideEffects(effective) });
-    this.applied.set(commandId, this.revision);
-    record('applied');
-    return { commandId, result: 'applied', revision: this.revision, atIndex };
+    const staged = this.stage({ changes: this.withSideEffects(effective) });
+    this.markApplied(commandId, 'applied', staged.revision);
+    return { commandId, result: 'applied', revision: staged.revision, atIndex: staged.atIndex };
   }
 
   private checkPath(path: string): string | null {
@@ -482,34 +653,72 @@ export class Cluster {
     return out;
   }
 
-  /** Append one change set to the replicated log and fan it out. Returns its atIndex. */
-  commit(entry: Omit<LogEntry, 'revision' | 'atIndex'>, atIndex?: number): number | undefined {
-    this.revision++;
-    const e: LogEntry = { revision: this.revision, ...entry };
-    if (entry.changes) {
-      e.atIndex = atIndex ?? sampleIndexNow();
-      for (const c of entry.changes) setAt(this.state as unknown as Record<string, unknown>, c.path, c.value);
+  /**
+   * Apply changes to the state now and add them to the log entry of the
+   * current block, which is committed and fanned out BLOCK_MS later.
+   */
+  stage(entry: { changes?: Change[]; owners?: OwnershipChange[]; origins?: Origin[] }, atIndex?: number): { revision: number; atIndex?: number } {
+    if (!this.batch) {
+      this.batch = { revision: this.revision + 1, changes: [], owners: [], origins: [] };
+      this.batchTimer = setTimeout(() => this.flush(), BLOCK_MS);
     }
-    if (entry.owners) {
-      for (const o of entry.owners) {
-        if (o.owner === null) delete this.owners[o.path];
-        else this.owners[o.path] = o.owner;
-      }
+    const b = this.batch;
+    for (const c of entry.changes ?? []) {
+      setAt(this.state as unknown as Record<string, unknown>, c.path, c.value);
+      b.changes = b.changes.filter((x) => x.path !== c.path);
+      b.changes.push(c);
     }
-    if (entry.origin) this.applied.set(entry.origin.commandId, this.revision);
+    if (entry.changes?.length) b.atIndex ??= atIndex ?? Math.floor(Date.now() * SAMPLES_PER_MS) + APPLY_MARGIN_SAMPLES;
+    for (const o of entry.owners ?? []) {
+      if (o.owner === null) delete this.owners[o.path];
+      else this.owners[o.path] = o.owner;
+      b.owners = b.owners.filter((x) => x.path !== o.path);
+      b.owners.push(o);
+    }
+    for (const o of entry.origins ?? []) {
+      b.origins.push(o);
+      this.applied.set(o.commandId, b.revision);
+    }
+    return { revision: b.revision, atIndex: b.atIndex };
+  }
+
+  /** Commit the open log entry and send it to every synced connection. */
+  flush(): void {
+    const b = this.batch;
+    if (!b) return;
+    if (this.batchTimer) clearTimeout(this.batchTimer);
+    this.batch = null;
+    this.batchTimer = null;
+    this.revision = b.revision;
+    const e: LogEntry = { revision: b.revision };
+    if (b.changes.length > 0) {
+      e.atIndex = b.atIndex;
+      e.changes = b.changes;
+    }
+    if (b.owners.length > 0) e.owners = b.owners;
+    if (b.origins.length > 0) e.origins = b.origins;
+    if (!e.changes && !e.owners) e.owners = [];
+    if (e.owners?.length === 0) {
+      // Every change in the block was undone within it; the revision still
+      // advances so the command ids stay answered.
+      e.changes = [{ path: '/scenes', value: this.state.scenes }];
+      e.atIndex = b.atIndex ?? Math.floor(Date.now() * SAMPLES_PER_MS) + APPLY_MARGIN_SAMPLES;
+      delete e.owners;
+    }
     this.log.push(e);
     if (this.log.length > LOG_LIMIT) {
       this.log.shift();
       this.logStart++;
     }
     for (const r of this.replicas) {
+      if (r.partitioned) continue;
       for (const c of r.conns) if (c.synced) this.emit(c, { type: 'delta', replica: this.ref(r), ...e });
     }
-    return e.atIndex;
   }
 
   /** Advance the revision without telling clients; dev control for gap tests. */
   skipRevision(): void {
+    this.flush();
     this.revision++;
     this.log = [];
     this.logStart = this.revision + 1;
@@ -530,8 +739,7 @@ export class Cluster {
   }
 
   private publishScenes(): void {
-    const list = [...this.scenes.values()].map((s) => s.scene);
-    this.commit({ changes: [{ path: '/scenes', value: list }] });
+    this.stage({ changes: [{ path: '/scenes', value: [...this.scenes.values()].map((s) => s.scene) }] });
   }
 
   storeScene(name: string, id: string | null): Scene {
@@ -575,18 +783,22 @@ export class Cluster {
   recallScene(id: string): { revision: number; atIndex?: number; changed: boolean } {
     const changes = this.recallChanges(id);
     if (changes.length === 0) return { revision: this.revision, changed: false };
-    const atIndex = this.commit({ changes: this.withSideEffects(changes) });
-    return { revision: this.revision, atIndex, changed: true };
+    return { ...this.stage({ changes: this.withSideEffects(changes) }), changed: true };
   }
 
-  /** Record a REST command id as applied at the current revision. */
-  markApplied(commandId: string): void {
-    this.applied.set(commandId, this.revision);
-    this.audit.push({ commandId, clientId: 'rest', type: 'rest', path: null, result: 'applied', revision: this.revision, replica: 'rest' });
+  /** Record a REST command id as answered. */
+  markApplied(commandId: string, result: 'applied' | 'noop' = 'applied', revision = this.batch?.revision ?? this.revision): void {
+    this.applied.set(commandId, revision);
+    this.audit.push({ commandId, owner: null, type: 'rest', path: null, result, revision, replica: 'rest' });
   }
 
   appliedAt(commandId: string): number | undefined {
     return this.applied.get(commandId);
+  }
+
+  /** Global revision a REST response reports: the open block's, if any. */
+  get pendingRevision(): number {
+    return this.batch?.revision ?? this.revision;
   }
 
   // ---- tally --------------------------------------------------------------
@@ -596,7 +808,7 @@ export class Cluster {
       .filter(([name, st]) => this.state.tally[name] !== st)
       .map(([name, st]) => ({ path: pointer('tally', name), value: st }));
     if (changes.length === 0) return undefined;
-    return this.commit({ changes: this.withSideEffects(changes) }, atIndex ?? undefined);
+    return this.stage({ changes: this.withSideEffects(changes) }, atIndex ?? undefined).atIndex;
   }
 
   replaceTally(sources: Record<string, TallyState>): number | undefined {
@@ -605,29 +817,81 @@ export class Cluster {
     return this.applyTally(all, null);
   }
 
-  // ---- telemetry ----------------------------------------------------------
+  // ---- telemetry and heartbeats ----------------------------------------------
 
+  private primaries(r: Replica): Conn[] {
+    return [...r.conns].filter((c) => c.synced && c.mode === 'primary');
+  }
+
+  /**
+   * One meter period: every serving replica counts it and sends its frame
+   * to each synced primary connection holding a credit, consuming one.
+   * A connection without credit misses the frame; nothing is queued.
+   */
   private meterTick(): void {
     this.sources.advance();
     for (const r of this.replicas) {
-      if (!r.healthy || r.frozen !== 'none') continue;
-      let frame: ReturnType<ReplicaMeters['frame']> | null = null;
-      for (const c of r.conns) {
-        if (!c.synced) continue;
-        frame ??= r.meters.frame(this.state, this.sources);
-        this.emit(c, { ...frame, replica: this.ref(r) });
+      if (!this.ready(r)) continue;
+      const sequence = r.meterSequence;
+      r.meterSequence = (r.meterSequence + 1) >>> 0;
+      const conns = this.primaries(r);
+      if (conns.length === 0) continue;
+      const values = r.meters.frame(this.state, this.sources);
+      const receivers = conns.filter((c) => c.credit > 0);
+      for (const c of conns) if (c.credit === 0) this.count(c, 'metersSkippedNoCredit');
+      if (receivers.length === 0) continue;
+      const bytes = encodeMeterFrame(this.meterLayout, { sequence, replica: r.id }, values);
+      this.assertMeterFrame(bytes, sequence, r.id);
+      for (const c of receivers) {
+        c.credit--;
+        this.count(c, 'meterFramesSent');
+        this.count(c, 'messagesOut');
+        c.send(bytes);
       }
     }
   }
 
+  /** Decodes a frame about to be sent and validates its values against model.schema.json. */
+  private assertMeterFrame(bytes: Uint8Array, sequence: number, replica: string): void {
+    const frame = decodeMeterFrame(this.meterLayout, bytes);
+    if (frame.sequence !== sequence || frame.replica !== replica) {
+      throw new ContractViolation(`meter frame decodes to ${frame.replica}/${frame.sequence}, sent as ${replica}/${sequence}`);
+    }
+    this.contract.assertMeterValues(frame);
+  }
+
   private counterTick(): void {
     for (const r of this.replicas) {
-      if (!r.healthy || r.frozen !== 'none') continue;
+      if (!this.ready(r)) continue;
       if (Math.random() < 0.05) r.counters['input_late_blocks_total']! += 1;
       if (Math.random() < 0.02) r.counters['deadline_miss_total']! += 1;
       if (Math.random() < 0.03) r.counters['command_late_total']! += 1;
-      for (const c of r.conns) if (c.synced) this.emit(c, { type: 'counters', replica: this.ref(r), values: { ...r.counters } });
+      for (const c of this.primaries(r)) this.emit(c, { type: 'counters', replica: this.ref(r), values: { ...r.counters } });
     }
+  }
+
+  /** Pings every connection after hello and closes those silent for DEAD_MS. */
+  private heartbeatTick(): void {
+    const t = Date.now();
+    for (const r of this.replicas) {
+      if (!this.ready(r)) continue;
+      for (const c of [...r.conns]) {
+        if (t - c.lastSeen > DEAD_MS) {
+          c.close();
+          continue;
+        }
+        if (c.owner) this.emit(c, { type: 'ping', replica: this.ref(r), t });
+      }
+    }
+    this.expireLeases(t);
+  }
+
+  /** Release every control of a session whose lease ran out. */
+  expireLeases(now = Date.now()): void {
+    const released: OwnershipChange[] = Object.entries(this.owners)
+      .filter(([, o]) => now - (this.leases.get(sessionKey(o)) ?? 0) > LEASE_MS)
+      .map(([path]) => ({ path, owner: null }));
+    if (released.length > 0) this.stage({ owners: released });
   }
 
   resetLoudness(ids: string[]): void {
@@ -647,35 +911,37 @@ export class Cluster {
     const consoles = structuredClone(this.state.consoles);
     const mcu = consoles.find((c) => c.id === 'mcu-1')!;
     const ext = consoles.find((c) => c.id === 'ext-1')!;
-    mcu.bankOffset = (mcu.bankOffset + 8) % 24;
+    mcu.bankOffset = (mcu.bankOffset + 8) % Math.max(8, this.shape.channels.length - 8);
     ext.bankOffset = mcu.bankOffset + 8;
     const osc = consoles.find((c) => c.id === 'osc-1')!;
     osc.connected = !osc.connected;
-    this.commit({ changes: [{ path: '/consoles', value: consoles }] });
+    this.stage({ changes: [{ path: '/consoles', value: consoles }] });
   }
 
-  /** A console operator rides a fader on the surface's first strip. */
+  /** A console operator rides a fader on the surface's second strip. */
   private consoleMotion(): void {
     const mcu = this.state.consoles.find((c) => c.id === 'mcu-1')!;
     const channel = this.shape.channels[mcu.bankOffset + 1];
     if (!channel) return;
     const path = pointer('channels', channel.id, 'fader');
-    const clientId = 'mcu-1';
     if (this.owners[path] !== undefined) return;
+    const owner = CONSOLE_OWNER;
     const id = () => crypto.randomUUID();
-    if (this.command(clientId, { type: 'touch', id: id(), path }, 'console')?.type === 'error') return;
+    this.leases.set(sessionKey(owner), Date.now());
+    if (this.command(owner, { type: 'touch', id: id(), path }, 'console')?.type === 'error') return;
     const start = this.state.channels[channel.id]!.fader;
     const base = start <= -60 ? -20 : start;
     let step = 0;
-    let seq = 0;
+    let seq = Date.now();
     const timer = setInterval(() => {
       step++;
+      this.leases.set(sessionKey(owner), Date.now());
       const value = Math.round((base + 4 * Math.sin((step / 20) * Math.PI)) * 10) / 10;
-      this.command(clientId, { type: 'set', id: id(), seq: ++seq, path, value }, 'console');
+      this.command(owner, { type: 'set', id: id(), seq: ++seq, path, value }, 'console');
       if (step >= 20) {
         clearInterval(timer);
-        this.command(clientId, { type: 'set', id: id(), seq: ++seq, path, value: start }, 'console');
-        this.command(clientId, { type: 'release', id: id(), path }, 'console');
+        this.command(owner, { type: 'set', id: id(), seq: ++seq, path, value: start }, 'console');
+        this.command(owner, { type: 'release', id: id(), path }, 'console');
       }
     }, 100);
     this.timers.push(timer);

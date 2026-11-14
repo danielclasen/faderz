@@ -3,7 +3,7 @@
 
 import type { CommandResult, Scene } from '../contract/types';
 import { RestClient } from '../net/rest';
-import { restBase } from '../net/connection';
+import { restBase } from '../sync/endpoints';
 import { uuid } from '../net/ids';
 import type { MixerStore } from './mixer.svelte';
 

@@ -1,7 +1,7 @@
 // HTTP and WebSocket front of the dev-only mock: the contract's REST
-// routes under /api/v1, the WebSocket at /api/v1/ws (routed to a healthy
+// routes under /api/v1, the WebSocket at /api/v1/ws (routed to a serving
 // replica, like a service endpoint) and at /__mock/replicas/<id>/api/v1/ws
-// (one replica), and dev controls under /__mock.
+// (one replica), and dev and test controls under /__mock (README.md).
 
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -71,9 +71,9 @@ export class MockServer {
         },
         () => ws.terminate(),
       );
-      ws.on('message', (data) => {
+      ws.on('message', (data, isBinary) => {
         try {
-          this.cluster.receive(conn, String(data));
+          this.cluster.receive(conn, isBinary ? '' : String(data), isBinary);
         } catch (e) {
           console.error('[faderz mock]', e);
           ws.terminate();
@@ -270,25 +270,70 @@ export class MockServer {
     };
     await readBody(req);
     const method = req.method ?? 'GET';
-    if (method === 'GET' && url.pathname === '/__mock/replicas') {
-      return send(200, c.replicas.map((r) => ({ id: r.id, role: r.role, healthy: r.healthy, frozen: r.frozen, clients: r.conns.size })));
+    const path = url.pathname;
+    if (method === 'GET' && path === '/__mock/replicas') {
+      return send(
+        200,
+        c.replicas.map((r) => ({ id: r.id, role: r.role, healthy: r.healthy, frozen: r.frozen, partitioned: r.partitioned, clients: r.conns.size })),
+      );
     }
-    if (method === 'GET' && url.pathname === '/__mock/commands') return send(200, c.audit);
-    const m = /^\/__mock\/replicas\/([a-z0-9-]+)\/(kill|freeze|restore)$/.exec(url.pathname);
+    if (method === 'GET' && path === '/__mock/commands') return send(200, c.audit);
+    if (method === 'GET' && path === '/__mock/audit') return send(200, this.auditReport());
+    if (method === 'GET' && path === '/__mock/stats') return send(200, this.statsReport());
+    const m = /^\/__mock\/replicas\/([a-z0-9-]+)\/(kill|restart|restore|freeze|unfreeze|partition|heal)$/.exec(path);
     if (method === 'POST' && m) {
-      const [, id, action] = m;
+      const id = m[1]!;
       const mode = url.searchParams.get('mode') === 'apply' ? 'apply' : 'drop';
-      const ok = action === 'kill' ? c.kill(id!) : action === 'freeze' ? c.freeze(id!, mode) : c.restore(id!);
-      return send(ok ? 200 : 404, { ok });
+      const actions: Record<string, () => boolean> = {
+        kill: () => c.kill(id),
+        restart: () => c.restore(id),
+        restore: () => c.restore(id),
+        freeze: () => c.freeze(id, mode),
+        unfreeze: () => c.unfreeze(id),
+        partition: () => c.partition(id),
+        heal: () => c.heal(id),
+      };
+      const ok = actions[m[2]!]!();
+      return send(ok ? 200 : c.replica(id) ? 409 : 404, { ok });
     }
-    if (method === 'POST' && url.pathname === '/__mock/drop-clients') {
-      for (const r of c.replicas) for (const conn of [...r.conns]) conn.close();
+    if (method === 'POST' && path === '/__mock/stats/reset') {
+      c.resetStats();
       return send(200, { ok: true });
     }
-    if (method === 'POST' && url.pathname === '/__mock/skip-revision') {
+    if (method === 'POST' && path === '/__mock/audit/reset') {
+      c.resetAudit();
+      return send(200, { ok: true });
+    }
+    if (method === 'POST' && path === '/__mock/drop-clients') {
+      for (const conn of c.connections()) conn.close();
+      return send(200, { ok: true });
+    }
+    if (method === 'POST' && path === '/__mock/skip-revision') {
       c.skipRevision();
       return send(200, { revision: c.revision });
     }
     send(404, { error: 'unknown mock control' });
+  }
+
+  private statsReport() {
+    const connections = this.cluster.connections().map((conn) => ({
+      connection: conn.id,
+      session: conn.owner?.session ?? null,
+      kind: conn.owner?.kind ?? null,
+      mode: conn.mode,
+      replica: conn.replica.id,
+      ...conn.stats,
+      creditsOutstanding: conn.credit,
+      openedAt: new Date(conn.openedAt).toISOString(),
+    }));
+    return { connections, totals: { connections: connections.length, ...this.cluster.totals } };
+  }
+
+  private auditReport() {
+    const entries = this.cluster.applies;
+    const times = new Map<string, number>();
+    for (const e of entries) times.set(e.commandId, (times.get(e.commandId) ?? 0) + 1);
+    const duplicates = [...times.values()].filter((n) => n > 1).length;
+    return { entries, summary: { total: entries.length, duplicates } };
   }
 }

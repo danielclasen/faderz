@@ -12,13 +12,14 @@
   const mixer = getMixer();
   const value = $derived(mixer.value<number>(path) ?? FADER_OFF_DB);
   const owner = $derived(mixer.ownerOf(path));
-  const mine = $derived(owner === mixer.clientId);
+  const mine = $derived(mixer.isMine(owner));
   const foreign = $derived(owner !== null && !mine);
+  const ownerName = $derived(mixer.ownerLabel(owner));
   const position = $derived(dbToPosition(value));
 
-  let track: HTMLDivElement | undefined = $state();
   let flash = $state(false);
-  let drag: { y: number; db: number; fine: boolean; id: number } | null = null;
+  /** The track's height is read once per drag: reading it per move forces a layout. */
+  let drag: { y: number; db: number; fine: boolean; id: number; height: number } | null = null;
   let queued: number | null = null;
   let frame = 0;
   let keyRelease: ReturnType<typeof setTimeout> | null = null;
@@ -49,19 +50,19 @@
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     el.focus({ preventScroll: true });
-    drag = { y: e.clientY, db: value, fine: isFine(e), id: e.pointerId };
+    drag = { y: e.clientY, db: value, fine: isFine(e), id: e.pointerId, height: (e.currentTarget as HTMLElement).clientHeight };
     mixer.touch(path);
   }
 
   function pointermove(e: PointerEvent): void {
-    if (!drag || e.pointerId !== drag.id || !track) return;
+    if (!drag || e.pointerId !== drag.id) return;
     const fine = isFine(e);
     if (fine !== drag.fine) {
       // Rebase on a modifier change so the cap does not jump.
-      drag = { y: e.clientY, db: queued ?? value, fine, id: drag.id };
+      drag = { ...drag, y: e.clientY, db: queued ?? value, fine };
       return;
     }
-    send(dragDb(drag.db, e.clientY - drag.y, track.clientHeight, fine));
+    send(dragDb(drag.db, e.clientY - drag.y, drag.height, fine));
   }
 
   function pointerup(e: PointerEvent): void {
@@ -134,15 +135,14 @@
   {/if}
   <div
     class="track"
-    bind:this={track}
     role="slider"
     tabindex="0"
     aria-label={label}
     aria-valuemin={FADER_OFF_DB}
     aria-valuemax={10}
     aria-valuenow={value}
-    aria-valuetext={`${formatDb(value)} dB${foreign ? `, held by ${owner}` : ''}`}
-    title={foreign ? `Held by ${owner}` : 'Drag; Shift for fine; double-click for 0 dB'}
+    aria-valuetext={`${formatDb(value)} dB${foreign ? `, held by ${ownerName}` : ''}`}
+    title={foreign ? `Held by ${ownerName}` : 'Drag; Shift for fine; double-click for 0 dB'}
     onpointerdown={pointerdown}
     onpointermove={pointermove}
     onpointerup={pointerup}
@@ -154,16 +154,14 @@
     data-path={path}
   >
     <div class="slot"></div>
+    {#if owner}
+      <span class="owner" class:mine data-testid="owner" data-owner-kind={owner.kind}>{ownerName}</span>
+    {/if}
     {#each FADER_MARKS as mark (mark)}
       <i class="tick" class:unity={mark === 0} style:bottom="calc({dbToPosition(mark)} * (100% - 34px) + 17px)"></i>
     {/each}
-    <div
-      class="cap"
-      class:mine
-      class:foreign
-      style:bottom="calc({position} * (100% - 34px))"
-    >
-      <span></span>
+    <div class="travel" style:transform="translateY({(1 - position) * 100}%)">
+      <div class="cap" class:mine class:foreign><span></span></div>
     </div>
   </div>
 </div>
@@ -192,6 +190,27 @@
   .scale span.unity {
     color: var(--text-dim);
     font-weight: 600;
+  }
+  .owner {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+    font-size: 8px;
+    line-height: 11px;
+    padding: 0 2px;
+    border-radius: 2px;
+    background: var(--owned);
+    color: #fff;
+  }
+  .owner.mine {
+    background: var(--accent);
   }
   .track {
     position: relative;
@@ -225,8 +244,16 @@
     left: 0;
     right: 0;
   }
+  /* The cap moves by transform, which changes no layout. The travel box
+     spans the cap's range: its translation in percent is of that range. */
+  .travel {
+    position: absolute;
+    inset: 0 0 34px;
+    pointer-events: none;
+  }
   .cap {
     position: absolute;
+    top: 0;
     left: 1px;
     right: 1px;
     height: 34px;

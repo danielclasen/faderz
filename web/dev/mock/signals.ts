@@ -2,19 +2,20 @@
 // inputs carry) and per-replica metering of it, so meter streams of
 // different replicas differ by measurement jitter like real ones would.
 
+import type { MeterValues } from '../../src/lib/contract/meterFrame.ts';
+import { METER_PERIOD_MS as FRAME_MS } from '../../src/lib/contract/protocol.ts';
 import type {
   BusMeter,
   ChannelMeter,
+  ElementShape,
   Layout,
   Loudness,
-  MetersMessage,
   Shape,
   State,
 } from '../../src/lib/contract/types.ts';
 import { LAYOUT_LABELS } from '../../src/lib/contract/types.ts';
 import { dbToGain, effectiveGainDb } from '../../src/lib/audio/db.ts';
 
-const FRAME_MS = 40;
 const SILENCE = -120;
 
 type Kind = 'speech' | 'music' | 'vt' | 'fx' | 'film' | 'phone' | 'amb' | 'idle';
@@ -195,35 +196,43 @@ interface Mix {
 export class ReplicaMeters {
   private readonly loudness = new Map<string, LoudnessMeter>();
   private readonly shape: Shape;
+  private readonly channelShapes: Map<string, ElementShape>;
 
   constructor(shape: Shape) {
     this.shape = shape;
+    this.channelShapes = new Map(shape.channels.map((c) => [c.id, c]));
   }
 
   resetLoudness(ids: readonly string[]): void {
     for (const id of ids) this.loudness.get(id)?.reset();
   }
 
-  frame(state: State, sources: SourceModel): Omit<MetersMessage, 'replica'> {
+  /** One meter period of this replica, in shape order. */
+  frame(state: State, sources: SourceModel): MeterValues {
     const jitter = () => (Math.random() - 0.5) * 0.4;
     const channelLevels = new Map<string, number[]>();
-    const channels: Record<string, ChannelMeter> = {};
+    const channels: ChannelMeter[] = [];
     for (const c of this.shape.channels) {
       const st = state.channels[c.id]!;
       const legs = (sources.levels.get(c.id) ?? Array(c.width).fill(SILENCE)).map((l) => l + st.trim + (st.comp.enabled ? st.comp.makeup - 2 : 0));
       channelLevels.set(c.id, legs);
-      channels[c.id] = {
+      channels.push({
         peak: legs.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
         rms: legs.map((l) => r1(l + jitter())),
-      };
+      });
     }
     const vcaOffsets = (id: string) =>
       Object.values(state.vcas).filter((v) => v.members.includes(id)).map((v) => v.offset);
     const vcaMuted = (id: string) => Object.values(state.vcas).some((v) => v.mute && v.members.includes(id));
+    const postGains = new Map<string, number>();
     const post = (id: string) => {
-      const st = state.channels[id]!;
-      if (st.mute || vcaMuted(id) || !state.afv[id]!.open) return 0;
-      return dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
+      let gain = postGains.get(id);
+      if (gain === undefined) {
+        const st = state.channels[id]!;
+        gain = st.mute || vcaMuted(id) || !state.afv[id]!.open ? 0 : dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
+        postGains.set(id, gain);
+      }
+      return gain;
     };
 
     const mixInto = (layout: Layout, contributions: Array<{ id: string; gain: number; pan: number; fr: number }>): Mix => {
@@ -232,7 +241,7 @@ export class ReplicaMeters {
       const peaks = Array<number>(width).fill(SILENCE);
       for (const k of contributions) {
         if (k.gain <= 0) continue;
-        const shape = this.shape.channels.find((c) => c.id === k.id)!;
+        const shape = this.channelShapes.get(k.id)!;
         const m = legMatrix(shape.layout, layout, k.pan, k.fr);
         const src = channelLevels.get(k.id)!;
         for (let d = 0; d < width; d++) {
@@ -271,15 +280,15 @@ export class ReplicaMeters {
       };
     };
 
-    const buses: Record<string, BusMeter> = {};
+    const buses: BusMeter[] = [];
     for (const b of this.shape.buses) {
       const contributions = this.shape.channels
         .filter((c) => state.channels[c.id]!.routes[b.id])
         .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr }));
       const st = state.buses[b.id]!;
-      buses[b.id] = busMeter(b.id, b.layout, mixInto(b.layout, contributions), st.fader, st.mute);
+      buses.push(busMeter(b.id, b.layout, mixInto(b.layout, contributions), st.fader, st.mute));
     }
-    const auxes: Record<string, BusMeter> = {};
+    const auxes: BusMeter[] = [];
     for (const a of this.shape.auxes) {
       const contributions = this.shape.channels.flatMap((c) => {
         const send = state.channels[c.id]!.sends[a.id];
@@ -288,16 +297,16 @@ export class ReplicaMeters {
         return [{ id: c.id, gain: base * dbToGain(send.level), pan: send.pan, fr: 0 }];
       });
       const st = state.auxes[a.id]!;
-      auxes[a.id] = busMeter(a.id, a.layout, mixInto(a.layout, contributions), st.fader, st.mute);
+      auxes.push(busMeter(a.id, a.layout, mixInto(a.layout, contributions), st.fader, st.mute));
     }
-    const mixMinus: Record<string, BusMeter> = {};
+    const mixMinus: BusMeter[] = [];
     for (const mm of this.shape.mixMinus) {
       const st = state.mixMinus[mm.id]!;
       const contributions = this.shape.channels
         .filter((c) => state.channels[c.id]!.routes[mm.bus] && !st.exclude.includes(c.id))
         .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr }));
-      mixMinus[mm.id] = busMeter(mm.id, mm.layout, mixInto(mm.layout, contributions), st.fader, st.mute);
+      mixMinus.push(busMeter(mm.id, mm.layout, mixInto(mm.layout, contributions), st.fader, st.mute));
     }
-    return { type: 'meters', channels, buses, auxes, mixMinus };
+    return { channels, buses, auxes, mixMinus };
   }
 }
