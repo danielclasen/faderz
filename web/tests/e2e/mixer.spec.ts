@@ -43,6 +43,16 @@ test('moves a fader and shows the value the server echoed', async ({ page, reque
   await expect.poll(async () => (await serverState(request)).owners['/channels/ch3/fader']).toBeUndefined();
 });
 
+test('gives each meter a level for assistive technology and shows the channel meter tap', async ({ page, request }) => {
+  await live(page);
+  const meter = page.getByRole('meter', { name: /^Pres 1 meter, pre-fader/ });
+  await expect(meter).toHaveAttribute('aria-valuetext', /^peak -?\d+ dBFS/, { timeout: 5000 });
+  await expect(page.getByTestId('tap-ch1')).toHaveText(' PRE');
+  await patch(request, '/channels/ch1/meterTap', 'postFader');
+  await expect(page.getByTestId('tap-ch1')).toHaveText('POST');
+  await patch(request, '/channels/ch1/meterTap', 'preFader');
+});
+
 test('keeps the fader cap under the pointer while dragging', async ({ page, request }) => {
   await live(page);
   await patch(request, '/channels/ch3/fader', -20);

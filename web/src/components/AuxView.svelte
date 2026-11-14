@@ -17,6 +17,7 @@
     return () => meters.destroy();
   });
   $effect(() => meters.setZones(mixer.state!.metering.zones));
+  $effect(() => meters.setLoudnessTarget(mixer.state!.metering.loudness.target));
   const shape = $derived(mixer.shape!);
   const sendPath = (ch: string, aux: string, key: string) => channelPath(ch, 'sends', aux, key);
 

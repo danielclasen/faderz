@@ -12,6 +12,8 @@ import { onAnimationFrame, type MeterGroup, type MeterStore } from './store';
 import { slotKey } from './flat';
 
 export const STALE_MS = 500;
+/** Period of the meters' accessible values, ms. */
+const ARIA_MS = 1000;
 /** Meter colour boundaries, dBFS (State.metering.zones). */
 export interface MeterZones {
   alignment: number;
@@ -97,6 +99,10 @@ export class MeterLayer {
   private w = 0;
   private h = 0;
   private zones: MeterZones = { alignment: -18, permittedMax: -9, truePeakMax: -1 };
+  /** Loudness target, LUFS: marked on the momentary loudness bar of channel meters. */
+  private target = -23;
+  /** Last time levels were written to the meters' accessible values. */
+  private lastAria = 0;
   /** Scratch legs for the maxima of the frames since the last draw. */
   private readonly peakIn: number[] = [];
   private readonly tpIn: number[] = [];
@@ -125,6 +131,12 @@ export class MeterLayer {
     if (zones.alignment === this.zones.alignment && zones.permittedMax === this.zones.permittedMax && zones.truePeakMax === this.zones.truePeakMax) return;
     this.zones = { alignment: zones.alignment, permittedMax: zones.permittedMax, truePeakMax: zones.truePeakMax };
     this.marks = meterMarks(this.zones);
+    this.relayout();
+  }
+
+  setLoudnessTarget(target: number): void {
+    if (target === this.target) return;
+    this.target = target;
     this.relayout();
   }
 
@@ -241,6 +253,27 @@ export class MeterLayer {
     this.drawn = true;
     for (const s of this.slots.values()) this.step(s, fresh, since, now, dt);
     this.draw();
+    if (now - this.lastAria >= ARIA_MS) {
+      this.lastAria = now;
+      this.describe();
+    }
+  }
+
+  /**
+   * Writes each visible meter's held peak to its accessible value, at most
+   * once per ARIA_MS and only when the whole dB changes: attributes only,
+   * no layout.
+   */
+  private describe(): void {
+    for (const s of this.slots.values()) {
+      if (!s.visible) continue;
+      const peak = Math.round(Math.max(...s.peak.map((l) => l.hold)));
+      const over = s.spec.group !== 'monitor' && this.meters.overs.has(s.key);
+      const text = peak <= METER_FLOOR_DB ? 'no signal' : `peak ${peak} dBFS${over ? ', true-peak over' : ''}`;
+      if (s.el.getAttribute('aria-valuetext') === text) continue;
+      s.el.setAttribute('aria-valuenow', String(Math.max(METER_FLOOR_DB, peak)));
+      s.el.setAttribute('aria-valuetext', text);
+    }
   }
 
   /** Some bar or peak hold is still above the floor. */
@@ -339,6 +372,12 @@ export class MeterLayer {
     const bw = Math.max(1, (legsW - gap * (legs - 1)) / legs);
     if (s.loud && s.loud.bar > METER_FLOOR_DB) {
       bar(x0 + w - loudW, loudW, METER_FLOOR_DB, s.loud.bar, colors.loud, 1);
+    }
+    if (s.loud) {
+      // The loudness target on the loudness bar, read in LUFS.
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = colors.loud;
+      ctx.fillRect(x0 + w - loudW - 2, Math.round(pos(this.target)) - 0.5, loudW + 2, 1);
     }
     for (let i = 0; i < legs; i++) {
       const x = x0 + scaleW + i * (bw + gap);

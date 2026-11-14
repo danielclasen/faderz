@@ -17,7 +17,8 @@
   $effect(() => layer.register(el!, { group, id, legs, scale }));
 </script>
 
-<div class="meter" role="img" aria-label={label} data-meter={`${group}/${id}`} bind:this={el}></div>
+<!-- The meter layer writes aria-valuenow and aria-valuetext about once a second. -->
+<div class="meter" role="meter" aria-label={label} aria-valuemin={-60} aria-valuemax={0} aria-valuenow={-60} aria-valuetext="no signal" data-meter={`${group}/${id}`} bind:this={el}></div>
 
 <style>
   .meter {

@@ -26,6 +26,7 @@
     return () => meters.destroy();
   });
   $effect(() => meters.setZones(mixer.state!.metering.zones));
+  $effect(() => meters.setLoudnessTarget(mixer.state!.metering.loudness.target));
   const shape = $derived(mixer.shape!);
   const banks = $derived(
     Array.from({ length: Math.ceil(shape.channels.length / BANK) }, (_, i) => ({

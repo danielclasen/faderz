@@ -8,7 +8,7 @@
   import Meter from './Meter.svelte';
   import Pan from './Pan.svelte';
   import EqCurve from './EqCurve.svelte';
-  import { TAP_LABEL } from '../lib/audio/taps';
+  import { TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
   import { tip } from '../lib/tip';
 
   interface Props {
@@ -103,7 +103,11 @@
 
   <div class="fm">
     <Fader path={channelPath(channel.id, 'fader')} label={`${channel.name} fader`} />
-    <div class="meter"><Meter group="channels" id={channel.id} legs={channel.width} label={`${channel.name} meter, ${TAP_LABEL[st.meterTap]}`} /></div>
+    <div class="meter">
+      <Meter group="channels" id={channel.id} legs={channel.width} label={`${channel.name} meter, ${TAP_LABEL[st.meterTap]}`} />
+      <!-- The meter tap, in the meter's bottom padding. -->
+      <span class="tap fixed" aria-hidden="true" data-testid={`tap-${channel.id}`}>{fit(TAP_KEY[st.meterTap], 4)}</span>
+    </div>
   </div>
 
   <div class="foot">
@@ -289,8 +293,21 @@
     gap: 3px;
   }
   .meter {
+    position: relative;
     min-width: 8px;
     padding: 17px 0;
+  }
+  .tap {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 3px;
+    height: 10px;
+    line-height: 10px;
+    font-size: 7.5px;
+    text-align: center;
+    color: var(--text-faint);
+    contain: strict;
   }
   .foot {
     display: flex;
