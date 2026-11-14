@@ -351,6 +351,23 @@ test('talks into a mix-minus output while TALK is held and stops on release', as
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 
+test('reads loudness in LU relative to the target on request', async ({ page, request }) => {
+  await live(page);
+  const integrated = page.getByTestId('loudness-i-pgm20');
+  await expect(integrated).not.toHaveText(/--\.-/, { timeout: 10_000 });
+  await expect(integrated).toHaveText(/^\s*-\d/);
+  await page.getByRole('button', { name: 'Setup' }).click();
+  await page.getByRole('radio', { name: 'LU', exact: true }).click();
+  await page.getByRole('button', { name: 'Mixer' }).click();
+  await expect(page.getByRole('group', { name: 'Loudness in LU relative to -23 LUFS' }).first()).toBeVisible();
+  // The mock programme sits near the target, so it reads a few LU, signed.
+  await expect(integrated).toHaveText(/^\s*[+-]\d{1,2}\.\d$/);
+  const lu = Number((await integrated.textContent())!.trim());
+  expect(Math.abs(lu)).toBeLessThan(20);
+  await page.getByRole('button', { name: 'Setup' }).click();
+  await page.getByRole('radio', { name: 'LUFS', exact: true }).click();
+});
+
 test('keeps the alignment level below the permitted maximum', async ({ page, request }) => {
   await live(page);
   await page.getByRole('button', { name: 'Setup' }).click();

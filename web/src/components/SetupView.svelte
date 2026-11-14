@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loudnessUnit, setLoudnessUnit } from '../lib/loudnessUnit.svelte';
   import type { LoudnessPreset, LoudnessScale } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import NumberEntry from './NumberEntry.svelte';
@@ -43,6 +44,17 @@
     </div>
     <NumberEntry path="/metering/loudness/target" label="Target" min={-31} max={-14} step={0.5} unit="LUFS" />
     <NumberEntry path="/metering/loudness/tolerance" label="Tolerance" min={0.5} max={5} step={0.5} unit="LU" />
+    <div class="radios" role="radiogroup" aria-label="Loudness readout on this screen">
+      {#each ['LUFS', 'LU'] as const as u (u)}
+        <button
+          class="key"
+          role="radio"
+          aria-checked={loudnessUnit.value === u}
+          title={u === 'LU' ? 'Relative to the target' : 'Absolute'}
+          onclick={() => setLoudnessUnit(u)}>{u}</button
+        >
+      {/each}
+    </div>
     <div class="radios" role="radiogroup" aria-label="Loudness meter scale">
       {#each SCALES as s (s.id)}
         <button

@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import type { MeterGroup, MeterReading } from '../lib/meters/store';
+  import { loudnessUnit } from '../lib/loudnessUnit.svelte';
 
   /** Readout period, ms. */
   const READOUT_MS = 100;
@@ -46,6 +47,10 @@
   const signed = (v: number | null | undefined) => fit(v === null || v === undefined ? '--.--' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`, 5);
   const settings = $derived(mixer.state!.metering);
   const target = $derived(settings.loudness.target);
+  /** Loudness values as read on this screen: LUFS, or LU relative to the target. */
+  const relative = $derived(loudnessUnit.value === 'LU');
+  const lu = (v: number | null | undefined) =>
+    !relative ? fmt(v) : v === null || v === undefined ? fit('--.-', 5) : fit(`${v - target >= 0 ? '+' : ''}${(v - target).toFixed(1)}`, 5);
   const tolerance = $derived(settings.loudness.tolerance);
   const l = $derived(reading?.loudness);
   const dev = $derived(l?.integrated == null ? null : l.integrated - target);
@@ -56,7 +61,7 @@
   const at = (lu: number) => Math.min(1, Math.max(0, (lu - range.lo) / (range.hi - range.lo)));
 </script>
 
-<div class="loud" role="group" aria-label="Loudness">
+<div class="loud" role="group" aria-label={relative ? `Loudness in LU relative to ${target} LUFS` : "Loudness in LUFS"}>
   <div
     class="bar"
     title={`Short-term loudness against ${target} LUFS, ${settings.scale === 'ebu18' ? '-36 to +18' : '-18 to +9'} LU`}
@@ -68,15 +73,15 @@
     <i class="fill" class:over={rel !== null && rel > tolerance} style:transform={`scaleX(${rel === null ? 0 : at(rel)})`}></i>
     <i class="target" style:transform={`translateX(${at(0) * 100}%)`}><b></b></i>
   </div>
-  <span class="k">M</span><b class="num v"><span>{fmt(l?.momentary)}</span></b><b class="num max" title="Maximum momentary since reset"><span>{fmt(l?.maxMomentary)}</span></b>
-  <span class="k">S</span><b class="num v"><span>{fmt(l?.shortTerm)}</span></b><b class="num max" title="Maximum short-term since reset"><span>{fmt(l?.maxShortTerm)}</span></b>
+  <span class="k">M</span><b class="num v"><span>{lu(l?.momentary)}</span></b><b class="num max" title="Maximum momentary since reset"><span>{lu(l?.maxMomentary)}</span></b>
+  <span class="k">S</span><b class="num v"><span>{lu(l?.shortTerm)}</span></b><b class="num max" title="Maximum short-term since reset"><span>{lu(l?.maxShortTerm)}</span></b>
   <span class="k">I</span>
   <b
     class="num v int"
     class:ok={dev !== null && Math.abs(dev) <= tolerance}
     class:off={dev !== null && Math.abs(dev) > tolerance}
     class:invalid={l && !l.integratedValid}
-    data-testid={`loudness-i-${id}`}><span>{fmt(l?.integrated)}</span></b
+    data-testid={`loudness-i-${id}`}><span>{lu(l?.integrated)}</span></b
   >
   <b class="num max" title={`Target ${target} LUFS +/-${tolerance} LU`}><span>{fmt(target)}</span></b>
   <span class="k">LRA</span>
