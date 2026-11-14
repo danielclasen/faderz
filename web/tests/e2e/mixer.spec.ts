@@ -318,13 +318,23 @@ test('talks into a mix-minus output while TALK is held and stops on release', as
   await page.getByRole('button', { name: 'Aux / N-1' }).click();
   await page.getByRole('combobox', { name: 'N-1 Phone 1 talkback source' }).selectOption('ch1');
   await settled(page);
-  const talk = page.getByRole('button', { name: 'N-1 Phone 1 talk, hold' });
+  const talk = page.getByRole('button', { name: /^N-1 Phone 1 talk/ });
+  const active = async () => (await serverState(request)).state.mixMinus['mm1']!.interrupt.active;
   await talk.hover();
   await page.mouse.down();
-  await expect.poll(async () => (await serverState(request)).state.mixMinus['mm1']!.interrupt.active).toBe(true);
+  await expect.poll(active).toBe(true);
   await expect(talk).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(400);
   await page.mouse.up();
-  await expect.poll(async () => (await serverState(request)).state.mixMinus['mm1']!.interrupt.active).toBe(false);
+  await expect.poll(active).toBe(false);
+  await expect.poll(async () => (await serverState(request)).owners['/mixMinus/mm1/interrupt/active']).toBeUndefined();
+  // A tap latches the talk until the next tap.
+  await talk.click();
+  await page.waitForTimeout(500);
+  expect(await active()).toBe(true);
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  await talk.click();
+  await expect.poll(active).toBe(false);
   await expect.poll(async () => (await serverState(request)).owners['/mixMinus/mm1/interrupt/active']).toBeUndefined();
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });

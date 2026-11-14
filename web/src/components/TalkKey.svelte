@@ -1,7 +1,9 @@
 <script lang="ts">
-  // Hold-to-talk key of a mix-minus IFB interrupt: pressed (pointer, Space
-  // or Enter) it owns and sets interrupt/active, released it clears and
-  // releases it. The server also clears it when the session's lease ends.
+  // Talk key of a mix-minus IFB interrupt. Pressed (pointer, Space or
+  // Enter) it owns and sets interrupt/active. Held longer than LATCH_MS it
+  // is momentary: released, it clears and releases it. A shorter tap
+  // latches it on until the next press. The server also clears it when
+  // the session's lease ends.
   import { getMixer } from '../lib/state/mixer.svelte';
   import { mixMinusPath } from '../lib/state/paths';
 
@@ -16,20 +18,47 @@
   const active = $derived(mixer.value<boolean>(path));
   const source = $derived(mixer.value<string | null>(sourcePath));
   const channels = $derived(mixer.shape!.channels);
+  /** A press shorter than this latches; a longer one is momentary. */
+  const LATCH_MS = 300;
   let holding = false;
+  let pressedAt = 0;
+  let latched = $state(false);
 
+  function off(): void {
+    mixer.set(path, false);
+    mixer.release(path);
+  }
   function press(): void {
-    if (holding || mixer.locked || source === null) return;
+    if (holding) return;
+    if (latched) {
+      // This press ends the latch; its release does nothing more.
+      latched = false;
+      holding = false;
+      off();
+      return;
+    }
+    if (mixer.locked || source === null) return;
     holding = true;
+    pressedAt = performance.now();
     mixer.touch(path);
     mixer.set(path, true);
   }
   function lift(): void {
     if (!holding) return;
     holding = false;
-    mixer.set(path, false);
-    mixer.release(path);
+    if (performance.now() - pressedAt < LATCH_MS) {
+      latched = true;
+      return;
+    }
+    off();
   }
+  // Another client or the lease ended the talk: drop the latch with it.
+  $effect(() => {
+    if (!active && latched && !holding) {
+      latched = false;
+      mixer.release(path);
+    }
+  });
   function down(e: PointerEvent): void {
     if (e.button !== 0) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -59,10 +88,11 @@
   <button
     class="key"
     class:on={active}
+    class:latched
     aria-disabled={mixer.locked || source === null}
     aria-pressed={active}
-    aria-label={`${name} talk, hold`}
-    title={source === null ? 'Choose a talkback source first' : 'Hold to talk into this output'}
+    aria-label={`${name} talk${latched ? ', latched' : ''}`}
+    title={source === null ? 'Choose a talkback source first' : 'Hold to talk into this output; tap to latch, tap again to stop'}
     onpointerdown={down}
     onpointerup={lift}
     onpointercancel={lift}
@@ -92,5 +122,9 @@
     background: var(--talk);
     border-color: var(--talk);
     color: var(--talk-ink);
+  }
+  /* Latched: the key stays lit with a ring, so it reads as left on. */
+  .key.latched {
+    box-shadow: 0 0 0 2px var(--talk-ink), 0 0 0 4px var(--talk);
   }
 </style>
