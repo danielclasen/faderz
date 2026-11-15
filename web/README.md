@@ -164,6 +164,20 @@ closes the channel processing panel. The mute of an output (bus, aux,
 mix-minus) needs a 0.5 s hold, by pointer, Space or Enter; one press
 unmutes. Channel mutes take one press.
 
+TALK on a mix-minus output, by pointer, Space or Enter: held longer
+than 0.3 s it talks until released; a shorter tap latches it on. Only
+a release on the key latches: a cancelled touch, a lost pointer or
+focus leaving the key during the press ends the talk. A press on a lit
+key stops the talk, whichever screen lit it; one another session holds
+is stopped there, and the screen names the holder. A latch stopped
+while writes are locked stays shown until the server reports the talk
+off.
+
+A label cut off for lack of room, such as a long channel name or the
+status-bar counters, shows its full text in a tooltip: after a short
+hover, on keyboard focus (Tab to it) and on a touch held for 0.5 s;
+Escape closes it.
+
 Typed values (the readout of every processing parameter, delay, the
 Setup view) are written on Enter or when the field is left, and Escape
 restores the current value. Parameters take units: `2.5k` or `2.5 kHz`,
