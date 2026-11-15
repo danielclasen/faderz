@@ -167,7 +167,8 @@ unmutes. Channel mutes take one press.
 TALK on a mix-minus output, by pointer, Space or Enter: held longer
 than 0.3 s it talks until released; a shorter tap latches it on. Only
 a release on the key latches: a cancelled touch, a lost pointer or
-focus leaving the key during the press ends the talk. A press on a lit
+focus leaving the key during the press ends the talk, and so does
+leaving the view while the key is held or latched. A press on a lit
 key stops the talk, whichever screen lit it; one another session holds
 is stopped there, and the screen names the holder. A latch stopped
 while writes are locked stays shown until the server reports the talk

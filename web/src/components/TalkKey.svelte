@@ -6,8 +6,10 @@
   // press latches (pointerup, keyup): a cancelled touch, a lost pointer
   // capture or focus leaving the key ends the talk, so an interrupted
   // press never leaves a presenter's feed replaced. A press on a lit key
-  // stops the talk, whichever client lit it. The server also clears it
-  // when the owning session releases it or its lease ends.
+  // stops the talk, whichever client lit it. A held or latched talk ends
+  // when the key leaves the screen (another view), so no talk outlives
+  // the key that stops it. The server also clears it when the owning
+  // session releases it or its lease ends.
   import { getMixer } from '../lib/state/mixer.svelte';
   import { mixMinusPath } from '../lib/state/paths';
 
@@ -45,11 +47,13 @@
       return;
     }
     if (active) {
-      // Lit by another client or a script: this press stops it. One
-      // another session owns can only be stopped there (the server
-      // refuses the write), so say who holds it instead.
+      // Lit by another client, a script or this session without a latch
+      // here: this press stops it, and releases it when this session owns
+      // it. One another session owns can only be stopped there (the
+      // server refuses the write), so say who holds it instead.
       const owner = mixer.ownerOf(path);
       if (owner && !mixer.isMine(owner)) mixer.notify('conflict', `${name} talk is held by ${mixer.ownerLabel(owner)}`, path);
+      else if (owner) off();
       else mixer.set(path, false);
       return;
     }
@@ -75,6 +79,11 @@
     holding = false;
     off();
   }
+  // The key leaves the screen: a held or latched talk ends with it.
+  $effect(() => () => {
+    if (holding || latched) off();
+    holding = false;
+  });
   // Another client or the lease ended the talk: drop the latch with it.
   $effect(() => {
     if (!active && latched && !holding) {

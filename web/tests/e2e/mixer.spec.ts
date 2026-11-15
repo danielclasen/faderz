@@ -476,6 +476,51 @@ test('ends the talk when focus leaves TALK during a short Space press', async ({
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 
+const TALK_OWNER = '/mixMinus/mm1/interrupt/active';
+
+test('ends a held talk when its view is left during the press', async ({ page, request }) => {
+  const { talk, active } = await talkKey(page, request);
+  const box = (await talk.boundingBox())!;
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+  await expect.poll(active).toBe(true);
+  // Held past the latch time: momentary. Another view replaces the key
+  // under the finger, so no lift ever reaches it.
+  await page.waitForTimeout(400);
+  await page.getByRole('button', { name: 'Scenes' }).click();
+  await expect(talk).toHaveCount(0);
+  await expect.poll(active).toBe(false);
+  await expect.poll(async () => (await serverState(request)).owners[TALK_OWNER]).toBeUndefined();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(400);
+  expect(await active()).toBe(false);
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
+test('ends a latched talk when its view is left, so another client can talk', async ({ page, browser, request }) => {
+  const { talk, active } = await talkKey(page, request);
+  await talk.click();
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  expect(await active()).toBe(true);
+  await page.getByRole('button', { name: 'Scenes' }).click();
+  await expect.poll(active).toBe(false);
+  await expect.poll(async () => (await serverState(request)).owners[TALK_OWNER]).toBeUndefined();
+  await page.getByRole('button', { name: 'Aux / N-1' }).click();
+  await expect(talk).toHaveAttribute('aria-pressed', 'false');
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  const other = await browser.newContext();
+  const second = await talkKey(await other.newPage(), request);
+  await second.talk.click();
+  await expect(second.talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  await expect.poll(active).toBe(true);
+  await expect(talk).toHaveAttribute('aria-pressed', 'true');
+  await second.talk.click();
+  await expect.poll(active).toBe(false);
+  await other.close();
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
 test('a tap on a lit TALK key stops the talk, or names the client that holds it', async ({ page, browser, request }) => {
   const { talk, active } = await talkKey(page, request);
   // Lit without an owner (a script): one tap here stops it.
