@@ -9,7 +9,7 @@ import { isIP } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Change, CommandResult, TallyState } from '../../src/lib/contract/types.ts';
-import { Cluster, CommandError } from './cluster.ts';
+import { Cluster, CommandError, type Replica } from './cluster.ts';
 
 const API = '/api/v1';
 
@@ -120,7 +120,7 @@ export class MockServer {
         res.end();
         return;
       }
-      void this.api(req, res, one[2]!.slice(API.length));
+      void this.api(req, res, one[2]!.slice(API.length), r);
       return;
     }
     if (url.pathname.startsWith('/__mock/')) {
@@ -134,7 +134,13 @@ export class MockServer {
     void this.api(req, res, url.pathname.slice(API.length));
   };
 
-  private async api(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
+  /**
+   * A REST request, through one replica when `via` is given, otherwise
+   * through the service, which reaches any ready replica. A write that
+   * replica, or with the service every replica, cannot commit is answered
+   * 503 and changes nothing.
+   */
+  private async api(req: IncomingMessage, res: ServerResponse, path: string, via?: Replica): Promise<void> {
     const method = req.method ?? 'GET';
     const route = this.routes.find((r) => r.method === method && r.pattern.test(path));
     const contract = this.cluster.contract;
@@ -169,6 +175,9 @@ export class MockServer {
       }
       const problem = contract.checkRequest(route.template, method, body);
       if (problem) return reply(route.template, 400, { code: 400, message: `invalid request: ${problem}` });
+      if (method !== 'GET' && !(via ? this.cluster.commitable(via) : this.cluster.quorum())) {
+        return reply(route.template, 503, { code: 503, message: 'not applied: no quorum' });
+      }
       const params = route.pattern.exec(path)!.slice(1);
       try {
         // A request sees no block left open, and its own block commits before

@@ -336,6 +336,26 @@ describe('sync engine: heartbeat and failure detection', () => {
     expect(engine.status().failover).toMatchObject({ from: 'r1', to: 'r2', reason: 'notCommitable' });
   });
 
+  it('looks for a third replica that can commit when neither the primary nor the standby can, and fails over to it', () => {
+    const { clock, engine, primary, standby, sockets } = live(['ws://a/ws', 'ws://b/ws', 'ws://c/ws']);
+    // r1 and r2 cannot commit; their reports say r3 can.
+    primary.deliver(replicas(R1, ['r1', 'r2']));
+    standby.deliver(replicas(R2, ['r1', 'r2']));
+    expect(standby.closed).toBe(false);
+    beats(clock, COMMIT_SETTLE_MS, [primary, R1], [standby, R2]);
+    expect(standby.closed).toBe(true);
+    expect(primary.closed).toBe(false);
+    clock.advance(STANDBY_RETRY_MS);
+    const next = sockets.at(-1)!;
+    expect(next).not.toBe(standby);
+    next.open();
+    next.deliver(replicas(R3, ['r1', 'r2']));
+    next.deliver(resume(R3, 10));
+    beats(clock, COMMIT_SETTLE_MS, [primary, R1], [next, R3]);
+    expect(next.ofType('promote')).toHaveLength(1);
+    expect(engine.status().failover).toMatchObject({ from: 'r1', to: 'r3', reason: 'notCommitable' });
+  });
+
   it('fails nothing over onto a standby whose own report of losing commit arrives just after the primary one', () => {
     const { clock, primary, standby } = live();
     const all = ['r1', 'r2', 'r3'];

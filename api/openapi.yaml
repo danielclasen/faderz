@@ -19,7 +19,8 @@ info:
     commands arriving within one processing block into one log entry, so
     one revision may carry changes of several commands. A write is answered
     once the log entry carrying it has committed, and a read returns the
-    state at a committed revision.
+    state at a committed revision. A write the serving replica cannot commit
+    is answered 503 and changes nothing.
 
     WebSocket clients keep a primary connection and a standby connection
     to another replica, exchange heartbeats every 250 ms on both and fail
@@ -77,6 +78,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "200":
           $ref: "#/components/responses/CommandResult"
         "400":
@@ -130,6 +133,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "201":
           $ref: "#/components/responses/SceneResult"
         "400":
@@ -160,6 +165,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "200":
           $ref: "#/components/responses/SceneResult"
         "400":
@@ -174,6 +181,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "200":
           $ref: "#/components/responses/CommandResult"
         "404":
@@ -208,6 +217,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "200":
           $ref: "#/components/responses/CommandResult"
         "400":
@@ -250,6 +261,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "200":
           $ref: "#/components/responses/CommandResult"
         "400":
@@ -277,6 +290,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "200":
           $ref: "#/components/responses/CommandResult"
         "400":
@@ -306,6 +321,8 @@ paths:
       responses:
         "403":
           $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
         "204":
           description: Reset.
         "404":
@@ -374,7 +391,7 @@ components:
       properties:
         code:
           type: integer
-          enum: [400, 403, 404, 409]
+          enum: [400, 403, 404, 409, 503]
         message:
           type: string
         conflicts:
@@ -403,6 +420,15 @@ components:
                 $ref: "#/components/schemas/CommandResult"
     Error:
       description: The request was refused.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotApplied:
+      description: |
+        The serving replica cannot commit, for example while it has no
+        quorum. Nothing changed; the request may be sent again with the
+        same commandId.
       content:
         application/json:
           schema:

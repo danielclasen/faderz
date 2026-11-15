@@ -351,12 +351,12 @@ export class Cluster {
   }
 
   /** A majority of the replicas is ready and not partitioned. */
-  private quorum(): boolean {
+  quorum(): boolean {
     return this.replicas.filter((x) => this.ready(x) && !x.partitioned).length > this.replicas.length / 2;
   }
 
   /** A ready replica that is not partitioned, while there is a quorum: it can commit. */
-  private commitable(r: Replica): boolean {
+  commitable(r: Replica): boolean {
     return this.ready(r) && !r.partitioned && this.quorum();
   }
 

@@ -104,9 +104,11 @@ does 250 ms later (a stall of the worker itself is not counted as
 missed beats: a watch timer that fires late first runs the messages
 that arrived meanwhile), or gives no state it can apply within 3 s of a
 hello, resync or promote, the command outbox, meter credits and decoding,
-and the replicated state. While no replica can commit the client stays
-on its primary and keeps its standby, though that cannot commit either:
-it fails over only to a replica that reports that it can. The page only renders: it sends a tick per
+and the replicated state. While neither its primary nor its standby can
+commit, the client lets the standby go to look for a third replica when
+a report names one that can, and fails over to it; while no replica can
+commit it stays on its primary and keeps its standby, so nothing fails
+over or reconnects. The page only renders: it sends a tick per
 animation frame while visible and applies the one patch the worker
 answers with, leaf by leaf, measured as the `faderz:patch` performance
 measure. A hidden page sends no ticks, so the worker grants no meter
@@ -120,7 +122,7 @@ revision above the committed one in the same epoch), applies nothing:
 the link shows AHEAD, a banner over the view names both revisions,
 nothing is retried, and TAKE CLUSTER STATE loads the cluster's snapshot.
 
-Every write control is `aria-disabled` and sends nothing while the link transmits no commands (connecting, offline, failing over, ahead), when the status area shows LOCK and names the reason in its title (`src/lib/state/writes.ts`). While the serving replica cannot commit, the status area shows NO Q and the controls stay usable: the notice line says CHANGES NOT COMMITTING - audio continues, with the number of writes pending, and a key pressed meanwhile shows its state desaturated inside a dashed edge until its write commits or expires. TALK starts no talk then, and a press on a latched TALK sends only the release, so the key stays latched until the state says the talk is off. A command answered 503 (not applied), unanswered when a snapshot answers a hello or resync sent after it or answers none, or unanswered when its connection fails, is sent again with its id; otherwise one without an answer is not sent again, as the server answers every command it reads. One still unanswered 3 s after it was issued is dropped with a notice, and its control shows the committed value again.
+Every write control is `aria-disabled` and sends nothing while the link transmits no commands (connecting, offline, failing over, ahead), when the status area shows LOCK and names the reason in its title (`src/lib/state/writes.ts`). While the serving replica cannot commit, the status area shows NO Q and the controls stay usable: the notice line says CHANGES NOT COMMITTING - audio continues, with the number of writes pending, and every key pressed meanwhile shows its state desaturated inside a dashed edge until its write commits or expires (`src/lib/pending.ts`, which every key that writes uses). Notices raised meanwhile wait and are timed once the line shows them again. REST writes are answered 503 then and change nothing. TALK starts no talk then, and a press on a latched TALK sends only the release, so the key stays latched until the state says the talk is off; a lit TALK never looks disabled. A command answered 503 (not applied), unanswered when a snapshot answers a hello or resync sent after it or answers none, or unanswered when its connection fails, is sent again with its id; otherwise one without an answer is not sent again, as the server answers every command it reads. One still unanswered 3 s after it was issued is dropped with a notice, and its control shows the committed value again.
 The LOCK DESK key in the header does the same on one screen: a 0.5 s
 hold locks it, another unlocks it. A phone shows the key only while
 the desk is locked.

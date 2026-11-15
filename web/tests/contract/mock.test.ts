@@ -831,6 +831,28 @@ describe('heartbeats', () => {
 });
 
 describe('replica faults', () => {
+  it('answers REST writes 503 without quorum, through the service and through a replica, and changes nothing', async () => {
+    expect((await control('POST', '/replicas/r2/partition')).status).toBe(200);
+    expect((await control('POST', '/replicas/r3/partition')).status).toBe(200);
+    const before = cluster.state.channels['ch12']!.mute;
+    const write = { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch12/mute', value: !before }] };
+    expect(await rest('PATCH', '/state', write)).toMatchObject({ status: 503, body: { code: 503 } });
+    expect((await rest('POST', '/scenes', { commandId: crypto.randomUUID(), name: 'No quorum' })).status).toBe(503);
+    const via = await fetch(`http://${main.base}/__mock/replicas/r1/api/v1/state`, {
+      method: 'PATCH',
+      headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify(write),
+    });
+    expect(via.status).toBe(503);
+    expect(cluster.state.channels['ch12']!.mute).toBe(before);
+    expect((await rest('GET', '/state')).status).toBe(200);
+    await control('POST', '/replicas/r2/heal');
+    await control('POST', '/replicas/r3/heal');
+    expect((await rest('PATCH', '/state', write)).status).toBe(200);
+    expect(cluster.state.channels['ch12']!.mute).toBe(!before);
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/channels/ch12/mute', value: before }] });
+  });
+
   it('a replica left without quorum reports itself not commitable and answers commands not applied, though not partitioned', async () => {
     const c = await new Client().open(onReplica('r1'));
     await c.hello();

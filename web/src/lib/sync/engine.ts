@@ -578,10 +578,11 @@ export class SyncEngine {
    * Acts on what the replicas report about committing, once the reports
    * have held for COMMIT_SETTLE_MS. A primary that cannot commit is left
    * only for a standby that reports it can. A standby that cannot commit
-   * is let go, to look for a better one, only while the primary can: with
-   * no replica able to commit the client stays on its primary and keeps
-   * its standby, so nothing fails over or reconnects until one reports
-   * it can.
+   * is let go, to look for a better one, while the primary can, or while
+   * a report names a third replica that can, so the client finds that
+   * one. With no replica able to commit the client stays on its primary
+   * and keeps its standby, so nothing fails over or reconnects until one
+   * reports it can.
    */
   private checkCommitable(): void {
     const p = this.primary;
@@ -589,7 +590,7 @@ export class SyncEngine {
     const due = () => {
       if (this.commitable(p) === false && this.promotable()) return 'failover';
       const sb = this.standby;
-      if (sb && this.standbyState !== 'Connecting' && this.commitable(sb) === false && this.commitable(p) !== false) return 'drop';
+      if (sb && this.standbyState !== 'Connecting' && this.commitable(sb) === false && (this.commitable(p) !== false || this.thirdCommitable())) return 'drop';
       return null;
     };
     if (due() === null) {
@@ -604,6 +605,12 @@ export class SyncEngine {
       if (act === 'failover') this.failover('notCommitable');
       else if (act === 'drop') this.dropStandby(this.standby!);
     }, COMMIT_SETTLE_MS);
+  }
+
+  /** A report of the primary or the standby names a replica other than theirs that can commit. */
+  private thirdCommitable(): boolean {
+    const mine = new Set([this.primary?.replica?.id, this.standby?.replica?.id]);
+    return [this.primary, this.standby].some((l) => l?.replicas?.some((r) => r.commitable && !mine.has(r.id)));
   }
 
   private linkEvent(e: LinkEvent): void {
