@@ -324,7 +324,7 @@
       }
     },
     "Selections": {
-      "description": "What every session has selected (client-message.schema.json#/$defs/Select), on every connection, standby ones included: after the snapshot or resume that answers its hello, and whenever a selection changes or lapses with its session's lease. Lists every session with a selection, the receiving one included, at most one entry per session.",
+      "description": "What every session has selected (client-message.schema.json#/$defs/Select), on every connection, standby ones included: after the snapshot or resume that answers its hello, and whenever a selection changes or lapses with its session's lease. At most one such message per connection every 100 ms; changes within that time go out together in the next one. Lists every session with a selection, the receiving one included, at most one entry per session. Selections are not part of the replicated state, and a client takes them from its primary connection only; a standby connection receives them so a promoted standby has them at once.",
       "type": "object",
       "required": [
         "type",

@@ -208,12 +208,16 @@ off.
 
 A gesture on a control another session holds is refused at once and
 the notice names the holder. ASK in that notice sends the holder a
-request for the control, at most once per control every 3 s, and the
-holder's screen shows it as a notice; nothing changes until the holder
-lets go or its lease runs out. The head of a strip that another screen
+request for the control, at most once per control every 3 s (the
+cluster drops more frequent ones), and once it is sent the notice line
+says so. The holder's screen shows the request as a notice with
+RELEASE, which ends a talk or releases any other control; nothing
+changes until the holder lets go or its lease runs out, and its lease
+runs on while any of its connections is open. The head of a strip that another screen
 has selected carries that screen's initial, the first letter of its
 handle tag, and the head's tooltip names every screen that has it
-selected.
+selected. The cluster sends selections at most every 100 ms, and the
+client shows those of its primary connection.
 
 A label cut off for lack of room, such as a long channel name, shows
 its full text in a tooltip: after a short hover, on keyboard focus (Tab

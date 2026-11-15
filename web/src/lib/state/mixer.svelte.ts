@@ -15,6 +15,7 @@ import { handleTag } from '../net/handle';
 import { getAt, setAt } from './pointer';
 import { describePath } from './paths';
 import { writesLockReason } from './writes';
+import { REQUEST_INTERVAL_MS } from '../contract/protocol';
 
 export interface Port {
   post(msg: ToWorker): void;
@@ -27,6 +28,8 @@ export interface Notice {
   text: string;
   /** Notices with one key (a control path) are one notice, counted. */
   key?: string;
+  /** The control a held-control or a request notice is about. */
+  path?: string;
   count: number;
 }
 
@@ -57,8 +60,6 @@ export const INITIAL_STATUS: SyncStatus = {
 };
 
 const NOTICE_LIMIT = 5;
-/** A client asks for one control at most this often (client-message.schema.json Request). */
-export const REQUEST_INTERVAL_MS = 3000;
 
 export class MixerStore {
   shape = $state.raw<Shape | null>(null);
@@ -203,7 +204,9 @@ export class MixerStore {
 
   /**
    * Asks the session that holds a control to give it up. At most one
-   * request per control every REQUEST_INTERVAL_MS; returns whether it went.
+   * request per control every REQUEST_INTERVAL_MS; returns whether it was
+   * handed to the worker. The notice that says so comes from the worker,
+   * once it has sent the request.
    */
   requestControl(path: string, now: number = Date.now()): boolean {
     const owner = this.ownerOf(path);
@@ -211,8 +214,19 @@ export class MixerStore {
     if (now - (this.requested.get(path) ?? -Infinity) < REQUEST_INTERVAL_MS) return false;
     this.requested.set(path, now);
     this.post({ type: 'request', path });
-    this.notify('info', `Asked ${this.ownerLabel(owner)} for ${describePath(path, this.shape)}`, `request:${path}`);
     return true;
+  }
+
+  /**
+   * Gives up a control this session holds, as another session asked: a
+   * talk is ended (the TALK key drops its latch with it), anything else
+   * released. Not a write of a value, so it is sent while locked too.
+   */
+  giveUp(path: string): void {
+    if (!this.isMine(this.ownerOf(path))) return;
+    if (/^\/mixMinus\/[^/]+\/interrupt\/active$/.test(path) && !this.locked && this.value<boolean>(path)) this.set(path, false);
+    this.held.delete(path);
+    this.post({ type: 'release', path });
   }
 
   /** Sent also while locked: it ends a touch made before, and changes no value. */
@@ -277,7 +291,9 @@ export class MixerStore {
     if (p.selections) this.selections = p.selections;
     for (const n of p.notices ?? []) {
       if (n.kind === 'request') {
-        this.notify('request', `${this.ownerLabel(n.from)} asks for ${describePath(n.path, this.shape)}`, `asked:${n.path}`);
+        this.notify('request', `${this.ownerLabel(n.from)} asks for ${describePath(n.path, this.shape)}`, `asked:${n.path}`, n.path);
+      } else if (n.kind === 'requested') {
+        this.notify('info', `Asked ${this.ownerLabel(n.owner)} for ${describePath(n.path, this.shape)}`, `request:${n.path}`);
       } else if (n.kind === 'conflict') {
         this.conflicts.set(n.path, Date.now());
         this.notify('conflict', `${describePath(n.path, this.shape)} is held by ${this.ownerLabel(n.owner)}`, n.path);
@@ -301,10 +317,10 @@ export class MixerStore {
   }
 
   /** Adds a notice; one with the key of a shown notice replaces it and counts up. */
-  notify(kind: Notice['kind'], text: string, key?: string): void {
+  notify(kind: Notice['kind'], text: string, key?: string, path?: string): void {
     const same = key === undefined ? undefined : this.notices.find((n) => n.key === key);
     const rest = this.notices.filter((n) => n !== same).slice(-(NOTICE_LIMIT - 1));
-    this.notices = [...rest, { id: ++this.noticeId, kind, text, key, count: (same?.count ?? 0) + 1 }];
+    this.notices = [...rest, { id: ++this.noticeId, kind, text, key, path, count: (same?.count ?? 0) + 1 }];
   }
 }
 

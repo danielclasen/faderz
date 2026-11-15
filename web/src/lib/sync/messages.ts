@@ -61,7 +61,9 @@ export type WorkerNotice =
   | { kind: 'expired'; paths: string[] }
   | { kind: 'error'; text: string }
   /** Another session asks for a control this session owns. */
-  | { kind: 'request'; path: string; from: Owner };
+  | { kind: 'request'; path: string; from: Owner }
+  /** A request for a control was sent to the cluster, for the session that owned it then. */
+  | { kind: 'requested'; path: string; owner: Owner | null };
 
 export interface Patch {
   type: 'patch';

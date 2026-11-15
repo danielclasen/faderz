@@ -544,6 +544,30 @@ async function talkKey(page: Page, request: APIRequestContext) {
   };
 }
 
+test('ends a latched talk from the notice when another session asks for it', { tag: '@mock' }, async ({ page, request, baseURL }) => {
+  const { talk, active } = await talkKey(page, request);
+  const path = '/mixMinus/mm1/interrupt/active';
+  await talk.click();
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  await expect.poll(active).toBe(true);
+  const other = await RawClient.open(baseURL!);
+  try {
+    const tag = handleTag(ownerHandle(other.session));
+    other.send({ type: 'request', path });
+    const notice = page.getByTestId('notice');
+    await expect(notice).toContainText(`web client ${tag} asks for N-1 Phone 1 interrupt active`);
+    await notice.getByRole('button', { name: 'RELEASE' }).click();
+    await expect.poll(active).toBe(false);
+    await expect.poll(async () => (await serverState(request)).owners[path]).toBeUndefined();
+    await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+    await expect(talk).toHaveAttribute('aria-pressed', 'false');
+    await expect(notice.getByRole('button', { name: 'RELEASE' })).toHaveCount(0);
+  } finally {
+    other.close();
+    await patch(request, '/mixMinus/mm1/interrupt/source', null);
+  }
+});
+
 test('ends the talk when a short touch on TALK is cancelled instead of latching it', async ({ page, request }) => {
   const { talk, active } = await talkKey(page, request);
   const box = (await talk.boundingBox())!;

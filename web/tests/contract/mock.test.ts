@@ -14,7 +14,7 @@ import { MockServer } from '../../dev/mock/server';
 import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
 import { ownerHandle } from '../../src/lib/net/handle';
 import { decodeMeterFrame, deriveMeterLayout, type MeterFrame, type MeterLayout } from '../../src/lib/contract/meterFrame';
-import { DEAD_MS, HEARTBEAT_MS, LEASE_MS, METER_CREDIT_CAP, METER_PERIOD_MS } from '../../src/lib/contract/protocol';
+import { DEAD_MS, HEARTBEAT_MS, LEASE_MS, METER_CREDIT_CAP, METER_PERIOD_MS, SELECTIONS_INTERVAL_MS } from '../../src/lib/contract/protocol';
 import type {
   AckMessage,
   DeltaMessage,
@@ -621,11 +621,15 @@ describe('selections and control requests', () => {
     const snap = late.messages.findIndex((m) => m.type === 'snapshot');
     expect(late.messages.indexOf(first)).toBeGreaterThan(snap);
     expect(first.selections).toEqual([{ session: a.you, element: 'ch3' }]);
-    // The same selection again changes nothing and is not sent again.
+    // The same selection again changes nothing, and one of an unknown
+    // element is ignored without an answer.
     from = observer.messages.length;
+    const aFrom = a.messages.length;
     a.send({ type: 'select', element: 'ch3' });
     a.send({ type: 'select', element: 'nope' });
-    expect(await a.next((m) => m.type === 'error' && m.code === 404)).toBeTruthy();
+    await sleep(300);
+    expect(a.messages.slice(aFrom).filter((m) => m.type === 'error')).toEqual([]);
+    expect(observer.count('selections', from)).toBe(0);
     a.send({ type: 'select', element: null });
     const cleared = await observer.next<SelectionsMessage>((m) => m.type === 'selections', from);
     expect(cleared.selections).toEqual([]);
@@ -638,6 +642,25 @@ describe('selections and control requests', () => {
     expect(lapsed.selections).toEqual([]);
     await Promise.all([observer.close(), standby.close(), late.close()]);
   }, 15_000);
+
+  it('sends the selections at most once per connection every 100 ms, the latest of a burst included', async () => {
+    const observer = await new Client().open(onReplica('r1'));
+    await observer.hello();
+    const a = await new Client().open(onReplica('r2'));
+    await a.hello();
+    await sleep(SELECTIONS_INTERVAL_MS);
+    const from = observer.messages.length;
+    const start = Date.now();
+    for (const id of ['ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6', 'ch7', 'ch8']) a.send({ type: 'select', element: id });
+    await sleep(SELECTIONS_INTERVAL_MS * 3);
+    const got = observer.messages.slice(from).filter((m): m is SelectionsMessage => m.type === 'selections');
+    expect(got.length).toBeGreaterThanOrEqual(1);
+    expect(got.length).toBeLessThanOrEqual(2);
+    expect(got.at(-1)!.selections).toEqual([{ session: a.you, element: 'ch8' }]);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(SELECTIONS_INTERVAL_MS);
+    a.send({ type: 'select', element: null });
+    await Promise.all([observer.close(), a.close()]);
+  });
 
   it('hands a control request to the primary connections of the holder only, naming the asker', async () => {
     const holder = await new Client().open(onReplica('r1'));
@@ -658,11 +681,27 @@ describe('selections and control requests', () => {
     expect(asker.count('controlRequest')).toBe(0);
     expect(asker.count('ack') + asker.count('error')).toBe(0);
     expect(holderStandby.count('controlRequest')).toBe(0);
-    // A request for a control nobody else holds goes nowhere.
+    // A request for a control nobody else holds goes nowhere, and the
+    // same asker's next request for the same control within 3 s is dropped.
     holder.send({ type: 'request', path });
     asker.send({ type: 'request', path: '/channels/ch10/fader' });
+    for (let i = 0; i < 5; i++) asker.send({ type: 'request', path });
     await sleep(300);
     expect(holder.count('controlRequest', from)).toBe(1);
+    // Another control of the same holder, or another asker, is forwarded.
+    await holder.answer(holder.command('touch', '/channels/ch10/fader'));
+    asker.send({ type: 'request', path: '/channels/ch10/fader' });
+    const third = await new Client().open(onReplica('r2'));
+    await third.hello();
+    third.send({ type: 'request', path });
+    await sleep(300);
+    expect(holder.messages.slice(from).filter((m) => m.type === 'controlRequest').map((m) => (m as ControlRequestMessage).path)).toEqual([
+      path,
+      '/channels/ch10/fader',
+      path,
+    ]);
+    await holder.answer(holder.command('release', '/channels/ch10/fader'));
+    await third.close();
     await holder.answer(holder.command('release', path));
     await Promise.all([holder.close(), holderStandby.close(), asker.close()]);
   });

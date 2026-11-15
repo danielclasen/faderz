@@ -1,7 +1,9 @@
 <script lang="ts">
   // The newest notice in a line of fixed height, with its repeat count
   // and the number of others; never an overlay on the controls. A notice
-  // that a control is held carries ASK, which asks its holder for it.
+  // that a control is held carries ASK, which asks its holder for it; a
+  // request from another session for a control this one holds carries
+  // RELEASE.
   import { getMixer } from '../lib/state/mixer.svelte';
   import { TRANSMITTING } from '../lib/sync/machines';
   import { tip } from '../lib/tip';
@@ -12,6 +14,8 @@
   const askable = $derived(
     latest?.kind === 'conflict' && latest.key !== undefined && mixer.ownedByOther(latest.key) && TRANSMITTING.has(mixer.status.link) ? latest.key : null,
   );
+  /** The control a request notice asks for, while this session still holds it. */
+  const releasable = $derived(latest?.kind === 'request' && latest.path !== undefined && mixer.isMine(mixer.ownerOf(latest.path)) ? latest.path : null);
 </script>
 
 <div class="notice-line" role="log" aria-live="polite" aria-label="Notices">
@@ -31,6 +35,14 @@
           onclick={() => askable && mixer.requestControl(askable)}
           aria-hidden={askable === null}
           title="Ask the holder to give the control up">ASK</button
+        >
+      {:else if latest.kind === 'request'}
+        <button
+          class="ask"
+          class:shown={releasable !== null}
+          onclick={() => releasable && mixer.giveUp(releasable)}
+          aria-hidden={releasable === null}
+          title="Give the control up: a talk ends, anything else is released">RELEASE</button
         >
       {/if}
       <button onclick={() => mixer.dismiss(latest.id)} aria-label="Dismiss notice">x</button>

@@ -99,6 +99,8 @@ type Role = 'primary' | 'standby';
 class Link {
   replica: ReplicaRef | null = null;
   replicas: ReplicaStatus[] | null = null;
+  /** The latest selections this connection reported (Selections); only the primary's are shown. */
+  selections: Selection[] | null = null;
   opened = false;
   suspect = false;
   lastRx: number;
@@ -132,7 +134,6 @@ export class SyncEngine {
   readonly touches = new Map<string, TouchState>();
   /** The element selected on this screen, sent again on every new primary. */
   private selection: string | null = null;
-  private selections: Selection[] = [];
   private selectionsDirty = false;
 
   private readonly clock: Clock;
@@ -220,7 +221,9 @@ export class SyncEngine {
         return this.sendSelection();
       case 'request': {
         const p = this.primary;
-        if (p && TRANSMITTING.has(this.link)) this.send(p, { type: 'request', path: msg.path });
+        if (!p || !TRANSMITTING.has(this.link)) return;
+        this.send(p, { type: 'request', path: msg.path });
+        this.notice({ kind: 'requested', path: msg.path, owner: this.owners[msg.path] ?? null });
         return;
       }
       case 'tick':
@@ -495,6 +498,7 @@ export class SyncEngine {
       this.standby = null;
       sb.role = 'primary';
       this.primary = sb;
+      this.selectionsDirty = true;
       this.primaryIndex = sb.endpoint;
       this.primaryAttempts = 0;
       this.failoverInfo = { n, from, to: sb.replica?.id ?? null, reason };
@@ -613,8 +617,9 @@ export class SyncEngine {
         if (link === this.primary) this.counters = { replica: msg.replica.id, values: msg.values };
         return;
       case 'selections':
-        this.selections = msg.selections;
-        this.selectionsDirty = true;
+        // Every connection keeps its copy; a promoted standby's is shown at once.
+        link.selections = msg.selections;
+        if (link === this.primary) this.selectionsDirty = true;
         return;
       case 'controlRequest':
         if (link === this.primary) this.notice({ kind: 'request', path: msg.path, from: msg.from });
@@ -904,7 +909,7 @@ export class SyncEngine {
     }
     if (this.selectionsDirty) {
       this.selectionsDirty = false;
-      patch.selections = this.selections;
+      patch.selections = this.primary?.selections ?? [];
       any = true;
     }
     if (this.notices.length > 0) {

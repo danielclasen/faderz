@@ -172,7 +172,7 @@
       }
     },
     "Request": {
-      "description": "Asks the session that owns a control to give it up, for example when a screen left a talkback latched or a session stopped with a control held. Not a command: it changes nothing, carries no id and is not answered. The cluster sends a control request (server-message.schema.json#/$defs/ControlRequest) to the primary connections of the session that owns path, through whichever replica serves them; a request for a control no other session owns goes nowhere. A client sends at most one request per control every 3 s.",
+      "description": "Asks the session that owns a control to give it up, for example when a screen left a talkback latched or a session stopped with a control held. Not a command: it changes nothing, carries no id and is not answered. The cluster sends a control request (server-message.schema.json#/$defs/ControlRequest) to the primary connections of the session that owns path, through whichever replica serves them; a request for a control no other session owns goes nowhere. The cluster forwards at most one request per asking session and control every 3 s and drops the others without an answer; a client sends no more often.",
       "type": "object",
       "required": [
         "type",
@@ -189,7 +189,7 @@
       }
     },
     "Select": {
-      "description": "The element this session has selected for editing (a channel, bus, aux or mix-minus output), or null when none, so other sessions can show where it works. Not a command and not part of the replicated state: it changes nothing, carries no id and is not answered. The cluster keeps the latest selection of each session until it sends another or its lease expires (model.schema.json#/$defs/Owners) and sends selections (server-message.schema.json#/$defs/Selections) to every connection when one changes. A client sends select after every snapshot or resume on a new primary connection, so a selection survives a failover and a reload clears the one before it.",
+      "description": "The element this session has selected for editing (a channel, bus, aux or mix-minus output), or null when none, so other sessions can show where it works. Not a command and not part of the replicated state: it changes nothing, carries no id and is not answered. A select of an element not in the shape is ignored. The cluster keeps the latest selection of each session until it sends another or its lease expires (model.schema.json#/$defs/Owners) and sends selections (server-message.schema.json#/$defs/Selections) to every connection when one changes, at most once per connection every 100 ms: changes within that time go out together. A client sends select after every snapshot or resume on a new primary connection, so a selection survives a failover and a reload clears the one before it.",
       "type": "object",
       "required": [
         "type",

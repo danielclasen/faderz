@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { INITIAL_STATUS, MixerStore, REQUEST_INTERVAL_MS } from '../../src/lib/state/mixer.svelte';
+import { INITIAL_STATUS, MixerStore } from '../../src/lib/state/mixer.svelte';
+import { REQUEST_INTERVAL_MS } from '../../src/lib/contract/protocol';
 import type { ToWorker } from '../../src/lib/sync/messages';
 import type { Owner } from '../../src/lib/contract/types';
 import { exampleShape, initialState } from '../../dev/mock/shape';
@@ -28,10 +29,12 @@ function store() {
 }
 
 describe('control requests', () => {
-  it('asks the holder of a control once per interval and says so', () => {
+  it('asks the holder of a control once per interval, and says so only once the worker sent it', () => {
     const { s, sent } = store();
     expect(s.requestControl(PATH, 1000)).toBe(true);
     expect(sent).toEqual([{ type: 'request', path: PATH }]);
+    expect(s.notices).toEqual([]);
+    s.apply({ type: 'patch', input: 1, changes: [], owners: [], notices: [{ kind: 'requested', path: PATH, owner: OTHER }] });
     expect(s.notices.at(-1)?.text).toMatch(/^Asked web client \S+ for N-1 /);
     expect(s.requestControl(PATH, 1000 + REQUEST_INTERVAL_MS - 1)).toBe(false);
     expect(sent).toHaveLength(1);
@@ -50,6 +53,27 @@ describe('control requests', () => {
     const { s } = store();
     s.apply({ type: 'patch', input: 0, changes: [], owners: [], notices: [{ kind: 'request', path: '/channels/ch1/fader', from: OTHER }] });
     expect(s.notices.at(-1)).toMatchObject({ kind: 'request', text: expect.stringMatching(/^web client \S+ asks for Pres 1 fader$/) });
+  });
+});
+
+describe('giving a control up on request', () => {
+  it('ends a talk this session holds and releases it, and the notice carries the control', () => {
+    const { s, sent } = store();
+    const talk = '/mixMinus/mm2/interrupt/active';
+    s.apply({ type: 'patch', input: 0, changes: [[talk, true]], owners: [[talk, YOU]], notices: [{ kind: 'request', path: talk, from: OTHER }] });
+    expect(s.notices.at(-1)).toMatchObject({ kind: 'request', path: talk });
+    s.giveUp(talk);
+    expect(sent).toEqual([
+      { type: 'set', path: talk, value: false },
+      { type: 'release', path: talk },
+    ]);
+  });
+
+  it('releases anything else without writing it, and gives up nothing it does not hold', () => {
+    const { s, sent } = store();
+    s.giveUp('/channels/ch1/fader');
+    s.giveUp(PATH);
+    expect(sent).toEqual([{ type: 'release', path: '/channels/ch1/fader' }]);
   });
 });
 
@@ -72,6 +96,8 @@ describe('selections', () => {
     expect(s.selectedBy('ch5')).toEqual([]);
     expect(s.ownerInitial(NAMED)).toBe('D');
     expect(s.ownerInitial(OTHER)).toBe(handleTag(OTHER.handle).charAt(0));
+    // The same handle gives the same initial on every screen.
+    expect(store().s.ownerInitial({ ...OTHER, connection: 'c99' })).toBe(s.ownerInitial(OTHER));
   });
 
   it('forwards this screen selection to the worker', () => {

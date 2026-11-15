@@ -1001,7 +1001,7 @@ describe('sync engine: selections and control requests', () => {
     ]);
     expect(standby.ofType('select')).toEqual([]);
     const sel = { session: OTHER, element: 'ch5' };
-    standby.deliver({ type: 'selections', replica: R2, selections: [sel] });
+    primary.deliver({ type: 'selections', replica: R1, selections: [sel] });
     expect(tick()!.selections).toEqual([sel]);
     expect(tick()).toBeNull();
     primary.drop();
@@ -1011,13 +1011,37 @@ describe('sync engine: selections and control requests', () => {
     expect(standby.ofType('select').at(-1)).toEqual({ type: 'select', element: null });
   });
 
-  it('sends a control request on a transmitting primary and turns one for this session into a notice', () => {
-    const { engine, primary, standby, tick } = live();
+  it('sends a control request on a transmitting primary, says it did, and turns one for this session into a notice', () => {
+    const { engine, primary, standby, tick } = live(undefined, { [F1]: OTHER });
     engine.input({ type: 'request', path: F1 });
     expect(primary.ofType('request')).toEqual([{ type: 'request', path: F1 }]);
     expect(standby.ofType('request')).toEqual([]);
     primary.deliver({ type: 'controlRequest', replica: R1, path: F2, from: OTHER });
-    expect(tick()!.notices).toEqual([{ kind: 'request', path: F2, from: OTHER }]);
+    expect(tick()!.notices).toEqual([
+      { kind: 'requested', path: F1, owner: OTHER },
+      { kind: 'request', path: F2, from: OTHER },
+    ]);
+  });
+
+  it('sends no control request and says nothing while the link transmits nothing', () => {
+    const t = setup();
+    t.engine.input({ type: 'request', path: F1 });
+    t.sockets[0]!.open();
+    expect(t.sockets[0]!.ofType('request')).toEqual([]);
+    expect(t.tick()?.notices).toBeUndefined();
+  });
+
+  it('shows the selections of its primary only, and those its standby had once promoted', () => {
+    const { primary, standby, tick } = live();
+    const onPrimary = [{ session: OTHER, element: 'ch5' }];
+    const onStandby = [{ session: OTHER, element: 'ch6' }];
+    primary.deliver({ type: 'selections', replica: R1, selections: onPrimary });
+    standby.deliver({ type: 'selections', replica: R2, selections: onStandby });
+    expect(tick()!.selections).toEqual(onPrimary);
+    standby.deliver({ type: 'selections', replica: R2, selections: onStandby });
+    expect(tick()?.selections).toBeUndefined();
+    primary.drop();
+    expect(tick()!.selections).toEqual(onStandby);
   });
 });
 

@@ -39,6 +39,8 @@ import {
   LEASE_MS,
   METER_CREDIT_CAP,
   METER_PERIOD_MS,
+  REQUEST_INTERVAL_MS,
+  SELECTIONS_INTERVAL_MS,
 } from '../../src/lib/contract/protocol.ts';
 import { getAt, parsePointer, pointer, setAt } from '../../src/lib/state/pointer.ts';
 import { Contract, ContractViolation } from './contract.ts';
@@ -262,6 +264,11 @@ export class Cluster {
   private leases = new Map<string, number>();
   /** What each session has selected, by session key (client-message.schema.json Select). */
   private selections = new Map<string, { session: Owner; element: string }>();
+  /** When the latest selections went out, and the timer of the coalesced next one. */
+  private selectionsSentAt = -Infinity;
+  private selectionsTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When a request was last forwarded, by asking session and control. */
+  private forwarded = new Map<string, number>();
   private scenes = new Map<string, StoredScene>();
   private sceneCounter = 0;
   private connCounter = 0;
@@ -329,6 +336,7 @@ export class Cluster {
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+    if (this.selectionsTimer) clearTimeout(this.selectionsTimer);
     if (this.batchTimer) clearTimeout(this.batchTimer);
     for (const t of this.lagTimers) clearTimeout(t);
     for (const r of this.replicas) for (const c of r.conns) c.close();
@@ -645,16 +653,29 @@ export class Cluster {
     this.emit(conn, { type: 'selections', replica: this.ref(conn.replica), selections: [...this.selections.values()] });
   }
 
+  /**
+   * Sends the selections to every connection, at most once per
+   * SELECTIONS_INTERVAL_MS: changes within that time go out together in
+   * the next message.
+   */
   private broadcastSelections(): void {
+    if (this.selectionsTimer) return;
+    const wait = this.selectionsSentAt + SELECTIONS_INTERVAL_MS - Date.now();
+    if (wait > 0) {
+      this.selectionsTimer = setTimeout(() => {
+        this.selectionsTimer = null;
+        this.broadcastSelections();
+      }, wait);
+      return;
+    }
+    this.selectionsSentAt = Date.now();
     for (const r of this.replicas) for (const c of r.conns) if (c.synced) this.emitSelections(c);
   }
 
-  /** A session's selection; an unknown element is refused. */
+  /** A session's selection; one of an unknown element is ignored, as nothing answers a select. */
   private select(conn: Conn, element: string | null): void {
     const s = this.shape;
-    if (element !== null && ![...s.channels, ...s.buses, ...s.auxes, ...s.mixMinus].some((e) => e.id === element)) {
-      return this.emit(conn, { type: 'error', replica: this.ref(conn.replica), code: 404, message: `unknown element ${element}` });
-    }
+    if (element !== null && ![...s.channels, ...s.buses, ...s.auxes, ...s.mixMinus].some((e) => e.id === element)) return;
     const key = sessionKey(conn.owner!);
     if ((this.selections.get(key)?.element ?? null) === element) return;
     if (element === null) this.selections.delete(key);
@@ -662,10 +683,19 @@ export class Cluster {
     this.broadcastSelections();
   }
 
-  /** Hands a control request to the primary connections of the session that owns the control. */
+  /**
+   * Hands a control request to the primary connections of the session
+   * that owns the control, at most one per asking session and control in
+   * REQUEST_INTERVAL_MS; the others are dropped.
+   */
   private requestControl(from: Owner, path: string): void {
     const owner = this.owners[path];
     if (!owner || sessionKey(owner) === sessionKey(from)) return;
+    const now = Date.now();
+    for (const [k, at] of this.forwarded) if (now - at >= REQUEST_INTERVAL_MS) this.forwarded.delete(k);
+    const key = `${sessionKey(from)}\n${path}`;
+    if (this.forwarded.has(key)) return;
+    this.forwarded.set(key, now);
     for (const r of this.replicas) {
       for (const c of r.conns) {
         if (c.synced && c.mode === 'primary' && c.owner && sessionKey(c.owner) === sessionKey(owner)) {

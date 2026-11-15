@@ -26,6 +26,14 @@ export const MAX_COMMANDS_IN_FLIGHT = 64;
  */
 export const COMMAND_EXPIRY_MS = 3000;
 
+/**
+ * The cluster forwards at most one control request per asking session and
+ * control in this time; it drops the others. A client sends no more often.
+ */
+export const REQUEST_INTERVAL_MS = 3000;
+/** The cluster sends at most one selections message per connection in this time. */
+export const SELECTIONS_INTERVAL_MS = 100;
+
 /** First byte of a binary meter frame, ASCII 'M'. */
 export const METER_FRAME_MAGIC = 0x4d;
 /** Format version in the second byte of a binary meter frame. */
