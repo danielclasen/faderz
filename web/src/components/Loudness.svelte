@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pendingWrite } from '../lib/pending';
   import { fit, levelText } from '../lib/format';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -127,6 +128,7 @@
            while it is paused, so a forgotten pause shows at a glance.
            Pausing takes a hold, running on one press. -->
       <button
+        {@attach pendingWrite(mixer, runPath)}
         class="key hold pause"
         data-testid={`loudness-pause-${id}`}
         aria-disabled={mixer.locked}
