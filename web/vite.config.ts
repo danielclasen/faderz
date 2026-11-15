@@ -14,6 +14,8 @@ export default defineConfig(async ({ command, mode }) => ({
     // The mock server exists only in `vite` dev serving; builds never load it.
     ...(command === 'serve' && mode !== 'test' ? [(await import('./dev/mock/plugin.ts')).faderzMock()] : []),
   ],
+  // Component tests mount Svelte's client runtime, not its server one.
+  ...(process.env['VITEST'] ? { resolve: { conditions: ['browser'] } } : {}),
   server: {
     fs: { allow: ['..'] },
     ...(https ? { https } : {}),

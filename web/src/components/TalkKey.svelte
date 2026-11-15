@@ -81,9 +81,18 @@
     holding = false;
     off();
   }
-  // The key leaves the screen: a held or latched talk ends with it.
+  // The key leaves the screen: a held or latched talk ends with it. A
+  // layout change that removed the mix-minus left no path to set, so the
+  // talk is only released. A teardown reads state as it was before the
+  // update that unmounts the key, so the shape is read once it is done.
   $effect(() => () => {
-    if (holding || latched) off();
+    if (holding || latched) {
+      const [p, mm] = [path, id];
+      queueMicrotask(() => {
+        if (mixer.shape?.mixMinus.some((m) => m.id === mm)) mixer.set(p, false);
+        mixer.release(p);
+      });
+    }
     holding = false;
   });
   // Another client or the lease ended the talk: drop the latch with it.
