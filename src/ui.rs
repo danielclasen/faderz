@@ -7,8 +7,12 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
 
+// Source maps stay out: rolldown orders their asset references
+// differently from build to build, so the binary would differ between two
+// builds of the same source.
 #[derive(Embed)]
 #[folder = "web/dist/"]
+#[exclude = "*.map"]
 #[allow_missing = true]
 struct Assets;
 
