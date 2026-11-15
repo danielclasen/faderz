@@ -413,6 +413,23 @@ describe('sync engine: commands', () => {
     expect(engine.outbox.inFlight).toBe(2);
   });
 
+  it('counts no standby hello as a request a snapshot answers', () => {
+    // After a promote the engine sends a resync and opens a new standby,
+    // whose hello the primary's snapshot does not answer: a command sent
+    // between the two is read after the resync and is not sent again.
+    const { engine, sockets, standby } = live();
+    sockets[0]!.drop();
+    expect(standby.ofType('resync')).toHaveLength(1);
+    engine.input({ type: 'set', path: F1, value: -5 });
+    const [set] = standby.ofType('set');
+    const next = sockets[2]!;
+    next.open();
+    expect(next.sent[0]).toMatchObject({ type: 'hello', mode: 'standby' });
+    standby.deliver(snapshot(R2, 11));
+    expect(engine.link).toBe('Live');
+    expect(standby.ofType('set').map((m) => m.id)).toEqual([set!.id]);
+  });
+
   it('answers a command from a delta seen on the standby, so it is not resent', () => {
     const { engine, primary, standby } = live();
     engine.input({ type: 'set', path: F1, value: -5 });
