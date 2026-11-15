@@ -140,4 +140,11 @@ describe('notices', () => {
     expect(s.notices).toHaveLength(2);
     expect(s.notices[0]).toMatchObject({ kind: 'conflict', count: 5, text: 'ch1 fader is held by web client abcdef' });
   });
+
+  it('shows writes dropped after the failover bound as a notice, not an error: the controls show the committed values', () => {
+    const { s } = store();
+    s.apply(patch(0, { notices: [{ kind: 'expired', paths: [F1, '/channels/ch1/mute'] }] }));
+    expect(s.notices).toHaveLength(1);
+    expect(s.notices[0]).toMatchObject({ kind: 'info', text: 'Not confirmed in time, not sent again: Pres 1 fader, Pres 1 mute' });
+  });
 });

@@ -215,7 +215,7 @@ export class MixerStore {
         this.conflicts.set(n.path, Date.now());
         this.notify('conflict', `${describePath(n.path, this.shape)} is held by ${this.ownerLabel(n.owner)}`, n.path);
       } else if (n.kind === 'expired') {
-        this.notify('error', `Not confirmed in time, not sent again: ${n.paths.map((p) => describePath(p, this.shape)).join(', ')}`);
+        this.notify('info', `Not confirmed in time, not sent again: ${n.paths.map((p) => describePath(p, this.shape)).join(', ')}`);
       } else {
         this.notify('error', n.text);
       }
