@@ -50,7 +50,9 @@
       // Lit by another client, a script or this session without a latch
       // here: this press stops it, and releases it when this session owns
       // it. One another session owns can only be stopped there (the
-      // server refuses the write), so say who holds it instead.
+      // server refuses the write), so say who holds it instead. The
+      // release is defensive: this key holds the path only while it holds
+      // or latches the talk, so here it only ever sends the set.
       const owner = mixer.ownerOf(path);
       if (owner && !mixer.isMine(owner)) mixer.notify('conflict', `${name} talk is held by ${mixer.ownerLabel(owner)}`, path);
       else if (owner) off();
