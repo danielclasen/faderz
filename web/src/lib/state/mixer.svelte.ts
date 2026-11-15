@@ -233,10 +233,13 @@ export class MixerStore {
    * Gives up a control this session holds, as another session asked: a
    * talk is ended (the TALK key drops its latch with it), anything else
    * released. Not a write of a value, so it is sent while locked too.
+   * While locked or while nothing commits only the release goes, as in
+   * TalkKey.off(): the server ends an interrupt its owner releases, and
+   * the screen shows the talk ended only once that commits.
    */
   giveUp(path: string): void {
     if (!this.isMine(this.ownerOf(path))) return;
-    if (/^\/mixMinus\/[^/]+\/interrupt\/active$/.test(path) && !this.locked && this.value<boolean>(path)) this.set(path, false);
+    if (/^\/mixMinus\/[^/]+\/interrupt\/active$/.test(path) && !this.locked && !this.notCommitting && this.value<boolean>(path)) this.set(path, false);
     this.held.delete(path);
     this.post({ type: 'release', path });
   }

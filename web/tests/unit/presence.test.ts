@@ -69,6 +69,24 @@ describe('giving a control up on request', () => {
     ]);
   });
 
+  it('while nothing commits sends only the release, and the talk shows on until the state says it ended', () => {
+    // As TalkKey.off(): a set made now would show the talk ended on this
+    // screen before any replica commits it.
+    const { s, sent } = store();
+    const talk = '/mixMinus/mm2/interrupt/active';
+    s.apply({
+      type: 'patch',
+      input: 0,
+      changes: [[talk, true]],
+      owners: [[talk, YOU]],
+      status: { ...INITIAL_STATUS, link: 'Live', handle: ME, you: YOU, primaryReplica: 'r1', replicas: [{ id: 'r1', role: 'leader', healthy: true, commitable: false }] },
+    });
+    expect(s.notCommitting).toBe(true);
+    s.giveUp(talk);
+    expect(sent).toEqual([{ type: 'release', path: talk }]);
+    expect(s.value(talk)).toBe(true);
+  });
+
   it('releases anything else without writing it, and gives up nothing it does not hold', () => {
     const { s, sent } = store();
     s.giveUp('/channels/ch1/fader');
