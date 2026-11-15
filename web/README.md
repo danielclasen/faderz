@@ -32,6 +32,8 @@ frame is decoded and its values validated before it is sent.
 - `FADERZ_MOCK_CHANNELS=<n>` sets the input channel count (default 29):
   mono channels `ch1`... followed by up to four stereo channels and one
   5.1 channel.
+- `FADERZ_BACKEND=<url>`, such as `http://127.0.0.1:8080`, loads no
+  mock: `/api/v1`, WebSocket included, goes to that faderz server.
 
 The striped MOCK button in the status bar kills, hangs, partitions and
 restores replicas. The same controls answer JSON under `/__mock`:

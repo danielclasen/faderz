@@ -6,7 +6,8 @@ import MockPanel from './MockPanel.svelte';
 
 export async function mountMockPanel(): Promise<void> {
   const res = await fetch('/__mock/replicas').catch(() => null);
-  if (!res?.ok) return;
+  // A dev server passing /api/v1 to a backend answers with its page.
+  if (!res?.ok || !res.headers.get('content-type')?.startsWith('application/json')) return;
   const target = document.createElement('div');
   document.body.appendChild(target);
   mount(MockPanel, { target });

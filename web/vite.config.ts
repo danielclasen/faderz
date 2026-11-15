@@ -8,17 +8,22 @@ const tlsCert = process.env['FADERZ_DEV_TLS_CERT'];
 const tlsKey = process.env['FADERZ_DEV_TLS_KEY'];
 const https = tlsCert && tlsKey ? { cert: readFileSync(tlsCert), key: readFileSync(tlsKey) } : undefined;
 
+// FADERZ_BACKEND names a faderz server, e.g. http://127.0.0.1:8080: dev
+// serving passes /api/v1 to it, WebSocket included, in place of the mock.
+const backend = process.env['FADERZ_BACKEND'];
+
 export default defineConfig(async ({ command, mode }) => ({
   plugins: [
     svelte(),
     // The mock server exists only in `vite` dev serving; builds never load it.
-    ...(command === 'serve' && mode !== 'test' ? [(await import('./dev/mock/plugin.ts')).faderzMock()] : []),
+    ...(command === 'serve' && mode !== 'test' && !backend ? [(await import('./dev/mock/plugin.ts')).faderzMock()] : []),
   ],
   // Component tests mount Svelte's client runtime, not its server one.
   ...(process.env['VITEST'] ? { resolve: { conditions: ['browser'] } } : {}),
   server: {
     fs: { allow: ['..'] },
     ...(https ? { https } : {}),
+    ...(backend ? { proxy: { '/api/v1': { target: backend, ws: true } } } : {}),
   },
   build: {
     target: 'es2022',
