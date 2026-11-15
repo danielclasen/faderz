@@ -90,7 +90,7 @@ describe('outbox', () => {
     expect(ids(o.transmit())).toEqual(['a', 'c']);
   });
 
-  it('keeps at most `limit` in flight, holds a not-applied command until its time and requeues overdue ones', () => {
+  it('keeps at most `limit` in flight and holds a not-applied command until its time', () => {
     const o = new Outbox();
     o.enqueue(set('a', '/a', 1), false, 0);
     o.enqueue(set('b', '/b', 1), false, 0);
@@ -100,9 +100,10 @@ describe('outbox', () => {
     o.notApplied('a', 300);
     expect(ids(o.transmit(20, 2))).toEqual(['c']);
     expect(o.transmit(299, 2)).toEqual([]);
-    expect(o.overdue(9)).toBe(0);
-    expect(o.overdue(10)).toBe(1);
-    expect(ids(o.transmit(300, 3))).toEqual(['a', 'b']);
+    expect(ids(o.transmit(300, 3))).toEqual(['a']);
+    // Sent and unanswered stays in flight, however long: no copy goes out.
+    expect(o.transmit(1e9, 4)).toEqual([]);
+    expect(o.inFlight).toBe(3);
   });
 
   it('drops commands issued at or before the expiry, whatever their state', () => {

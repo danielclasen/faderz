@@ -78,16 +78,16 @@ describe('standby machine', () => {
 
 describe('command machine', () => {
   it('has the expected event and state lists', () => {
-    expect(COMMAND_EVENTS).toEqual(['transmit', 'ack', 'reject', 'stale', 'supersede', 'failover', 'timeout', 'notApplied', 'expire']);
+    expect(COMMAND_EVENTS).toEqual(['transmit', 'ack', 'reject', 'stale', 'supersede', 'failover', 'notApplied', 'expire']);
     expect(COMMAND_STATES).toEqual(['Queued', 'Sent', 'Acked', 'Rejected', 'Stale', 'Superseded', 'Expired']);
   });
 
   it('follows the full transition table', () => {
-    // transmit, ack, reject, stale, supersede, failover, timeout, notApplied, expire
-    const end = (s: CommandState) => Array<CommandState>(9).fill(s);
+    // transmit, ack, reject, stale, supersede, failover, notApplied, expire
+    const end = (s: CommandState) => Array<CommandState>(8).fill(s);
     check(COMMAND, COMMAND_STATES, COMMAND_EVENTS, {
-      Queued: ['Sent', 'Acked', 'Rejected', 'Stale', 'Superseded', 'Queued', 'Queued', 'Queued', 'Expired'],
-      Sent: ['Sent', 'Acked', 'Rejected', 'Stale', 'Sent', 'Queued', 'Queued', 'Queued', 'Expired'],
+      Queued: ['Sent', 'Acked', 'Rejected', 'Stale', 'Superseded', 'Queued', 'Queued', 'Expired'],
+      Sent: ['Sent', 'Acked', 'Rejected', 'Stale', 'Sent', 'Queued', 'Queued', 'Expired'],
       Acked: end('Acked'),
       Rejected: end('Rejected'),
       Stale: end('Stale'),

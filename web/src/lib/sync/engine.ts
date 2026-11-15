@@ -87,8 +87,6 @@ export const RESYNC_RETRY_MS = 250;
  * 2 s a replica holds an answer for its read index.
  */
 export const SYNC_TIMEOUT_MS = 3000;
-/** A command sent this long ago without an answer is sent again with its id. */
-export const ANSWER_TIMEOUT_MS = 1000;
 /** A command answered not applied is sent again with its id after this. */
 export const NOT_APPLIED_RETRY_MS = 250;
 /** Credits are topped up to the cap once this many or fewer are outstanding. */
@@ -251,14 +249,13 @@ export class SyncEngine {
   }
 
   /**
-   * Once per heartbeat: a command unanswered for ANSWER_TIMEOUT_MS is sent
-   * again with its id, and one unanswered COMMAND_EXPIRY_MS after it was
-   * issued is dropped, so no command pins its control for longer.
+   * Once per heartbeat: a command unanswered COMMAND_EXPIRY_MS after it was
+   * issued is dropped, so no command pins its control for longer. No
+   * deadline sends one again: the server answers every command it reads,
+   * and a sent command stays in flight until answered or dropped.
    */
   private sweep(): void {
-    const now = this.clock.now();
-    this.outbox.overdue(now - ANSWER_TIMEOUT_MS);
-    const expired = this.outbox.expire(now - COMMAND_EXPIRY_MS);
+    const expired = this.outbox.expire(this.clock.now() - COMMAND_EXPIRY_MS);
     const paths = new Set<string>();
     for (const { msg } of expired) {
       if (msg.type === 'set') paths.add(msg.path);

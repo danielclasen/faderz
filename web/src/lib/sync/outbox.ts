@@ -2,10 +2,13 @@
 // origins, an ack or an error. Bounded and ordered. A set of a continuous
 // control (contract/continuous.ts) that has not been sent yet is replaced
 // by a newer set of the same control; every other command keeps its
-// place. After a failover, an answer deadline or a not-applied answer a
-// sent command is queued again with its id, which the server applies at
-// most once. A command still unanswered at its expiry is dropped, so none
-// is sent beyond the time the server remembers its id and seq.
+// place. After a failover, a snapshot or a not-applied answer a sent
+// command is queued again with its id, which the server applies at most
+// once; nothing else sends it again, as the server answers every command
+// it reads, so a sent command counts in flight until it is answered or
+// dropped. A command still unanswered at its expiry is
+// dropped, so none is sent beyond the time the server remembers its id
+// and seq.
 
 import type { CommandId, CommandMessage } from '../contract/types';
 import { COMMAND, TERMINAL, step, type CommandEvent, type CommandState } from './machines';
@@ -18,8 +21,6 @@ export interface OutboxEntry {
   state: CommandState;
   /** Clock time it was enqueued. */
   readonly issuedAt: number;
-  /** Clock time it was last sent. */
-  sentAt: number;
   /** Not sent again before this clock time (after a not-applied answer). */
   holdUntil: number;
 }
@@ -69,7 +70,7 @@ export class Outbox {
       }
     }
     if (this.entries.length >= this.capacity) return { accepted: false };
-    this.entries.push({ msg, continuous, state: 'Queued', issuedAt: now, sentAt: -Infinity, holdUntil: -Infinity });
+    this.entries.push({ msg, continuous, state: 'Queued', issuedAt: now, holdUntil: -Infinity });
     this.count(msg, 1);
     return { accepted: true, superseded };
   }
@@ -85,7 +86,6 @@ export class Outbox {
       if (n >= limit) break;
       if (e.state !== 'Queued' || e.holdUntil > now) continue;
       e.state = step(COMMAND, e.state, 'transmit');
-      e.sentAt = now;
       out.push(e.msg);
       n++;
     }
@@ -110,17 +110,6 @@ export class Outbox {
     if (!e || e.state !== 'Sent') return;
     e.state = step(COMMAND, e.state, 'notApplied');
     e.holdUntil = until;
-  }
-
-  /** Every command sent at or before `before` and still unanswered is queued again. Returns how many. */
-  overdue(before: number): number {
-    let n = 0;
-    for (const e of this.entries) {
-      if (e.state !== 'Sent' || e.sentAt > before) continue;
-      e.state = step(COMMAND, e.state, 'timeout');
-      n++;
-    }
-    return n;
   }
 
   /** Drops every command enqueued at or before `before`; returns them in order. */

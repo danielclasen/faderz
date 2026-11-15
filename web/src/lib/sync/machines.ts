@@ -103,19 +103,17 @@ export type CommandEvent =
   | 'supersede'
   /** the connection it was sent on failed: it is sent again with the same id */
   | 'failover'
-  /** no answer within the answer deadline: it is sent again with the same id */
-  | 'timeout'
   /** error 503, not applied: it is sent again with the same id */
   | 'notApplied'
   /** a set still unanswered at its expiry: dropped, its control shows the committed value */
   | 'expire';
 
 export const COMMAND_STATES: readonly CommandState[] = ['Queued', 'Sent', 'Acked', 'Rejected', 'Stale', 'Superseded', 'Expired'];
-export const COMMAND_EVENTS: readonly CommandEvent[] = ['transmit', 'ack', 'reject', 'stale', 'supersede', 'failover', 'timeout', 'notApplied', 'expire'];
+export const COMMAND_EVENTS: readonly CommandEvent[] = ['transmit', 'ack', 'reject', 'stale', 'supersede', 'failover', 'notApplied', 'expire'];
 
 export const COMMAND: Table<CommandState, CommandEvent> = {
   Queued: { transmit: 'Sent', supersede: 'Superseded', ack: 'Acked', reject: 'Rejected', stale: 'Stale', expire: 'Expired' },
-  Sent: { ack: 'Acked', reject: 'Rejected', stale: 'Stale', failover: 'Queued', timeout: 'Queued', notApplied: 'Queued', expire: 'Expired' },
+  Sent: { ack: 'Acked', reject: 'Rejected', stale: 'Stale', failover: 'Queued', notApplied: 'Queued', expire: 'Expired' },
   Acked: {},
   Rejected: {},
   Stale: {},

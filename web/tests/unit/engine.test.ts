@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANSWER_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import { NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
 import { ownerHandle } from '../../src/lib/net/handle';
 import type { Patch } from '../../src/lib/sync/messages';
@@ -444,26 +444,36 @@ describe('sync engine: commands', () => {
 describe('sync engine: unanswered commands', () => {
   const MUTE = '/channels/ch1/mute';
 
-  it('sends a command without an answer again with its id, then drops it at its expiry so its control shows the committed value', () => {
+  it('never sends a command without an answer again on its connection, and drops it at its expiry so its control shows the committed value', () => {
     const { engine, primary, standby, clock, tick } = live();
     tick();
     engine.input({ type: 'set', path: MUTE, value: true });
     const [set] = primary.ofType('set');
     primary.deliver(delta(R1, 11, { changes: [{ path: MUTE, value: false }, { path: F2, value: -3 }] }));
-    beats(clock, ANSWER_TIMEOUT_MS, [primary, R1], [standby, R2]);
-    expect(primary.ofType('set')).toEqual([set, set]);
+    beats(clock, COMMAND_EXPIRY_MS - HEARTBEAT_MS, [primary, R1], [standby, R2]);
+    expect(primary.ofType('set')).toEqual([set]);
+    expect(engine.outbox.inFlight).toBe(1);
     // Held back while the write is unanswered.
     expect(tick()!.changes).toEqual([[F2, -3]]);
-    beats(clock, COMMAND_EXPIRY_MS - ANSWER_TIMEOUT_MS, [primary, R1], [standby, R2]);
+    beats(clock, HEARTBEAT_MS, [primary, R1], [standby, R2]);
     expect(engine.outbox.size).toBe(0);
-    const sends = primary.ofType('set').length;
-    expect(sends).toBeGreaterThanOrEqual(3);
     const p = tick()!;
     expect(p.changes).toEqual([[MUTE, false]]);
     expect(p.notices).toEqual([{ kind: 'expired', paths: [MUTE] }]);
     expect(p.status?.outbox).toBe(0);
     beats(clock, 5000, [primary, R1], [standby, R2]);
-    expect(primary.ofType('set')).toHaveLength(sends);
+    expect(primary.ofType('set')).toEqual([set]);
+  });
+
+  it('counts every unanswered command in flight until it is answered or dropped, so a held connection gets no more than 64', () => {
+    // A server holding its answers (a promote onto a lagging replica) reads
+    // at most 64 commands ahead; copies would fill that window and push the
+    // heartbeats and the resync behind them.
+    const { engine, primary, standby, clock } = live();
+    for (let i = 0; i < 100; i++) engine.input({ type: 'set', path: `/channels/ch${(i % 20) + 1}/mute`, value: i % 2 === 0 });
+    beats(clock, COMMAND_EXPIRY_MS - HEARTBEAT_MS, [primary, R1], [standby, R2]);
+    expect(primary.ofType('set')).toHaveLength(MAX_COMMANDS_IN_FLIGHT);
+    expect(engine.outbox.inFlight).toBe(MAX_COMMANDS_IN_FLIGHT);
   });
 
   it('sends a command answered not applied again with its id, after a pause', () => {
