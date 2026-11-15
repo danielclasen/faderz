@@ -104,14 +104,15 @@ test('the commit banner shows its whole text to the keyboard on a short screen',
   try {
     for (const r of REPLICAS.filter((x) => x !== primary)) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
     await expect(banner).toBeVisible();
-    expect(await banner.locator('.text').evaluate((el) => el.scrollWidth > el.clientWidth), 'the banner is cut off').toBe(true);
+    // The narrow line drops words; the tooltip carries them.
+    await expect(banner.getByText('audio continues')).toBeHidden();
     // The banner follows the view menu in the tab order.
     await page.getByRole('combobox', { name: 'View' }).focus();
     await page.keyboard.press('Tab');
     await expect(banner).toBeFocused();
     const tooltip = page.getByRole('tooltip');
-    await expect(tooltip).toContainText('CHANGES NOT COMMITTING - audio continues');
-    await expect(tooltip).toContainText('Audio continues on the last committed state.');
+    await expect(tooltip).toContainText('CHANGES NOT COMMITTING - audio continues on the last committed state. 0 pending');
+    expect((await tooltip.textContent())!.match(/audio continues/gi)).toHaveLength(1);
     await expect(banner).toHaveAttribute('aria-describedby', 'faderz-tip');
     await page.keyboard.press('Escape');
     await expect(tooltip).toBeHidden();

@@ -13,7 +13,8 @@
   const outbox = $derived(mixer.status.outbox);
   /** Its accessible name: fixed, so a changing count announces nothing. */
   const NAME = 'Changes not committing - audio continues on the last committed state';
-  const text = $derived(`${NAME}. ${outbox} pending: sent again until a replica commits them or 3 s pass.`);
+  /** The tooltip: the line's own words, each once, then what they mean. */
+  const text = $derived(`CHANGES NOT COMMITTING - audio continues on the last committed state. ${outbox} pending: sent again until a replica commits them or 3 s pass.`);
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
