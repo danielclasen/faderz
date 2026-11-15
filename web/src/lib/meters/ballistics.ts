@@ -4,7 +4,7 @@ export const METER_FLOOR_DB = -60;
 export const PEAK_HOLD_MS = 1500;
 /**
  * Fall rate of the bar, dB per second: 20 dB in 1.7 s, the return time of
- * an IEC TR 60268-18 digital peak level meter (1.7 +/- 0.3 s for 20 dB).
+ * an IEC 60268-18 digital peak level meter.
  */
 export const BAR_FALL_DB_PER_S = 20 / 1.7;
 /** Fall rate of the peak-hold marker after the hold time, dB per second. */

@@ -24,7 +24,7 @@ describe('meter ballistics', () => {
     expect(leg.bar).toBeCloseTo(-10 - BAR_FALL_DB_PER_S, 6);
   });
 
-  it('returns 20 dB in 1.7 s, as an IEC TR 60268-18 digital peak meter', () => {
+  it('returns 20 dB in 1.7 s, as an IEC 60268-18 digital peak meter', () => {
     const leg = newLeg();
     stepLeg(leg, -10, 0, 40);
     for (let t = 40; t <= 1700; t += 40) stepLeg(leg, METER_FLOOR_DB, t, 40);
