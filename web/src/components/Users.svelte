@@ -70,7 +70,7 @@
   .panel {
     display: none;
     position: fixed;
-    top: 46px;
+    top: calc(var(--header-h) + 2px);
     right: 10px;
     z-index: 40;
     width: min(360px, calc(100vw - 20px));

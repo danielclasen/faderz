@@ -81,3 +81,52 @@ test('a locked desk keeps its key on screen at every width from 320 px', async (
   }
   expect(found).toEqual([]);
 });
+
+test('a tablet in portrait has the view tabs on a second header row, one tap each, and nothing moves', async ({ page }) => {
+  test.setTimeout(60_000);
+  // Layout shifts not caused by input, from the first paint on.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __shifts: string[] };
+    w.__shifts = [];
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries() as Array<PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: Array<{ node?: Node }> }>) {
+        if (!e.hadRecentInput && e.value > 0) w.__shifts.push(`${e.value.toFixed(4)} ${(e.sources ?? []).map((s) => (s.node as Element | undefined)?.className ?? '').join(',')}`);
+      }
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
+  for (const [width, height] of [[701, 900], [768, 1024], [820, 1180], [1023, 1366]] as const) {
+    await page.setViewportSize({ width, height });
+    await live(page);
+    const tabs = page.getByRole('navigation', { name: 'Views' }).getByRole('button');
+    await expect(tabs).toHaveCount(6);
+    await expect(page.getByRole('combobox', { name: 'View' })).toBeHidden();
+    const header = (await page.locator('header.top').boundingBox())!;
+    expect(header.height, `${width}x${height}`).toBe(76);
+    for (const tab of await tabs.all()) {
+      const box = (await tab.boundingBox())!;
+      expect(box.x, `${width}x${height}`).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width, `${width}x${height}`).toBeLessThanOrEqual(width);
+      expect(box.y, `${width}x${height}`).toBeGreaterThanOrEqual(44);
+      expect(await tab.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+    }
+    const main = (await page.locator('main').boundingBox())!;
+    for (const name of ['Aux / N-1', 'Setup', 'Mixer']) {
+      await page.getByRole('button', { name, exact: true }).click();
+      await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('aria-current', 'page');
+      expect(await page.locator('header.top').boundingBox()).toEqual(header);
+      expect(await page.locator('main').boundingBox()).toEqual(main);
+    }
+    // A panel that opens under the header opens under both rows.
+    await page.getByRole('button', { name: /^Connection LIVE, details$/ }).click();
+    const details = (await page.getByRole('region', { name: 'Connection details' }).boundingBox())!;
+    expect(details.y).toBeGreaterThanOrEqual(header.y + header.height);
+    await page.getByRole('button', { name: /^Connection LIVE, details$/ }).click();
+    expect(await page.evaluate(() => (window as unknown as { __shifts: string[] }).__shifts)).toEqual([]);
+  }
+  // In landscape at the same widths the views stay a menu on one row.
+  await page.setViewportSize({ width: 1023, height: 768 });
+  await expect(page.getByRole('combobox', { name: 'View' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Views' })).toBeHidden();
+  expect((await page.locator('header.top').boundingBox())!.height).toBe(44);
+});
+

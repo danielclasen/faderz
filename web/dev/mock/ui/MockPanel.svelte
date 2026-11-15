@@ -85,7 +85,7 @@
       right: auto;
       bottom: auto;
       left: 2px;
-      top: 49px;
+      top: calc(var(--header-h) + 5px);
     }
     .body {
       bottom: auto;
@@ -93,11 +93,6 @@
       left: 0;
       right: auto;
       max-width: calc(100vw - 8px);
-    }
-  }
-  @media (max-height: 500px) {
-    .mock {
-      top: 41px;
     }
   }
   @media (max-width: 700px) and (min-height: 501px) {

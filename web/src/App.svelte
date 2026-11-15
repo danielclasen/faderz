@@ -229,6 +229,34 @@
       gap: 0;
     }
   }
+  /* Tablets in portrait: room for a second header row, which carries the
+     view tabs, so a view stays one tap away. The rows have fixed heights
+     at this size whatever happens, so nothing moves. */
+  @media (orientation: portrait) and (min-width: 701px) and (max-width: 1023px) and (min-height: 501px) {
+    .top {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-rows: 44px 32px;
+      height: 76px;
+      min-height: 76px;
+      column-gap: 14px;
+      row-gap: 0;
+    }
+    .view-menu {
+      display: none;
+    }
+    nav {
+      display: flex;
+      grid-column: 1 / -1;
+      grid-row: 2;
+      margin: 0 -10px;
+      padding: 0 4px;
+      border-top: 1px solid var(--line);
+    }
+    .tab {
+      height: 31px;
+    }
+  }
   /* Phones: a locked desk's key takes the theme key's room (LockKey). */
   @media (max-width: 700px) {
     .desk-locked .theme {

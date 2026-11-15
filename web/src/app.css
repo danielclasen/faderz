@@ -1,5 +1,7 @@
 /* Dark broadcast desk, the default. */
 :root {
+  /* Height of the header (App): panels that open under it start below it. */
+  --header-h: 44px;
   --font-ui: 'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif;
   --font-num: 'JetBrains Mono', ui-monospace, monospace;
 
@@ -335,5 +337,17 @@ input[type='number'] {
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Header heights by screen, as App sets them. */
+@media (orientation: portrait) and (min-width: 701px) and (max-width: 1023px) and (min-height: 501px) {
+  :root {
+    --header-h: 76px;
+  }
+}
+@media (max-height: 500px) {
+  :root {
+    --header-h: 36px;
   }
 }
