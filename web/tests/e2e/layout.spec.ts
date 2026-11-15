@@ -398,7 +398,7 @@ test('on a touch screen no control of the mixer is under 24 px (WCAG 2.5.8)', as
   expect(coarse ? [...new Set(small)] : []).toEqual([]);
 });
 
-test('a notice gives its keys a finger-sized target on a touch screen and moves nothing', async ({ page, baseURL }) => {
+test('a notice gives its keys a finger-sized target on a touch screen and moves nothing', async ({ page, baseURL }, info) => {
   await live(page);
   const line = page.locator('.notice-line').first();
   const before = await line.boundingBox();
@@ -414,6 +414,9 @@ test('a notice gives its keys a finger-sized target on a touch screen and moves 
     await expect(notice).toBeVisible();
     const keys = [notice.getByRole('button', { name: 'Dismiss notice' }), notice.getByRole('button', { name: 'ASK' })];
     const coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
+    // Every touch project checks the size: a project that stopped matching
+    // the coarse pointer would otherwise skip it unseen.
+    expect(coarse, 'pointer: coarse').toBe(info.project.use.hasTouch === true);
     for (const key of keys) {
       await expect(key).toBeVisible();
       const box = (await key.boundingBox())!;
