@@ -17,10 +17,11 @@ function channelCount(): number | undefined {
 
 type Served = Pick<ViteDevServer | PreviewServer, 'httpServer' | 'middlewares'>;
 
-function serve(server: Served): void {
+/** `host` is the configured bind host (`--host`), true for every interface. */
+function serve(server: Served, host: string | boolean | undefined): void {
   if (!server.httpServer) return;
   const cluster = new Cluster({ automation: process.env['FADERZ_MOCK_AUTOMATION'] !== '0', channels: channelCount() });
-  const mock = new MockServer(cluster);
+  const mock = new MockServer(cluster, typeof host === 'string' ? host : undefined);
   mock.attach(server.httpServer as import('node:http').Server);
   server.middlewares.use(mock.middleware);
   cluster.start();
@@ -31,8 +32,8 @@ export function faderzMock(): Plugin {
   return {
     name: 'faderz-mock',
     apply: 'serve',
-    configureServer: serve,
+    configureServer: (server) => serve(server, server.config.server.host),
     // `vite preview` of a production build, for measuring without dev-mode overhead.
-    configurePreviewServer: serve,
+    configurePreviewServer: (server) => serve(server, server.config.preview.host),
   };
 }

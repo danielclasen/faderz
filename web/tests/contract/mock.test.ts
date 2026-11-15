@@ -4,7 +4,7 @@
 // binary meter frames by decoding them against the layout of the
 // snapshot's shape and validating the decoded meters.
 
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -37,9 +37,9 @@ interface Mock {
   stop(): Promise<void>;
 }
 
-async function startMock(options: ClusterOptions): Promise<Mock> {
+async function startMock(options: ClusterOptions, bindHost?: string): Promise<Mock> {
   const cluster = new Cluster(options);
-  const mock = new MockServer(cluster);
+  const mock = new MockServer(cluster, bindHost);
   const server: Server = createServer((req, res) =>
     mock.middleware(req, res, () => {
       res.statusCode = 404;
@@ -244,6 +244,23 @@ async function rest(method: string, path: string, body?: unknown, headers: Recor
 async function control<T = Record<string, unknown>>(method: 'GET' | 'POST', path: string, base = main.base): Promise<{ status: number; body: T }> {
   const res = await fetch(`http://${base}/__mock${path}`, { method });
   return { status: res.status, body: (await res.json()) as T };
+}
+
+/**
+ * Status of a request to the mock at `base` naming `host` (with base's
+ * port) in Host, and in Origin for a POST: fetch sets Host itself.
+ */
+function withHost(base: string, host: string, method: 'GET' | 'POST', path: string): Promise<number> {
+  const port = base.split(':')[1]!;
+  const headers: Record<string, string> = { Host: `${host}:${port}`, ...(method === 'POST' ? { Origin: `http://${host}:${port}` } : {}) };
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+      res.resume();
+      resolve(res.statusCode!);
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 async function owners(): Promise<Record<string, Owner>> {
@@ -877,6 +894,26 @@ describe('/__mock', () => {
     expect(cluster.replica('r2')!.healthy).toBe(true);
     expect((await post(`http://${main.base}`)).status).toBe(200);
     expect(cluster.replica('r2')!.healthy).toBe(false);
+  });
+
+  it('refuses a control request naming another host, as a page that rebinds its name to this address sends', async () => {
+    expect(await withHost(main.base, 'rebind.example', 'POST', '/__mock/replicas/r2/kill')).toBe(403);
+    expect(await withHost(main.base, 'rebind.example', 'GET', '/__mock/replicas')).toBe(403);
+    expect(cluster.replica('r2')!.healthy).toBe(true);
+    expect(await withHost(main.base, 'localhost', 'GET', '/__mock/replicas')).toBe(200);
+    expect(await withHost(main.base, '[::1]', 'GET', '/__mock/replicas')).toBe(200);
+    expect(await withHost(main.base, '127.0.0.1', 'POST', '/__mock/replicas/r2/kill')).toBe(200);
+    expect(cluster.replica('r2')!.healthy).toBe(false);
+  });
+
+  it('answers control requests naming its bind host', async () => {
+    const named = await startMock({ automation: false, replicas: 3 }, 'mixer.test');
+    try {
+      expect(await withHost(named.base, 'mixer.test', 'GET', '/__mock/replicas')).toBe(200);
+      expect(await withHost(named.base, 'other.test', 'GET', '/__mock/replicas')).toBe(403);
+    } finally {
+      await named.stop();
+    }
   });
 
   it('serves the REST API of one replica under its path, and 503 while it is down', async () => {

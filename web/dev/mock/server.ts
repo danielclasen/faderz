@@ -5,6 +5,7 @@
 
 import { SESSION_ID } from '../../src/lib/net/ids.ts';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import { isIP } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Change, CommandResult, TallyState } from '../../src/lib/contract/types.ts';
@@ -24,6 +25,18 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 type Handler = (body: unknown, params: string[]) => { status: number; body?: unknown };
 
+/**
+ * True when a Host header names this server as a browser reaches it
+ * without DNS rebinding: an IP address, localhost or the bind host. A
+ * page of another site can resolve its own name to this server's
+ * address, so its requests carry that name, and its Origin matches it.
+ */
+function ownHost(host: string | undefined, bindHost: string | undefined): boolean {
+  if (host === undefined) return false;
+  const name = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.replace(/:\d+$/, '');
+  return isIP(name) !== 0 || name === 'localhost' || name === bindHost;
+}
+
 interface Route {
   method: string;
   pattern: RegExp;
@@ -37,7 +50,11 @@ export class MockServer {
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly routes: Route[];
 
-  constructor(cluster: Cluster) {
+  /** `bindHost` is the host name the server is bound to, when it is one. */
+  constructor(
+    cluster: Cluster,
+    private readonly bindHost?: string,
+  ) {
     this.cluster = cluster;
     this.routes = this.buildRoutes();
   }
@@ -296,7 +313,10 @@ export class MockServer {
     const method = req.method ?? 'GET';
     const path = url.pathname;
     // The dev server listens on every interface: a page of another origin
-    // must not drive the controls. Browsers send Origin with every POST.
+    // must not drive the controls. Browsers send Origin with every POST,
+    // and a page that rebinds its own name to this address sends that
+    // name as Host too.
+    if (!ownHost(req.headers.host, this.bindHost)) return send(403, { error: 'mock controls answer their own host only' });
     const origin = req.headers.origin;
     if (method !== 'GET' && origin !== undefined && (!URL.canParse(origin) || new URL(origin).host !== req.headers.host)) {
       return send(403, { error: 'mock controls answer their own origin only' });

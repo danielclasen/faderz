@@ -60,8 +60,9 @@ restores replicas. The same controls answer JSON under `/__mock`:
 `/__mock/replicas/<id>/api/v1/ws` connects to one replica, and
 `/__mock/replicas/<id>/api/v1/...` serves the REST API through it, 503
 while it is killed or hung; `/api/v1/ws` picks a serving replica at
-random. A `/__mock` POST that carries an `Origin` other than the dev
-server's own is refused with 403. The mock remembers a command id for
+random. A `/__mock` request whose `Host` is not an IP address,
+`localhost` or the `--host` name, and a `/__mock` POST that carries an
+`Origin` other than the dev server's own, are refused with 403. The mock remembers a command id for
 10 s after it applied and the last seq of a session and control for
 13 s after the session's lease expired; its command logs keep the
 latest 10000 entries.
