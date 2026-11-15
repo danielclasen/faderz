@@ -372,6 +372,13 @@ export class MockServer {
       c.rewind(by);
       return send(200, { revision: c.revision });
     }
+    const bank = /^\/__mock\/consoles\/([a-z0-9-]+)\/bank$/.exec(path);
+    if (method === 'POST' && bank) {
+      const offset = Number(url.searchParams.get('offset'));
+      if (!Number.isInteger(offset) || offset < 0 || offset >= c.shape.channels.length) return send(400, { error: 'offset must be a channel index' });
+      if (!c.bankConsole(bank[1]!, offset)) return send(404, { error: 'unknown console' });
+      return send(200, { revision: c.revision });
+    }
     if (method === 'POST' && path === '/__mock/skip-revision') {
       c.skipRevision();
       return send(200, { revision: c.revision });

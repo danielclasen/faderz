@@ -1307,6 +1307,46 @@ test('steps banks with [ and ], jumps to a channel by name or number, and spills
   await expect(page.locator('.strips .strip')).toHaveCount((await serverState(request)).shape.channels.length);
 });
 
+test('jumps, steps banks and follows a surface among the strips of a spilled VCA', async ({ page, request }) => {
+  // Every channel but the first two: positions on the strips are two less
+  // than in the shape.
+  const channels = (await serverState(request)).shape.channels.map((c) => c.id);
+  await patch(request, '/vcas/vca2/members', channels.slice(2));
+  try {
+    await live(page);
+    const scroller = page.locator('.scroller');
+    const scrolledTo = (strip: number) =>
+      expect
+        .poll(() => scroller.evaluate((el, x) => `${el.scrollLeft} of ${Math.min(x, el.scrollWidth - el.clientWidth)}`, strip * 86), { message: `strip ${strip}` })
+        .toMatch(/^(\d+) of \1$/);
+    await page.getByRole('button', { name: /^Spill VCA .*: show only its members$/ }).nth(1).click();
+    await expect(page.locator('.strips .strip')).toHaveCount(channels.length - 2);
+    const jump = page.getByRole('textbox', { name: /^Jump to a channel/ });
+    // Channel 12 is the tenth strip shown.
+    await jump.fill('12');
+    await jump.press('Enter');
+    await scrolledTo(9);
+    await expect(jump).not.toHaveClass(/miss/);
+    // Channel 1 is not a member: a miss, and nothing scrolls.
+    await jump.fill('1');
+    await jump.press('Enter');
+    await expect(jump).toHaveClass(/miss/);
+    await scrolledTo(9);
+    await jump.blur();
+    await page.locator('body').press('[');
+    await scrolledTo(0);
+    await page.locator('body').press(']');
+    await scrolledTo(8);
+    // The surface banks to channel 17: the first member there is strip 15.
+    await page.getByRole('button', { name: 'FOLLOW' }).click();
+    expect((await request.post('/__mock/consoles/mcu-1/bank?offset=16')).ok()).toBe(true);
+    await scrolledTo(14);
+  } finally {
+    await request.post('/__mock/consoles/mcu-1/bank?offset=0');
+    await patch(request, '/vcas/vca2/members', ['ch3', 'ch4', 'ch5', 'ch6']);
+  }
+});
+
 test('opens processing over the strips with the masters and monitor reachable, and moves focus in and back', async ({ page }) => {
   await live(page);
   const head = page.locator('[data-channel="ch1"] .head');

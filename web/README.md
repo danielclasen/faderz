@@ -54,6 +54,7 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `GET /__mock/commands` | every command outcome, REST included |
 | `POST /__mock/audit/reset` | clears both command logs |
 | `POST /__mock/drop-clients` | closes every socket |
+| `POST /__mock/consoles/<id>/bank?offset=<n>` | moves that console's bank to start at channel index `n` |
 | `POST /__mock/skip-revision` | advances the revision without a delta |
 | `POST /__mock/rewind?by=<n>` | rolls the cluster back `n` revisions, as a restore from an older backup would: a new epoch and every socket closed, so a client that held state reconnects with the old epoch and gets a snapshot of the new one |
 

@@ -1160,6 +1160,16 @@ export class Cluster {
     this.stage({ changes: [{ path: '/consoles', value: consoles }] });
   }
 
+  /** Moves one console's bank to `offset`, as banking on the surface does. Returns false for an unknown console. */
+  bankConsole(id: string, offset: number): boolean {
+    const consoles = structuredClone(this.state.consoles);
+    const c = consoles.find((x) => x.id === id);
+    if (!c) return false;
+    c.bankOffset = offset;
+    this.stage({ changes: [{ path: '/consoles', value: consoles }] });
+    return true;
+  }
+
   /** A console operator rides a fader on the surface's second strip. */
   private consoleMotion(): void {
     const mcu = this.state.consoles.find((c) => c.id === 'mcu-1')!;

@@ -51,6 +51,7 @@
     return () => document.removeEventListener('faderz:show-masters', show);
   });
 
+  /** Scrolls to the strip at `start` of the strip area (of the shown strips during a spill). */
   function goto(start: number): void {
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
     scroller?.scrollTo({ left: start * STRIP_W, behavior: still ? 'instant' : 'smooth' });
@@ -64,8 +65,8 @@
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
     if (e.key !== '[' && e.key !== ']') return;
     e.preventDefault();
-    const next = Math.min(banks.length - 1, Math.max(0, visibleBank + (e.key === ']' ? 1 : -1)));
-    goto(banks[next]!.start);
+    const last = Math.max(0, Math.ceil(shown.length / BANK) - 1);
+    goto(Math.min(last, Math.max(0, visibleBank + (e.key === ']' ? 1 : -1))) * BANK);
   }
 
   /** Jump: a strip number or the start of a channel name; the strip scrolls to the left edge. */
@@ -75,10 +76,12 @@
     const q = jumpText.trim().toLowerCase();
     if (!q) return;
     const n = Number(q);
-    const index = Number.isInteger(n) && n >= 1 ? n - 1 : shape.channels.findIndex((c) => c.name.toLowerCase().startsWith(q));
-    jumpMiss = index < 0 || index >= shape.channels.length;
+    const channel = Number.isInteger(n) && n >= 1 ? shape.channels[n - 1] : shape.channels.find((c) => c.name.toLowerCase().startsWith(q));
+    // During a spill only its members are on the strips: any other misses.
+    const at = channel ? shown.indexOf(channel) : -1;
+    jumpMiss = at < 0;
     if (!jumpMiss) {
-      goto(index);
+      goto(at);
       jumpText = '';
     }
   }
@@ -107,7 +110,10 @@
   let follow = $state(false);
   const followed = $derived(surfaces[0]?.bankOffset ?? null);
   $effect(() => {
-    if (follow && followed !== null) goto(followed);
+    if (!follow || followed === null) return;
+    // During a spill: the first member at or after the surface's bank.
+    const at = shown.findIndex((c) => shape.channels.indexOf(c) >= followed);
+    if (at >= 0) goto(at);
   });
 </script>
 
