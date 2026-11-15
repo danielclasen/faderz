@@ -57,3 +57,42 @@ test('a desk locked in landscape shows its key in portrait and unlocks there', a
   await expect(lock).toHaveAttribute('aria-pressed', 'false');
   await expect(lock).toBeHidden();
 });
+
+test('a notice longer than the header slot widens nothing and moves no header item', async ({ page, baseURL }) => {
+  await live(page);
+  const width = page.viewportSize()!.width;
+  const page_ = () => page.evaluate(() => ({ inner: innerWidth, scroll: document.documentElement.scrollWidth }));
+  // Left edges of the header items right of the notice slot.
+  const edges = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('header .right > :not(.mid)')]
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.width > 0)
+        .map((r) => Math.round(r.left)),
+    );
+  const before = await edges();
+  expect(before.length).toBeGreaterThan(0);
+  expect(await page_()).toEqual({ inner: width, scroll: width });
+  const path = '/channels/ch4/fader';
+  const other = await RawClient.open(baseURL!);
+  try {
+    expect((await other.command({ type: 'touch', path })).type).toBe('delta');
+    // A keyboard adjust of the held fader is refused at once with a
+    // notice wider than the slot.
+    await page.locator(`[role="slider"][data-path="${path}"]`).focus();
+    await page.keyboard.press('ArrowUp');
+    const notice = page.getByTestId('notice');
+    await expect(notice).toBeVisible();
+    const after = await page_();
+    expect(after.inner, 'layout viewport width').toBe(width);
+    expect(after.scroll, 'page width').toBeLessThanOrEqual(after.inner);
+    expect(await edges()).toEqual(before);
+    // It is long: the slot cuts it off, and its whole text is in the tooltip.
+    const text = notice.locator('.text');
+    expect(await text.evaluate((el) => el.scrollWidth > el.clientWidth), 'the notice is cut off').toBe(true);
+    expect(await notice.getAttribute('data-tip')).toBe(await text.textContent());
+  } finally {
+    await other.command({ type: 'release', path });
+    other.close();
+  }
+});
