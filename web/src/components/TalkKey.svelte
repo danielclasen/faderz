@@ -2,8 +2,11 @@
   // Talk key of a mix-minus IFB interrupt. Pressed (pointer, Space or
   // Enter) it owns and sets interrupt/active. Held longer than LATCH_MS it
   // is momentary: released, it clears and releases it. A shorter tap
-  // latches it on until the next press. The server also clears it when
-  // the session's lease ends.
+  // latches it on until the next press. Only a release that ends the
+  // press latches (pointerup, keyup): a cancelled touch, a lost pointer
+  // capture or focus leaving the key ends the talk, so an interrupted
+  // press never leaves a presenter's feed replaced. The server also
+  // clears it when the session's lease ends.
   import { getMixer } from '../lib/state/mixer.svelte';
   import { mixMinusPath } from '../lib/state/paths';
 
@@ -43,6 +46,7 @@
     mixer.touch(path);
     mixer.set(path, true);
   }
+  /** The press ended where it was made: a short one latches. */
   function lift(): void {
     if (!holding) return;
     holding = false;
@@ -50,6 +54,12 @@
       latched = true;
       return;
     }
+    off();
+  }
+  /** The press was interrupted (touch cancelled, capture lost, focus gone): the talk ends. */
+  function abort(): void {
+    if (!holding) return;
+    holding = false;
     off();
   }
   // Another client or the lease ended the talk: drop the latch with it.
@@ -95,11 +105,11 @@
     title={source === null ? 'Choose a talkback source first' : 'Hold to talk into this output; tap to latch, tap again to stop'}
     onpointerdown={down}
     onpointerup={lift}
-    onpointercancel={lift}
-    onlostpointercapture={lift}
+    onpointercancel={abort}
+    onlostpointercapture={abort}
     onkeydown={(e) => key(e, true)}
     onkeyup={(e) => key(e, false)}
-    onblur={lift}
+    onblur={abort}
   >TALK</button>
 </div>
 

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { handleTag, ownerHandle } from '../../src/lib/net/handle';
 import {
   RawClient,
@@ -348,6 +348,54 @@ test('talks into a mix-minus output while TALK is held and stops on release', as
   await talk.click();
   await expect.poll(active).toBe(false);
   await expect.poll(async () => (await serverState(request)).owners['/mixMinus/mm1/interrupt/active']).toBeUndefined();
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
+/** Aux / N-1 view with a talkback source on N-1 Phone 1: its TALK key and the server's interrupt/active. */
+async function talkKey(page: Page, request: APIRequestContext) {
+  await live(page);
+  await page.getByRole('button', { name: 'Aux / N-1' }).click();
+  const select = page.getByRole('combobox', { name: 'N-1 Phone 1 talkback source' });
+  if ((await select.inputValue()) !== 'ch1') await select.selectOption('ch1');
+  await settled(page);
+  return {
+    talk: page.getByRole('button', { name: /^N-1 Phone 1 talk/ }),
+    active: async () => (await serverState(request)).state.mixMinus['mm1']!.interrupt.active,
+  };
+}
+
+test('ends the talk when a short touch on TALK is cancelled instead of latching it', async ({ page, request }) => {
+  const { talk, active } = await talkKey(page, request);
+  const box = (await talk.boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+  await expect.poll(active).toBe(true);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+  await expect.poll(active).toBe(false);
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  await expect(talk).toHaveAttribute('aria-pressed', 'false');
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
+test('ends the talk when focus leaves TALK during a short Space press', async ({ page, request }) => {
+  const { talk, active } = await talkKey(page, request);
+  await talk.focus();
+  await page.keyboard.down(' ');
+  await expect(talk).toHaveAttribute('aria-pressed', 'true');
+  // Tab moves focus away well within the latch time; the keyup lands elsewhere.
+  await page.waitForTimeout(100);
+  await page.keyboard.press('Tab');
+  await page.keyboard.up(' ');
+  await expect.poll(active).toBe(false);
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  // A short Space press that ends on the key still latches.
+  await talk.focus();
+  await page.keyboard.press(' ');
+  await page.waitForTimeout(400);
+  expect(await active()).toBe(true);
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  await page.keyboard.press(' ');
+  await expect.poll(active).toBe(false);
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 
