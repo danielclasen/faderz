@@ -74,9 +74,14 @@ export async function stats(request: APIRequestContext): Promise<ConnStats[]> {
   return ((await (await request.get('/__mock/stats')).json()) as { connections: ConnStats[] }).connections;
 }
 
-/** Every replica serving, both command logs and the counters empty. */
+/** Every replica serving, both command logs and the counters empty; against the backend, no control owned. */
 export async function resetMock(request: APIRequestContext): Promise<void> {
-  if (BACKEND) return;
+  if (BACKEND) {
+    // A touch outlives a closed client by its lease plus the server's
+    // liveness bound, up to 9 s: the next test starts once none is left.
+    await expect.poll(async () => Object.keys((await serverState(request)).owners), { timeout: 15_000 }).toEqual([]);
+    return;
+  }
   for (const id of REPLICAS) expect((await request.post(`/__mock/replicas/${id}/restore`)).ok()).toBe(true);
   expect((await request.post('/__mock/blocks/flush')).ok()).toBe(true);
   await request.post('/__mock/audit/reset');
