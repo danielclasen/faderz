@@ -64,14 +64,16 @@
     data-color={st.color}
     onclick={() => onselect(channel.id)}
     aria-pressed={selected}
-    use:tip={channel.source ? `${channel.name} (${channel.source})` : channel.name}
+    use:tip={`${channel.source ? `${channel.name} (${channel.source})` : channel.name}${safe.length > 0 ? `; recall safe: ${safe.join(', ')}` : ''}`}
   >
     <span class="no num">{index + 1}</span>
     <span class="name">{channel.name}</span>
     <span class="line2">
       <span class="source">{channel.source ?? ''}</span>
       <span class="badges">
-        <span class="badge iso" class:shown={safe.length > 0} title={`Recall safe: ${safe.join(', ')}`} aria-hidden={safe.length === 0} data-testid={`iso-${channel.id}`}>ISO</span>
+        <!-- The groups are in the head's tooltip and accessible name. -->
+        <span class="badge iso" class:shown={safe.length > 0} aria-hidden="true" data-testid={`iso-${channel.id}`}>ISO</span>
+        <span class="sr-only">{safe.length > 0 ? `, recall safe: ${safe.join(', ')}` : ''}</span>
         <span class="badge alt" class:shown={st.input === 'b'} title="Fed from its B input" aria-hidden={st.input !== 'b'}>B</span>
         {#if badge}<span class="badge">{badge}</span>{/if}
       </span>

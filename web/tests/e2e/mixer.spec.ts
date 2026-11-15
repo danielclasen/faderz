@@ -974,7 +974,15 @@ test('locks the desk with a hold so nothing on the screen changes the mixer, and
 
   await patch(request, '/recallSafe/ch3', ['fader', 'mute']);
   await expect(page.getByTestId('iso-ch3')).toBeVisible();
-  await expect(page.getByTestId('iso-ch3')).toHaveAttribute('title', 'Recall safe: fader, mute');
+  // The groups are in the head's tooltip and accessible name, which the
+  // keyboard and a long touch reach as well as a hover.
+  const head = page.locator('[data-channel="ch3"] .head');
+  await expect(head).toHaveAccessibleName(/, recall safe: fader, mute$/);
+  await expect(head).toHaveAttribute('data-tip', 'Guest 1 (Studio mic 3); recall safe: fader, mute');
+  await head.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('tooltip')).toHaveText('Guest 1 (Studio mic 3); recall safe: fader, mute');
   await patch(request, '/recallSafe/ch3', []);
   await expect(page.getByTestId('iso-ch3')).toBeHidden();
 });
