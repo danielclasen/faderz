@@ -243,6 +243,35 @@ async fn refusals_carry_their_code_and_command() {
     server.stop().await;
 }
 
+/// select and request are not commands: nothing answers them and they
+/// change nothing; in particular neither is taken for a release.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn select_and_request_are_not_answered_and_change_nothing() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    let id = a.command("touch", "/channels/ch1/fader", None).await;
+    assert_eq!(a.answer(&id).await["type"], "delta");
+    a.send(json!({ "type": "select", "element": "ch1" })).await;
+    a.send(json!({ "type": "request", "path": "/channels/ch1/fader" }))
+        .await;
+    a.send(json!({ "type": "select", "element": null })).await;
+    // The next message is the answer to this set: nothing answered the
+    // three before it, and the touch still holds.
+    let id = a
+        .command("set", "/channels/ch1/fader", Some(json!(-7)))
+        .await;
+    let next = a.next().await;
+    assert_eq!(next["type"], "delta", "{next}");
+    assert!(next["origins"][0]["commandId"] == id, "{next}");
+    assert!(
+        next.get("owners").is_none(),
+        "no release was applied: {next}"
+    );
+    server.stop().await;
+}
+
 /// A resend of a command id is answered as a duplicate, never applied
 /// twice; a seq not above the last one of the control is stale.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

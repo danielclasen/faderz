@@ -247,7 +247,20 @@ fn on_message<'a>(
             queue.grant_meter_credits(n.min(room));
             Reply::Now(None)
         }
-        _ => control(app, connect, &client_kind, &msg, admission),
+        "set" | "touch" | "release" => control(app, connect, &client_kind, &msg, admission),
+        // Not commands and not answered (client-message.schema.json Select,
+        // Request). This replica does not deliver them yet: sending a
+        // selections or controlRequest message to other connections needs
+        // a server-initiated text frame that samplez-service does not have.
+        "select" | "request" => Reply::Now(None),
+        // A type the contract has but this server does not handle: refused,
+        // never taken for a command.
+        _ => Reply::Now(Some(error(
+            app,
+            400,
+            &format!("unhandled message type {kind}"),
+            None,
+        ))),
     }
 }
 
