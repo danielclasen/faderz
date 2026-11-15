@@ -185,8 +185,8 @@ of that run, and so is the production build server.
 ### The UI from the binary
 
 The faderz binary carries the UI it is built with: `npm run build` here
-before `cargo build` at the repository root (a release build without
-`dist/` serves no UI; a debug build reads `dist/` when asked).
+before `cargo build` at the repository root (a build without
+`dist/` serves no UI).
 
 ```sh
 FADERZ_BIN=../target/debug/faderz npm run test:binary

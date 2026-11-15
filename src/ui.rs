@@ -1,6 +1,6 @@
 //! The web UI, built into the binary from `web/dist` (`npm run build` in
-//! `web/` first; a release build without it serves no UI). Debug builds
-//! read the files from `web/dist` when asked.
+//! `web/` first; a build without it serves no UI). Debug builds embed it
+//! too, so a binary built in one place serves it in another.
 
 use axum::Router;
 use axum::http::{Method, StatusCode, Uri, header};

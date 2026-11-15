@@ -15,7 +15,7 @@ futures-util = { version = "=0.3.34", default-features = false, features = ["all
 jsonschema = { version = "=0.61.2", default-features = false }
 libc = "=0.2.191"
 openraft = "=0.9.21"
-rust-embed = { version = "=8.14.0", features = ["mime-guess"] }
+rust-embed = { version = "=8.14.0", features = ["debug-embed", "mime-guess"] }
 samplez-replica = { git = "https://github.com/danielclasen/samplez", rev = "9c347d59469a21c2ec11887285704bcb435a954f" }
 samplez-service = { git = "https://github.com/danielclasen/samplez", rev = "9c347d59469a21c2ec11887285704bcb435a954f" }
 serde = { version = "=1.0.229", features = ["derive"] }
