@@ -345,6 +345,12 @@
       padding: 0 6px;
       font-size: 10px;
     }
+  }
+  /* The narrowest phones (App.svelte): room for a locked desk's key. */
+  @media (max-width: 389px) {
+    .link {
+      padding: 0 3px;
+    }
     .replica {
       padding: 0 3px;
       font-size: 10px;

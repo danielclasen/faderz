@@ -213,9 +213,11 @@
     font-size: 13px;
     font-weight: 600;
   }
-  /* Phones: the views are a menu, so the header stays one row with the
-     connection state in view. */
-  @media (max-width: 700px) {
+  /* Below 1024 px the view tabs, the brand name and the right group do
+     not fit one row: the views are a menu and the brand its mark, so the
+     header stays one row, within the screen, with the connection state in
+     view. */
+  @media (max-width: 1023px) {
     nav {
       display: none;
     }
@@ -344,5 +346,32 @@
     place-items: center;
     height: 100%;
     color: var(--text-dim);
+  }
+  /* The narrowest phones: the brand mark and the theme key go (the theme
+     stays as set) and the gaps narrow, so the view menu, quorum, link,
+     tone lamp and a locked desk's key fit 320 px. Last in the sheet: it
+     overrides the rules above. */
+  @media (max-width: 389px) {
+    .top {
+      gap: 4px;
+      padding: 0 4px;
+    }
+    .brand,
+    .theme {
+      display: none;
+    }
+    .right {
+      gap: 4px;
+    }
+    .tone-slot {
+      width: 36px;
+    }
+    .view-menu {
+      font-size: 11px;
+    }
+    .tone {
+      padding: 0 3px;
+      letter-spacing: 0;
+    }
   }
 </style>

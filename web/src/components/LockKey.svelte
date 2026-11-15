@@ -83,6 +83,12 @@
       width: 6ch;
     }
   }
+  /* The narrowest phones (App.svelte): the header fits 320 px. */
+  @media (max-width: 389px) {
+    .lock {
+      font-size: 10px;
+    }
+  }
   .lock.on {
     background: var(--text);
     border-color: var(--text);

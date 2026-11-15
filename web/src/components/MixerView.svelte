@@ -433,12 +433,27 @@
       margin-left: 0;
     }
   }
-  /* Phones: the bank keys name themselves, and the meter replica, in the
-     connection details too, gives its slot to the keys. */
-  @media (max-width: 700px) {
+  /* The narrowest phones: tighter keys, so the bank keys, TP, FINE and
+     MASTERS keep their full text within 320 px. */
+  @media (max-width: 389px) {
+    .bankbar {
+      gap: 4px;
+      padding: 0 4px;
+    }
+    .banks .key,
+    .overs {
+      padding: 0 3px;
+    }
+  }
+  /* Below 760 px the meter replica, in the connection details too, gives
+     its slot to the keys, which otherwise do not fit. */
+  @media (max-width: 759px) {
     .meters-from {
       display: none;
     }
+  }
+  /* Phones: the bank keys name themselves. */
+  @media (max-width: 700px) {
     .bankbar .panel-title {
       display: none;
     }
