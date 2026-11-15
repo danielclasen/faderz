@@ -76,10 +76,11 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          docker pull "$IMAGE@$DIGEST"
           docker pull "$IMAGE:$VERSION"
           test "$(docker inspect -f '{{index .RepoDigests 0}}' "$IMAGE:$VERSION")" = "$IMAGE@$DIGEST"
-          docker run --rm "$IMAGE:$VERSION" --version | grep -qx "faderz $VERSION"
-          docker/smoke.sh "$IMAGE:$VERSION"
+          docker run --rm "$IMAGE@$DIGEST" --version | grep -qx "faderz $VERSION"
+          docker/smoke.sh "$IMAGE@$DIGEST"
 
   # The binary for standalone use, from the image's build stage.
   binary:
@@ -130,8 +131,10 @@ jobs:
           mv faderz "faderz-$VERSION-x86_64-linux"
           mv THIRD-PARTY.txt "faderz-$VERSION-THIRD-PARTY.txt"
           mv THIRD-PARTY-WEB.txt "faderz-$VERSION-THIRD-PARTY-WEB.txt"
-          sha256sum "faderz-$VERSION-x86_64-linux" "faderz-$VERSION-THIRD-PARTY.txt" \
-            "faderz-$VERSION-THIRD-PARTY-WEB.txt" > "faderz-$VERSION-SHA256SUMS"
+          mv LICENSE "faderz-$VERSION-LICENSE"
+          sha256sum "faderz-$VERSION-x86_64-linux" "faderz-$VERSION-LICENSE" \
+            "faderz-$VERSION-THIRD-PARTY.txt" "faderz-$VERSION-THIRD-PARTY-WEB.txt" \
+            > "faderz-$VERSION-SHA256SUMS"
           gh release upload --clobber "$TAG" "faderz-$VERSION-"* --repo "$GITHUB_REPOSITORY"
       # Workflow logs are no evidence the published artefact is right.
       - name: Download the attached files and check their sums

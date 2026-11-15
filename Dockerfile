@@ -38,9 +38,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       -o /out/usr/share/licenses/faderz/THIRD-PARTY.txt about.hbs \
  && install -Dm0644 web/dist/THIRD-PARTY-WEB.txt /out/usr/share/licenses/faderz/THIRD-PARTY-WEB.txt
 
-# The binary and the licences of the crates in it, attached to a release.
+# The binary, its licence and the licences of what is built into it,
+# attached to a release.
 FROM scratch AS dist
-COPY --from=build /out/usr/local/bin/faderz /out/usr/share/licenses/faderz/THIRD-PARTY.txt \
+COPY --from=build /out/usr/local/bin/faderz /out/usr/share/licenses/faderz/LICENSE \
+     /out/usr/share/licenses/faderz/THIRD-PARTY.txt \
      /out/usr/share/licenses/faderz/THIRD-PARTY-WEB.txt /
 
 # The slim variant of the Debian release the builder and foldz use: the
