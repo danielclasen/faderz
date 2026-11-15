@@ -1250,6 +1250,21 @@ mod tests {
     }
 
     #[test]
+    fn a_loudness_measurement_starts_and_pauses() {
+        let mut m = mixer();
+        let v = values(&patch(
+            &mut m,
+            "p",
+            &[("/loudness/pgm/running", json!(false))],
+        ));
+        assert_eq!(v, vec![("/loudness/pgm/running".to_owned(), json!(false))]);
+        assert!(matches!(
+            m.check_write("/loudness/ch1/running", &json!(true)),
+            Err(Answer::NotFound { .. })
+        ));
+    }
+
+    #[test]
     fn a_loudness_preset_sets_target_and_tolerance_and_a_target_makes_it_custom() {
         let mut m = mixer();
         let v = values(&patch(

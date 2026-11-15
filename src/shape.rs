@@ -201,7 +201,8 @@ impl Shape {
     /// The live state of an empty start: input channels closed, buses at
     /// 0 dB, nothing muted, every channel routed to every bus, sends off,
     /// processing off, the monitor on the first bus, EBU R 68 and R 128
-    /// metering, no scenes and no tally.
+    /// metering with every loudness measurement running, no scenes and no
+    /// tally.
     pub fn initial_state(&self) -> Value {
         let eq = || {
             json!({ "enabled": false, "bands": [
@@ -307,6 +308,13 @@ impl Shape {
                 "holdMs": 0, "offLevel": -90, "open": true,
             }))).collect()),
             "tally": {},
+            "loudness": by_id(
+                self.buses.iter().map(|e| &e.id)
+                    .chain(self.auxes.iter().map(|e| &e.id))
+                    .chain(self.mix_minus.iter().map(|e| &e.id))
+                    .map(|id| (id.clone(), json!({ "running": true })))
+                    .collect(),
+            ),
             "recallSafe": {},
             "scenes": [],
             "consoles": [],
@@ -359,6 +367,13 @@ pub(crate) mod tests {
             json!(false)
         );
         assert_eq!(state["monitor"]["source"], json!("pgm"));
+        let measured: Vec<&String> = state["loudness"].as_object().unwrap().keys().collect();
+        assert_eq!(
+            measured,
+            ["aux1", "cf", "mm1", "pgm"],
+            "every bus, aux and mix-minus output"
+        );
+        assert_eq!(state["loudness"]["pgm"], json!({ "running": true }));
     }
 
     /// Each rule the schema cannot express refuses a shape breaking it.
