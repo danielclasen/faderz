@@ -83,7 +83,7 @@
       <a href="#monitor" onclick={(e) => skip(e, 'monitor')}>Skip to monitor</a>
     </div>
   {/if}
-  <header class="top">
+  <header class="top" class:desk-locked={mixer.deskLock}>
     <div class="brand" aria-label="faderz"><i></i>faderz</div>
     <select class="view-menu" aria-label="View" value={view} onchange={(e) => (view = (e.currentTarget as HTMLSelectElement).value as View)}>
       {#each VIEWS as v (v.id)}<option value={v.id}>{v.label}</option>{/each}
@@ -111,7 +111,7 @@
         >
       </span>
       <LockKey />
-      <button class="key" onclick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
+      <button class="key theme" onclick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
         {theme === 'dark' ? 'LIGHT' : 'DARK'}
       </button>
     </div>
@@ -225,6 +225,12 @@
     .brand {
       font-size: 0;
       gap: 0;
+    }
+  }
+  /* Phones: a locked desk's key takes the theme key's room (LockKey). */
+  @media (max-width: 700px) {
+    .desk-locked .theme {
+      display: none;
     }
   }
   /* Short screens (a phone in landscape): one header row of 36 px with

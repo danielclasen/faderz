@@ -950,6 +950,8 @@ test('keeps the processing panel open on a second press and steps to the next an
 test('locks the desk with a hold so nothing on the screen changes the mixer, and marks recall-safe strips', async ({ page, request }) => {
   await live(page);
   const lock = page.getByTestId('desk-lock');
+  // Its text tells it from the red LOCK of a link that sends no commands.
+  await expect(lock).toHaveText('LOCK DESK');
   // A press shorter than the hold does nothing.
   await lock.click();
   await expect(lock).toHaveAttribute('aria-pressed', 'false');
@@ -959,6 +961,7 @@ test('locks the desk with a hold so nothing on the screen changes the mixer, and
   await page.waitForTimeout(700);
   await page.mouse.up();
   await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  await expect(lock).toHaveText('LOCKED');
   const mute = page.getByRole('button', { name: 'Pres 1 mute' });
   const before = (await serverState(request)).state.channels['ch1']!.mute;
   await mute.click({ force: true });

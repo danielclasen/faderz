@@ -34,3 +34,26 @@ test('puts the channel faders above the fold and the notices in the header', asy
     other.close();
   }
 });
+
+test('a desk locked in landscape shows its key in portrait and unlocks there', async ({ page }) => {
+  await live(page);
+  const lock = page.getByTestId('desk-lock');
+  const cdp = await page.context().newCDPSession(page);
+  const hold = async () => {
+    const box = (await lock.boundingBox())!;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+    await page.waitForTimeout(800);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  await hold();
+  await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  // Turned to portrait: a phone hides an unlit key, never a lit one, and
+  // the header still fits the screen.
+  await page.setViewportSize({ width: 390, height: 664 });
+  await expect(lock).toBeVisible();
+  await expect(lock).toHaveText('LOCKED');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await hold();
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  await expect(lock).toBeHidden();
+});

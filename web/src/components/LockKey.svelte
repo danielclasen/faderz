@@ -38,7 +38,7 @@
   style:--hold={`${HOLD_MS}ms`}
   aria-pressed={mixer.deskLock}
   aria-label={mixer.deskLock ? 'Desk locked, hold to unlock' : 'Lock the desk, hold to lock'}
-  title={mixer.deskLock ? 'Locked: this screen changes nothing. Hold to unlock.' : 'Hold to lock this screen against changes'}
+  title={mixer.deskLock ? 'Desk locked by this screen: it changes nothing. Hold to unlock.' : 'Hold to lock this screen against changes'}
   data-testid="desk-lock"
   onpointerdown={(e) => {
     if (e.button === 0) {
@@ -51,7 +51,7 @@
   onlostpointercapture={lift}
   onkeydown={(e) => key(e, true)}
   onkeyup={(e) => key(e, false)}
-  onblur={lift}><span class="fixed">{mixer.deskLock ? 'LOCKED' : '  LOCK'}</span></button
+  onblur={lift}><span class="fixed label">{mixer.deskLock ? 'LOCKED' : 'LOCK DESK'}</span></button
 >
 
 <style>
@@ -60,11 +60,27 @@
     flex: none;
     touch-action: none;
   }
-  /* Phones: the header holds the connection state and the tone lamp only;
-     with LOCK it would be wider than the screen. */
+  /* One width for both texts, so a change moves nothing. "LOCK DESK"
+     tells it apart from the red LOCK of a link that sends no commands. */
+  .label {
+    display: inline-block;
+    width: 9ch;
+    text-align: center;
+  }
+  /* Phones: the header holds the connection state and the tone lamp; a
+     LOCK DESK key would make it wider than the screen. A locked desk
+     shows its key in any case, in the room of the theme key (App), so
+     a lock made in landscape can be undone in portrait. */
   @media (max-width: 700px) {
-    .lock {
+    .lock:not(.on) {
       display: none;
+    }
+    .lock {
+      padding: 0 2px;
+      letter-spacing: 0;
+    }
+    .label {
+      width: 6ch;
     }
   }
   .lock.on {
