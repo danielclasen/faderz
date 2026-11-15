@@ -412,11 +412,23 @@ export interface ResyncMessage {
   /** Answer with a snapshot. */
   full?: true;
 }
+/** Asks the session that owns a control to give it up; not a command, not answered. */
+export interface RequestMessage {
+  type: 'request';
+  path: string;
+}
+/** The element this session has selected for editing, or null; not a command, not answered. */
+export interface SelectMessage {
+  type: 'select';
+  element: Id | null;
+}
 export type CommandMessage = SetMessage | TouchMessage | ReleaseMessage;
 export type ClientMessage =
   | HelloMessage
   | PromoteMessage
   | CommandMessage
+  | RequestMessage
+  | SelectMessage
   | ResyncMessage
   | CreditMessage
   | PingMessage
@@ -491,6 +503,21 @@ export interface ErrorMessage {
   current?: unknown;
   owner?: Owner;
 }
+export interface Selection {
+  session: Owner;
+  element: Id;
+}
+export interface SelectionsMessage {
+  type: 'selections';
+  replica: ReplicaRef;
+  selections: Selection[];
+}
+export interface ControlRequestMessage {
+  type: 'controlRequest';
+  replica: ReplicaRef;
+  path: string;
+  from: Owner;
+}
 export interface ServerPing {
   type: 'ping' | 'pong';
   replica: ReplicaRef;
@@ -505,6 +532,8 @@ export type ServerMessage =
   | CountersMessage
   | ErrorMessage
   | AheadMessage
+  | SelectionsMessage
+  | ControlRequestMessage
   | ServerPing;
 
 // REST

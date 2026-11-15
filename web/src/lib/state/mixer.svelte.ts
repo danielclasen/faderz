@@ -8,7 +8,7 @@
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getContext } from 'svelte';
-import type { Owner, Owners, Shape, State } from '../contract/types';
+import type { Owner, Owners, Selection, Shape, State } from '../contract/types';
 import { MeterStore } from '../meters/store';
 import type { Patch, SyncStatus, ToWorker } from '../sync/messages';
 import { handleTag } from '../net/handle';
@@ -22,7 +22,8 @@ export interface Port {
 
 export interface Notice {
   id: number;
-  kind: 'conflict' | 'error' | 'info';
+  /** request: another session asks for a control this one holds. */
+  kind: 'conflict' | 'error' | 'info' | 'request';
   text: string;
   /** Notices with one key (a control path) are one notice, counted. */
   key?: string;
@@ -56,6 +57,8 @@ export const INITIAL_STATUS: SyncStatus = {
 };
 
 const NOTICE_LIMIT = 5;
+/** A client asks for one control at most this often (client-message.schema.json Request). */
+export const REQUEST_INTERVAL_MS = 3000;
 
 export class MixerStore {
   shape = $state.raw<Shape | null>(null);
@@ -66,6 +69,8 @@ export class MixerStore {
   countersReplica = $state<string | null>(null);
   meterReplica = $state<string | null>(null);
   notices = $state<Notice[]>([]);
+  /** What every session has selected, this one included. */
+  selections = $state.raw<Selection[]>([]);
   /** Page time (Date.now()) when the worker last reported a failover. */
   failoverAt = $state<number | null>(null);
   /** Controls under the pointer or a keyboard adjust. */
@@ -80,6 +85,8 @@ export class MixerStore {
   /** Writes by page message number; a patch built before that message does not overwrite them. */
   private readonly localWrites = new Map<string, { input: number; value: unknown }>();
   private noticeId = 0;
+  /** Page time of the last control request per control. */
+  private readonly requested = new Map<string, number>();
 
   attach(port: Port): void {
     this.port = port;
@@ -141,6 +148,16 @@ export class MixerStore {
     return `${principal}${kind} ${handleTag(owner.handle)}`;
   }
 
+  /** Other sessions that have selected an element. */
+  selectedBy(id: string): Owner[] {
+    return this.selections.filter((s) => s.element === id && !this.isMine(s.session)).map((s) => s.session);
+  }
+
+  /** One character for an owner: its principal's initial, or the first of the handle tag other screens show. */
+  ownerInitial(owner: Owner): string {
+    return owner.principal === 'anonymous' ? handleTag(owner.handle).charAt(0) : owner.principal.charAt(0).toUpperCase();
+  }
+
   /**
    * An owner in a form that fits a small slot: "you", a console's name, or
    * the handle tag other screens show for a session.
@@ -176,6 +193,25 @@ export class MixerStore {
     if (owner === null || this.isMine(owner)) return false;
     this.conflicts.set(path, Date.now());
     this.notify('conflict', `${describePath(path, this.shape)} is held by ${this.ownerLabel(owner)}`, path);
+    return true;
+  }
+
+  /** Tells other screens what this one has selected; not a write, so sent while locked too. */
+  select(element: string | null): void {
+    this.post({ type: 'select', element });
+  }
+
+  /**
+   * Asks the session that holds a control to give it up. At most one
+   * request per control every REQUEST_INTERVAL_MS; returns whether it went.
+   */
+  requestControl(path: string, now: number = Date.now()): boolean {
+    const owner = this.ownerOf(path);
+    if (owner === null || this.isMine(owner)) return false;
+    if (now - (this.requested.get(path) ?? -Infinity) < REQUEST_INTERVAL_MS) return false;
+    this.requested.set(path, now);
+    this.post({ type: 'request', path });
+    this.notify('info', `Asked ${this.ownerLabel(owner)} for ${describePath(path, this.shape)}`, `request:${path}`);
     return true;
   }
 
@@ -238,8 +274,11 @@ export class MixerStore {
       this.counters = p.counters.values;
       this.countersReplica = p.counters.replica;
     }
+    if (p.selections) this.selections = p.selections;
     for (const n of p.notices ?? []) {
-      if (n.kind === 'conflict') {
+      if (n.kind === 'request') {
+        this.notify('request', `${this.ownerLabel(n.from)} asks for ${describePath(n.path, this.shape)}`, `asked:${n.path}`);
+      } else if (n.kind === 'conflict') {
         this.conflicts.set(n.path, Date.now());
         this.notify('conflict', `${describePath(n.path, this.shape)} is held by ${this.ownerLabel(n.owner)}`, n.path);
       } else if (n.kind === 'expired') {

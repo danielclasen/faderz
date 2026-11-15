@@ -989,6 +989,38 @@ describe('sync engine: ownership', () => {
   });
 });
 
+describe('sync engine: selections and control requests', () => {
+  it('sends the selection on the primary only, again on every new primary, and posts the selections either connection reports', () => {
+    const { engine, primary, standby, tick } = live();
+    engine.input({ type: 'select', element: 'ch3' });
+    engine.input({ type: 'select', element: 'ch3' });
+    // Once on going live, to clear what a reload left, then once per change.
+    expect(primary.ofType('select')).toEqual([
+      { type: 'select', element: null },
+      { type: 'select', element: 'ch3' },
+    ]);
+    expect(standby.ofType('select')).toEqual([]);
+    const sel = { session: OTHER, element: 'ch5' };
+    standby.deliver({ type: 'selections', replica: R2, selections: [sel] });
+    expect(tick()!.selections).toEqual([sel]);
+    expect(tick()).toBeNull();
+    primary.drop();
+    standby.deliver(resume(R2, 10));
+    expect(standby.ofType('select')).toEqual([{ type: 'select', element: 'ch3' }]);
+    engine.input({ type: 'select', element: null });
+    expect(standby.ofType('select').at(-1)).toEqual({ type: 'select', element: null });
+  });
+
+  it('sends a control request on a transmitting primary and turns one for this session into a notice', () => {
+    const { engine, primary, standby, tick } = live();
+    engine.input({ type: 'request', path: F1 });
+    expect(primary.ofType('request')).toEqual([{ type: 'request', path: F1 }]);
+    expect(standby.ofType('request')).toEqual([]);
+    primary.deliver({ type: 'controlRequest', replica: R1, path: F2, from: OTHER });
+    expect(tick()!.notices).toEqual([{ kind: 'request', path: F2, from: OTHER }]);
+  });
+});
+
 describe('sync engine: patches', () => {
   it('holds back server values of a control with a pending write, then posts the committed value', () => {
     const { engine, primary, tick } = live();

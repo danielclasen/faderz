@@ -185,6 +185,78 @@ test('arms and confirms a scene store and delete from the keyboard alone, within
   await expect(page.getByText(name)).toBeHidden();
 });
 
+test('asks the holder of a refused control for it, and tells this screen when another asks for one it holds', { tag: '@mock' }, async ({ page, baseURL }) => {
+  await live(page);
+  const path = '/channels/ch4/fader';
+  const other = await RawClient.open(baseURL!);
+  try {
+    expect((await other.command({ type: 'touch', path })).type).toBe('delta');
+    const tag = handleTag(ownerHandle(other.session));
+    await dragFader(page, path, -80);
+    const notice = page.getByTestId('notice');
+    await expect(notice).toContainText(`Guest 2 fader is held by web client ${tag}`);
+    const handle = ownerHandle(await debug(page, 'session'));
+    await notice.getByRole('button', { name: 'ASK' }).click();
+    await expect.poll(() => other.messages.filter((m) => m.type === 'controlRequest')).toEqual([
+      expect.objectContaining({ path, from: expect.objectContaining({ handle, kind: 'ui' }) }),
+    ]);
+    await expect(notice).toContainText(`Asked web client ${tag} for Guest 2 fader`);
+    // Asking again at once sends nothing.
+    await dragFader(page, path, -80);
+    await notice.getByRole('button', { name: 'ASK' }).click();
+    await page.waitForTimeout(500);
+    expect(other.messages.filter((m) => m.type === 'controlRequest')).toHaveLength(1);
+    // Released, the notice offers nothing to ask for.
+    await other.command({ type: 'release', path });
+    await expect(notice.getByRole('button', { name: 'ASK' })).toHaveCount(0);
+
+    // This screen holds a fader while the other session asks for it.
+    const mine = '/channels/ch6/fader';
+    const at = await faderCenter(page, mine);
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    await expect.poll(async () => (await debug(page, 'touching')) ?? []).toContain(mine);
+    await expect.poll(async () => {
+      other.send({ type: 'request', path: mine });
+      return (await notice.textContent()) ?? '';
+    }).toContain(`web client ${tag} asks for Guest 4 fader`);
+    await page.mouse.up();
+  } finally {
+    other.close();
+  }
+});
+
+test('marks the strip of a channel another screen has selected with its initial', { tag: '@mock' }, async ({ page, baseURL }) => {
+  await live(page);
+  const other = await RawClient.open(baseURL!);
+  try {
+    const tag = handleTag(ownerHandle(other.session));
+    const mark = page.getByTestId('selected-by-ch5');
+    await expect(mark).toBeHidden();
+    const head = page.locator('[data-channel="ch5"] .head');
+    const boxes = () => head.locator('.name, .badge.shown, .no').evaluateAll((els) => els.map((e) => JSON.stringify(e.getBoundingClientRect())));
+    const before = await boxes();
+    other.send({ type: 'select', element: 'ch5' });
+    await expect(mark).toBeVisible();
+    await expect(mark).toHaveText(tag.charAt(0));
+    // The mark takes room from the source line only: nothing else moves.
+    expect((await boxes()).filter((b) => before.includes(b))).toHaveLength(before.length);
+    await expect(head).toHaveAccessibleName(new RegExp(`selected on web client ${tag}`));
+    // What this screen selects, the other session is told.
+    const handle = ownerHandle(await debug(page, 'session'));
+    await page.locator('[data-channel="ch2"] .head').click();
+    await expect
+      .poll(() => other.messages.filter((m) => m.type === 'selections').at(-1)?.['selections'])
+      .toContainEqual(expect.objectContaining({ element: 'ch2', session: expect.objectContaining({ handle }) }));
+    // This screen's own selection marks nothing here.
+    await expect(page.getByTestId('selected-by-ch2')).toBeHidden();
+    other.send({ type: 'select', element: null });
+    await expect(mark).toBeHidden();
+  } finally {
+    other.close();
+  }
+});
+
 test('refuses a fader held by another session at the gesture and shows its value and owner', { tag: '@mock' }, async ({ page, baseURL, request }) => {
   const frames: string[] = [];
   page.on('websocket', (ws) => ws.on('framereceived', (f) => typeof f.payload === 'string' && frames.push(f.payload)));

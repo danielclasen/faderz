@@ -206,6 +206,15 @@ is stopped there, and the screen names the holder. A latch stopped
 while writes are locked stays shown until the server reports the talk
 off.
 
+A gesture on a control another session holds is refused at once and
+the notice names the holder. ASK in that notice sends the holder a
+request for the control, at most once per control every 3 s, and the
+holder's screen shows it as a notice; nothing changes until the holder
+lets go or its lease runs out. The head of a strip that another screen
+has selected carries that screen's initial, the first letter of its
+handle tag, and the head's tooltip names every screen that has it
+selected.
+
 A label cut off for lack of room, such as a long channel name, shows
 its full text in a tooltip: after a short hover, on keyboard focus (Tab
 to it) and on a touch held for 0.5 s; Escape closes it.

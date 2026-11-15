@@ -24,7 +24,7 @@
   const name = (n: string) => n.replace(/_total$/, '');
 
   $effect(() => {
-    const timers = mixer.notices.map((n) => setTimeout(() => mixer.dismiss(n.id), n.kind === 'error' ? 8000 : 4000));
+    const timers = mixer.notices.map((n) => setTimeout(() => mixer.dismiss(n.id), n.kind === 'error' || n.kind === 'request' ? 8000 : 4000));
     return () => timers.forEach(clearTimeout);
   });
 </script>

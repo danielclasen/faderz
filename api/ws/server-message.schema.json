@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/danielclasen/faderz/raw/main/api/ws/server-message.schema.json",
   "title": "faderz WebSocket server message",
-  "description": "Messages a replica sends on /api/v1/ws. replica names the sending replica. Every message is a JSON text message defined here, except meter frames, which are binary messages laid out as in $defs/MeterFrame. hello is answered with replicas, then snapshot or resume; deltas follow in revision order. A client that sees a revision other than its own plus one sends resync. The replica sends ping every 250 ms and answers every client ping with pong (heartbeat rules: client-message.schema.json#/$defs/Ping). Meter frames and counters go to primary connections only. Meter frames are paced by the client's credits and dropped, never queued, while the connection holds none; deltas are never dropped: a client whose queue fills with deltas gets a snapshot instead.",
+  "description": "Messages a replica sends on /api/v1/ws. replica names the sending replica. Every message is a JSON text message defined here, except meter frames, which are binary messages laid out as in $defs/MeterFrame. hello is answered with replicas, then snapshot or resume; deltas follow in revision order. A client that sees a revision other than its own plus one sends resync. The replica sends ping every 250 ms and answers every client ping with pong (heartbeat rules: client-message.schema.json#/$defs/Ping). Meter frames, counters and control requests go to primary connections only. Meter frames are paced by the client's credits and dropped, never queued, while the connection holds none; deltas are never dropped: a client whose queue fills with deltas gets a snapshot instead.",
   "oneOf": [
     {
       "$ref": "#/$defs/Snapshot"
@@ -21,6 +21,12 @@
     },
     {
       "$ref": "#/$defs/Counters"
+    },
+    {
+      "$ref": "#/$defs/Selections"
+    },
+    {
+      "$ref": "#/$defs/ControlRequest"
     },
     {
       "$ref": "#/$defs/Error"
@@ -314,6 +320,70 @@
         },
         "values": {
           "$ref": "model.schema.json#/$defs/Counters"
+        }
+      }
+    },
+    "Selections": {
+      "description": "What every session has selected (client-message.schema.json#/$defs/Select), on every connection, standby ones included: after the snapshot or resume that answers its hello, and whenever a selection changes or lapses with its session's lease. Lists every session with a selection, the receiving one included, at most one entry per session.",
+      "type": "object",
+      "required": [
+        "type",
+        "replica",
+        "selections"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "selections"
+        },
+        "replica": {
+          "$ref": "model.schema.json#/$defs/ReplicaRef"
+        },
+        "selections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "session",
+              "element"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "session": {
+                "description": "The session, as its owner record: principal, handle, kind and the connection the message came through.",
+                "$ref": "model.schema.json#/$defs/Owner"
+              },
+              "element": {
+                "$ref": "model.schema.json#/$defs/Id"
+              }
+            }
+          }
+        }
+      }
+    },
+    "ControlRequest": {
+      "description": "Another session asks this one to give up a control it owns (client-message.schema.json#/$defs/Request). Sent to the primary connections of the owning session only. It changes nothing: the owner decides, and its ownership lapses with its lease in any case.",
+      "type": "object",
+      "required": [
+        "type",
+        "replica",
+        "path",
+        "from"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "controlRequest"
+        },
+        "replica": {
+          "$ref": "model.schema.json#/$defs/ReplicaRef"
+        },
+        "path": {
+          "$ref": "model.schema.json#/$defs/ControlPath"
+        },
+        "from": {
+          "description": "The asking session's owner record.",
+          "$ref": "model.schema.json#/$defs/Owner"
         }
       }
     },

@@ -53,6 +53,9 @@
       ? ''
       : `${vcas.map((v) => `VCA ${v.name} ${formatDb(mixer.state!.vcas[v.id]!.offset)} dB`).join(', ')}; effective gain ${formatDb(effective)} dB`,
   );
+  /** Other sessions with this channel selected: the first one's initial marks the head. */
+  const selectors = $derived(mixer.selectedBy(channel.id));
+  const selectorsText = $derived(selectors.length > 0 ? `selected on ${selectors.map((o) => mixer.ownerLabel(o)).join(', ')}` : '');
   /** Recall-safe groups: a scene recall leaves these alone (an isolate on a console). */
   const safe = $derived(mixer.state!.recallSafe[channel.id] ?? []);
   const badge = $derived(channel.layout === 'mono' ? '' : channel.layout === 'stereo' ? 'ST' : channel.layout);
@@ -70,13 +73,19 @@
     data-color={st.color}
     onclick={() => onselect(channel.id)}
     aria-pressed={selected}
-    use:tip={`${channel.source ? `${channel.name} (${channel.source})` : channel.name}${safe.length > 0 ? `; recall safe: ${safe.join(', ')}` : ''}`}
+    use:tip={`${channel.source ? `${channel.name} (${channel.source})` : channel.name}${safe.length > 0 ? `; recall safe: ${safe.join(', ')}` : ''}${selectorsText ? `; ${selectorsText}` : ''}`}
   >
     <span class="no num">{index + 1}</span>
     <span class="name">{channel.name}</span>
     <span class="line2">
       <span class="source">{channel.source ?? ''}</span>
       <span class="badges">
+        <!-- First, so appearing moves no other badge; the sessions are in
+             the head's tooltip and accessible name. -->
+        <span class="badge user" class:shown={selectors.length > 0} aria-hidden="true" data-testid={`selected-by-${channel.id}`}
+          >{selectors[0] ? mixer.ownerInitial(selectors[0]) : ''}</span
+        >
+        <span class="sr-only">{selectorsText ? `, ${selectorsText}` : ''}</span>
         <!-- The groups are in the head's tooltip and accessible name. -->
         <span class="badge iso" class:shown={safe.length > 0} aria-hidden="true" data-testid={`iso-${channel.id}`}>ISO</span>
         <span class="sr-only">{safe.length > 0 ? `, recall safe: ${safe.join(', ')}` : ''}</span>
@@ -306,8 +315,16 @@
     gap: 2px;
   }
   /* Hidden badges give their room to the source. */
-  .badge:not(.shown):is(.alt, .iso) {
+  .badge:not(.shown):is(.alt, .iso, .user) {
     display: none;
+  }
+  /* Another screen's selection: a round mark with its initial. */
+  .badge.user {
+    min-width: 13px;
+    border-radius: 7px;
+    text-align: center;
+    background: var(--accent);
+    color: var(--accent-ink);
   }
   .badge.alt,
   .badge.iso {

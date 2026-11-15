@@ -17,6 +17,7 @@ import type {
   Owners,
   ReplicaRef,
   ReplicaStatus,
+  Selection,
   AheadMessage,
   ResumeMessage,
   ServerMessage,
@@ -129,6 +130,10 @@ export class SyncEngine {
   credits = 0;
   readonly outbox = new Outbox();
   readonly touches = new Map<string, TouchState>();
+  /** The element selected on this screen, sent again on every new primary. */
+  private selection: string | null = null;
+  private selections: Selection[] = [];
+  private selectionsDirty = false;
 
   private readonly clock: Clock;
   /** Owner handle of this session: how its ownership appears in records. */
@@ -209,6 +214,15 @@ export class SyncEngine {
         return this.touchEvent(msg.path, 'down');
       case 'release':
         return this.touchEvent(msg.path, 'up');
+      case 'select':
+        if (msg.element === this.selection) return;
+        this.selection = msg.element;
+        return this.sendSelection();
+      case 'request': {
+        const p = this.primary;
+        if (p && TRANSMITTING.has(this.link)) this.send(p, { type: 'request', path: msg.path });
+        return;
+      }
       case 'tick':
         this.grantCredits();
         return this.postPatch();
@@ -226,6 +240,11 @@ export class SyncEngine {
     const seq = (this.seq.get(path) ?? this.deps.seqBase) + 1;
     this.seq.set(path, seq);
     return seq;
+  }
+
+  private sendSelection(): void {
+    const p = this.primary;
+    if (p && TRANSMITTING.has(this.link)) this.send(p, { type: 'select', element: this.selection });
   }
 
   private issueSet(path: string, value: unknown): void {
@@ -593,6 +612,13 @@ export class SyncEngine {
       case 'counters':
         if (link === this.primary) this.counters = { replica: msg.replica.id, values: msg.values };
         return;
+      case 'selections':
+        this.selections = msg.selections;
+        this.selectionsDirty = true;
+        return;
+      case 'controlRequest':
+        if (link === this.primary) this.notice({ kind: 'request', path: msg.path, from: msg.from });
+        return;
     }
   }
 
@@ -670,6 +696,7 @@ export class SyncEngine {
     const replica = this.primary?.replica?.id ?? null;
     if (this.failoverInfo && this.failoverInfo.to === null) this.failoverInfo = { ...this.failoverInfo, to: replica };
     for (const path of new Set([...Object.keys(this.owners), ...this.touches.keys()])) this.reconcile(path);
+    this.sendSelection();
     this.transmit();
     if (this.standby && this.standby.replica && !this.standbySuitable(this.standby)) this.dropStandby(this.standby);
     this.startStandby();
@@ -873,6 +900,11 @@ export class SyncEngine {
     if (this.counters) {
       patch.counters = this.counters;
       this.counters = null;
+      any = true;
+    }
+    if (this.selectionsDirty) {
+      this.selectionsDirty = false;
+      patch.selections = this.selections;
       any = true;
     }
     if (this.notices.length > 0) {

@@ -260,6 +260,8 @@ export class Cluster {
   private applied = new Map<string, { revision: number; at: number }>();
   private lastSeq = new Map<string, number>();
   private leases = new Map<string, number>();
+  /** What each session has selected, by session key (client-message.schema.json Select). */
+  private selections = new Map<string, { session: Owner; element: string }>();
   private scenes = new Map<string, StoredScene>();
   private sceneCounter = 0;
   private connCounter = 0;
@@ -549,6 +551,10 @@ export class Cluster {
         return;
       case 'resync':
         return this.sync(conn, this.ownEpoch(msg.epoch, msg.lastRevision), msg.full === true);
+      case 'request':
+        return this.requestControl(conn.owner, msg.path);
+      case 'select':
+        return this.select(conn, msg.element);
     }
     // A partitioned replica cannot commit: every command is answered not applied.
     if (r.partitioned) {
@@ -618,7 +624,8 @@ export class Cluster {
       const deltas = this.log
         .filter((e) => e.revision > lastRevision && e.revision <= revision)
         .map((e): DeltaMessage => ({ type: 'delta', replica, ...e }));
-      return this.emit(conn, { type: 'resume', you, replica, epoch: this.epoch, revision, deltas, ...stale });
+      this.emit(conn, { type: 'resume', you, replica, epoch: this.epoch, revision, deltas, ...stale });
+      return this.emitSelections(conn);
     }
     this.emit(conn, {
       type: 'snapshot',
@@ -631,6 +638,41 @@ export class Cluster {
       owners: r.view?.owners ?? this.owners,
       ...stale,
     });
+    this.emitSelections(conn);
+  }
+
+  private emitSelections(conn: Conn): void {
+    this.emit(conn, { type: 'selections', replica: this.ref(conn.replica), selections: [...this.selections.values()] });
+  }
+
+  private broadcastSelections(): void {
+    for (const r of this.replicas) for (const c of r.conns) if (c.synced) this.emitSelections(c);
+  }
+
+  /** A session's selection; an unknown element is refused. */
+  private select(conn: Conn, element: string | null): void {
+    const s = this.shape;
+    if (element !== null && ![...s.channels, ...s.buses, ...s.auxes, ...s.mixMinus].some((e) => e.id === element)) {
+      return this.emit(conn, { type: 'error', replica: this.ref(conn.replica), code: 404, message: `unknown element ${element}` });
+    }
+    const key = sessionKey(conn.owner!);
+    if ((this.selections.get(key)?.element ?? null) === element) return;
+    if (element === null) this.selections.delete(key);
+    else this.selections.set(key, { session: conn.owner!, element });
+    this.broadcastSelections();
+  }
+
+  /** Hands a control request to the primary connections of the session that owns the control. */
+  private requestControl(from: Owner, path: string): void {
+    const owner = this.owners[path];
+    if (!owner || sessionKey(owner) === sessionKey(from)) return;
+    for (const r of this.replicas) {
+      for (const c of r.conns) {
+        if (c.synced && c.mode === 'primary' && c.owner && sessionKey(c.owner) === sessionKey(owner)) {
+          this.emit(c, { type: 'controlRequest', replica: this.ref(r), path, from });
+        }
+      }
+    }
   }
 
   /**
@@ -1123,12 +1165,16 @@ export class Cluster {
     for (const session of this.leases.keys()) if (gone(session)) this.leases.delete(session);
   }
 
-  /** Release every control of a session whose lease ran out. */
+  /** Release every control and drop the selection of a session whose lease ran out. */
   expireLeases(now = Date.now()): void {
+    const lapsed = (key: string) => now - (this.leases.get(key) ?? 0) > LEASE_MS;
     const released: OwnershipChange[] = Object.entries(this.owners)
-      .filter(([, o]) => now - (this.leases.get(sessionKey(o)) ?? 0) > LEASE_MS)
+      .filter(([, o]) => lapsed(sessionKey(o)))
       .map(([path]) => ({ path, owner: null }));
     if (released.length > 0) this.stage({ changes: this.momentaryOff(released.map((r) => r.path)), owners: released });
+    const gone = [...this.selections.keys()].filter(lapsed);
+    for (const key of gone) this.selections.delete(key);
+    if (gone.length > 0) this.broadcastSelections();
   }
 
   /** Momentary controls (IFB interrupt) among released paths go back to false. */

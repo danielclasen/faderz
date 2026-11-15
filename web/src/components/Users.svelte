@@ -1,8 +1,9 @@
 <script lang="ts">
   // Who works on this mixer: this screen, the control surfaces and every
-  // other session that holds a control, with what it holds. Sessions that
-  // hold nothing are not known to the client: the contract carries
-  // holders (owners) and consoles, not a list of connected screens.
+  // other session that holds a control, with what it holds. The contract
+  // carries holders (owners), consoles and selections, not a list of
+  // connected screens: a session that holds nothing shows only as the
+  // initial on the strip it has selected.
   import { getMixer } from '../lib/state/mixer.svelte';
   import { describePath } from '../lib/state/paths';
   import { handleTag } from '../lib/net/handle';

@@ -2,7 +2,7 @@
 // per user action and a tick per animation frame; the worker answers each
 // tick with at most one patch.
 
-import type { Owner, OwnerHandle, Owners, ReplicaStatus, Revision, Shape, State } from '../contract/types';
+import type { Owner, OwnerHandle, Owners, ReplicaStatus, Revision, Selection, Shape, State } from '../contract/types';
 import type { LinkState, StandbyState } from './machines';
 
 export type ToWorker =
@@ -10,6 +10,10 @@ export type ToWorker =
   | { type: 'set'; path: string; value: unknown }
   | { type: 'touch'; path: string }
   | { type: 'release'; path: string }
+  /** The element selected on this screen, or null: other screens show it. */
+  | { type: 'select'; element: string | null }
+  /** Ask the session that owns a control to give it up. */
+  | { type: 'request'; path: string }
   /** Take the cluster state while the link is Ahead. */
   | { type: 'adopt' }
   /** The page rendered a frame and wants the changes since the last patch. */
@@ -55,7 +59,9 @@ export type WorkerNotice =
   | { kind: 'conflict'; path: string; owner: Owner | null }
   /** Writes still unanswered at their expiry, dropped: the controls show the committed values. */
   | { kind: 'expired'; paths: string[] }
-  | { kind: 'error'; text: string };
+  | { kind: 'error'; text: string }
+  /** Another session asks for a control this session owns. */
+  | { kind: 'request'; path: string; from: Owner };
 
 export interface Patch {
   type: 'patch';
@@ -71,6 +77,8 @@ export interface Patch {
   meters?: { replica: string; sequence: number; values: Float32Array };
   counters?: { replica: string; values: Record<string, number> };
   notices?: WorkerNotice[];
+  /** What every session has selected, replaced whole when it changes. */
+  selections?: Selection[];
 }
 
 export type FromWorker = Patch;

@@ -22,6 +22,8 @@ import type {
   LinkMode,
   Owner,
   ReplicasMessage,
+  SelectionsMessage,
+  ControlRequestMessage,
   ServerMessage,
   SnapshotMessage,
 } from '../../src/lib/contract/types';
@@ -596,6 +598,74 @@ describe('leases', () => {
     await sleep(LEASE_MS + 600);
     expect((await owners())[path]).toBeUndefined();
   }, 10_000);
+});
+
+describe('selections and control requests', () => {
+  it('tells every connection what each session selected, until the session clears it or its lease lapses', async () => {
+    const observer = await new Client().open(onReplica('r1'));
+    await observer.hello();
+    const standby = await new Client(observer.session).open(onReplica('r2'));
+    await standby.hello('standby');
+    const a = await new Client().open(onReplica('r3'));
+    await a.hello();
+    let from = observer.messages.length;
+    let sbFrom = standby.messages.length;
+    a.send({ type: 'select', element: 'ch3' });
+    const seen = await observer.next<SelectionsMessage>((m) => m.type === 'selections' && m.selections.length > 0, from);
+    expect(seen.selections).toEqual([{ session: a.you, element: 'ch3' }]);
+    await standby.next((m) => m.type === 'selections' && m.selections.length > 0, sbFrom);
+    // A late joiner gets them after its snapshot.
+    const late = await new Client().open();
+    await late.hello();
+    const first = await late.next<SelectionsMessage>((m) => m.type === 'selections');
+    const snap = late.messages.findIndex((m) => m.type === 'snapshot');
+    expect(late.messages.indexOf(first)).toBeGreaterThan(snap);
+    expect(first.selections).toEqual([{ session: a.you, element: 'ch3' }]);
+    // The same selection again changes nothing and is not sent again.
+    from = observer.messages.length;
+    a.send({ type: 'select', element: 'ch3' });
+    a.send({ type: 'select', element: 'nope' });
+    expect(await a.next((m) => m.type === 'error' && m.code === 404)).toBeTruthy();
+    a.send({ type: 'select', element: null });
+    const cleared = await observer.next<SelectionsMessage>((m) => m.type === 'selections', from);
+    expect(cleared.selections).toEqual([]);
+    // A session that goes away loses its selection with its lease.
+    a.send({ type: 'select', element: 'pgm20' });
+    await observer.next<SelectionsMessage>((m) => m.type === 'selections' && m.selections.length > 0, from);
+    from = observer.messages.length;
+    await a.close();
+    const lapsed = await observer.next<SelectionsMessage>((m) => m.type === 'selections', from, LEASE_MS + DEAD_MS + 2000);
+    expect(lapsed.selections).toEqual([]);
+    await Promise.all([observer.close(), standby.close(), late.close()]);
+  }, 15_000);
+
+  it('hands a control request to the primary connections of the holder only, naming the asker', async () => {
+    const holder = await new Client().open(onReplica('r1'));
+    await holder.hello();
+    const holderStandby = await new Client(holder.session).open(onReplica('r2'));
+    await holderStandby.hello('standby');
+    const asker = await new Client().open(onReplica('r3'));
+    await asker.hello();
+    const path = '/channels/ch9/fader';
+    await holder.answer(holder.command('touch', path));
+    const from = holder.messages.length;
+    asker.send({ type: 'request', path });
+    const req = await holder.next<ControlRequestMessage>((m) => m.type === 'controlRequest', from);
+    expect(req).toMatchObject({ path, from: asker.you });
+    // Nothing changed, nothing answered the asker, the standby heard nothing.
+    expect((await owners())[path]).toEqual(holder.you);
+    await sleep(300);
+    expect(asker.count('controlRequest')).toBe(0);
+    expect(asker.count('ack') + asker.count('error')).toBe(0);
+    expect(holderStandby.count('controlRequest')).toBe(0);
+    // A request for a control nobody else holds goes nowhere.
+    holder.send({ type: 'request', path });
+    asker.send({ type: 'request', path: '/channels/ch10/fader' });
+    await sleep(300);
+    expect(holder.count('controlRequest', from)).toBe(1);
+    await holder.answer(holder.command('release', path));
+    await Promise.all([holder.close(), holderStandby.close(), asker.close()]);
+  });
 });
 
 describe('ahead of the cluster', () => {

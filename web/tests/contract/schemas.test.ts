@@ -271,6 +271,9 @@ describe('WebSocket messages', () => {
     { type: 'resync' },
     { type: 'touch', id: cmd, seq: 2, path: '/channels/ch1/fader' },
     { type: 'release', id: cmd, seq: 3, path: '/channels/ch1/fader' },
+    { type: 'request', path: '/mixMinus/mm1/interrupt/active' },
+    { type: 'select', element: 'ch3' },
+    { type: 'select', element: null },
   ])('client accepts %j', (msg) => {
     expect(contract.checkClientMessage(msg)).toBeNull();
   });
@@ -312,6 +315,14 @@ describe('WebSocket messages', () => {
     { type: 'ping', t: 1, revision: 4 },
     { type: 'pong', t: 1, replica },
     { type: 'meters' },
+    // A request and a selection are not commands: no id, no seq.
+    { type: 'request', id: cmd, path: '/channels/ch1/fader' },
+    { type: 'request', path: '/channels/ch1/peak' },
+    { type: 'request' },
+    { type: 'select' },
+    { type: 'select', element: 'Ch 3' },
+    { type: 'select', element: ['ch1', 'ch2'] },
+    { type: 'select', id: cmd, seq: 1, element: 'ch1' },
   ])('client refuses %j', (msg) => {
     expect(contract.checkClientMessage(msg)).not.toBeNull();
   });
@@ -347,6 +358,9 @@ describe('WebSocket messages', () => {
     ['503 not applied', { type: 'error', replica, code: 503, message: 'not applied', commandId: cmd, path: '/channels/ch1/fader' }],
     ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 } }],
     ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
+    ['selections', { type: 'selections', replica, selections: [{ session: owner, element: 'ch3' }, { session: { ...owner, handle: 'Rk9vYmFyLWJhei1xdXV4LT' }, element: 'pgm20' }] }],
+    ['no selections', { type: 'selections', replica, selections: [] }],
+    ['control request', { type: 'controlRequest', replica, path: '/mixMinus/mm1/interrupt/active', from: owner }],
   ])('server accepts %s', (_, msg) => {
     expect(server(msg)).toBeNull();
   });
@@ -375,6 +389,10 @@ describe('WebSocket messages', () => {
     ['ping with state', { type: 'ping', replica, t: 1, revision: 3 }],
     ['ping without replica', { type: 'ping', t: 1 }],
     ['error with a code outside the contract', { type: 'error', replica, code: 500, message: 'oops', commandId: cmd }],
+    ['selection of nothing', { type: 'selections', replica, selections: [{ session: owner, element: null }] }],
+    ['selection by a session id', { type: 'selections', replica, selections: [{ session: 'dGFiLTEtc2Vzc2lvbi1pZA', element: 'ch1' }] }],
+    ['control request without asker', { type: 'controlRequest', replica, path: '/channels/ch1/fader' }],
+    ['control request for a meter', { type: 'controlRequest', replica, path: '/channels/ch1/peak', from: owner }],
   ])('server refuses %s', (_, msg) => {
     expect(server(msg)).not.toBeNull();
   });

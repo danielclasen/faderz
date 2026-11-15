@@ -50,6 +50,8 @@
   let selected = $state<string | null>(null);
   /** Processing section to show first when a strip's chip selected the channel. */
   let section = $state<string | null>(null);
+  // Other screens mark what this one has selected.
+  $effect(() => mixer.select(selected));
 
   /** Moves focus to a region; on a narrow screen the masters open first. */
   function skip(e: MouseEvent, id: string): void {

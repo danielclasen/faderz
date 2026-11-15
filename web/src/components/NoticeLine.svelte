@@ -1,11 +1,17 @@
 <script lang="ts">
   // The newest notice in a line of fixed height, with its repeat count
-  // and the number of others; never an overlay on the controls.
+  // and the number of others; never an overlay on the controls. A notice
+  // that a control is held carries ASK, which asks its holder for it.
   import { getMixer } from '../lib/state/mixer.svelte';
+  import { TRANSMITTING } from '../lib/sync/machines';
   import { tip } from '../lib/tip';
   const mixer = getMixer();
   const latest = $derived(mixer.notices.at(-1) ?? null);
   const others = $derived(mixer.notices.length - 1);
+  /** The control a held-control notice names, while another session still holds it. */
+  const askable = $derived(
+    latest?.kind === 'conflict' && latest.key !== undefined && mixer.ownedByOther(latest.key) && TRANSMITTING.has(mixer.status.link) ? latest.key : null,
+  );
 </script>
 
 <div class="notice-line" role="log" aria-live="polite" aria-label="Notices">
@@ -17,6 +23,16 @@
       <span class="text">{latest.text}</span>
       <span class="count num" class:shown={latest.count > 1}>x{latest.count}</span>
       <span class="more num" class:shown={others > 0}>+{others}</span>
+      {#if latest.kind === 'conflict'}
+        <!-- Kept in place while hidden, so the text does not move. -->
+        <button
+          class="ask"
+          class:shown={askable !== null}
+          onclick={() => askable && mixer.requestControl(askable)}
+          aria-hidden={askable === null}
+          title="Ask the holder to give the control up">ASK</button
+        >
+      {/if}
       <button onclick={() => mixer.dismiss(latest.id)} aria-label="Dismiss notice">x</button>
     </div>
   {/if}
@@ -49,6 +65,9 @@
   .notice.error {
     border-left-color: var(--err);
   }
+  .notice.request {
+    border-left-color: var(--accent);
+  }
   .text {
     flex: 1;
     min-width: 0;
@@ -63,6 +82,21 @@
     color: var(--text-dim);
   }
   .shown {
+    visibility: visible;
+  }
+  .notice .ask {
+    visibility: hidden;
+    height: 16px;
+    line-height: 16px;
+    padding: 0 6px;
+    border: 1px solid var(--key-edge);
+    border-radius: 2px;
+    color: var(--text);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+  }
+  .notice .ask.shown {
     visibility: visible;
   }
   .notice button {

@@ -177,6 +177,11 @@ export class RawClient {
     return answer!;
   }
 
+  /** Sends a message that is not a command, such as select or request. */
+  send(msg: Message): void {
+    this.ws.send(JSON.stringify(msg));
+  }
+
   close(): void {
     this.ws.close();
   }
