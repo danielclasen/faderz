@@ -174,9 +174,25 @@ export class SyncEngine {
       const t = Math.max(0, Math.floor(this.clock.now()));
       for (const l of [this.primary, this.standby]) if (l?.opened) this.send(l, { type: 'ping', t });
       this.sweep();
-      this.clock.schedule(beat, HEARTBEAT_MS);
+      this.deadline(beat, HEARTBEAT_MS);
     };
-    this.clock.schedule(beat, HEARTBEAT_MS);
+    this.deadline(beat, HEARTBEAT_MS);
+  }
+
+  /**
+   * Runs fn `ms` from now. A timer that fires more than SUSPECT_MS late
+   * shows that the worker itself stalled (garbage collection, a busy CPU),
+   * and the messages received meanwhile may still wait behind it: fn then
+   * yields to them once, from a 0 ms timer, before it judges what did not
+   * arrive. Returns the cancel of whichever timer is pending.
+   */
+  private deadline(fn: () => void, ms: number): () => void {
+    const at = this.clock.now() + Math.max(0, ms);
+    let cancel = this.clock.schedule(() => {
+      if (this.clock.now() - at > SUSPECT_MS) cancel = this.clock.schedule(fn, 0);
+      else fn();
+    }, ms);
+    return () => cancel();
   }
 
   input(msg: ToWorker): void {
@@ -319,7 +335,7 @@ export class SyncEngine {
     const socket = this.deps.socket(withSession(this.deps.endpoints[index]!, this.deps.session));
     socket.binaryType = 'arraybuffer';
     const link = new Link(role, index, socket, this.clock.now());
-    link.cancelWatch = this.clock.schedule(() => this.closed(link, 'lost'), CONNECT_TIMEOUT_MS);
+    link.cancelWatch = this.deadline(() => this.closed(link, 'lost'), CONNECT_TIMEOUT_MS);
     socket.onopen = () => this.opened(link);
     socket.onmessage = (ev) => this.message(link, ev.data);
     socket.onclose = () => this.closed(link, 'lost');
@@ -370,18 +386,13 @@ export class SyncEngine {
 
   /**
    * Re-arms the traffic watch of a link: suspect after SUSPECT_MS, dead
-   * after DEAD_MS. A watch that fires more than SUSPECT_MS late shows that
-   * the worker itself stalled (garbage collection, a busy CPU), and the
-   * messages received meanwhile may still wait behind it: it yields to
-   * them once before it counts the silence.
+   * after DEAD_MS. A late watch yields to the messages a stall held up
+   * before it counts the silence (deadline()).
    */
-  private watch(link: Link, yielded = false): void {
+  private watch(link: Link): void {
     link.cancelWatch?.();
-    const now = this.clock.now();
-    const due = link.lastRx + (link.suspect ? DEAD_MS : SUSPECT_MS) - now;
-    const at = now + Math.max(0, due);
-    link.cancelWatch = this.clock.schedule(() => {
-      if (!yielded && this.clock.now() - at > SUSPECT_MS) return this.watch(link, true);
+    const due = link.lastRx + (link.suspect ? DEAD_MS : SUSPECT_MS) - this.clock.now();
+    link.cancelWatch = this.deadline(() => {
       const silence = this.clock.now() - link.lastRx;
       if (silence >= DEAD_MS) return this.closed(link, 'dead');
       if (silence >= SUSPECT_MS && !link.suspect) {
@@ -436,7 +447,7 @@ export class SyncEngine {
   private awaitSync(): void {
     this.cancelSyncTimeout?.();
     const p = this.primary;
-    this.cancelSyncTimeout = this.clock.schedule(() => {
+    this.cancelSyncTimeout = this.deadline(() => {
       this.cancelSyncTimeout = null;
       if (p === this.primary && p && (this.link === 'Syncing' || this.link === 'Resyncing')) this.closed(p, 'noAnswer');
     }, SYNC_TIMEOUT_MS);

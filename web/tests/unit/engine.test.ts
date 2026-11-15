@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import { CONNECT_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
 import { ownerHandle } from '../../src/lib/net/handle';
 import type { Patch } from '../../src/lib/sync/messages';
@@ -233,6 +233,42 @@ describe('sync engine: heartbeat and failure detection', () => {
     expect(primary.closed).toBe(true);
     expect(standby.ofType('promote')).toHaveLength(1);
     expect(engine.status().failover?.reason).toBe('dead');
+  });
+
+  it('drops no command for its expiry over a stall whose answer was queued meanwhile', () => {
+    const { clock, engine, primary, standby, tick } = live();
+    tick();
+    engine.input({ type: 'set', path: '/channels/ch1/mute', value: true });
+    const [set] = primary.ofType('set');
+    clock.stall(COMMAND_EXPIRY_MS + 500);
+    primary.deliver(delta(R1, 11, { changes: [{ path: '/channels/ch1/mute', value: true }], origins: [{ owner: YOU, commandId: set!.id, seq: set!.seq }] }));
+    standby.deliver({ type: 'ping', replica: R2, t: 1 });
+    clock.advance(0);
+    expect(engine.outbox.size).toBe(0);
+    expect(tick()!.notices).toBeUndefined();
+  });
+
+  it('leaves no primary for its sync timeout over a stall whose snapshot was queued meanwhile', () => {
+    const t = setup();
+    const s = t.sockets[0]!;
+    s.open();
+    t.clock.stall(SYNC_TIMEOUT_MS + 500);
+    s.deliver(replicas(R1));
+    s.deliver(snapshot(R1, 4));
+    t.clock.advance(0);
+    expect(s.closed).toBe(false);
+    expect(t.engine.link).toBe('Live');
+  });
+
+  it('abandons no socket for its connect timeout over a stall whose open was queued meanwhile', () => {
+    const t = setup();
+    const s = t.sockets[0]!;
+    t.clock.stall(CONNECT_TIMEOUT_MS + 500);
+    s.open();
+    t.clock.advance(0);
+    expect(s.closed).toBe(false);
+    expect(t.engine.link).toBe('Syncing');
+    expect(s.sent[0]).toMatchObject({ type: 'hello', mode: 'primary' });
   });
 
   it('fails over after three missed beats', () => {
