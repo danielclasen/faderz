@@ -397,3 +397,31 @@ test('on a touch screen no control of the mixer is under 24 px (WCAG 2.5.8)', as
   );
   expect(coarse ? [...new Set(small)] : []).toEqual([]);
 });
+
+test('a notice gives its keys a finger-sized target on a touch screen and moves nothing', async ({ page, baseURL }) => {
+  await live(page);
+  const line = page.locator('.notice-line').first();
+  const before = await line.boundingBox();
+  const path = '/channels/ch4/fader';
+  const other = await RawClient.open(baseURL!);
+  try {
+    expect((await other.command({ type: 'touch', path })).type).toBe('delta');
+    // A keyboard adjust of the held fader is refused at once with a notice.
+    const fader = page.locator(`[role="slider"][data-path="${path}"]`);
+    await fader.focus();
+    await page.keyboard.press('ArrowUp');
+    const notice = page.getByTestId('notice');
+    await expect(notice).toBeVisible();
+    const keys = [notice.getByRole('button', { name: 'Dismiss notice' }), notice.getByRole('button', { name: 'ASK' })];
+    const coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
+    for (const key of keys) {
+      await expect(key).toBeVisible();
+      const box = (await key.boundingBox())!;
+      if (coarse) expect(Math.min(box.width, box.height), await key.textContent() ?? '').toBeGreaterThanOrEqual(24);
+    }
+    expect(await line.boundingBox()).toEqual(before);
+  } finally {
+    await other.command({ type: 'release', path });
+    other.close();
+  }
+});

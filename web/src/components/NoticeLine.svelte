@@ -117,4 +117,20 @@
     color: var(--text-dim);
     padding: 0 4px;
   }
+  /* Touch screens: every key of the line is at least 24 px square
+     (WCAG 2.5.8). It overhangs the 20 px line by 2 px each way rather
+     than growing it, so a notice moves nothing. */
+  @media (pointer: coarse) {
+    .notice button,
+    .notice .ask {
+      box-sizing: border-box;
+      min-width: 24px;
+      height: 24px;
+      margin: -2px 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: normal;
+    }
+  }
 </style>
