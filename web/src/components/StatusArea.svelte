@@ -95,9 +95,11 @@
     {/if}
   </span>
   <span class="slot pend">
-    {#if status.outbox > 0}
-      <span class="pending fixed" data-testid="pending" title="Commands waiting for confirmation">{fit(`${status.outbox} pending`, 11)}</span>
-    {/if}
+    <span class="box">
+      {#if status.outbox > 0}
+        <span class="pending fixed" data-testid="pending" title="Commands waiting for confirmation">{fit(`${status.outbox} pending`, 11)}</span>
+      {/if}
+    </span>
   </span>
   <span class="slot fo">
     {#if failover}
@@ -116,7 +118,7 @@
   >
     <i></i><b>{LABEL[status.link]}</b>
   </div>
-  <span class="sr-only" data-testid="revision">rev {status.revision}</span>
+  <span class="sr-only" data-testid="revision"><span class="rev">rev {status.revision}</span></span>
 </div>
 
 <style>
@@ -135,8 +137,19 @@
   .slot.q {
     width: 5ch;
   }
+  /* The count comes and goes with every write. A flex item is never a
+     relayout boundary, so it sits in a block child of fixed size with
+     strict containment: a change lays out the box, not the page. */
   .slot.pend {
+    display: block;
     width: 11ch;
+  }
+  .slot.pend .box {
+    display: block;
+    height: 14px;
+    line-height: 14px;
+    text-align: center;
+    contain: strict;
   }
   /* Left-aligned, with its text padded at the end: the target replica
      appearing after the source moves nothing. */
@@ -193,6 +206,15 @@
     font-weight: 600;
     letter-spacing: 0.06em;
     white-space: nowrap;
+  }
+  /* The revision changes with every patch. The visually hidden box is
+     positioned, which is never a relayout boundary, so the text sits in
+     a block child with strict containment: a change lays out that box,
+     not the page. */
+  .rev {
+    display: block;
+    height: 1px;
+    contain: strict;
   }
   .pending {
     font-size: 10.5px;
