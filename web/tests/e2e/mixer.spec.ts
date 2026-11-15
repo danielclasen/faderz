@@ -1010,7 +1010,8 @@ test('labels the channel meter in dBFS on its outer side, apart from the fader s
     const fill = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function (text: string, x: number, y: number, max?: number) {
       const m = this.getTransform();
-      seen.push({ text, x: x * m.a / devicePixelRatio, y: y * m.d / devicePixelRatio });
+      // The strips' canvas only: the masters draw their labels on their own.
+      if (this.canvas.matches('.mixer > .meter-layer')) seen.push({ text, x: x * m.a / devicePixelRatio, y: y * m.d / devicePixelRatio });
       return max === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, max);
     };
   });

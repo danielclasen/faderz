@@ -102,6 +102,8 @@ export class MeterLayer {
   private dpr = 1;
   private w = 0;
   private h = 0;
+  /** The canvas box relative to its place without its transform, px. */
+  private box: Rect = { x: 0, y: 0, w: 0, h: 0 };
   private zones: MeterZones = { alignment: -18, permittedMax: -9, truePeakMax: -1 };
   /** Loudness target, LUFS: marked on the momentary loudness bar of channel meters. */
   private target = -23;
@@ -214,35 +216,71 @@ export class MeterLayer {
     };
   }
 
-  /** Reads every rectangle once, relative to the canvas, after a layout change. */
+  /**
+   * Reads every rectangle once after a layout change, and fits the canvas
+   * to the visible meters: each frame drawn copies every pixel of the
+   * canvas, so a canvas the size of the view cost the main thread a few
+   * ms a frame for pixels no meter uses. The canvas keeps its layout
+   * position, at the corner of the host, and moves by a transform only,
+   * which is no layout shift.
+   */
   private measure(): void {
     this.layoutDirty = false;
     const canvas = this.canvas!;
     const c = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    if (c.width !== this.w || c.height !== this.h || dpr !== this.dpr) {
-      this.w = c.width;
-      this.h = c.height;
-      this.dpr = dpr;
-      canvas.width = Math.max(1, Math.round(c.width * dpr));
-      canvas.height = Math.max(1, Math.round(c.height * dpr));
-    }
-    const rel = (r: DOMRect): Rect => ({ x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height });
+    // Rectangles relative to the canvas's place without its transform.
+    const ox = c.left - this.box.x;
+    const oy = c.top - this.box.y;
+    const rel = (r: DOMRect): Rect => ({ x: r.left - ox, y: r.top - oy, w: r.width, h: r.height });
     const clips = new Map<HTMLElement, Rect>();
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
     for (const s of this.slots.values()) {
       if (!s.visible) continue;
       s.rect = rel(s.el.getBoundingClientRect());
       if (s.clipper === undefined) s.clipper = this.clipperOf(s.el);
-      if (!s.clipper) {
-        s.clip = null;
-        continue;
-      }
-      let clip = clips.get(s.clipper);
-      if (!clip) {
-        clip = rel(s.clipper.getBoundingClientRect());
-        clips.set(s.clipper, clip);
+      let clip: Rect | null = null;
+      if (s.clipper) {
+        clip = clips.get(s.clipper) ?? null;
+        if (!clip) {
+          clip = rel(s.clipper.getBoundingClientRect());
+          clips.set(s.clipper, clip);
+        }
       }
       s.clip = clip;
+      const r = s.rect;
+      const left = clip ? Math.max(r.x, clip.x) : r.x;
+      const top = clip ? Math.max(r.y, clip.y) : r.y;
+      const right = clip ? Math.min(r.x + r.w, clip.x + clip.w) : r.x + r.w;
+      const bottom = clip ? Math.min(r.y + r.h, clip.y + clip.h) : r.y + r.h;
+      if (right <= left || bottom <= top) continue;
+      x0 = Math.min(x0, left);
+      y0 = Math.min(y0, top);
+      x1 = Math.max(x1, right);
+      y1 = Math.max(y1, bottom);
+    }
+    const box: Rect = x1 > x0 && y1 > y0 ? { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1) - Math.floor(x0), h: Math.ceil(y1) - Math.floor(y0) } : { x: 0, y: 0, w: 0, h: 0 };
+    const dpr = window.devicePixelRatio || 1;
+    if (box.w !== this.w || box.h !== this.h || dpr !== this.dpr) {
+      this.w = box.w;
+      this.h = box.h;
+      this.dpr = dpr;
+      canvas.style.width = `${box.w}px`;
+      canvas.style.height = `${box.h}px`;
+      canvas.width = Math.max(1, Math.round(box.w * dpr));
+      canvas.height = Math.max(1, Math.round(box.h * dpr));
+    }
+    if (box.x !== this.box.x || box.y !== this.box.y) canvas.style.transform = `translate(${box.x}px, ${box.y}px)`;
+    this.box = box;
+    for (const s of this.slots.values()) {
+      if (!s.visible) continue;
+      s.rect = { ...s.rect, x: s.rect.x - box.x, y: s.rect.y - box.y };
+    }
+    for (const clip of clips.values()) {
+      clip.x -= box.x;
+      clip.y -= box.y;
     }
   }
 
