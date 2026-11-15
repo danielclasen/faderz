@@ -31,4 +31,13 @@ for (const font of readdirSync('dist/assets').filter((f) => /\.(woff2?|ttf|otf)$
   }
   packages.add(owner);
 }
+// A font inlined as a data: URL, or one a script or style sheet loads
+// that is not a file of its own, passes the tracing above unseen.
+for (const file of readdirSync('dist/assets').filter((f) => /\.(js|css)$/.test(f))) {
+  const text = readFileSync(`dist/assets/${file}`, 'utf8');
+  if (/data:(font\/|application\/(x-)?font)/.test(text)) throw new Error(`${file} inlines a font as a data: URL`);
+  for (const [, font] of text.matchAll(/\/assets\/([^"'`)\s]+\.(?:woff2?|ttf|otf))/g)) {
+    if (!existsSync(`dist/assets/${font}`)) throw new Error(`${file} loads ${font}, which the build does not ship`);
+  }
+}
 console.log(`THIRD-PARTY-WEB.txt covers ${[...packages].sort().join(', ')}`);
