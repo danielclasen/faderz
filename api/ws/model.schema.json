@@ -72,7 +72,7 @@
       "pattern": "^(0|[1-9][0-9]{0,19})$"
     },
     "CommandId": {
-      "description": "Client-generated UUID of a command. A command id is applied at most once across all replicas within the deduplication retention, at least 10 s after the command was applied, so a client may resend it after a failover. A copy that arrives after the retention is applied again; its seq (client-message.schema.json#/$defs/Set) keeps it from undoing a later command of the same control.",
+      "description": "Client-generated UUID of a command. A command id is applied at most once across all replicas within the deduplication retention, at least 10 s after the command was applied, so a client may resend it after a failover. A copy that arrives after the retention is applied again; its seq (client-message.schema.json#/$defs/Set) keeps it from undoing a later command of the same control only while the server still keeps the session's seqs, at least 13 s past the end of the session's lifetime. A client sends no copy more than 3 s after it issued the command, but nothing bounds how late a copy it sent arrives; one arriving after the seqs are forgotten is applied as a new command.",
       "type": "string",
       "format": "uuid"
     },
