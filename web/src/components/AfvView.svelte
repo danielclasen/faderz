@@ -78,8 +78,11 @@
 </div>
 
 <style>
+  /* One column as wide as the view: the table scrolls in its own box
+     instead of widening the view past the screen. */
   .view {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     gap: 12px;
     padding: 10px 14px;

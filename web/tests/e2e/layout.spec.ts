@@ -202,7 +202,7 @@ test('every fader fits its box, VCA masters included', async ({ page }) => {
 
 test('status-bar counters reserve their width, so a new digit moves nothing', async ({ page }) => {
   await live(page);
-  await expect(page.getByTestId('counter').first()).toBeVisible();
+  await expect(page.getByTestId('counter').first()).toBeAttached();
   const widths = await page.getByTestId('counter').evaluateAll((list) =>
     list.map((b) => {
       const probe = document.createElement('b');
@@ -217,6 +217,35 @@ test('status-bar counters reserve their width, so a new digit moves nothing', as
   );
   expect(widths.length).toBeGreaterThan(0);
   for (const d of widths) expect(d).toBeLessThan(0.5);
+});
+
+test('status-bar counters are never cut silently: all in a tooltip, a count when they do not fit', async ({ page }) => {
+  await live(page);
+  const box = page.getByTestId('counters');
+  await expect(page.getByTestId('counter').first()).toBeAttached();
+  const label = await box.getAttribute('aria-label');
+  for (const name of ['deadline_miss', 'overrun_skipped_samples', 'input_late_blocks', 'input_wait_timeout', 'command_late', 'afv_late']) {
+    expect(label).toContain(`${name} `);
+  }
+  expect(await box.getAttribute('data-tip')).toBe(label);
+  // Either every counter shows in full, or the count does.
+  const state = await box.evaluate((b) => {
+    const list = b.querySelector<HTMLElement>('.list')!;
+    const compact = b.querySelector<HTMLElement>('.compact')!;
+    const fits = list.scrollWidth <= b.clientWidth;
+    const shown = (e: HTMLElement) => getComputedStyle(e).visibility === 'visible';
+    return { fits, list: shown(list), compact: shown(compact), compactFits: compact.scrollWidth <= b.clientWidth + 0.5, text: compact.textContent, w: b.clientWidth };
+  });
+  expect(state.w).toBeGreaterThan(0);
+  expect(state.list).toBe(state.fits);
+  expect(state.compact).toBe(!state.fits);
+  expect(state.compactFits).toBe(true);
+  expect(state.text).toMatch(/^6 counters, \d+ nonzero$/);
+  // Reachable by keyboard: focus shows the full list.
+  await box.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('tooltip')).toHaveText(label!);
 });
 
 test('no visible label is cut off without its full text in a tooltip reachable by keyboard', async ({ page, request }) => {
@@ -249,8 +278,23 @@ test('no visible label is cut off without its full text in a tooltip reachable b
           if (cs.visibility === 'hidden' || el.closest('.sr-only')) continue;
           const clipX = cs.overflowX === 'hidden' || cs.overflowX === 'clip' || cs.textOverflow === 'ellipsis';
           const clipY = cs.overflowY === 'hidden' || cs.overflowY === 'clip';
-          const cut = (clipX && el.scrollWidth > el.clientWidth + 1) || (clipY && el.scrollHeight > el.clientHeight + 1);
-          if (!cut) continue;
+          const own = (clipX && el.scrollWidth > el.clientWidth + 1) || (clipY && el.scrollHeight > el.clientHeight + 1);
+          // Cut by an ancestor that clips without scrolling, up to the
+          // nearest one that scrolls (whose content is reached by scrolling).
+          // The text's own extent, not the box's: a heading's box may be
+          // wider than its words.
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const t = range.getBoundingClientRect();
+          let byParent = false;
+          for (let p = el.parentElement; p && p !== document.body && !byParent; p = p.parentElement) {
+            const ps = getComputedStyle(p);
+            if ([ps.overflowX, ps.overflowY].some((o) => o === 'auto' || o === 'scroll')) break;
+            const pr = p.getBoundingClientRect();
+            if ((ps.overflowX === 'hidden' || ps.overflowX === 'clip') && (t.left < pr.left - 1 || t.right > pr.right + 1)) byParent = true;
+            if ((ps.overflowY === 'hidden' || ps.overflowY === 'clip') && (t.top < pr.top - 1 || t.bottom > pr.bottom + 1)) byParent = true;
+          }
+          if (!own && !byParent) continue;
           // lib/tip.ts: shown on hover, keyboard focus and a long touch.
           const holder = el.closest<HTMLElement>('[data-tip]');
           const tipped = holder !== null && (holder.dataset['tip'] ?? '').includes(text) && holder.tabIndex >= 0;

@@ -92,9 +92,13 @@
     font-size: 11px;
     text-transform: uppercase;
   }
+  /* Narrow: both sections stack and the view scrolls, so no output row
+     is cut off below the screen. */
   @media (max-width: 900px) {
     .view {
       grid-template-columns: minmax(0, 1fr);
+      overflow: auto;
+      scrollbar-gutter: stable;
     }
   }
 </style>
