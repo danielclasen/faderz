@@ -58,6 +58,7 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `POST /__mock/drop-clients` | closes every socket |
 | `POST /__mock/consoles/<id>/bank?offset=<n>` | moves that console's bank to start at channel index `n` |
 | `POST /__mock/skip-revision` | advances the revision without a delta |
+| `POST /__mock/write` | body `{"changes": [{path, value}]}`: commits the changes in one revision whether or not a replica can commit, as a restore writing state does; answers like `PATCH /state` |
 | `POST /__mock/rewind?by=<n>` | rolls the cluster back `n` revisions, as a restore from an older backup would: a new epoch and every socket closed, so a client that held state reconnects with the old epoch and gets a snapshot of the new one |
 
 A replica that is not partitioned itself but is left without a majority

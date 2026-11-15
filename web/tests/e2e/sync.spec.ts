@@ -474,7 +474,12 @@ test('a client never resumes onto a restored cluster that has committed past its
   const mine = (await debug(page, 'revision')) as number;
   for (const id of REPLICAS) expect((await request.post(`/__mock/replicas/${id}/kill`)).ok()).toBe(true);
   await request.post('/__mock/rewind?by=2');
-  for (const v of [-30, -31, -32]) await patch(request, '/channels/ch19/fader', v);
+  // Every replica is down, so the API refuses writes (503): the restored
+  // cluster's newer history is written as a restore would write it.
+  for (const v of [-30, -31, -32]) {
+    const res = await request.post('/__mock/write', { data: { changes: [{ path: '/channels/ch19/fader', value: v }] } });
+    expect(res.ok()).toBe(true);
+  }
   const restored = (await serverState(request)).revision;
   expect(restored).toBeGreaterThan(mine);
   for (const id of REPLICAS) expect((await request.post(`/__mock/replicas/${id}/restore`)).ok()).toBe(true);

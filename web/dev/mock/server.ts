@@ -318,7 +318,7 @@ export class MockServer {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(body));
     };
-    await readBody(req);
+    const raw = await readBody(req);
     const method = req.method ?? 'GET';
     const path = url.pathname;
     // The dev server listens on every interface: a page of another origin
@@ -391,6 +391,25 @@ export class MockServer {
     if (method === 'POST' && path === '/__mock/skip-revision') {
       c.skipRevision();
       return send(200, { revision: c.revision });
+    }
+    if (method === 'POST' && path === '/__mock/write') {
+      // Commits whatever the replicas report, as a restore writing state
+      // into the cluster does; the API's quorum gate is not in the way.
+      let changes: Change[];
+      try {
+        changes = (JSON.parse(raw) as { changes: Change[] }).changes;
+      } catch {
+        return send(400, { error: 'body must be {"changes": [{path, value}]}' });
+      }
+      try {
+        c.flush();
+        const result = c.patch(crypto.randomUUID(), changes);
+        c.flush();
+        return send(200, result);
+      } catch (e) {
+        if (e instanceof CommandError) return send(e.code, { error: e.message });
+        throw e;
+      }
     }
     send(404, { error: 'unknown mock control' });
   }

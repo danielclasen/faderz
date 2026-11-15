@@ -846,6 +846,12 @@ describe('replica faults', () => {
     expect(via.status).toBe(503);
     expect(cluster.state.channels['ch12']!.mute).toBe(before);
     expect((await rest('GET', '/state')).status).toBe(200);
+    // The dev control writes as a restore does, past the quorum gate.
+    const devWrite = (changes: unknown) =>
+      fetch(`http://${main.base}/__mock/write`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ changes }) });
+    expect((await devWrite(write.changes)).status).toBe(200);
+    expect(cluster.state.channels['ch12']!.mute).toBe(!before);
+    expect((await devWrite([{ path: '/channels/ch12/mute', value: before }])).status).toBe(200);
     await control('POST', '/replicas/r2/heal');
     await control('POST', '/replicas/r3/heal');
     expect((await rest('PATCH', '/state', write)).status).toBe(200);
