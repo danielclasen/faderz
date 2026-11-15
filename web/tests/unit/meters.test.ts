@@ -321,6 +321,39 @@ describe('meter store: true peak between display ticks', () => {
       expect(store.overs.has('buses/pgm20')).toBe(false);
     });
 
+    it('is seen from LRA alone turning null', () => {
+      const store = new MeterStore();
+      store.setShape(shape);
+      const t = loudOffset('pgm20');
+      const a = loud(0, { maxMomentary: -20, maxShortTerm: -22, lraStable: false });
+      a[t + 2] = -23;
+      a[t + 3] = 4;
+      store.ingest('r1', a, 40);
+      // Integrated already measured again, LRA not yet: only LRA shows it.
+      const b = loud(-30, { maxMomentary: -20, maxShortTerm: -22, lraStable: false });
+      b[t + 2] = -23;
+      b[t + 3] = Number.NaN;
+      store.ingest('r1', b, 80);
+      expect(store.overs.has('buses/pgm20')).toBe(false);
+    });
+
+    it('is never read on a channel, whose values past its legs belong to the next channels', () => {
+      const store = new MeterStore();
+      store.setShape(shape);
+      // ch1 is the first channel, one leg, a direct out: peak, true peak, momentary.
+      const a = new Float32Array(layout.valueCount).fill(-40);
+      a[1] = 0.2;
+      store.ingest('r1', a, 40);
+      expect(store.overs.has('channels/ch1')).toBe(true);
+      // Where a bus keeps its maxima and integrated, ch1 is followed by
+      // other channels' values; here they fall to null.
+      const b = new Float32Array(layout.valueCount).fill(-40);
+      for (let i = 3; i < 3 + 8; i++) b[i] = Number.NaN;
+      store.ingest('r1', b, 80);
+      expect(store.overs.has('channels/ch1')).toBe(true);
+      expect(store.truePeakSinceReset('channels', 'ch1')).toBeCloseTo(0.2, 5);
+    });
+
     it('is seen from LRA turning unstable when the maxima do not move', () => {
       const store = new MeterStore();
       store.setShape(shape);
