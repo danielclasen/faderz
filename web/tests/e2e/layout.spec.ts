@@ -360,3 +360,27 @@ test('the dev mock key covers no control and no readout', async ({ page }) => {
   });
   expect(hits).toEqual([]);
 });
+
+test('on a touch screen no control of the mixer is under 24 px (WCAG 2.5.8)', async ({ page }) => {
+  await live(page);
+  // The masters too, where they are an overlay.
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  if (await masters.isVisible()) await masters.click();
+  const coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
+  const small = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('button, [role="slider"], input, select, a[href]')]
+      .filter((el) => !el.closest('aside.mock, .sr-only, .skip'))
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth && cs.visibility !== 'hidden' && cs.pointerEvents !== 'none';
+      })
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return Math.min(r.width, r.height) < 24;
+      })
+      .slice(0, 40)
+      .map((el) => `${el.tagName.toLowerCase()}.${el.className} "${(el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 20)}" ${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)}`),
+  );
+  expect(coarse ? [...new Set(small)] : []).toEqual([]);
+});

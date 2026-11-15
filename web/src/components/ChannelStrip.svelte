@@ -11,6 +11,7 @@
   import { TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
   import { tip } from '../lib/tip';
   import { hold } from '../lib/hold';
+  import { MediaQuery } from 'svelte/reactivity';
   import { pointer } from '../lib/state/pointer';
 
   interface Props {
@@ -22,6 +23,7 @@
   let { channel, index, selected, onselect }: Props = $props();
 
   const mixer = getMixer();
+  const coarse = new MediaQuery('pointer: coarse');
   const st = $derived(mixer.state!.channels[channel.id] as ChannelState);
   const afv = $derived(mixer.state!.afv[channel.id]);
   const tally = $derived(afv?.source ? mixer.state!.tally[afv.source] : undefined);
@@ -91,7 +93,10 @@
     {/if}
   </div>
 
-  <div class="proc" role="group" aria-label={`${channel.name} processing`}>
+  <!-- On a touch screen a chip is too narrow for a finger: the row is one
+       target that opens the processing panel there. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <div class="proc" role="group" aria-label={`${channel.name} processing`} onclick={() => coarse.current && onselect(channel.id, 'input')}>
     {#each [
       { key: 'HPF', on: st.hpf.enabled, to: 'input', what: 'High-pass filter' },
       { key: 'G', on: st.gate.enabled, to: 'dynamics', what: 'Gate' },
@@ -114,7 +119,8 @@
 
   <!-- Every bus is an output that leaves the mixer: assigning or removing
        a channel takes a hold, as muting an output does. -->
-  <div class="routes" role="group" aria-label={`${channel.name} bus assignment`}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <div class="routes" role="group" aria-label={`${channel.name} bus assignment`} onclick={() => coarse.current && onselect(channel.id, 'assign')}>
     {#each mixer.shape!.buses as bus (bus.id)}
       {@const path = pointer('channels', channel.id, 'routes', bus.id)}
       <button
@@ -543,9 +549,16 @@
     }
     .chip {
       line-height: 24px;
+      pointer-events: none;
     }
-    .chip::before {
-      inset: 0;
+    .proc,
+    .routes {
+      cursor: pointer;
+    }
+    .eq {
+      height: 24px;
+      display: flex;
+      align-items: center;
     }
     .pan {
       min-height: 28px;
@@ -572,12 +585,13 @@
     .line2 {
       display: none;
     }
+    /* Three equal keys, each at least 24 px wide (WCAG 2.5.8). */
     .ctl {
-      grid-template-columns: auto auto 1fr;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 2px;
     }
     .ctl .key {
-      padding: 0 2px;
+      padding: 0;
       font-size: 10px;
       letter-spacing: 0;
     }

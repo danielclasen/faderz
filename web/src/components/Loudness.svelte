@@ -236,6 +236,11 @@
     height: 20px;
     font-size: 10px;
   }
+  @media (pointer: coarse) {
+    .reset {
+      height: 28px;
+    }
+  }
   .reset::after {
     content: '';
     position: absolute;

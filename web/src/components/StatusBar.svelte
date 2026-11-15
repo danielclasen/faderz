@@ -80,6 +80,14 @@
     overflow: hidden;
     white-space: nowrap;
   }
+  @media (pointer: coarse) {
+    .bar {
+      height: 32px;
+    }
+    .bar .engine {
+      height: 26px;
+    }
+  }
   .engine-wrap {
     position: relative;
     flex: none;

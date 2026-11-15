@@ -339,6 +339,11 @@
     height: 22px;
     font-size: 11px;
   }
+  @media (pointer: coarse) {
+    .jump {
+      height: 32px;
+    }
+  }
   .jump.miss {
     border-color: var(--err);
   }
