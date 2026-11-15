@@ -213,8 +213,15 @@ test('refuses a fader held by another session at the gesture and shows its value
     await expect(holder).toHaveText(tag);
     expect(await holder.locator('span').evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
     await expect(holder).toHaveAccessibleName(`Fader held by web client ${tag}`);
-    await holder.focus();
-    await expect(page.getByRole('tooltip')).toHaveText(`Fader held by web client ${tag}`);
+    // The keyboard reaches the full label on the fader, not on an extra stop.
+    await expect(holder).toHaveJSProperty('tabIndex', -1);
+    const track = page.locator('[role="slider"][data-path="/channels/ch4/fader"]');
+    await track.focus();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    await expect(track).toBeFocused();
+    await expect(page.getByRole('tooltip')).toHaveText(`Held by web client ${tag}`);
+    await expect(track).toHaveAttribute('aria-valuetext', new RegExp(`held by web client ${tag}$`));
     // The notice sits in the status bar, clear of the monitor and masters.
     const box = (await notice.boundingBox())!;
     const monitor = (await page.getByRole('region', { name: 'Monitor' }).boundingBox())!;
@@ -1219,7 +1226,7 @@ test('keeps replica detail out of the sightline behind one connection lamp', asy
   await expect(details).toBeHidden();
 });
 
-test('keeps a strip to five tab stops and skips to the masters and the monitor', async ({ page }) => {
+test('keeps a strip to five tab stops and skips to the masters and the monitor', async ({ page, baseURL }) => {
   await live(page);
   // The first tab stop of the page is the skip link, shown when focused.
   await page.keyboard.press('Tab');
@@ -1233,7 +1240,11 @@ test('keeps a strip to five tab stops and skips to the masters and the monitor',
 
   // Five controls, then the VCA row of a strip in a VCA: its tooltip
   // names the VCAs and the effective gain, so it stays reachable. Pres 1
-  // is in VCA PRES.
+  // is in VCA PRES. Another session holds its fader: the holder slot adds
+  // no stop.
+  const other = await RawClient.open(baseURL!);
+  expect((await other.command({ type: 'touch', path: '/channels/ch1/fader' })).type).toBe('delta');
+  await expect(page.getByTestId('holder-ch1')).not.toHaveText('');
   await page.locator('[data-channel="ch1"] .head').focus();
   const stops: string[] = [];
   for (let i = 0; i < 12; i++) {
@@ -1246,6 +1257,8 @@ test('keeps a strip to five tab stops and skips to the masters and the monitor',
     );
     await page.keyboard.press('Tab');
   }
+  await other.command({ type: 'release', path: '/channels/ch1/fader' });
+  other.close();
   expect(stops.filter((s) => s !== 'outside')).toEqual(['head', 'Pres 1 PFL', 'Pres 1 AFL', 'Pres 1 mute', 'Pres 1 fader', 'vca']);
   await expect(page.getByRole('region', { name: 'Channel strips' })).toBeVisible();
 });

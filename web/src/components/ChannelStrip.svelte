@@ -183,14 +183,13 @@
   <div class="foot">
     <output class="num value" data-testid={`fader-value-${channel.id}`}><span class="fixed">{fit(formatDb(level), 5)}</span></output>
     <!-- Who holds the fader, in words; the slot is there whether held or
-         not, and reachable by keyboard while another session holds it. -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+         not. It is no tab stop: the held fader's tooltip and value text
+         give the keyboard the full label. -->
     <span
       class="holder"
       class:held={holder !== null}
       class:mine={holderMine}
       role="note"
-      tabindex={holder && !holderMine ? 0 : -1}
       aria-label={holderText || undefined}
       use:tip={holderText}
       data-testid={`holder-${channel.id}`}><span>{holderName}</span></span
@@ -518,10 +517,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     contain: strict;
-  }
-  .holder:focus-visible {
-    outline: 2px solid var(--focus);
-    outline-offset: -2px;
   }
   .holder.held {
     background: var(--owned);
