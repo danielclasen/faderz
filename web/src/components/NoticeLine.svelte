@@ -2,6 +2,7 @@
   // The newest notice in a line of fixed height, with its repeat count
   // and the number of others; never an overlay on the controls.
   import { getMixer } from '../lib/state/mixer.svelte';
+  import { tip } from '../lib/tip';
   const mixer = getMixer();
   const latest = $derived(mixer.notices.at(-1) ?? null);
   const others = $derived(mixer.notices.length - 1);
@@ -9,7 +10,10 @@
 
 <div class="notice-line" role="log" aria-live="polite" aria-label="Notices">
   {#if latest}
-    <div class="notice {latest.kind}" data-testid="notice" title={latest.text}>
+    <!-- A text cut off at the end is whole in the tooltip, which focus
+         shows too. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="notice {latest.kind}" data-testid="notice" tabindex="0" use:tip={latest.text}>
       <span class="text">{latest.text}</span>
       <span class="count num" class:shown={latest.count > 1}>x{latest.count}</span>
       <span class="more num" class:shown={others > 0}>+{others}</span>
@@ -34,6 +38,10 @@
     background: var(--panel-2);
     color: var(--text);
     font-size: 11.5px;
+  }
+  .notice:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -2px;
   }
   .notice.conflict {
     border-left-color: var(--owned);

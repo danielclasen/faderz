@@ -10,6 +10,13 @@ const ACTIVE = '/mixMinus/mm1/interrupt/active';
 const SOURCE = '/mixMinus/mm1/interrupt/source';
 const LIVE = { ...INITIAL_STATUS, link: 'Live' as const };
 
+/** The page reports `state` and says so, as a browser does on a tab switch. */
+function setVisibility(state: 'hidden' | 'visible'): void {
+  Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+  document.dispatchEvent(new Event('visibilitychange'));
+  delete (document as { visibilityState?: unknown }).visibilityState;
+}
+
 /** TALK key of mm1 with a talkback source, latched by a short Space press. */
 function latched() {
   const s = new MixerStore();
@@ -60,11 +67,7 @@ describe('TALK key', () => {
     // not focus a button on click.
     for (const leave of [
       () => window.dispatchEvent(new Event('pagehide')),
-      () => {
-        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-        document.dispatchEvent(new Event('visibilitychange'));
-        delete (document as { visibilityState?: unknown }).visibilityState;
-      },
+      () => setVisibility('hidden'),
     ]) {
       const { posted, key, button } = latched();
       leave();
@@ -96,6 +99,59 @@ describe('TALK key', () => {
     posted.length = 0;
     window.dispatchEvent(new Event('pagehide'));
     expect(posted).toEqual([]);
+    unmount(key);
+    document.body.replaceChildren();
+  });
+
+  it('tells the operator once, on return, that a talk ended because the page was hidden or left', () => {
+    for (const [leave, back, why] of [
+      [() => setVisibility('hidden'), () => setVisibility('visible'), 'the page was hidden'],
+      [() => window.dispatchEvent(new Event('pagehide')), () => window.dispatchEvent(new Event('pageshow')), 'the page was left'],
+    ] as const) {
+      const { s, key } = latched();
+      expect(s.notices).toEqual([]);
+      leave();
+      flushSync();
+      // Nobody sees a notice on a hidden page, and its timer would run out there.
+      expect(s.notices).toEqual([]);
+      back();
+      flushSync();
+      expect(s.notices.map((n) => [n.kind, n.text, n.key])).toEqual([['info', `N-1 Phone 1 talk ended: ${why}`, ACTIVE]]);
+      back();
+      expect(s.notices).toHaveLength(1);
+      unmount(key);
+      document.body.replaceChildren();
+    }
+  });
+
+  it('tells it for a held talk too, and nothing when no talk was on', () => {
+    const { s, key, button } = latched();
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    button.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
+    flushSync();
+    // Idle: away and back says nothing.
+    setVisibility('hidden');
+    setVisibility('visible');
+    expect(s.notices).toEqual([]);
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    setVisibility('hidden');
+    setVisibility('visible');
+    flushSync();
+    expect(s.notices.map((n) => n.text)).toEqual(['N-1 Phone 1 talk ended: the page was hidden']);
+    unmount(key);
+    document.body.replaceChildren();
+  });
+
+  it('says the page was left when pagehide follows visibilitychange, as browsers fire them', () => {
+    const { s, key } = latched();
+    setVisibility('hidden');
+    window.dispatchEvent(new Event('pagehide'));
+    flushSync();
+    // Back from the back-forward cache: pageshow, then visible.
+    window.dispatchEvent(new Event('pageshow'));
+    setVisibility('visible');
+    flushSync();
+    expect(s.notices.map((n) => n.text)).toEqual(['N-1 Phone 1 talk ended: the page was left']);
     unmount(key);
     document.body.replaceChildren();
   });

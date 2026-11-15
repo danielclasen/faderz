@@ -516,21 +516,44 @@ test('ends a held talk when its view is left during the press', async ({ page, r
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 
-test('ends a latched talk when the page is hidden', async ({ page, request }) => {
+test('ends a latched talk when the page is hidden and says so on return, moving nothing', async ({ page, request }) => {
   // A mouse hold over a tab switch gets no blur on Safari. Playwright
   // cannot hide a headless page or fire a real pagehide without leaving
   // it, so the page reports itself hidden and fires visibilitychange.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __shift: number };
+    w.__shift = 0;
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries() as unknown as Array<{ value: number }>) w.__shift += e.value;
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
+  const visibility = (state: 'hidden' | 'visible') =>
+    page.evaluate((v) => {
+      Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
   const { talk, active } = await talkKey(page, request);
   await talk.click();
   await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
   expect(await active()).toBe(true);
-  await page.evaluate(() => {
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
+  await visibility('hidden');
   await expect.poll(active).toBe(false);
   await expect.poll(async () => (await serverState(request)).owners[TALK_OWNER]).toBeUndefined();
   await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  // Back on the page: a notice says the talk ended and why.
+  const text = 'N-1 Phone 1 talk ended: the page was hidden';
+  const notice = page.getByTestId('notice');
+  await expect(page.getByText(text)).toHaveCount(0);
+  await visibility('visible');
+  await expect(notice).toContainText(text);
+  // It takes the fixed notice line: nothing on the page moved, from load on.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  expect(await page.evaluate(() => (window as unknown as { __shift: number }).__shift)).toBe(0);
+  // Cut off or not, its whole text is in a tooltip that the keyboard reaches.
+  await notice.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('tooltip')).toHaveText(text);
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 

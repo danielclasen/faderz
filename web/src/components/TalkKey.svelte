@@ -8,6 +8,8 @@
   // press never leaves a presenter's feed replaced. The page going hidden
   // or away ends a held or latched talk: a mouse hold over a tab or app
   // switch gets no blur where a click does not focus the key (Safari).
+  // Back on the page, a notice says the talk ended and why: the operator
+  // left it on and finds it off.
   // A press on a lit key stops the talk, whichever client lit it. A held
   // or latched talk ends when the key leaves the screen (another view),
   // so no talk outlives the key that stops it. The server also clears it
@@ -83,15 +85,30 @@
     holding = false;
     off();
   }
-  /** The page is hidden or left: a held or latched talk ends. */
-  function hidden(): void {
-    if (holding) return abort();
-    if (!latched) return;
-    off();
-    if (!mixer.locked) latched = false;
+  /** Why a talk ended while the page was away, for the notice on return. */
+  let endedAway: string | null = null;
+  /**
+   * The page is hidden or left: a held or latched talk ends. A browser
+   * fires visibilitychange before pagehide, so the later, more precise
+   * reason replaces the earlier one of the same absence.
+   */
+  function away(why: string): void {
+    if (holding) abort();
+    else if (latched) {
+      off();
+      if (!mixer.locked) latched = false;
+    } else if (endedAway === null) return;
+    endedAway = why;
+  }
+  /** The page is back: say once that a talk ended while it was away. */
+  function back(): void {
+    if (endedAway === null) return;
+    mixer.notify('info', `${name} talk ended: ${endedAway}`, path);
+    endedAway = null;
   }
   function visibility(): void {
-    if (document.visibilityState === 'hidden') hidden();
+    if (document.visibilityState === 'hidden') away('the page was hidden');
+    else back();
   }
   // The key leaves the screen: a held or latched talk ends with it. A
   // layout change that removed the mix-minus left no path to set, so the
@@ -127,7 +144,7 @@
   }
 </script>
 
-<svelte:window onpagehide={hidden} />
+<svelte:window onpagehide={() => away('the page was left')} onpageshow={back} />
 <svelte:document onvisibilitychange={visibility} />
 
 <div class="talk">
