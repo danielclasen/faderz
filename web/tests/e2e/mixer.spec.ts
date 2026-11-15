@@ -1219,7 +1219,7 @@ test('resets a running loudness measurement only after a one second hold', async
   expect(JSON.parse(resets[0]!)).toEqual({ ids: ['pgm20'] });
 });
 
-test('pauses the loudness integration of an output after a hold and runs it on with one press', async ({ page, request }) => {
+test('pauses the loudness integration of an output after a hold and runs it on with one press', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const master = page.locator('[data-master="pgm20"]');
   const integrated = page.getByTestId('loudness-i-pgm20');
