@@ -305,6 +305,22 @@ describe('meter store: true peak between display ticks', () => {
       expect(store.truePeakSinceReset('buses', 'pgm20')).toBe(-30);
     });
 
+    it('is seen from integrated loudness turning null when the maxima do not move', () => {
+      const store = new MeterStore();
+      store.setShape(shape);
+      const t = loudOffset('pgm20');
+      const a = loud(0, { maxMomentary: -20, maxShortTerm: -22, lraStable: false });
+      a[t + 2] = -23;
+      a[t + 3] = 4;
+      store.ingest('r1', a, 40);
+      // Reset while the momentary level equals its maximum.
+      const b = loud(-30, { maxMomentary: -20, maxShortTerm: -22, lraStable: false });
+      b[t + 2] = Number.NaN;
+      b[t + 3] = 4;
+      store.ingest('r1', b, 80);
+      expect(store.overs.has('buses/pgm20')).toBe(false);
+    });
+
     it('is seen from LRA turning unstable when the maxima do not move', () => {
       const store = new MeterStore();
       store.setShape(shape);

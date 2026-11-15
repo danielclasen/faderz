@@ -694,6 +694,10 @@ test('a RESET on one screen clears the true-peak over on every screen', async ({
   await patch(request, '/tone/on', false);
   await expect(page.getByTestId('tp-over-pgm20')).toHaveClass(/over/);
   await expect(page2.getByTestId('tp-over-pgm20')).toHaveClass(/over/);
+  // The 150 ms of tone leaves the 400 ms momentary window before RESET,
+  // as it would on a desk; a RESET while the momentary level is at its
+  // maximum shows only in integrated and LRA (unit tests).
+  await page.waitForTimeout(600);
   await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
   await expect(page.getByTestId('tp-over-pgm20')).not.toHaveClass(/over/);
   await expect(page2.getByTestId('tp-over-pgm20')).not.toHaveClass(/over/);

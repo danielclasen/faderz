@@ -21,6 +21,15 @@ export interface MeterReading {
   correlation?: number | null;
 }
 
+/** What a loudness measurement shows of its reset: NaN for null. */
+interface LoudSeen {
+  integrated: number;
+  lra: number;
+  maxMomentary: number;
+  maxShortTerm: number;
+  lraStable: boolean;
+}
+
 /** Frames kept for maxima over a display period: 0.64 s at 25 frames per second. */
 const HISTORY = 16;
 
@@ -37,7 +46,7 @@ export class MeterStore {
   /** Highest true peak per slot key since it was last cleared, dBTP. */
   private readonly tpMax = new Map<string, number>();
   /** Loudness maxima and LRA state per slot key in the last frame of `loudReplica`. */
-  private readonly loudSeen = new Map<string, { maxMomentary: number; maxShortTerm: number; lraStable: boolean }>();
+  private readonly loudSeen = new Map<string, LoudSeen>();
   private loudReplica: string | null = null;
   /** Replica that measured the latest frame. */
   replica: string | null = null;
@@ -117,17 +126,33 @@ export class MeterStore {
 
   /**
    * The element's loudness measurement restarted since the last frame:
-   * a RESET from any client. The maxima since reset only rise until one,
-   * and LRA is unstable for 60 s after one (model.schema.json Loudness).
+   * a RESET from any client. The maxima since reset only rise until one;
+   * integrated and LRA are null only until enough audio is measured after
+   * one; LRA is unstable for 60 s after one (model.schema.json Loudness).
+   * A reset at the moment the maxima equal the current level shows only
+   * in integrated and LRA.
    */
   private restarted(key: string, slot: MeterSlot, values: Float32Array): boolean {
     const t = slot.offset + 3 * slot.legs;
-    const now = { maxMomentary: values[t + 4]!, maxShortTerm: values[t + 5]!, lraStable: (values[t + 7]! & 2) === 2 };
+    const now: LoudSeen = {
+      integrated: values[t + 2]!,
+      lra: values[t + 3]!,
+      maxMomentary: values[t + 4]!,
+      maxShortTerm: values[t + 5]!,
+      lraStable: (values[t + 7]! & 2) === 2,
+    };
     const prev = this.loudSeen.get(key);
     this.loudSeen.set(key, now);
     if (!prev) return false;
     const fell = (a: number, b: number) => !Number.isNaN(a) && (Number.isNaN(b) || b < a);
-    return fell(prev.maxMomentary, now.maxMomentary) || fell(prev.maxShortTerm, now.maxShortTerm) || (prev.lraStable && !now.lraStable);
+    const cleared = (a: number, b: number) => !Number.isNaN(a) && Number.isNaN(b);
+    return (
+      fell(prev.maxMomentary, now.maxMomentary) ||
+      fell(prev.maxShortTerm, now.maxShortTerm) ||
+      cleared(prev.integrated, now.integrated) ||
+      cleared(prev.lra, now.lra) ||
+      (prev.lraStable && !now.lraStable)
+    );
   }
 
   /** Highest true peak of the element since its over was last cleared, dBTP, or null. */
