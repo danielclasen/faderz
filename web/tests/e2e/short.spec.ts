@@ -3,7 +3,7 @@
 // show in the header because the status bar row is gone.
 
 import { expect, test } from '@playwright/test';
-import { RawClient, live, resetMock } from './support';
+import { REPLICAS, RawClient, debug, live, resetMock } from './support';
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
@@ -95,4 +95,28 @@ test('a notice longer than the header slot widens nothing and moves no header it
     await other.command({ type: 'release', path });
     other.close();
   }
+});
+
+test('the commit banner shows its whole text to the keyboard on a short screen', { tag: '@mock' }, async ({ page, request }) => {
+  await live(page);
+  const banner = page.getByTestId('commit-banner');
+  const primary = (await debug(page, 'primaryReplica'))!;
+  try {
+    for (const r of REPLICAS.filter((x) => x !== primary)) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
+    await expect(banner).toBeVisible();
+    expect(await banner.locator('.text').evaluate((el) => el.scrollWidth > el.clientWidth), 'the banner is cut off').toBe(true);
+    // The banner follows the view menu in the tab order.
+    await page.getByRole('combobox', { name: 'View' }).focus();
+    await page.keyboard.press('Tab');
+    await expect(banner).toBeFocused();
+    const tooltip = page.getByRole('tooltip');
+    await expect(tooltip).toContainText('CHANGES NOT COMMITTING - audio continues');
+    await expect(tooltip).toContainText('Audio continues on the last committed state.');
+    await expect(banner).toHaveAttribute('aria-describedby', 'faderz-tip');
+    await page.keyboard.press('Escape');
+    await expect(tooltip).toBeHidden();
+  } finally {
+    for (const r of REPLICAS) await request.post(`/__mock/replicas/${r}/restore`);
+  }
+  await expect(banner).toHaveCount(0);
 });
