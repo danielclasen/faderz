@@ -33,7 +33,7 @@ async function holdReset(page: Page, master: string): Promise<void> {
 test.beforeEach(async ({ request }) => resetMock(request));
 test.afterEach(async ({ request }) => resetMock(request));
 
-test('loads the mixer from a snapshot and streams meters', async ({ page }) => {
+test('loads the mixer from a snapshot and streams meters', { tag: '@meters' }, async ({ page }) => {
   await live(page);
   await expect(page.locator('[data-channel]')).toHaveCount(29);
   await expect(page.locator('[data-master]')).toHaveCount(4);
@@ -58,7 +58,7 @@ test('moves a fader and shows the value the server echoed', async ({ page, reque
   await expect.poll(async () => (await serverState(request)).owners['/channels/ch3/fader']).toBeUndefined();
 });
 
-test('gives each meter a level for assistive technology and shows the channel meter tap', async ({ page, request }) => {
+test('gives each meter a level for assistive technology and shows the channel meter tap', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const meter = page.getByRole('meter', { name: /^Pres 1 meter, pre-fader/ });
   await expect(meter).toHaveAttribute('aria-valuetext', /^peak -?\d+ dBFS/, { timeout: 5000 });
@@ -68,7 +68,7 @@ test('gives each meter a level for assistive technology and shows the channel me
   await patch(request, '/channels/ch1/meterTap', 'preFader');
 });
 
-test("a meter's level for assistive technology ends where its bars do when the meters stop", async ({ page, request }) => {
+test("a meter's level for assistive technology ends where its bars do when the meters stop", { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
   await live(page);
   const meters = page.locator('[role="meter"][data-meter^="channels/"]');
@@ -185,7 +185,7 @@ test('arms and confirms a scene store and delete from the keyboard alone, within
   await expect(page.getByText(name)).toBeHidden();
 });
 
-test('refuses a fader held by another session at the gesture and shows its value and owner', async ({ page, baseURL, request }) => {
+test('refuses a fader held by another session at the gesture and shows its value and owner', { tag: '@mock' }, async ({ page, baseURL, request }) => {
   const frames: string[] = [];
   page.on('websocket', (ws) => ws.on('framereceived', (f) => typeof f.payload === 'string' && frames.push(f.payload)));
   await live(page);
@@ -323,7 +323,7 @@ test('a fader dragged after a keyboard adjust keeps its touch when focus leaves 
   await expect.poll(owner).toBeUndefined();
 });
 
-test('operates a pan from the keyboard, with no jump from a lone key or a double-click', async ({ page, request }) => {
+test('operates a pan from the keyboard, with no jump from a lone key or a double-click', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   const pan = page.locator('[role="slider"][data-path="/channels/ch21/pan/lr"]');
   await pan.focus();
@@ -548,7 +548,7 @@ test('ends a latched talk when the page is hidden and says so on return, moving 
   const { talk, active } = await talkKey(page, request);
   await talk.click();
   await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
-  expect(await active()).toBe(true);
+  await expect.poll(active).toBe(true);
   await visibility('hidden');
   await expect.poll(active).toBe(false);
   await expect.poll(async () => (await serverState(request)).owners[TALK_OWNER]).toBeUndefined();
@@ -574,7 +574,7 @@ test('ends a latched talk when its view is left, so another client can talk', as
   const { talk, active } = await talkKey(page, request);
   await talk.click();
   await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
-  expect(await active()).toBe(true);
+  await expect.poll(active).toBe(true);
   await page.getByRole('button', { name: 'Scenes' }).click();
   await expect.poll(active).toBe(false);
   await expect.poll(async () => (await serverState(request)).owners[TALK_OWNER]).toBeUndefined();
@@ -621,7 +621,7 @@ test('a tap on a lit TALK key stops the talk, or names the client that holds it'
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 
-test('a latched talk stopped while writes are locked never shows as unlatched while it is still on', async ({ page, request }) => {
+test('a latched talk stopped while writes are locked never shows as unlatched while it is still on', { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
   const { talk, active } = await talkKey(page, request);
   await talk.click();
@@ -650,7 +650,7 @@ test('a latched talk stopped while writes are locked never shows as unlatched wh
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 
-test('reads loudness in LU relative to the target on request', async ({ page, request }) => {
+test('reads loudness in LU relative to the target on request', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const integrated = page.getByTestId('loudness-i-pgm20');
   await expect(integrated).not.toHaveText(/--\.-/, { timeout: 10_000 });
@@ -728,7 +728,7 @@ test('labels every leg of a 5.1 master under its own bar', async ({ page }) => {
   });
 });
 
-test('latches a true-peak over of a channel direct out until cleared', async ({ page, request }) => {
+test('latches a true-peak over of a channel direct out until cleared', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const overs = page.getByTestId('channel-overs');
   const pres1 = /Pres 1(,|$|\.)/;
@@ -747,7 +747,7 @@ test('latches a true-peak over of a channel direct out until cleared', async ({ 
   await patch(request, '/channels/ch1/trim', 0);
 });
 
-test('latches a true-peak over on a master until RESET, however short it was', async ({ page, request }) => {
+test('latches a true-peak over on a master until RESET, however short it was', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const lamp = page.getByTestId('tp-over-pgm20');
   await expect(lamp).not.toHaveClass(/over/);
@@ -766,7 +766,7 @@ test('latches a true-peak over on a master until RESET, however short it was', a
   await patch(request, '/tone/targets', []);
 });
 
-test('shows a channel true peak only on channels with a direct out', async ({ page, request }) => {
+test('shows a channel true peak only on channels with a direct out', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const { shape } = await serverState(request);
   const direct = new Set(shape.outputs.map((o) => o.source));
@@ -781,7 +781,7 @@ test('shows a channel true peak only on channels with a direct out', async ({ pa
   await patch(request, '/channels/ch1/trim', 0);
 });
 
-test('reads the highest true peak since RESET, not the last tenth of a second', async ({ page, request }) => {
+test('reads the highest true peak since RESET, not the last tenth of a second', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const tp = page.getByTestId('tp-pgm20');
   await holdReset(page, 'pgm20');
@@ -799,7 +799,7 @@ test('reads the highest true peak since RESET, not the last tenth of a second', 
   await patch(request, '/tone/targets', []);
 });
 
-test('a RESET on one screen clears the true-peak over on every screen', async ({ page, browser, request }) => {
+test('a RESET on one screen clears the true-peak over on every screen', { tag: '@meters' }, async ({ page, browser, request }) => {
   await live(page);
   const other = await browser.newContext();
   const page2 = await other.newPage();
@@ -1091,7 +1091,7 @@ test('shows the source under the channel name and colours the scribble strip fro
   await expect.poll(async () => (await serverState(request)).state.channels['ch3']!.color).toBe('none');
 });
 
-test('shows one engine lamp in the status bar and the counters only on request', async ({ page }) => {
+test('shows one engine lamp in the status bar and the counters only on request', { tag: '@meters' }, async ({ page }) => {
   await live(page);
   const lamp = page.getByTestId('engine');
   await expect(lamp).toHaveText(/ENGINE (OK|WARN \d+)/);
@@ -1158,7 +1158,7 @@ test('writes the tally on the strip in words: PGM, PVW, and CLOSED when the AFV 
   await expect(page.getByTestId('tally-ch15')).not.toHaveCSS('text-decoration-line', 'line-through');
 });
 
-test('says in the header that changes are not committing while the serving replica has no quorum', async ({ page, request }) => {
+test('says in the header that changes are not committing while the serving replica has no quorum', { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
   await live(page);
   const banner = page.getByTestId('commit-banner');
@@ -1308,7 +1308,7 @@ test('keeps a strip to five tab stops and skips to the masters and the monitor',
   await expect(page.getByRole('region', { name: 'Channel strips' })).toBeVisible();
 });
 
-test('lists the consoles and every other session with what it holds, each once', async ({ page, baseURL }) => {
+test('lists the consoles and every other session with what it holds, each once', { tag: '@mock' }, async ({ page, baseURL }) => {
   await live(page);
   const other = await RawClient.open(baseURL!);
   // A control surface that holds a fader is a console row, not a session.
@@ -1365,7 +1365,7 @@ test('steps banks with [ and ], jumps to a channel by name or number, and spills
   await expect(page.locator('.strips .strip')).toHaveCount((await serverState(request)).shape.channels.length);
 });
 
-test('jumps, steps banks and follows a surface among the strips of a spilled VCA', async ({ page, request }) => {
+test('jumps, steps banks and follows a surface among the strips of a spilled VCA', { tag: '@mock' }, async ({ page, request }) => {
   // Every channel but the first two: positions on the strips are two less
   // than in the shape.
   const channels = (await serverState(request)).shape.channels.map((c) => c.id);

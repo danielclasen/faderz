@@ -49,7 +49,7 @@ async function sweep(page: Page, path: string, until: number): Promise<number> {
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
-test('three clients moving faders with meters on stay under 50 ms tasks and 4 ms patches', async ({ browser, request }) => {
+test('three clients moving faders with meters on stay under 50 ms tasks and 4 ms patches', { tag: '@mock' }, async ({ browser, request }) => {
   test.setTimeout(60_000);
   expect((await serverState(request)).shape.channels).toHaveLength(64);
   const contexts = await Promise.all([0, 1, 2].map(() => browser.newContext({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 } })));
@@ -89,7 +89,7 @@ test('three clients moving faders with meters on stay under 50 ms tasks and 4 ms
   }
 });
 
-test('a production build gives page scripts no session id in window.__faderz', async ({ page }) => {
+test('a production build gives page scripts no session id in window.__faderz', { tag: '@mock' }, async ({ page }) => {
   await live(page);
   const view = await page.evaluate(() => ({ keys: Object.keys(window.__faderz!), session: (window.__faderz as unknown as Record<string, unknown>)['session'] }));
   expect(view.keys).toContain('connection');

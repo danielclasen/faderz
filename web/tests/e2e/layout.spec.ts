@@ -84,7 +84,7 @@ test('mounts only once the web fonts are in, however late they arrive, so no tex
   await expectNoShift(page, 'load with late fonts');
 });
 
-test('nothing moves on load, live updates, failover and interaction', async ({ page, request }, info) => {
+test('nothing moves on load, live updates, failover and interaction', { tag: '@mock' }, async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const phone = (page.viewportSize()?.width ?? 1600) < 600;
   await live(page);
@@ -362,7 +362,7 @@ test('no text an operator reads is set below 10 px', async ({ page }) => {
   expect([...new Set(small)]).toEqual([]);
 });
 
-test('the dev mock key covers no control and no readout', async ({ page }) => {
+test('the dev mock key covers no control and no readout', { tag: '@mock' }, async ({ page }) => {
   await live(page);
   const hits = await page.evaluate(() => {
     const key = document.querySelector('aside.mock button')!.getBoundingClientRect();

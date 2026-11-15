@@ -99,7 +99,7 @@ async function writeAcross(
   await expect(page.getByTestId(`fader-value-${channel}`)).toHaveText('-3.0');
 }
 
-test('two clients move different faders at the same time and see each other', async ({ browser, baseURL, request }) => {
+test('two clients move different faders at the same time and see each other', { tag: '@mock' }, async ({ browser, baseURL, request }) => {
   await patch(request, '/channels/ch5/fader', -20);
   await patch(request, '/channels/ch6/fader', -20);
   const contexts = await Promise.all([0, 1].map(() => browser.newContext({ baseURL, viewport: { width: 1600, height: 1000 } })));
@@ -126,7 +126,7 @@ test('two clients move different faders at the same time and see each other', as
   }
 });
 
-test('a fader held across a reload stays owned by the session and is released after resync', async ({ page, baseURL, request }) => {
+test('a fader held across a reload stays owned by the session and is released after resync', { tag: '@mock' }, async ({ page, baseURL, request }) => {
   await live(page);
   const path = '/channels/ch9/fader';
   const session = await debug(page, 'session');
@@ -174,7 +174,7 @@ test('a fader held across a reload stays owned by the session and is released af
   }
 });
 
-test('fails over to the standby within 500 ms when the primary is killed, without losing or duplicating commands', async ({ page, request }) => {
+test('fails over to the standby within 500 ms when the primary is killed, without losing or duplicating commands', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   const from = (await debug(page, 'primaryReplica'))!;
   const standby = (await debug(page, 'standbyReplica'))!;
@@ -202,7 +202,7 @@ const faults = [
 ] as const;
 
 for (const f of faults) {
-  test(`fails over from ${f.name} without losing or duplicating commands`, async ({ page, request }) => {
+  test(`fails over from ${f.name} without losing or duplicating commands`, { tag: '@mock' }, async ({ page, request }) => {
     await live(page);
     const from = (await debug(page, 'primaryReplica'))!;
     const standby = (await debug(page, 'standbyReplica'))!;
@@ -227,7 +227,7 @@ for (const f of faults) {
   });
 }
 
-test('keeps a held fader owned across a replica kill', async ({ page, request }) => {
+test('keeps a held fader owned across a replica kill', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   const path = '/channels/ch20/fader';
   const session = await debug(page, 'session');
@@ -250,7 +250,7 @@ test('keeps a held fader owned across a replica kill', async ({ page, request })
   await expect(page.getByTestId('fader-value-ch20')).toHaveText(formatDb(await fader(request, 'ch20')));
 });
 
-test('a hidden tab stops meter traffic after at most the credit cap and resumes when visible', async ({ page, request }) => {
+test('a hidden tab stops meter traffic after at most the credit cap and resumes when visible', { tag: '@meters' }, async ({ page, request }) => {
   await page.addInitScript(() => {
     let hidden = false;
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') });
@@ -286,7 +286,7 @@ test('a hidden tab stops meter traffic after at most the credit cap and resumes 
   expect(await debug(page, 'connection')).toBe('Live');
 });
 
-test('mute toggles within 20 ms are each sent and applied in order', async ({ page, request }) => {
+test('mute toggles within 20 ms are each sent and applied in order', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   const path = '/channels/ch1/mute';
   const before = (await serverState(request)).state.channels['ch1']!.mute;
@@ -307,7 +307,7 @@ test('mute toggles within 20 ms are each sent and applied in order', async ({ pa
   expect((await serverState(request)).state.channels['ch1']!.mute).toBe(!before);
 });
 
-test('a promote onto a lagging replica never shows an older value', async ({ page, request, baseURL }) => {
+test('a promote onto a lagging replica never shows an older value', { tag: '@mock' }, async ({ page, request, baseURL }) => {
   const ws = baseURL!.replace(/^http/, 'ws');
   await live(page, `/?endpoints=${ws}/__mock/replicas/r1/api/v1/ws,${ws}/__mock/replicas/r2/api/v1/ws`);
   expect(await debug(page, 'primaryReplica')).toBe('r1');
@@ -331,7 +331,7 @@ test('a promote onto a lagging replica never shows an older value', async ({ pag
   expect(seen.slice(seen.indexOf(formatDb(target)))).not.toContain(formatDb(before));
 });
 
-test('without quorum and standby the client stays connected and disables every write control', async ({ page, request }) => {
+test('without quorum and standby the client stays connected and disables every write control', { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
   await live(page);
   const faderPath = '/channels/ch3/fader';
@@ -379,7 +379,7 @@ test('without quorum and standby the client stays connected and disables every w
   expect((await serverState(request)).state.channels['ch3']!.mute).toBe(!before.state.channels['ch3']!.mute);
 });
 
-test('with every replica down the client disables every write control and sends nothing written then', async ({ page, request }) => {
+test('with every replica down the client disables every write control and sends nothing written then', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   const faderPath = '/channels/ch4/fader';
   const slider = page.locator(`[role="slider"][data-path="${faderPath}"]`);
@@ -413,7 +413,7 @@ test('with every replica down the client disables every write control and sends 
   expect((await serverState(request)).state.channels['ch4']).toEqual(before.state.channels['ch4']);
 });
 
-test('sends the same ?session= on the primary, the standby and the reconnect after a failover', async ({ page, request }) => {
+test('sends the same ?session= on the primary, the standby and the reconnect after a failover', { tag: '@mock' }, async ({ page, request }) => {
   const urls: string[] = [];
   page.on('websocket', (ws) => {
     if (ws.url().includes('/api/v1/ws')) urls.push(ws.url());
@@ -430,7 +430,7 @@ test('sends the same ?session= on the primary, the standby and the reconnect aft
   expect([...sessions][0]).toBe(await debug(page, 'session'));
 });
 
-test('a client of a rewound cluster shows it is ahead at once and takes the cluster state on request', async ({ page, request }) => {
+test('a client of a rewound cluster shows it is ahead at once and takes the cluster state on request', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   await patch(request, '/channels/ch19/fader', -11);
   const written = (await serverState(request)).revision;
@@ -450,7 +450,7 @@ test('a client of a rewound cluster shows it is ahead at once and takes the clus
   await expect.poll(async () => (await debug(page, 'revision')) === (await serverState(request)).revision).toBe(true);
 });
 
-test('a client never resumes onto a restored cluster that has committed past its revision', async ({ page, request }) => {
+test('a client never resumes onto a restored cluster that has committed past its revision', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   await patch(request, '/channels/ch19/fader', -11);
   const written = (await serverState(request)).revision;
