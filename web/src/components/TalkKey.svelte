@@ -5,11 +5,13 @@
   // latches it on until the next press. Only a release that ends the
   // press latches (pointerup, keyup): a cancelled touch, a lost pointer
   // capture or focus leaving the key ends the talk, so an interrupted
-  // press never leaves a presenter's feed replaced. A press on a lit key
-  // stops the talk, whichever client lit it. A held or latched talk ends
-  // when the key leaves the screen (another view), so no talk outlives
-  // the key that stops it. The server also clears it when the owning
-  // session releases it or its lease ends.
+  // press never leaves a presenter's feed replaced. The page going hidden
+  // or away ends a held or latched talk: a mouse hold over a tab or app
+  // switch gets no blur where a click does not focus the key (Safari).
+  // A press on a lit key stops the talk, whichever client lit it. A held
+  // or latched talk ends when the key leaves the screen (another view),
+  // so no talk outlives the key that stops it. The server also clears it
+  // when the owning session releases it or its lease ends.
   import { getMixer } from '../lib/state/mixer.svelte';
   import { mixMinusPath } from '../lib/state/paths';
 
@@ -81,6 +83,16 @@
     holding = false;
     off();
   }
+  /** The page is hidden or left: a held or latched talk ends. */
+  function hidden(): void {
+    if (holding) return abort();
+    if (!latched) return;
+    off();
+    if (!mixer.locked) latched = false;
+  }
+  function visibility(): void {
+    if (document.visibilityState === 'hidden') hidden();
+  }
   // The key leaves the screen: a held or latched talk ends with it. A
   // layout change that removed the mix-minus left no path to set, so the
   // talk is only released. A teardown reads state as it was before the
@@ -114,6 +126,9 @@
     else if (!on) lift();
   }
 </script>
+
+<svelte:window onpagehide={hidden} />
+<svelte:document onvisibilitychange={visibility} />
 
 <div class="talk">
   <select

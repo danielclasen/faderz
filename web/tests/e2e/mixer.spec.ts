@@ -498,6 +498,24 @@ test('ends a held talk when its view is left during the press', async ({ page, r
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 
+test('ends a latched talk when the page is hidden', async ({ page, request }) => {
+  // A mouse hold over a tab switch gets no blur on Safari. Playwright
+  // cannot hide a headless page or fire a real pagehide without leaving
+  // it, so the page reports itself hidden and fires visibilitychange.
+  const { talk, active } = await talkKey(page, request);
+  await talk.click();
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  expect(await active()).toBe(true);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(active).toBe(false);
+  await expect.poll(async () => (await serverState(request)).owners[TALK_OWNER]).toBeUndefined();
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
 test('ends a latched talk when its view is left, so another client can talk', async ({ page, browser, request }) => {
   const { talk, active } = await talkKey(page, request);
   await talk.click();

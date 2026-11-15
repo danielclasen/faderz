@@ -27,7 +27,7 @@ function latched() {
   flushSync();
   expect(button.getAttribute('aria-label')).toBe('N-1 Phone 1 talk, latched');
   posted.length = 0;
-  return { s, posted, shape, key };
+  return { s, posted, shape, key, button };
 }
 
 describe('TALK key', () => {
@@ -53,5 +53,50 @@ describe('TALK key', () => {
     await Promise.resolve();
     expect(posted).toEqual([{ type: 'release', path: ACTIVE }]);
     expect(s.state!.mixMinus['mm1']).toBeUndefined();
+  });
+
+  it('ends a latched talk when the page is hidden or left', () => {
+    // A mouse hold over a tab switch gets no blur on Safari, which does
+    // not focus a button on click.
+    for (const leave of [
+      () => window.dispatchEvent(new Event('pagehide')),
+      () => {
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        delete (document as { visibilityState?: unknown }).visibilityState;
+      },
+    ]) {
+      const { posted, key, button } = latched();
+      leave();
+      flushSync();
+      expect(posted).toEqual([
+        { type: 'set', path: ACTIVE, value: false },
+        { type: 'release', path: ACTIVE },
+      ]);
+      expect(button.getAttribute('aria-label')).toBe('N-1 Phone 1 talk');
+      unmount(key);
+      document.body.replaceChildren();
+    }
+  });
+
+  it('ends a held talk when the page is hidden, and leaves an idle key alone', () => {
+    const { posted, key, button } = latched();
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    button.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
+    flushSync();
+    posted.length = 0;
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(posted.map((m) => m.type)).toEqual(['touch', 'set']);
+    window.dispatchEvent(new Event('pagehide'));
+    flushSync();
+    expect(posted.slice(2)).toEqual([
+      { type: 'set', path: ACTIVE, value: false },
+      { type: 'release', path: ACTIVE },
+    ]);
+    posted.length = 0;
+    window.dispatchEvent(new Event('pagehide'));
+    expect(posted).toEqual([]);
+    unmount(key);
+    document.body.replaceChildren();
   });
 });
