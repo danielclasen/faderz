@@ -4,7 +4,7 @@
 // excuse, and the total must be 0.
 
 import { expect, test, type Page } from '@playwright/test';
-import { debug, dragFader, live, patch, resetMock } from './support';
+import { HEADERS, debug, dragFader, live, patch, resetMock } from './support';
 
 interface Shift {
   value: number;
@@ -163,10 +163,24 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
   await page.keyboard.press('Escape');
   await expectNoShift(page, 'close processing');
 
+  const scene = `Layout ${Date.now()}`;
+  const created = await request.post('/api/v1/scenes', { headers: HEADERS, data: { commandId: crypto.randomUUID(), name: scene } });
+  expect(created.ok()).toBe(true);
   for (const name of ['Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup', 'Mixer']) {
     await showView(page, name);
     await page.waitForTimeout(400);
     await expectNoShift(page, `view ${name}`);
+    if (name === 'Scenes') {
+      // Arming STORE or DEL puts CONFIRM in its place, and disarming takes it back.
+      for (const key of [`Store into ${scene}`, `Delete ${scene}`]) {
+        await page.getByRole('button', { name: key, exact: true }).click();
+        await page.waitForTimeout(200);
+        await expectNoShift(page, `arm ${key}`);
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(200);
+        await expectNoShift(page, `disarm ${key}`);
+      }
+    }
     if (name === 'AFV') {
       // Tally cuts while the AFV table is in view.
       for (const sources of [
@@ -184,6 +198,9 @@ test('nothing moves on load, live updates, failover and interaction', async ({ p
       await expectNoShift(page, 'tally on the AFV view');
     }
   }
+  const doc = (await (await request.get('/api/v1/state')).json()) as { state: { scenes: Array<{ id: string; name: string }> } };
+  const id = doc.state.scenes.find((x) => x.name === scene)!.id;
+  expect((await request.delete(`/api/v1/scenes/${id}`, { headers: HEADERS })).ok()).toBe(true);
   info.annotations.push({ type: 'viewport', description: phone ? 'phone' : 'desktop' });
 });
 
