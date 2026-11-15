@@ -128,7 +128,7 @@ impl Client {
     /// Sends a command; returns its id.
     async fn command(&mut self, kind: &str, path: &str, value: Option<Value>) -> String {
         self.seq += 1;
-        let id = faderz::app::uuid();
+        let id = faderz::app::uuid().unwrap();
         let mut m = json!({ "type": kind, "id": id, "seq": self.seq, "path": path });
         if let Some(v) = value {
             m["value"] = v;
@@ -195,7 +195,7 @@ async fn refusals_carry_their_code_and_command() {
     let dir = data_dir();
     let server = start(&dir).await;
     let mut a = Client::connect(&server, SESSION_A).await;
-    a.send(json!({ "type": "set", "id": faderz::app::uuid(), "seq": 1, "path": "/channels/ch1/fader", "value": 0 })).await;
+    a.send(json!({ "type": "set", "id": faderz::app::uuid().unwrap(), "seq": 1, "path": "/channels/ch1/fader", "value": 0 })).await;
     let e = a.next().await;
     assert_eq!(
         (e["code"].as_u64(), e["message"].as_str()),
@@ -228,7 +228,7 @@ async fn copies_and_old_seqs_change_nothing() {
     let server = start(&dir).await;
     let mut a = Client::connect(&server, SESSION_A).await;
     a.hello().await;
-    let id = faderz::app::uuid();
+    let id = faderz::app::uuid().unwrap();
     let set =
         json!({ "type": "set", "id": id, "seq": 10, "path": "/channels/ch1/fader", "value": -3 });
     a.send(set.clone()).await;
@@ -239,7 +239,7 @@ async fn copies_and_old_seqs_change_nothing() {
         (ack["result"].as_str(), &ack["revision"]),
         (Some("duplicate"), &json!(1))
     );
-    let old = faderz::app::uuid();
+    let old = faderz::app::uuid().unwrap();
     a.send(
         json!({ "type": "set", "id": old, "seq": 9, "path": "/channels/ch1/fader", "value": -9 }),
     )

@@ -181,21 +181,25 @@ pub fn now_rfc3339() -> String {
 }
 
 /// A random (version 4) UUID, for commands the server issues itself.
-pub fn uuid() -> String {
+///
+/// # Errors
+///
+/// When the operating system's random source fails.
+pub fn uuid() -> std::io::Result<String> {
     let mut b = [0u8; 16];
-    // SAFETY: `b` is writable for its length.
-    unsafe { libc::getrandom(b.as_mut_ptr().cast(), b.len(), 0) };
+    b[..8].copy_from_slice(&crate::replica::random()?.to_le_bytes());
+    b[8..].copy_from_slice(&crate::replica::random()?.to_le_bytes());
     b[6] = b[6] & 0x0f | 0x40;
     b[8] = b[8] & 0x3f | 0x80;
     let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!(
+    Ok(format!(
         "{}-{}-{}-{}-{}",
         &hex[..8],
         &hex[8..12],
         &hex[12..16],
         &hex[16..20],
         &hex[20..]
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -211,7 +215,7 @@ mod tests {
 
     #[test]
     fn issued_ids_and_times_match_the_contract() {
-        check(&contract().command_id, &json!(uuid())).unwrap();
+        check(&contract().command_id, &json!(uuid().unwrap())).unwrap();
         let at = now_rfc3339();
         let scene = json!({ "id": "s", "name": "n", "storedAt": at });
         let shape = jsonschema::options()

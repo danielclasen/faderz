@@ -307,7 +307,8 @@ async fn delete_scene(
     let run = async {
         known_scene(&app, &scene)?;
         let owner = owner(identity.map(|Extension(i)| i));
-        let id = uuid();
+        let id = uuid()
+            .map_err(|e| error(StatusCode::SERVICE_UNAVAILABLE, format!("not applied: {e}")))?;
         let ack = run(
             &app,
             &owner,
@@ -388,7 +389,8 @@ async fn tally(
         valid(|c| &c.tally_state, "state", &json!(state))?;
     }
     let owner = owner(identity.map(|Extension(i)| i));
-    let id = uuid();
+    let id =
+        uuid().map_err(|e| error(StatusCode::SERVICE_UNAVAILABLE, format!("not applied: {e}")))?;
     let command = Command::Tally {
         id: id.clone(),
         sources,
