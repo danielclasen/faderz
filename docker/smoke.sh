@@ -1,10 +1,11 @@
 #!/bin/bash
-# Starts the faderz image with a read-only root file system in token
-# mode, as the calling user with every capability dropped and once as the
-# image's own user, 65532. Each time the API listener has to serve the
-# UI, refuse a request without the token and take a write with it; the
-# write has to survive a restart on the same data directory, and the
-# process has to exit 0 on SIGTERM.
+# Checks the image carries its licence notices, then starts it with a
+# read-only root file system in token mode, as the calling user with
+# every capability dropped and once as the image's own user, 65532.
+# Each time the API listener has to serve the UI, refuse a request
+# without the token and take a write with it; the write has to survive
+# a restart on the same data directory, and the process has to exit 0
+# on SIGTERM.
 #
 # usage: docker/smoke.sh <image>
 set -euo pipefail
@@ -22,6 +23,9 @@ cleanup() {
 trap cleanup EXIT
 
 test "$(docker inspect -f '{{.Config.User}}' "$image")" = 65532:65532
+for notice in LICENSE THIRD-PARTY.txt THIRD-PARTY-WEB.txt; do
+  docker run --rm --entrypoint /bin/test "$image" -s "/usr/share/licenses/faderz/$notice"
+done
 
 token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 mkdir "$work/user" "$work/image" "$work/secret"

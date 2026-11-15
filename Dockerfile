@@ -1,5 +1,6 @@
 # The faderz image: the binary with the web UI built into it, and the
-# licences of everything shipped.
+# licences of everything shipped: the Rust crates (THIRD-PARTY.txt) and
+# the npm packages and fonts of the UI (THIRD-PARTY-WEB.txt).
 FROM node:22.22.3-trixie-slim@sha256:8cd0ffd483b64585c6d135364bea5f937ff40cd3da431789af011f9ee8d55af0 AS web
 
 WORKDIR /src/web
@@ -7,7 +8,7 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY api /src/api
 COPY web ./
-RUN npm run build
+RUN npm run build && node build/check-licenses.mjs
 
 FROM ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba AS build
 
@@ -34,11 +35,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && install -Dm0755 target/release/faderz /out/usr/local/bin/faderz \
  && install -Dm0644 LICENSE /out/usr/share/licenses/faderz/LICENSE \
  && /opt/cargo-about/bin/cargo-about generate --locked --fail \
-      -o /out/usr/share/licenses/faderz/THIRD-PARTY.txt about.hbs
+      -o /out/usr/share/licenses/faderz/THIRD-PARTY.txt about.hbs \
+ && install -Dm0644 web/dist/THIRD-PARTY-WEB.txt /out/usr/share/licenses/faderz/THIRD-PARTY-WEB.txt
 
 # The binary and the licences of the crates in it, attached to a release.
 FROM scratch AS dist
-COPY --from=build /out/usr/local/bin/faderz /out/usr/share/licenses/faderz/THIRD-PARTY.txt /
+COPY --from=build /out/usr/local/bin/faderz /out/usr/share/licenses/faderz/THIRD-PARTY.txt \
+     /out/usr/share/licenses/faderz/THIRD-PARTY-WEB.txt /
 
 FROM debian:trixie-20261027@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1
 

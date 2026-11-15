@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { licenses } from './build/licenses';
 
 // Dev-only HTTPS: FADERZ_DEV_TLS_CERT and FADERZ_DEV_TLS_KEY name PEM files.
 // Without them `npm run dev` serves plain HTTP.
@@ -15,6 +16,8 @@ const backend = process.env['FADERZ_BACKEND'];
 export default defineConfig(async ({ command, mode }) => ({
   plugins: [
     svelte(),
+    // The licence notice of every npm package in the bundle.
+    licenses(),
     // The mock server exists only in `vite` dev serving; builds never load it.
     ...(command === 'serve' && mode !== 'test' && !backend ? [(await import('./dev/mock/plugin.ts')).faderzMock()] : []),
   ],
