@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { INITIAL_STATUS, MixerStore } from '../../src/lib/state/mixer.svelte';
-import { writesBlocked } from '../../src/lib/state/writes';
+import { writesLockReason } from '../../src/lib/state/writes';
 import type { SyncStatus, ToWorker } from '../../src/lib/sync/messages';
 import { exampleShape, initialState } from '../../dev/mock/shape';
 
@@ -10,9 +10,10 @@ const replicas = (r1: boolean, r2: boolean, r3: boolean): SyncStatus['replicas']
   { id: 'r3', role: 'follower', healthy: true, commitable: r3 },
 ];
 
+const writesBlocked = (s: SyncStatus) => writesLockReason(s) !== null;
 const status = (extra: Partial<SyncStatus>): SyncStatus => ({ ...INITIAL_STATUS, link: 'Live', primaryReplica: 'r1', ...extra });
 
-describe('writesBlocked', () => {
+describe('writesLockReason', () => {
   it('blocks writes when the serving replica cannot commit and no standby is ready', () => {
     expect(writesBlocked(status({ replicas: replicas(false, false, false), standby: 'Idle' }))).toBe(true);
     expect(writesBlocked(status({ replicas: replicas(false, false, false), standby: 'Syncing' }))).toBe(true);
@@ -33,6 +34,24 @@ describe('writesBlocked', () => {
       expect(writesBlocked(status({ ...ok, link, replicas: [], primaryReplica: null })), link).toBe(true);
     }
     for (const link of ['Live', 'Suspect', 'Resyncing'] as const) expect(writesBlocked(status({ ...ok, link })), link).toBe(false);
+  });
+
+  it('names why writes are blocked: the link state when it transmits nothing, else the quorum', () => {
+    const ok = { replicas: replicas(true, true, true), standby: 'Ready' as const };
+    const reasons = {
+      Connecting: 'reconnecting',
+      Syncing: 'waiting for the replica to sync',
+      FailingOver: 'failing over',
+      Ahead: 'this client is ahead of the cluster',
+      Offline: 'no replica reachable',
+    } as const;
+    for (const [link, reason] of Object.entries(reasons) as [keyof typeof reasons, string][]) {
+      expect(writesLockReason(status({ ...ok, link })), link).toBe(reason);
+      // A link that transmits nothing is the reason even without quorum.
+      expect(writesLockReason(status({ link, replicas: replicas(false, false, false), standby: 'Idle' })), link).toBe(reason);
+    }
+    expect(writesLockReason(status({ replicas: replicas(false, false, false), standby: 'Idle' }))).toBe('no quorum and no ready standby');
+    expect(writesLockReason(status(ok))).toBeNull();
   });
 
   it('does not block before the serving replica is known', () => {
@@ -59,6 +78,7 @@ describe('mixer store without quorum', () => {
     const before = s.value<number>(path);
     lose(s, false);
     expect(s.locked).toBe(true);
+    expect(s.lockReason).toBe('no quorum and no ready standby');
     s.touch(path);
     s.set(path, before + 3);
     s.set('/channels/ch1/mute', true);

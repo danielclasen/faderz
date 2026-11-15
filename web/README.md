@@ -108,7 +108,7 @@ revision above the committed one in the same epoch), applies nothing:
 the link shows AHEAD, a banner over the view names both revisions,
 nothing is retried, and TAKE CLUSTER STATE loads the cluster's snapshot.
 
-Every write control is `aria-disabled` and sends nothing while the link transmits no commands (connecting, offline, failing over, ahead), and while the serving replica cannot commit and no standby is ready, when the client stays connected and the status area shows NO Q (`src/lib/state/writes.ts`). A command without an answer for 1 s, or answered 503 (not applied), is sent again with its id; one still unanswered 3 s after it was issued is dropped with a notice, and its control shows the committed value again.
+Every write control is `aria-disabled` and sends nothing while the link transmits no commands (connecting, offline, failing over, ahead), when the status area shows LOCK, and while the serving replica cannot commit and no standby is ready, when the client stays connected and the status area shows NO Q; either one names the reason in its title (`src/lib/state/writes.ts`). A command without an answer for 1 s, or answered 503 (not applied), is sent again with its id; one still unanswered 3 s after it was issued is dropped with a notice, and its control shows the committed value again.
 
 `window.__faderz` is a read-only view of the sync state for tests:
 `connection`, `standby`, `primaryReplica`, `standbyReplica`, `session`

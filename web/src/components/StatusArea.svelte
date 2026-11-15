@@ -2,7 +2,7 @@
   import { fit } from '../lib/format';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
-  import type { LinkState } from '../lib/sync/machines';
+  import { TRANSMITTING, type LinkState } from '../lib/sync/machines';
 
   const mixer = getMixer();
   let now = $state(Date.now());
@@ -32,6 +32,8 @@
   );
   const serving = $derived(status.replicas.find((r) => r.id === status.primaryReplica));
   const commitable = $derived(serving ? serving.commitable : null);
+  /** Quorum says nothing while the link transmits no commands: the slot shows why writes are off instead. */
+  const transmitting = $derived(TRANSMITTING.has(status.link));
   const role = (id: string) =>
     id === status.primaryReplica ? 'primary' : id === status.standbyReplica ? 'standby' : 'other';
   const describe = (r: { id: string; role: string; healthy: boolean; commitable: boolean }) => {
@@ -67,17 +69,27 @@
     {/each}
   </div>
   <span class="slot q">
-    {#if commitable !== null}
+    <!-- The lock is a node of its own, not the quorum one restyled: a link
+         that stops transmitting moves no node in the slot. -->
+    {#if !transmitting}
+      <span
+        class="quorum lost"
+        data-testid="quorum"
+        data-locked={mixer.lockReason}
+        title={`Every write control is disabled: ${mixer.lockReason}`}
+      >LOCK</span>
+    {:else if commitable !== null}
       <span
         class="quorum"
         class:lost={!commitable}
         data-testid="quorum"
         data-commitable={commitable}
+        data-locked={mixer.lockReason}
         role={mixer.locked ? 'alert' : undefined}
         title={commitable
           ? 'The serving replica can commit'
           : mixer.locked
-            ? 'No quorum and no standby: every write control is disabled'
+            ? `Every write control is disabled: ${mixer.lockReason}`
             : 'The serving replica cannot commit (no quorum)'}
       >{commitable ? 'Q' : 'NO Q'}</span>
     {/if}

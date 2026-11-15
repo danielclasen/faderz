@@ -14,7 +14,7 @@ import type { Patch, SyncStatus, ToWorker } from '../sync/messages';
 import { handleTag } from '../net/handle';
 import { getAt, setAt } from './pointer';
 import { describePath } from './paths';
-import { writesBlocked } from './writes';
+import { writesLockReason } from './writes';
 
 export interface Port {
   post(msg: ToWorker): void;
@@ -97,8 +97,9 @@ export class MixerStore {
     return this.status.outbox;
   }
 
-  /** Link not transmitting, or no quorum and no ready standby: write controls are disabled and send nothing. */
-  readonly locked = $derived(writesBlocked(this.status));
+  /** Why write controls are disabled and send nothing (link not transmitting, or no quorum and no ready standby), or null. */
+  readonly lockReason = $derived(writesLockReason(this.status));
+  readonly locked = $derived(this.lockReason !== null);
 
   // ---- reading -----------------------------------------------------------
 

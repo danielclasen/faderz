@@ -347,6 +347,7 @@ test('without quorum and standby the client stays connected and disables every w
   const quorum = page.getByTestId('quorum');
   await expect(quorum).toHaveText('NO Q');
   await expect(quorum).toHaveAttribute('data-commitable', 'false');
+  await expect(quorum).toHaveAttribute('title', 'Every write control is disabled: no quorum and no ready standby');
   await expect(quorum).toBeVisible();
   await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
   await expect(slider).toHaveAttribute('aria-disabled', 'true');
@@ -387,6 +388,10 @@ test('with every replica down the client disables every write control and sends 
   const before = await serverState(request);
   for (const r of REPLICAS) expect((await request.post(`/__mock/replicas/${r}/kill`)).ok()).toBe(true);
   await expect.poll(() => debug(page, 'connection')).toMatch(/^(Connecting|Offline)$/);
+  // The quorum slot says why writes are off: the link, not the quorum.
+  const lock = page.getByTestId('quorum');
+  await expect(lock).toHaveText('LOCK');
+  await expect(lock).toHaveAttribute('title', /^Every write control is disabled: (reconnecting|no replica reachable)$/);
   await expect(slider).toHaveAttribute('aria-disabled', 'true');
   await expect(mute).toHaveAttribute('aria-disabled', 'true');
   await expect(page.locator('[role="slider"][aria-disabled="false"]')).toHaveCount(0);
@@ -401,6 +406,7 @@ test('with every replica down the client disables every write control and sends 
   await request.post('/__mock/audit/reset');
   for (const r of REPLICAS) expect((await request.post(`/__mock/replicas/${r}/restore`)).ok()).toBe(true);
   await expect.poll(() => debug(page, 'connection'), { timeout: 10_000 }).toBe('Live');
+  await expect(lock).toHaveText('Q');
   await expect(slider).toHaveAttribute('aria-disabled', 'false');
   await settled(page);
   expect((await audit(request)).entries).toEqual([]);
@@ -437,6 +443,7 @@ test('a client of a rewound cluster shows it is ahead at once and takes the clus
   await expect(banner).toContainText(`revision ${mine} of an earlier history`);
   expect(await debug(page, 'connection')).toBe('Ahead');
   expect(await debug(page, 'revision')).toBe(mine);
+  await expect(page.getByTestId('quorum')).toHaveAttribute('title', 'Every write control is disabled: this client is ahead of the cluster');
   await banner.getByRole('button', { name: 'TAKE CLUSTER STATE' }).click();
   await expect(banner).toBeHidden();
   await expect.poll(() => debug(page, 'connection')).toBe('Live');
