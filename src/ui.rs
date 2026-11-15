@@ -12,6 +12,17 @@ use rust_embed::Embed;
 #[allow_missing = true]
 struct Assets;
 
+/// What the built UI loads, all from its own origin: its scripts, the
+/// worker, styles, fonts, the icon, and the API over HTTP and WebSocket.
+/// No page may frame it.
+pub const CSP: &str = "default-src 'self'; script-src 'self'; worker-src 'self'; \
+    style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self'; \
+    object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/// Answered at `/` by a binary built without `web/dist`.
+const NO_UI: &str = "This faderz binary was built without its web UI: run `npm run build` \
+    in web/ before `cargo build`.\n";
+
 /// Served at `/` on the API listener, beside `/api/v1`.
 pub fn router() -> Router {
     Router::new().fallback(serve)
@@ -26,6 +37,9 @@ async fn serve(method: Method, uri: Uri) -> Response {
         p => p,
     };
     let Some(file) = Assets::get(path) else {
+        if path == "index.html" {
+            return (StatusCode::NOT_FOUND, NO_UI).into_response();
+        }
         return StatusCode::NOT_FOUND.into_response();
     };
     // Vite names what it builds under assets/ by content hash.
@@ -37,6 +51,9 @@ async fn serve(method: Method, uri: Uri) -> Response {
     let headers = [
         (header::CONTENT_TYPE, file.metadata.mimetype().to_owned()),
         (header::CACHE_CONTROL, cache.to_owned()),
+        (header::CONTENT_SECURITY_POLICY, CSP.to_owned()),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+        (header::X_FRAME_OPTIONS, "DENY".to_owned()),
     ];
     (headers, file.data).into_response()
 }
@@ -53,17 +70,33 @@ mod tests {
         router().oneshot(req).await.unwrap()
     }
 
-    /// Needs the built UI: `npm --prefix web ci && npm --prefix web run build`.
+    /// The checks of the built UI need `npm --prefix web run build` before
+    /// the build; without it the test checks what such a binary answers.
     #[tokio::test]
-    async fn serves_the_built_ui_with_its_types_and_caching() {
+    async fn serves_the_built_ui_with_its_types_caching_and_protections() {
         let index = get("/").await;
-        assert_eq!(
-            index.status(),
-            StatusCode::OK,
-            "build the UI first: npm --prefix web run build"
-        );
+        if Assets::get("index.html").is_none() {
+            eprintln!(
+                "web/dist was not built: checking the answer of a binary without the UI only"
+            );
+            assert_eq!(index.status(), StatusCode::NOT_FOUND);
+            let body = to_bytes(index.into_body(), 1 << 20).await.unwrap();
+            assert_eq!(body, NO_UI.as_bytes());
+            return;
+        }
+        assert_eq!(index.status(), StatusCode::OK);
         assert_eq!(index.headers()[header::CONTENT_TYPE], "text/html");
         assert_eq!(index.headers()[header::CACHE_CONTROL], "no-cache");
+        let protections = |r: &Response| {
+            assert_eq!(r.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+            assert_eq!(r.headers()[header::X_FRAME_OPTIONS], "DENY");
+            let csp = r.headers()[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap();
+            assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+            assert!(csp.contains("script-src 'self'"), "{csp}");
+        };
+        protections(&index);
         let html = String::from_utf8(to_bytes(index.into_body(), 1 << 20).await.unwrap().to_vec())
             .unwrap();
         let script = html
@@ -80,6 +113,7 @@ mod tests {
                 .unwrap()
                 .contains("immutable")
         );
+        protections(&asset);
         assert_eq!(get("/nope.js").await.status(), StatusCode::NOT_FOUND);
     }
 }

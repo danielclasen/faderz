@@ -27,12 +27,21 @@ const session = () => `binary-${crypto.randomUUID()}`;
 
 test('serves the UI, which goes live and writes through the API', { tag: '@all' }, async ({ page }, info) => {
   await signIn(page, info.project.name);
+  // The UI runs within the binary's Content-Security-Policy.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __csp: string[] };
+    w.__csp = [];
+    document.addEventListener('securitypolicyviolation', (e) => w.__csp.push(`${e.violatedDirective} ${e.blockedURI}`));
+  });
   await page.goto('/');
   await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
   await page.getByRole('button', { name: 'Pres 1 mute' }).click();
   await expect
     .poll(async () => ((await (await page.request.get('/api/v1/state')).json()) as { state: { channels: { ch1: { mute: boolean } } } }).state.channels.ch1.mute)
     .toBe(true);
+  // Every view, with the fonts, the worker and the WebSocket in use.
+  for (const view of ['Aux / N-1', 'Scenes', 'Mixer']) await page.getByRole('button', { name: view }).click();
+  expect(await page.evaluate(() => (window as unknown as { __csp: string[] }).__csp)).toEqual([]);
 });
 
 test('refuses a state-changing request without X-Samplez-Request', { tag: '@all' }, async ({ page }, info) => {
