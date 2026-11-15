@@ -7,6 +7,7 @@ import {
   debug,
   dragFader,
   fader,
+  faderCenter,
   formatDb,
   live,
   patch,
@@ -266,6 +267,29 @@ test('operates a fader from the keyboard', async ({ page, request }) => {
   await settled(page);
   expect(await fader(request, 'ch21')).toBe(0.4);
   expect(await fader(request, 'ch22')).toBe(-90);
+});
+
+test('a fader dragged after a keyboard adjust keeps its touch when focus leaves it', async ({ page, request }) => {
+  await live(page);
+  const path = '/channels/ch21/fader';
+  const owner = async () => (await serverState(request)).owners[path];
+  const slider = page.locator(`[role="slider"][data-path="${path}"]`);
+  await slider.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(owner).toBeDefined();
+  // The keyboard touch ends on its own after a pause.
+  await expect.poll(owner, { timeout: 3000 }).toBeUndefined();
+  const { x, y } = await faderCenter(page, path);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y + 10);
+  await expect.poll(owner).toBeDefined();
+  // Focus leaves while the pointer still holds the fader.
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(500);
+  expect(await owner()).toBeDefined();
+  await page.mouse.up();
+  await expect.poll(owner).toBeUndefined();
 });
 
 test('operates a pan from the keyboard, with no jump from a lone key or a double-click', async ({ page, request }) => {

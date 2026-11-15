@@ -52,7 +52,10 @@
     const next = Math.round(Math.max(-1, Math.min(1, v)) * 100) / 100;
     if (next !== value) mixer.set(path, next);
     if (keyRelease) clearTimeout(keyRelease);
-    keyRelease = setTimeout(() => mixer.release(path), 800);
+    keyRelease = setTimeout(() => {
+      keyRelease = null;
+      mixer.release(path);
+    }, 800);
   }
   function blur(): void {
     if (keyRelease) {

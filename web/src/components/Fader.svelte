@@ -113,7 +113,10 @@
     mixer.touch(path);
     if (next !== value) mixer.set(path, next);
     if (keyRelease) clearTimeout(keyRelease);
-    keyRelease = setTimeout(() => mixer.release(path), 800);
+    keyRelease = setTimeout(() => {
+      keyRelease = null;
+      mixer.release(path);
+    }, 800);
   }
 
   function blur(): void {
