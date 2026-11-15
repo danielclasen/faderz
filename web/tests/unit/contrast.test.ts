@@ -40,6 +40,9 @@ describe.each([
     expect(contrast('#ffffff', t['pgm']!)).toBeGreaterThanOrEqual(4.5);
     expect(contrast(t['afl-ink']!, t['afl']!)).toBeGreaterThanOrEqual(4.5);
   });
+  it('a lit PAUSED loudness key carries readable ink', () => {
+    expect(contrast(t['paused-ink']!, t['paused']!)).toBeGreaterThanOrEqual(4.5);
+  });
 });
 
 it('separates alternate strips in the light theme', () => {

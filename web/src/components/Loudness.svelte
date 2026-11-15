@@ -269,9 +269,9 @@
     outline-offset: -1px;
   }
   .key.pause[aria-pressed='true'] {
-    background: var(--warn);
-    border-color: var(--warn);
-    color: var(--accent-ink);
+    background: var(--paused);
+    border-color: var(--paused);
+    color: var(--paused-ink);
   }
   .keys {
     grid-column: 1 / -1;

@@ -37,6 +37,9 @@
   --pgm: #c8102e;
   --pvw: #2fd36b;
   --ok: #2fd36b;
+  /* A paused loudness integration: lit, with ink at 4.5:1 or more. */
+  --paused: #ffb000;
+  --paused-ink: #1a1200;
   --warn: #ffb000;
   --err: #ff3b47;
   --focus: #3fd0e0;
@@ -91,6 +94,8 @@
   --pgm: #d1202c;
   --pvw: #10883e;
   --ok: #10883e;
+  --paused: #956000;
+  --paused-ink: #ffffff;
   --warn: #a86b00;
   --err: #d1202c;
   --focus: #00788a;
