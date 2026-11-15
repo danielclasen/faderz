@@ -102,16 +102,19 @@
     height: 100%;
     min-height: 0;
   }
+  /* Anchored at the corner; the meter layer sizes it and moves it over
+     the visible meters by a transform. */
   .meter-layer {
     position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
     pointer-events: none;
     z-index: 1;
   }
-  /* The meter layer covers the visible masters and stays put while they
-     scroll; it stacks above them and below anything outside the view. */
+  /* The meter layer lies over the visible masters and stays put while
+     they scroll; it stacks above them and below anything outside the view. */
   .masters-wrap {
     position: relative;
     isolation: isolate;

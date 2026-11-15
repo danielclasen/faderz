@@ -26,6 +26,8 @@ const LOUD_W = 3;
 /** Height of the true-peak over lamp at the top of a meter, px, and the gap below it. */
 const LAMP_H = 3;
 const LAMP_GAP = 1;
+/** Canvas beyond the meters' boxes on every side, px. */
+const MARGIN = 1;
 
 export interface MeterSpec {
   group: MeterGroup;
@@ -121,7 +123,11 @@ export class MeterLayer {
 
   constructor(private readonly meters: MeterStore) {}
 
-  /** Starts drawing into `canvas`, which covers `host`; meters register before or after. */
+  /**
+   * Starts drawing into `canvas`, anchored at the top left corner of
+   * `host`; the layer sets its size and moves it over the visible meters.
+   * Meters register before or after.
+   */
   attach(host: HTMLElement, canvas: HTMLCanvasElement): void {
     this.host = host;
     this.canvas = canvas;
@@ -261,22 +267,38 @@ export class MeterLayer {
       x1 = Math.max(x1, right);
       y1 = Math.max(y1, bottom);
     }
-    const box: Rect = x1 > x0 && y1 > y0 ? { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1) - Math.floor(x0), h: Math.ceil(y1) - Math.floor(y0) } : { x: 0, y: 0, w: 0, h: 0 };
+    // One pixel of margin takes the floor mark, drawn on the row below a
+    // meter's box. Edges fall on whole device pixels, so the backing
+    // store maps one to one onto the screen at any devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
+    let box: Rect = { x: 0, y: 0, w: 0, h: 0 };
+    let bw = 1;
+    let bh = 1;
+    if (x1 > x0 && y1 > y0) {
+      const dx0 = Math.floor((x0 - MARGIN) * dpr);
+      const dy0 = Math.floor((y0 - MARGIN) * dpr);
+      const dx1 = Math.ceil((x1 + MARGIN) * dpr);
+      const dy1 = Math.ceil((y1 + MARGIN) * dpr);
+      box = { x: dx0 / dpr, y: dy0 / dpr, w: (dx1 - dx0) / dpr, h: (dy1 - dy0) / dpr };
+      bw = dx1 - dx0;
+      bh = dy1 - dy0;
+    }
     if (box.w !== this.w || box.h !== this.h || dpr !== this.dpr) {
       this.w = box.w;
       this.h = box.h;
       this.dpr = dpr;
       canvas.style.width = `${box.w}px`;
       canvas.style.height = `${box.h}px`;
-      canvas.width = Math.max(1, Math.round(box.w * dpr));
-      canvas.height = Math.max(1, Math.round(box.h * dpr));
+      // Each assignment clears and reallocates the backing store.
+      if (canvas.width !== bw) canvas.width = bw;
+      if (canvas.height !== bh) canvas.height = bh;
     }
     if (box.x !== this.box.x || box.y !== this.box.y) canvas.style.transform = `translate(${box.x}px, ${box.y}px)`;
     this.box = box;
     for (const s of this.slots.values()) {
       if (!s.visible) continue;
-      s.rect = { ...s.rect, x: s.rect.x - box.x, y: s.rect.y - box.y };
+      s.rect.x -= box.x;
+      s.rect.y -= box.y;
     }
     for (const clip of clips.values()) {
       clip.x -= box.x;

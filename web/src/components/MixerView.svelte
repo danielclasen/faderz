@@ -229,11 +229,14 @@
 </div>
 
 <style>
+  /* Anchored at the corner; the meter layer sizes it and moves it over
+     the visible meters by a transform. */
   .meter-layer {
     position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
     pointer-events: none;
     z-index: 1;
   }

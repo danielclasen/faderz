@@ -1004,31 +1004,37 @@ test('locks the desk with a hold so nothing on the screen changes the mixer, and
 });
 
 test('labels the channel meter in dBFS on its outer side, apart from the fader scale', async ({ page }) => {
+  // Each label in page coordinates, from the canvas's box when it was
+  // drawn: the meter layer moves its canvas over the visible meters.
   await page.addInitScript(() => {
     const seen: Array<{ text: string; x: number; y: number }> = [];
     (window as unknown as { __labels: typeof seen }).__labels = seen;
     const fill = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function (text: string, x: number, y: number, max?: number) {
       const m = this.getTransform();
-      // The strips' canvas only: the masters draw their labels on their own.
-      if (this.canvas.matches('.mixer > .meter-layer')) seen.push({ text, x: x * m.a / devicePixelRatio, y: y * m.d / devicePixelRatio });
+      const c = this.canvas.getBoundingClientRect();
+      seen.push({ text, x: c.x + (x * m.a) / devicePixelRatio, y: c.y + (y * m.d) / devicePixelRatio });
       return max === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, max);
     };
   });
   await live(page);
-  const meter = (await page.locator('[data-meter="channels/ch1"]').boundingBox())!;
-  const canvas = (await page.locator('.mixer > .meter-layer').boundingBox())!;
-  await expect
-    .poll(() =>
-      page.evaluate(
-        ({ m, c }) =>
-          [...new Set((window as unknown as { __labels: Array<{ text: string; x: number; y: number }> }).__labels
-            .filter((l) => l.x + c.x >= m.x + m.width - 17 && l.x + c.x <= m.x + m.width && l.y + c.y >= m.y && l.y + c.y <= m.y + m.height)
-            .map((l) => l.text))].sort(),
-        { m: meter, c: canvas },
-      ),
-    )
-    .toEqual(['-18', '-40', '-9', '0']);
+  /** Label texts drawn in the 17 px column at the left or right edge of a meter. */
+  const column = async (meter: string, side: 'left' | 'right') => {
+    const m = (await page.locator(`[data-meter="${meter}"]`).boundingBox())!;
+    return page.evaluate(
+      ({ m, side }) => {
+        const x0 = side === 'left' ? m.x : m.x + m.width - 17;
+        return [...new Set((window as unknown as { __labels: Array<{ text: string; x: number; y: number }> }).__labels
+          .filter((l) => l.x >= x0 && l.x <= x0 + 17 && l.y >= m.y && l.y <= m.y + m.height)
+          .map((l) => l.text))].sort();
+      },
+      { m, side },
+    );
+  };
+  // A channel meter: full scale, the zone boundaries and -40, on its outer side.
+  await expect.poll(() => column('channels/ch1', 'right')).toEqual(['-18', '-40', '-9', '0']);
+  // A master meter: every mark, on its left.
+  await expect.poll(() => column('buses/pgm20', 'left')).toEqual(['-18', '-30', '-40', '-50', '-60', '-9', '0']);
 });
 
 test('moves faders at a tenth of their travel while FINE is lit, without a modifier key', async ({ page, request }) => {
