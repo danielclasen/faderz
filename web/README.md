@@ -111,6 +111,15 @@ nothing is retried, and TAKE CLUSTER STATE loads the cluster's snapshot.
 
 Every write control is `aria-disabled` and sends nothing while the link transmits no commands (connecting, offline, failing over, ahead), when the status area shows LOCK, and while the serving replica cannot commit and no standby is ready, when the client stays connected and the status area shows NO Q; either one names the reason in its title (`src/lib/state/writes.ts`). A command answered 503 (not applied), unanswered when a snapshot arrives, or unanswered when its connection fails, is sent again with its id; otherwise one without an answer is not sent again, as the server answers every command it reads. One still unanswered 3 s after it was issued is dropped with a notice, and its control shows the committed value again.
 
+Each screen latches true-peak overs and holds the maximum true peak
+(the TP readout of a master) from the meter frames it receives, so a
+screen opened later shows only what it measured since. RESET restarts
+the loudness measurement of an output for every client; each screen
+sees the restart in the frames (the maxima since reset fall, LRA turns
+unstable) and clears that output's over and TP maximum, so all screens
+agree. Channels latch an over only where they feed a direct out; the TP
+key above the strips clears those on this screen only.
+
 `window.__faderz` is a read-only view of the sync state for tests:
 `connection`, `standby`, `primaryReplica`, `standbyReplica`, `session`
 (dev builds only: the session id is a credential), `revision`,

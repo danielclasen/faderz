@@ -18,20 +18,17 @@
   let { group, id, stereo = false, onreset }: Props = $props();
   const mixer = getMixer();
   let reading = $state<MeterReading | undefined>();
-  /** Highest true peak of every frame since the previous readout tick, dBTP. */
+  /** Highest true peak since the last reset, dBTP, as the over lamp latches it. */
   let tp = $state<number | null>(null);
-  const tpLegs: number[] = [];
 
   // 10 readouts per second, the rate EBU Tech 3341 asks of a live meter.
-  // The true peak is the maximum over every frame in between, so a short
-  // over between two ticks is still shown.
+  // TP is the maximum true-peak level since the last reset (EBU R 128),
+  // gathered from every frame, so a short over between two ticks stays
+  // readable.
   onMount(() => {
-    let since = -Infinity;
     const t = setInterval(() => {
-      const meters = mixer.meters;
-      reading = meters.get(group, id);
-      tp = meters.maxSince(group, id, 'truePeak', since, tpLegs) ? Math.max(...tpLegs) : reading ? tp : null;
-      since = meters.receivedAt;
+      reading = mixer.meters.get(group, id);
+      tp = mixer.meters.truePeakSinceReset(group, id);
     }, READOUT_MS);
     return () => clearInterval(t);
   });
@@ -87,7 +84,7 @@
   <span class="k">LRA</span>
   <b class="num v" class:unstable={l !== undefined && !l.lraStable} title={l && !l.lraStable ? 'Settles after 60 s of measurement' : undefined}><span>{fmt(l?.lra)}</span></b>
   <span class="max unit">LU</span>
-  <span class="k">TP</span><b class="num v" class:hot={tp !== null && tp > settings.zones.truePeakMax}><span>{fmt(tp)}</span></b><span
+  <span class="k">TP</span><b class="num v" class:hot={tp !== null && tp > settings.zones.truePeakMax} title="Maximum true peak since the last reset" data-testid={`tp-${id}`}><span>{fmt(tp)}</span></b><span
     class="max unit lamp"
     class:over
     data-testid={`tp-over-${id}`}

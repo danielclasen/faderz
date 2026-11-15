@@ -261,7 +261,66 @@ describe('meter store: true peak between display ticks', () => {
     // A reconnect without resume, a new epoch or a rewind sends a snapshot.
     store.setShape(exampleShape());
     expect(store.overs.has('buses/pgm20')).toBe(true);
+    expect(store.truePeakSinceReset('buses', 'pgm20')).toBe(0);
     store.setShape(exampleShape(shape.channels.length + 1));
     expect(store.overs.size).toBe(0);
+    expect(store.truePeakSinceReset('buses', 'pgm20')).toBeNull();
+  });
+
+  it('holds the highest true peak since the last reset, not the latest frames', () => {
+    const store = new MeterStore();
+    store.setShape(shape);
+    expect(store.truePeakSinceReset('buses', 'pgm20')).toBeNull();
+    store.ingest('r1', frame(-12), 40);
+    store.ingest('r1', frame(-3.5), 80);
+    for (let t = 120; t < 120 + 40 * 50; t += 40) store.ingest('r1', frame(-20), t);
+    expect(store.truePeakSinceReset('buses', 'pgm20')).toBeCloseTo(-3.5, 5);
+    store.clearOvers('buses', ['pgm20']);
+    expect(store.truePeakSinceReset('buses', 'pgm20')).toBeNull();
+    store.ingest('r1', frame(-20), 4000);
+    expect(store.truePeakSinceReset('buses', 'pgm20')).toBe(-20);
+  });
+
+  describe('a loudness reset made on any client', () => {
+    /** Offset of the loudness values of bus `id` (meters/flat.ts). */
+    const loudOffset = (id: string) => tpOffset(id) + 2 * layout.buses.find((b) => b.id === id)!.legs;
+    const loud = (tp: number, l: { maxMomentary: number; maxShortTerm: number; lraStable: boolean }) => {
+      const flat = frame(tp);
+      const t = loudOffset('pgm20');
+      flat[t + 4] = l.maxMomentary;
+      flat[t + 5] = l.maxShortTerm;
+      flat[t + 7] = 1 | (l.lraStable ? 2 : 0);
+      return flat;
+    };
+
+    it('clears the over and the true-peak maximum when the maxima since reset fall', () => {
+      const store = new MeterStore();
+      store.setShape(shape);
+      store.ingest('r1', loud(0, { maxMomentary: -20, maxShortTerm: -22, lraStable: true }), 40);
+      store.ingest('r1', loud(-30, { maxMomentary: -18, maxShortTerm: -21, lraStable: true }), 80);
+      expect(store.overs.has('buses/pgm20')).toBe(true);
+      // Another client's RESET: the maxima start again from the current level.
+      store.ingest('r1', loud(-30, { maxMomentary: -25, maxShortTerm: Number.NaN, lraStable: false }), 120);
+      expect(store.overs.has('buses/pgm20')).toBe(false);
+      expect(store.truePeakSinceReset('buses', 'pgm20')).toBe(-30);
+    });
+
+    it('is seen from LRA turning unstable when the maxima do not move', () => {
+      const store = new MeterStore();
+      store.setShape(shape);
+      store.ingest('r1', loud(0, { maxMomentary: -20, maxShortTerm: -22, lraStable: true }), 40);
+      store.ingest('r1', loud(-30, { maxMomentary: -20, maxShortTerm: -22, lraStable: false }), 80);
+      expect(store.overs.has('buses/pgm20')).toBe(false);
+    });
+
+    it('is not read from the other measurement of a new replica', () => {
+      const store = new MeterStore();
+      store.setShape(shape);
+      store.ingest('r1', loud(0, { maxMomentary: -20, maxShortTerm: -22, lraStable: true }), 40);
+      store.ingest('r2', loud(-30, { maxMomentary: -21, maxShortTerm: -23, lraStable: true }), 80);
+      expect(store.overs.has('buses/pgm20')).toBe(true);
+      store.ingest('r2', loud(-30, { maxMomentary: -21, maxShortTerm: -23, lraStable: true }), 120);
+      expect(store.overs.has('buses/pgm20')).toBe(true);
+    });
   });
 });

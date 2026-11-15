@@ -34,6 +34,11 @@ export class MeterStore {
   private readings = new Map<string, MeterReading>();
   /** The latest frames, oldest first, with the time each arrived. */
   private history: Array<{ at: number; values: Float32Array }> = [];
+  /** Highest true peak per slot key since it was last cleared, dBTP. */
+  private readonly tpMax = new Map<string, number>();
+  /** Loudness maxima and LRA state per slot key in the last frame of `loudReplica`. */
+  private readonly loudSeen = new Map<string, { maxMomentary: number; maxShortTerm: number; lraStable: boolean }>();
+  private loudReplica: string | null = null;
   /** Replica that measured the latest frame. */
   replica: string | null = null;
   receivedAt = 0;
@@ -48,8 +53,8 @@ export class MeterStore {
 
   /**
    * Meter frames follow the shape of the last snapshot. Every snapshot
-   * sets it, also after a reconnect or a rewind: latched overs clear
-   * only when the meter layout changes.
+   * sets it, also after a reconnect or a rewind: latched overs and true
+   * peak maxima clear only when the meter layout changes.
    */
   setShape(shape: Shape): void {
     const layout = deriveMeterLayout(shape);
@@ -57,11 +62,14 @@ export class MeterStore {
       this.fingerprint = layout.fingerprint;
       this.slots = meterSlots(layout);
       this.overs.clear();
+      this.tpMax.clear();
+      this.loudSeen.clear();
     }
     this.directOuts = new Set(shape.outputs.map((o) => o.source));
     this.truePeaks = [...this.slots].filter(([key, slot]) => this.showsTruePeak(key, slot));
     const shown = new Set(this.truePeaks.map(([key]) => key));
     for (const key of [...this.overs]) if (!shown.has(key)) this.overs.delete(key);
+    for (const key of [...this.tpMax.keys()]) if (!shown.has(key)) this.tpMax.delete(key);
     this.clear();
   }
 
@@ -88,21 +96,51 @@ export class MeterStore {
     this.readings.clear();
     this.history.push({ at: now, values });
     if (this.history.length > HISTORY) this.history.shift();
+    // Each replica measures loudness itself: a reset shows only between
+    // frames of one replica.
+    if (replica !== this.loudReplica) {
+      this.loudReplica = replica;
+      this.loudSeen.clear();
+    }
     for (const [key, slot] of this.truePeaks) {
-      if (this.overs.has(key)) continue;
-      const tp = slot.offset + slot.legs;
-      for (let i = 0; i < slot.legs; i++) {
-        if (values[tp + i]! > this.truePeakMax) {
-          this.overs.add(key);
-          break;
-        }
+      if (slot.kind === 'bus' && this.restarted(key, slot, values)) {
+        this.overs.delete(key);
+        this.tpMax.delete(key);
       }
+      const tp = slot.offset + slot.legs;
+      let max = values[tp]!;
+      for (let i = 1; i < slot.legs; i++) max = Math.max(max, values[tp + i]!);
+      if (max > (this.tpMax.get(key) ?? -Infinity)) this.tpMax.set(key, max);
+      if (max > this.truePeakMax && !this.overs.has(key)) this.overs.add(key);
     }
   }
 
-  /** Clears the latched true-peak overs of these elements. */
+  /**
+   * The element's loudness measurement restarted since the last frame:
+   * a RESET from any client. The maxima since reset only rise until one,
+   * and LRA is unstable for 60 s after one (model.schema.json Loudness).
+   */
+  private restarted(key: string, slot: MeterSlot, values: Float32Array): boolean {
+    const t = slot.offset + 3 * slot.legs;
+    const now = { maxMomentary: values[t + 4]!, maxShortTerm: values[t + 5]!, lraStable: (values[t + 7]! & 2) === 2 };
+    const prev = this.loudSeen.get(key);
+    this.loudSeen.set(key, now);
+    if (!prev) return false;
+    const fell = (a: number, b: number) => !Number.isNaN(a) && (Number.isNaN(b) || b < a);
+    return fell(prev.maxMomentary, now.maxMomentary) || fell(prev.maxShortTerm, now.maxShortTerm) || (prev.lraStable && !now.lraStable);
+  }
+
+  /** Highest true peak of the element since its over was last cleared, dBTP, or null. */
+  truePeakSinceReset(group: MeterGroup, id: string): number | null {
+    return this.tpMax.get(slotKey(group, id)) ?? null;
+  }
+
+  /** Clears the latched true-peak overs and true-peak maxima of these elements. */
   clearOvers(group: MeterGroup, ids: readonly string[]): void {
-    for (const id of ids) this.overs.delete(slotKey(group, id));
+    for (const id of ids) {
+      this.overs.delete(slotKey(group, id));
+      this.tpMax.delete(slotKey(group, id));
+    }
   }
 
   /**

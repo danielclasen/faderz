@@ -582,6 +582,45 @@ test('shows a channel true peak only on channels with a direct out', async ({ pa
   await patch(request, '/channels/ch1/trim', 0);
 });
 
+test('reads the highest true peak since RESET, not the last tenth of a second', async ({ page, request }) => {
+  await live(page);
+  const tp = page.getByTestId('tp-pgm20');
+  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await patch(request, '/tone/level', 0);
+  await patch(request, '/tone/targets', ['pgm20']);
+  await patch(request, '/tone/on', true);
+  await page.waitForTimeout(150);
+  await patch(request, '/tone/on', false);
+  await expect(tp).toHaveText(/^\s*-?0\.\d$/);
+  await page.waitForTimeout(1500);
+  await expect(tp).toHaveText(/^\s*-?0\.\d$/);
+  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await expect(tp).not.toHaveText(/^\s*-?0\.\d$/);
+  await patch(request, '/tone/level', -18);
+  await patch(request, '/tone/targets', []);
+});
+
+test('a RESET on one screen clears the true-peak over on every screen', async ({ page, browser, request }) => {
+  await live(page);
+  const other = await browser.newContext();
+  const page2 = await other.newPage();
+  await live(page2);
+  await patch(request, '/tone/level', 0);
+  await patch(request, '/tone/targets', ['pgm20']);
+  await patch(request, '/tone/on', true);
+  await page.waitForTimeout(150);
+  await patch(request, '/tone/on', false);
+  await expect(page.getByTestId('tp-over-pgm20')).toHaveClass(/over/);
+  await expect(page2.getByTestId('tp-over-pgm20')).toHaveClass(/over/);
+  await page.locator('[data-master="pgm20"]').getByRole('button', { name: 'RESET' }).click();
+  await expect(page.getByTestId('tp-over-pgm20')).not.toHaveClass(/over/);
+  await expect(page2.getByTestId('tp-over-pgm20')).not.toHaveClass(/over/);
+  await expect(page2.getByTestId('tp-pgm20')).not.toHaveText(/^\s*-?0\.\d$/);
+  await other.close();
+  await patch(request, '/tone/level', -18);
+  await patch(request, '/tone/targets', []);
+});
+
 test('mutes and solos monitor speakers and sets monitor image and dim depth', async ({ page, request }) => {
   await live(page);
   await page.getByRole('button', { name: 'Mute speaker R' }).click();
