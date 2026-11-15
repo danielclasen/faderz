@@ -40,7 +40,9 @@ test('serves the UI, which goes live and writes through the API', { tag: '@all' 
     .poll(async () => ((await (await page.request.get('/api/v1/state')).json()) as { state: { channels: { ch1: { mute: boolean } } } }).state.channels.ch1.mute)
     .toBe(true);
   // Every view, with the fonts, the worker and the WebSocket in use.
-  for (const view of ['Aux / N-1', 'Scenes', 'Mixer']) await page.getByRole('button', { name: view }).click();
+  for (const view of ['Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup', 'Mixer']) {
+    await page.getByRole('button', { name: view, exact: true }).click();
+  }
   expect(await page.evaluate(() => (window as unknown as { __csp: string[] }).__csp)).toEqual([]);
 });
 

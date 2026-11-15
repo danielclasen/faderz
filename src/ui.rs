@@ -3,7 +3,7 @@
 //! too, so a binary built in one place serves it in another.
 
 use axum::Router;
-use axum::http::{Method, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
 
@@ -14,10 +14,24 @@ struct Assets;
 
 /// What the built UI loads, all from its own origin: its scripts, the
 /// worker, styles, fonts, the icon, and the API over HTTP and WebSocket.
-/// No page may frame it.
-pub const CSP: &str = "default-src 'self'; script-src 'self'; worker-src 'self'; \
-    style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self'; \
-    object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+/// No page may frame it. The WebSocket origin of `host` is named beside
+/// `'self'`, which Safari before 15.4 does not take to cover `ws:` and
+/// `wss:`.
+pub fn csp(host: Option<&str>) -> String {
+    let ws = host
+        .filter(|h| {
+            !h.is_empty()
+                && h.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-.:[]".contains(&b))
+        })
+        .map(|h| format!(" ws://{h} wss://{h}"))
+        .unwrap_or_default();
+    format!(
+        "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; \
+         font-src 'self'; img-src 'self'; connect-src 'self'{ws}; object-src 'none'; \
+         base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    )
+}
 
 /// Answered at `/` by a binary built without `web/dist`.
 const NO_UI: &str = "This faderz binary was built without its web UI: run `npm run build` \
@@ -28,7 +42,7 @@ pub fn router() -> Router {
     Router::new().fallback(serve)
 }
 
-async fn serve(method: Method, uri: Uri) -> Response {
+async fn serve(method: Method, uri: Uri, headers: HeaderMap) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
@@ -48,10 +62,11 @@ async fn serve(method: Method, uri: Uri) -> Response {
     } else {
         "no-cache"
     };
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
     let headers = [
         (header::CONTENT_TYPE, file.metadata.mimetype().to_owned()),
         (header::CACHE_CONTROL, cache.to_owned()),
-        (header::CONTENT_SECURITY_POLICY, CSP.to_owned()),
+        (header::CONTENT_SECURITY_POLICY, csp(host)),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
         (header::X_FRAME_OPTIONS, "DENY".to_owned()),
     ];
@@ -115,5 +130,21 @@ mod tests {
         );
         protections(&asset);
         assert_eq!(get("/nope.js").await.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Safari before 15.4 does not take 'self' to cover the WebSocket.
+    #[test]
+    fn the_policy_names_the_websocket_origin_of_the_host() {
+        let policy = csp(Some("mixer.example:8443"));
+        assert!(
+            policy.contains("connect-src 'self' ws://mixer.example:8443 wss://mixer.example:8443;"),
+            "{policy}"
+        );
+        assert!(csp(Some("[::1]:8080")).contains("wss://[::1]:8080"));
+        // Nothing that could end the directive or add one gets in.
+        for bad in ["evil.example; script-src *", "a b", ""] {
+            assert!(csp(Some(bad)).contains("connect-src 'self';"), "{bad}");
+        }
+        assert!(csp(None).contains("connect-src 'self';"));
     }
 }
