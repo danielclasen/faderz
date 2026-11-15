@@ -567,6 +567,21 @@ test('latches a true-peak over on a master until RESET, however short it was', a
   await patch(request, '/tone/targets', []);
 });
 
+test('shows a channel true peak only on channels with a direct out', async ({ page, request }) => {
+  await live(page);
+  const { shape } = await serverState(request);
+  const direct = new Set(shape.outputs.map((o) => o.source));
+  const without = shape.channels.find((c) => !direct.has(c.id))!;
+  const overs = page.getByTestId('channel-overs');
+  await patch(request, `/channels/${without.id}/trim`, 20);
+  await patch(request, '/channels/ch1/trim', 20);
+  await expect(overs).toHaveAccessibleName(/Pres 1(,|$|\.)/);
+  await page.waitForTimeout(500);
+  expect(await overs.getAttribute('aria-label')).not.toContain(without.name);
+  await patch(request, `/channels/${without.id}/trim`, 0);
+  await patch(request, '/channels/ch1/trim', 0);
+});
+
 test('mutes and solos monitor speakers and sets monitor image and dim depth', async ({ page, request }) => {
   await live(page);
   await page.getByRole('button', { name: 'Mute speaker R' }).click();

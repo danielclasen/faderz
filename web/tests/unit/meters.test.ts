@@ -223,4 +223,45 @@ describe('meter store: true peak between display ticks', () => {
     store.ingest('r1', flat, 40);
     expect([...store.overs]).toEqual(['channels/ch1']);
   });
+
+  it('shows a channel true peak only where the channel feeds a direct out', () => {
+    const store = new MeterStore();
+    store.setShape(shape);
+    const direct = new Set(shape.outputs.map((o) => o.source));
+    const without = layout.channels.find((c) => !direct.has(c.id))!;
+    expect(direct.has('ch1')).toBe(true);
+    // Every channel's true-peak leg above the limit.
+    const flat = new Float32Array(layout.valueCount).fill(-40);
+    let offset = 0;
+    for (const c of layout.channels) {
+      for (let i = 0; i < c.legs; i++) flat[offset + c.legs + i] = 0.5;
+      offset += 2 * c.legs + 1;
+    }
+    store.ingest('r1', flat, 40);
+    const channelOvers = [...store.overs].filter((k) => k.startsWith('channels/')).sort();
+    expect(channelOvers).toEqual([...direct].filter((id) => layout.channels.some((c) => c.id === id)).map((id) => `channels/${id}`).sort());
+    expect(store.hasTruePeak('channels', 'ch1')).toBe(true);
+    expect(store.hasTruePeak('channels', without.id)).toBe(false);
+    expect(store.hasTruePeak('buses', 'pgm20')).toBe(true);
+    expect(store.hasTruePeak('monitor', 'mon')).toBe(false);
+    const out: number[] = [];
+    expect(store.maxSince('channels', without.id, 'truePeak', 0, out)).toBe(false);
+    expect(store.maxSince('channels', 'ch1', 'truePeak', 0, out)).toBe(true);
+    // A shape without the direct out drops the channel's over.
+    store.setShape({ ...shape, outputs: shape.outputs.filter((o) => o.source !== 'ch1') });
+    expect(store.overs.has('channels/ch1')).toBe(false);
+    expect(store.hasTruePeak('channels', 'ch1')).toBe(false);
+  });
+
+  it('keeps latched overs across a snapshot of the same shape and clears them when the layout changes', () => {
+    const store = new MeterStore();
+    store.setShape(shape);
+    store.ingest('r1', frame(0), 40);
+    expect(store.overs.has('buses/pgm20')).toBe(true);
+    // A reconnect without resume, a new epoch or a rewind sends a snapshot.
+    store.setShape(exampleShape());
+    expect(store.overs.has('buses/pgm20')).toBe(true);
+    store.setShape(exampleShape(shape.channels.length + 1));
+    expect(store.overs.size).toBe(0);
+  });
 });

@@ -23,7 +23,7 @@ export interface MeterZones {
 }
 /** Width of the momentary loudness bar of a channel meter, px. */
 const LOUD_W = 3;
-/** Height of the true-peak over lamp at the top of every meter, px, and the gap below it. */
+/** Height of the true-peak over lamp at the top of a meter, px, and the gap below it. */
 const LAMP_H = 3;
 const LAMP_GAP = 1;
 
@@ -49,7 +49,7 @@ interface Slot {
   /** Nearest ancestor below the host that clips its content, or null; undefined until measured. */
   clipper: HTMLElement | null | undefined;
   peak: LegBallistics[];
-  /** True peak: of the bus, or of a channel at its direct-out tap. Drawn as its hold marker. */
+  /** True peak: of the bus, or of a channel with a direct out at that tap. Drawn as its hold marker. */
   tp: LegBallistics[];
   /** Bus RMS legs; empty for channels. */
   rms: LegBallistics[];
@@ -355,8 +355,9 @@ export class MeterLayer {
     ctx.globalAlpha = 1;
     ctx.fillStyle = colors.well;
     ctx.fillRect(x0, top, w, full);
-    // A monitor meter carries no true peak, so no lamp; its space stays.
-    if (s.spec.group !== 'monitor') {
+    // A monitor meter, and a channel without a direct out, shows no true
+    // peak, so no lamp; its space stays.
+    if (this.meters.hasTruePeak(s.spec.group, s.spec.id)) {
       const over = this.meters.overs.has(s.key);
       ctx.globalAlpha = over ? 1 : 0.5;
       ctx.fillStyle = over ? colors.high : colors.line;
