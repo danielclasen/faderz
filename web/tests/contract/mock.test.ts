@@ -1106,6 +1106,23 @@ describe('REST', () => {
     await rest('DELETE', `/scenes/${id}`);
   });
 
+  it('pauses and starts a loudness measurement as a write, which a scene recall and a reset leave as it is', async () => {
+    const write = (path: string, value: unknown) =>
+      rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path, value }] });
+    expect(cluster.state.loudness['pgm20']).toEqual({ running: true });
+    const created = await rest('POST', '/scenes', { commandId: crypto.randomUUID(), name: 'Measuring' });
+    const id = (created.body!['scene'] as { id: string }).id;
+    expect((await write('/loudness/pgm20/running', false)).status).toBe(200);
+    expect(cluster.state.loudness['pgm20']).toEqual({ running: false });
+    await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 });
+    expect((await rest('POST', '/loudness/reset', { ids: ['pgm20'] })).status).toBe(204);
+    expect(cluster.state.loudness['pgm20']).toEqual({ running: false });
+    expect((await write('/loudness/nope/running', false)).status).toBe(404);
+    expect((await write('/loudness/pgm20/running', true)).status).toBe(200);
+    expect(cluster.state.loudness['pgm20']).toEqual({ running: true });
+    await rest('DELETE', `/scenes/${id}`);
+  });
+
   it('applies a loudness preset with its target and tolerance, and a typed target makes it custom', async () => {
     const write = (path: string, value: unknown) =>
       rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path, value }] });

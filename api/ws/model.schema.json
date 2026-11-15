@@ -1324,6 +1324,7 @@
         "recallSafe",
         "scenes",
         "consoles",
+        "loudness",
         "metering",
         "tone",
         "sceneRecalled"
@@ -1424,6 +1425,16 @@
             "$ref": "#/$defs/ConsoleStatus"
           }
         },
+        "loudness": {
+          "description": "Loudness measurement of each bus, aux and mix-minus output, keyed by its id. Not part of scenes: recalling one leaves every measurement as it is.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Id"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/LoudnessMeasurement"
+          }
+        },
         "metering": {
           "$ref": "#/$defs/Metering"
         },
@@ -1497,6 +1508,9 @@
         },
         {
           "pattern": "^/recallSafe/[a-z][a-z0-9-]{0,31}$"
+        },
+        {
+          "pattern": "^/loudness/[a-z][a-z0-9-]{0,31}/running$"
         },
         {
           "pattern": "^/metering/(zones/(alignment|permittedMax|truePeakMax)|loudness/(preset|target|tolerance)|scale)$"
@@ -1608,7 +1622,7 @@
             "properties": {
               "path": {
                 "type": "string",
-                "pattern": "(/(enabled|mute|on|pre|dim|cut|mono|open)|/polarity/[0-7]|/routes/[a-z][a-z0-9-]{0,31})$"
+                "pattern": "(/(enabled|mute|on|pre|dim|cut|mono|open|running)|/polarity/[0-7]|/routes/[a-z][a-z0-9-]{0,31})$"
               }
             }
           },
@@ -2550,7 +2564,7 @@
       }
     },
     "Loudness": {
-      "description": "ITU-R BS.1770-5 / EBU R128 loudness in LUFS, LRA in LU (EBU Tech 3342). null until enough audio has been measured. maxMomentary and maxShortTerm are the highest momentary and short-term loudness since the last reset (EBU Tech 3341). integratedValid is false after a telemetry drop until the integrated measurement is reset. lraStable is false during the first 60 s after a reset, while LRA is not yet meaningful.",
+      "description": "ITU-R BS.1770-5 / EBU R128 loudness in LUFS, LRA in LU (EBU Tech 3342). null until enough audio has been measured. maxMomentary and maxShortTerm are the highest momentary and short-term loudness since the last reset (EBU Tech 3341). integrated, lra and the maxima take in audio only while the measurement runs (LoudnessMeasurement). integratedValid is false after a telemetry drop until the integrated measurement is reset. lraStable is false during the first 60 s of running measurement after a reset, while LRA is not yet meaningful.",
       "type": "object",
       "required": [
         "momentary",
@@ -2640,6 +2654,19 @@
           "type": "boolean"
         },
         "lraStable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "LoudnessMeasurement": {
+      "description": "Integration of an output's loudness measurement (EBU Tech 3341: start, pause and reset of the integrated measurement). While running is true, integrated loudness, LRA, maxMomentary and maxShortTerm take in the audio; while false they hold their values and take in nothing, and the 60 s before LRA is stable count only running time. Momentary and short-term loudness, true peak and the other meters are measured whether running or not. A change takes effect at its atIndex, the same sample on every replica. POST /loudness/reset restarts the measurement and leaves running as it is.",
+      "type": "object",
+      "required": [
+        "running"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "running": {
           "type": "boolean"
         }
       }

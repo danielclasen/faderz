@@ -5,6 +5,7 @@
   import type { MeterGroup, MeterReading } from '../lib/meters/store';
   import { loudnessUnit } from '../lib/loudnessUnit.svelte';
   import { hold } from '../lib/hold';
+  import { pointer } from '../lib/state/pointer';
 
   /** Readout period, ms. */
   const READOUT_MS = 100;
@@ -18,6 +19,8 @@
   }
   let { group, id, stereo = false, onreset }: Props = $props();
   const RESET_HOLD_MS = 1000;
+  /** Pausing a running integration loses the programme while paused: it takes a hold. Starting is one press. */
+  const PAUSE_HOLD_MS = 500;
   const mixer = getMixer();
   let reading = $state<MeterReading | undefined>();
   /** Highest true peak since the last reset, dBTP, as the over lamp latches it. */
@@ -39,6 +42,14 @@
     if (mixer.locked) return;
     mixer.meters.clearOvers(group, [id]);
     onreset?.();
+  }
+
+  const runPath = $derived(pointer('loudness', id, 'running'));
+  /** The integrated measurement takes in audio (EBU Tech 3341 start and pause). */
+  const running = $derived(mixer.value<boolean | undefined>(runPath) !== false);
+  function toggleRun(): void {
+    if (mixer.locked) return;
+    mixer.set(runPath, !running);
   }
 
   /** One decimal place at most (EBU Tech 3341); every value fits 5 characters. */
@@ -79,11 +90,13 @@
     class:ok={dev !== null && Math.abs(dev) <= tolerance}
     class:off={dev !== null && Math.abs(dev) > tolerance}
     class:invalid={l && !l.integratedValid}
+    class:held={!running}
+    title={running ? undefined : 'Integration paused: integrated loudness, LRA and maxima hold until RUN'}
     data-testid={`loudness-i-${id}`}><span>{lu(l?.integrated)}</span></b
   >
   <b class="num max" title={`Target ${target} LUFS +/-${tolerance} LU`}><span>{fmt(target)}</span></b>
   <span class="k">LRA</span>
-  <b class="num v" class:unstable={l !== undefined && !l.lraStable} title={l && !l.lraStable ? 'Settles after 60 s of measurement' : undefined}><span>{fmt(l?.lra)}</span></b>
+  <b class="num v" class:unstable={l !== undefined && !l.lraStable} class:held={!running} title={!running ? 'Integration paused' : l && !l.lraStable ? 'Settles after 60 s of measurement' : undefined}><span>{fmt(l?.lra)}</span></b>
   <span class="max unit">LU</span>
   <span class="k">TP</span><b class="num v" class:hot={tp !== null && tp > settings.zones.truePeakMax} title="Maximum true peak since the last reset" data-testid={`tp-${id}`}><span>{fmt(tp)}</span></b><span
     class="max unit lamp"
@@ -102,14 +115,26 @@
   {/if}
   <span class="max unit"></span>
   {#if onreset}
-    <!-- Resetting mid-programme loses the running measurement: it takes a hold. -->
-    <button
-      class="key reset"
-      aria-disabled={mixer.locked}
-      use:hold={{ ms: RESET_HOLD_MS, fire: reset }}
-      aria-label="Reset loudness, hold for one second"
-      title="Hold for one second to reset integrated loudness, LRA, maxima and the true-peak over">RESET</button
-    >
+    <div class="keys">
+      <!-- Lit while the integration runs. A paused integration holds its
+           values; pausing takes a hold, starting one press. -->
+      <button
+        class="key hold run"
+        aria-disabled={mixer.locked}
+        aria-pressed={running}
+        use:hold={{ ms: running ? PAUSE_HOLD_MS : 0, fire: toggleRun }}
+        aria-label={running ? 'Loudness integration running, hold to pause' : 'Loudness integration paused, press to run'}
+        title={running ? 'Integrating: hold to pause integrated loudness, LRA and maxima' : 'Paused: press to run the integration on from its held values'}>RUN</button
+      >
+      <!-- Resetting mid-programme loses the running measurement: it takes a hold. -->
+      <button
+        class="key hold reset"
+        aria-disabled={mixer.locked}
+        use:hold={{ ms: RESET_HOLD_MS, fire: reset }}
+        aria-label="Reset loudness, hold for one second"
+        title="Hold for one second to reset integrated loudness, LRA, maxima and the true-peak over">RESET</button
+      >
+    </div>
   {/if}
 </div>
 
@@ -228,20 +253,30 @@
     background: var(--meter-high);
     color: #fff;
   }
-  .reset {
+  .held {
+    opacity: 0.55;
+  }
+  .keys {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+    margin-top: 2px;
+  }
+  .hold {
     position: relative;
     touch-action: none;
-    grid-column: 1 / -1;
-    margin-top: 2px;
     height: 20px;
+    padding: 0;
     font-size: 10px;
+    letter-spacing: 0.02em;
   }
   @media (pointer: coarse) {
-    .reset {
+    .hold {
       height: 28px;
     }
   }
-  .reset::after {
+  .hold::after {
     content: '';
     position: absolute;
     left: 0;
@@ -252,7 +287,7 @@
     transform: scaleX(0);
     transform-origin: left;
   }
-  .reset:global(.arming)::after {
+  .hold:global(.arming)::after {
     transform: scaleX(1);
     transition: transform var(--hold) linear;
   }

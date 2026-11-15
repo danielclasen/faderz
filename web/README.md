@@ -121,7 +121,11 @@ screen opened later shows only what it measured since. RESET restarts
 the loudness measurement of an output for every client; each screen
 sees the restart in the frames (the maxima since reset fall, LRA turns
 unstable) and clears that output's over and TP maximum, so all screens
-agree. Channels latch an over only where they feed a direct out; the TP
+agree. RUN, lit while an output's integration runs, pauses it after a
+0.5 s hold and runs it on with one press: paused, its integrated
+loudness, LRA and maxima hold on every screen while momentary and
+short-term go on, a scene recall leaves it paused or running, and RESET
+leaves it paused. Channels latch an over only where they feed a direct out; the TP
 key above the strips clears those on this screen only.
 
 `window.__faderz` is a read-only view of the sync state for tests:

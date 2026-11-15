@@ -50,6 +50,62 @@ describe('mock bus limiter', () => {
   });
 });
 
+describe('mock loudness measurement', () => {
+  it('holds integrated loudness, LRA and the maxima while paused and goes on measuring momentary and short-term', () => {
+    const shape = exampleShape();
+    const state = initialState(shape);
+    const sources = new SourceModel(shape);
+    const meters = new ReplicaMeters(shape);
+    const pgm = shape.buses.findIndex((b) => b.id === 'pgm20');
+    const level = (db: number) => {
+      for (const c of shape.channels) sources.levels.set(c.id, Array<number>(c.width).fill(db));
+    };
+    const run = (n: number) => {
+      let last = meters.frame(state, sources).buses[pgm]!.loudness;
+      for (let i = 1; i < n; i++) last = meters.frame(state, sources).buses[pgm]!.loudness;
+      return last;
+    };
+    level(-40);
+    const running = run(200);
+    expect(running.integrated).not.toBeNull();
+
+    state.loudness['pgm20']!.running = false;
+    level(-10);
+    const paused = run(200);
+    expect(paused.momentary!).toBeGreaterThan(running.momentary! + 20);
+    expect(paused.shortTerm!).toBeGreaterThan(running.shortTerm! + 20);
+    expect(paused.integrated).toBe(running.integrated);
+    expect(paused.lra).toBe(running.lra);
+    expect(paused.maxMomentary).toBe(running.maxMomentary);
+    expect(paused.maxShortTerm).toBe(running.maxShortTerm);
+
+    state.loudness['pgm20']!.running = true;
+    const resumed = run(200);
+    expect(resumed.integrated!).toBeGreaterThan(running.integrated! + 5);
+    expect(resumed.maxMomentary!).toBeGreaterThan(running.maxMomentary! + 20);
+  });
+
+  it('counts only running time towards a stable LRA', () => {
+    const shape = exampleShape();
+    const state = initialState(shape);
+    const sources = new SourceModel(shape);
+    const meters = new ReplicaMeters(shape);
+    const pgm = shape.buses.findIndex((b) => b.id === 'pgm20');
+    const frames = (n: number) => {
+      let stable = false;
+      for (let i = 0; i < n; i++) stable = meters.frame(state, sources).buses[pgm]!.loudness.lraStable;
+      return stable;
+    };
+    // 60 s of meter periods at 40 ms is 1500; half of them run.
+    expect(frames(750)).toBe(false);
+    state.loudness['pgm20']!.running = false;
+    expect(frames(1500)).toBe(false);
+    state.loudness['pgm20']!.running = true;
+    expect(frames(749)).toBe(false);
+    expect(frames(2)).toBe(true);
+  });
+});
+
 describe('mock line-up tone', () => {
   it('replaces the mix of its target outputs at the selected level and leaves the others', () => {
     const shape = exampleShape();

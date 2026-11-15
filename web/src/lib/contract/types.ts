@@ -235,6 +235,10 @@ export interface ConsoleStatus {
 }
 export type LoudnessPreset = 'ebu' | 'atsc' | 'custom';
 export type LoudnessScale = 'ebu9' | 'ebu18';
+/** Integration of an output's loudness measurement: start and pause (EBU Tech 3341). */
+export interface LoudnessMeasurement {
+  running: boolean;
+}
 export interface Metering {
   zones: { alignment: number; permittedMax: number; truePeakMax: number };
   loudness: { preset: LoudnessPreset; target: number; tolerance: number };
@@ -265,6 +269,8 @@ export interface State {
   recallSafe: Record<Id, RecallGroup[]>;
   scenes: Scene[];
   consoles: ConsoleStatus[];
+  /** Loudness measurement per bus, aux and mix-minus output; not part of scenes. */
+  loudness: Record<Id, LoudnessMeasurement>;
   metering: Metering;
   tone: Tone;
   /** Last recalled scene; server-written. */

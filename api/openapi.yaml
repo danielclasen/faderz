@@ -285,6 +285,11 @@ paths:
     post:
       operationId: resetLoudness
       summary: Reset integrated loudness and LRA of buses, auxes or mix-minus outputs.
+      description: |
+        Restarts the measurement of each output: integrated loudness, LRA
+        and the momentary and short-term maxima. A paused measurement stays
+        paused; start and pause are writes of /loudness/{id}/running
+        (model.schema.json LoudnessMeasurement).
       parameters:
         - $ref: "#/components/parameters/RequestHeader"
       requestBody:

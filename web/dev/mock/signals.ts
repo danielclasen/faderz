@@ -186,7 +186,12 @@ class LoudnessMeter {
     this.cachedLra = null;
   }
 
-  push(z: number): Loudness {
+  /**
+   * One meter period. While not running the integrated measurement, LRA
+   * and the maxima take in nothing and hold their values; momentary and
+   * short-term are measured throughout.
+   */
+  push(z: number, running: boolean): Loudness {
     this.frames.push(z);
     if (this.frames.length > 75) this.frames.shift();
     const mean = (n: number) => {
@@ -196,6 +201,18 @@ class LoudnessMeter {
     const lufs = (zz: number) => (zz <= 1e-12 ? null : -0.691 + 10 * Math.log10(zz));
     const momentary = this.frames.length >= 10 ? lufs(mean(10)) : null;
     const shortTerm = this.frames.length >= 75 ? lufs(mean(75)) : null;
+    const clampL = (v: number | null) => (v === null ? null : Math.round(Math.max(-120, Math.min(30, v)) * 10) / 10);
+    const loudness = (): Loudness => ({
+      momentary: clampL(momentary),
+      shortTerm: clampL(shortTerm),
+      integrated: clampL(this.cachedIntegrated),
+      lra: this.cachedLra === null ? null : Math.round(Math.min(100, this.cachedLra) * 10) / 10,
+      maxMomentary: this.maxMomentary,
+      maxShortTerm: this.maxShortTerm,
+      integratedValid: true,
+      lraStable: this.since >= LRA_STABLE_PERIODS,
+    });
+    if (!running) return loudness();
     this.tick++;
     if (this.tick % 3 === 0 && this.frames.length >= 10) {
       this.blocks.push(mean(10));
@@ -209,21 +226,11 @@ class LoudnessMeter {
       this.cachedIntegrated = this.integrated();
       this.cachedLra = this.lra();
     }
-    const clampL = (v: number | null) => (v === null ? null : Math.round(Math.max(-120, Math.min(30, v)) * 10) / 10);
     const higher = (a: number | null, b: number | null) => (a === null ? b : b === null ? a : Math.max(a, b));
     this.maxMomentary = higher(this.maxMomentary, clampL(momentary));
     this.maxShortTerm = higher(this.maxShortTerm, clampL(shortTerm));
     this.since++;
-    return {
-      momentary: clampL(momentary),
-      shortTerm: clampL(shortTerm),
-      integrated: clampL(this.cachedIntegrated),
-      lra: this.cachedLra === null ? null : Math.round(Math.min(100, this.cachedLra) * 10) / 10,
-      maxMomentary: this.maxMomentary,
-      maxShortTerm: this.maxShortTerm,
-      integratedValid: true,
-      lraStable: this.since >= LRA_STABLE_PERIODS,
-    };
+    return loudness();
   }
 
   private integrated(): number | null {
@@ -370,7 +377,7 @@ export class ReplicaMeters {
         peak: peak.map((v) => r1(Math.min(ceiling, v + jitter()))),
         truePeak: peak.map((v) => r1(Math.min(ceiling, v + Math.random() * 0.6 + jitter()))),
         rms: rms.map((v) => r1(v + jitter())),
-        loudness: meter.push(z),
+        loudness: meter.push(z, state.loudness[id]?.running ?? true),
         correlation: correlationOf(layout, rms),
       };
     };

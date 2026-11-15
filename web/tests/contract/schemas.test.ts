@@ -130,6 +130,8 @@ describe('Change values are constrained by path', () => {
     ['/monitor/speakerSolo/0', false],
     ['/vcas/vca1/solo', 'pfl'],
     ['/channels/ch1/input', 'b'],
+    ['/loudness/pgm20/running', false],
+    ['/loudness/mm1/running', true],
   ])('accepts %s = %j', (path, value) => {
     expect(set(path, value)).toBeNull();
   });
@@ -189,6 +191,9 @@ describe('Change values are constrained by path', () => {
     ['/vcas/vca1/solo', true],
     ['/channels/ch1/input', 'c'],
     ['/buses/pgm20/input', 'a'],
+    ['/loudness/pgm20/running', 'paused'],
+    ['/loudness/pgm20', { running: false }],
+    ['/loudness/pgm20/integrated', null],
   ])('refuses %s = %j', (path, value) => {
     expect(set(path, value)).not.toBeNull();
   });

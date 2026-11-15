@@ -1219,6 +1219,39 @@ test('resets a running loudness measurement only after a one second hold', async
   expect(JSON.parse(resets[0]!)).toEqual({ ids: ['pgm20'] });
 });
 
+test('pauses the loudness integration of an output after a hold and runs it on with one press', async ({ page, request }) => {
+  await live(page);
+  const master = page.locator('[data-master="pgm20"]');
+  const integrated = page.getByTestId('loudness-i-pgm20');
+  await expect(integrated).not.toHaveText(/--\.-/, { timeout: 10_000 });
+  const run = master.getByRole('button', { name: 'Loudness integration running, hold to pause' });
+  await expect(run).toHaveAttribute('aria-pressed', 'true');
+  // A tap pauses nothing.
+  await run.click();
+  await page.waitForTimeout(800);
+  expect((await serverState(request)).state.loudness['pgm20']).toEqual({ running: true });
+
+  const box = (await run.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(700);
+  await page.mouse.up();
+  await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']).toEqual({ running: false });
+  const paused = master.getByRole('button', { name: 'Loudness integration paused, press to run' });
+  await expect(paused).toHaveAttribute('aria-pressed', 'false');
+  await expect(integrated).toHaveAttribute('title', /Integration paused/);
+  // Paused, the integrated value holds while the programme goes on.
+  const held = await integrated.textContent();
+  for (let i = 0; i < 4; i++) {
+    await page.waitForTimeout(500);
+    expect(await integrated.textContent()).toBe(held);
+  }
+  await paused.click();
+  await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']).toEqual({ running: true });
+  await expect(run).toHaveAttribute('aria-pressed', 'true');
+  await expect(integrated).not.toHaveAttribute('title', /.+/);
+});
+
 test('keeps replica detail out of the sightline behind one connection lamp', async ({ page }) => {
   await live(page);
   const primary = (await debug(page, 'primaryReplica'))!;
