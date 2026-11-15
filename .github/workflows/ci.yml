@@ -92,6 +92,39 @@ jobs:
             .cargo-git
           key: cargo-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
 
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: faderz:ci
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
+      - name: Start the image and check it serves, refuses and persists
+        run: docker/smoke.sh faderz:ci
+      - name: Build the release binary
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: dist
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=image
+      - name: Check the release binary runs here
+        run: |
+          test -s dist/THIRD-PARTY.txt
+          if grep -E '&(quot|amp|lt|gt|#x[0-9a-fA-F]+);' dist/THIRD-PARTY.txt; then
+            echo "::error::THIRD-PARTY.txt contains HTML entities"
+            exit 1
+          fi
+          dist/faderz --version | grep -q '^faderz '
+
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

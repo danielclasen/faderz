@@ -1,0 +1,11 @@
+.cargo-git
+.cargo-registry
+.claude
+.git
+.github
+target
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+web/playwright-report-binary
