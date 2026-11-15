@@ -1,0 +1,40 @@
+# cargo-deny: advisories, licences, bans and sources of the Rust crates
+# in the binary. The licences are the ones about.toml accepts.
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+exclude-dev = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[[licenses.clarify]]
+crate = "ring"
+expression = "Apache-2.0 AND ISC"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+multiple-versions = "allow"
+# The samplez crates are git dependencies pinned by rev, which cargo-deny
+# counts as wildcards; registry dependencies are pinned with `=`.
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/danielclasen/samplez"]
