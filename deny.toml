@@ -30,9 +30,9 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [bans]
 multiple-versions = "allow"
-# The samplez crates are git dependencies pinned by rev, which cargo-deny
-# counts as wildcards; registry dependencies are pinned with `=`.
-wildcards = "allow"
+# Every dependency names its version: registry ones and the samplez git
+# ones, pinned by rev, with `=`.
+wildcards = "deny"
 
 [sources]
 unknown-registry = "deny"
