@@ -41,6 +41,16 @@ describe('RestClient', () => {
     await expect(client().request('DELETE', '/scenes/s1')).resolves.toBeNull();
   });
 
+  it('takes a 404 to a DELETE retried after a gateway timeout as the delete that applied', async () => {
+    stubFetch({ status: 504 }, { status: 404, body: '{"code":404,"message":"unknown scene s1"}' });
+    await expect(client().request('DELETE', '/scenes/s1')).resolves.toBeNull();
+  });
+
+  it('reports a 404 to a DELETE retried only after not-applied answers: someone else deleted it', async () => {
+    stubFetch({ status: 503 }, { status: 503 }, { status: 404, body: '{"code":404,"message":"unknown scene s1"}' });
+    await expect(client().request('DELETE', '/scenes/s1')).rejects.toMatchObject({ status: 404, message: 'unknown scene s1' });
+  });
+
   it('reports a 404 to a first DELETE', async () => {
     stubFetch({ status: 404, body: '{"code":404,"message":"unknown scene s1"}' });
     await expect(client().request('DELETE', '/scenes/s1')).rejects.toMatchObject({ status: 404, message: 'unknown scene s1' });

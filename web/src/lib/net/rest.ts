@@ -28,6 +28,8 @@ export class RestClient {
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const bases = this.bases();
     let lastError: unknown = null;
+    /** An earlier attempt may have applied: its answer was lost or timed out. */
+    let mayHaveApplied = false;
     for (let i = 0; i < this.attempts; i++) {
       const base = bases[i % bases.length]!;
       if (i > 0) await new Promise((r) => setTimeout(r, this.retryDelayMs));
@@ -49,17 +51,22 @@ export class RestClient {
       } catch (e) {
         // Network error or timeout: the request may or may not have applied.
         lastError = abort.signal.aborted ? abort.signal.reason : e;
+        mayHaveApplied = true;
         continue;
       } finally {
         clearTimeout(timer);
       }
       if (RETRY_STATUS.has(res.status)) {
         lastError = new ApiRequestError(res.status, null);
+        // 503 is the server's own not applied; a gateway error or timeout
+        // may come after the request reached it.
+        if (res.status !== 503) mayHaveApplied = true;
         continue;
       }
       // A DELETE retried after an attempt whose answer was lost finds
-      // nothing left to delete: that attempt applied.
-      if (method === 'DELETE' && res.status === 404 && i > 0) return null as T;
+      // nothing left to delete: that attempt applied. After only
+      // not-applied answers the 404 is someone else's delete.
+      if (method === 'DELETE' && res.status === 404 && mayHaveApplied) return null as T;
       const json = parseJson(text);
       if (!res.ok) throw new ApiRequestError(res.status, isApiError(json) ? json : null);
       if (json === undefined) throw new Error(`HTTP ${res.status}: response is not JSON`);
