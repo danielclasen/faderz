@@ -64,6 +64,7 @@ impl Server {
             tokio::select! {
                 r = bound.serve() => r.map_err(|e| format!("serving: {e}")),
                 () = tasks_app.publish() => unreachable!("publishing never returns"),
+                // Stop-gap until samplez-replica decides lease expiries.
                 () = replica::expire_leases(&tasks_state, estimate) => unreachable!("expiring never returns"),
             }
         });

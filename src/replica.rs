@@ -167,7 +167,8 @@ pub async fn start(dir: &Path, shape: Shape, estimate: Estimate) -> Result<Repli
 /// leader decides it; the expiry is a no-op when a renewal was applied
 /// after the one it was decided on. Never returns.
 ///
-/// samplez-replica does not decide expiries yet; this goes once it does.
+/// Stop-gap: samplez-replica does not decide lease expiries yet. Remove
+/// this, and its task in [`crate::server::Server::start`], once it does.
 pub async fn expire_leases(replica: &Replica<Mixer>, estimate: Estimate) {
     let mut decided: BTreeSet<(SessionKey, u64)> = BTreeSet::new();
     let mut ticks = tokio::time::interval(Duration::from_millis(250));
