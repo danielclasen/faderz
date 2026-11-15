@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { handleTag, ownerHandle } from '../../src/lib/net/handle';
 import {
+  REPLICAS,
   RawClient,
   audit,
   debug,
@@ -396,6 +397,63 @@ test('ends the talk when focus leaves TALK during a short Space press', async ({
   await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
   await page.keyboard.press(' ');
   await expect.poll(active).toBe(false);
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
+test('a tap on a lit TALK key stops the talk, or names the client that holds it', async ({ page, browser, request }) => {
+  const { talk, active } = await talkKey(page, request);
+  // Lit without an owner (a script): one tap here stops it.
+  await patch(request, '/mixMinus/mm1/interrupt/active', true);
+  await expect(talk).toHaveAttribute('aria-pressed', 'true');
+  await talk.click();
+  await expect.poll(active).toBe(false);
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  // Latched on a second client, which owns it: a tap here does not
+  // latch it here too; it names the holder, and the holder stops it.
+  const other = await browser.newContext();
+  const page2 = await other.newPage();
+  const second = await talkKey(page2, request);
+  await second.talk.click();
+  await expect(second.talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  await expect(talk).toHaveAttribute('aria-pressed', 'true');
+  await talk.click();
+  await expect(page.getByTestId('notice')).toContainText('N-1 Phone 1 talk is held by');
+  await page.waitForTimeout(400);
+  expect(await active()).toBe(true);
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  await second.talk.click();
+  await expect.poll(active).toBe(false);
+  await expect(talk).toHaveAttribute('aria-pressed', 'false');
+  await other.close();
+  await patch(request, '/mixMinus/mm1/interrupt/source', null);
+});
+
+test('a latched talk stopped while writes are locked never shows as unlatched while it is still on', async ({ page, request }) => {
+  test.setTimeout(60_000);
+  const { talk, active } = await talkKey(page, request);
+  await talk.click();
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk, latched');
+  // Every state the key shows from here: lit means latched, until it goes dark.
+  await talk.evaluate((el) => {
+    const seen: string[] = [];
+    (window as unknown as { __talk: string[] }).__talk = seen;
+    const note = () => seen.push(`${el.getAttribute('aria-pressed')} ${el.getAttribute('aria-label')}`);
+    new MutationObserver(note).observe(el, { attributes: true, attributeFilter: ['aria-pressed', 'aria-label'] });
+  });
+  const primary = (await debug(page, 'primaryReplica'))!;
+  const others = REPLICAS.filter((r) => r !== primary);
+  for (const r of others) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
+  await expect(page.getByTestId('quorum')).toHaveText('NO Q');
+  // The press sends the release, which the server applies once it can
+  // commit; without quorum the session's lease also runs out. Either way
+  // the key stays latched until the state says the talk is off.
+  await talk.click({ force: true });
+  for (const r of others) expect((await request.post(`/__mock/replicas/${r}/heal`)).ok()).toBe(true);
+  await expect.poll(active, { timeout: 10_000 }).toBe(false);
+  await expect(talk).toHaveAccessibleName('N-1 Phone 1 talk');
+  await expect(talk).toHaveAttribute('aria-pressed', 'false');
+  const seen = await page.evaluate(() => (window as unknown as { __talk: string[] }).__talk);
+  expect(seen.filter((x) => x === 'true N-1 Phone 1 talk')).toEqual([]);
   await patch(request, '/mixMinus/mm1/interrupt/source', null);
 });
 

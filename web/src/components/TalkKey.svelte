@@ -5,8 +5,9 @@
   // latches it on until the next press. Only a release that ends the
   // press latches (pointerup, keyup): a cancelled touch, a lost pointer
   // capture or focus leaving the key ends the talk, so an interrupted
-  // press never leaves a presenter's feed replaced. The server also
-  // clears it when the session's lease ends.
+  // press never leaves a presenter's feed replaced. A press on a lit key
+  // stops the talk, whichever client lit it. The server also clears it
+  // when the owning session releases it or its lease ends.
   import { getMixer } from '../lib/state/mixer.svelte';
   import { mixMinusPath } from '../lib/state/paths';
 
@@ -34,10 +35,22 @@
   function press(): void {
     if (holding) return;
     if (latched) {
-      // This press ends the latch; its release does nothing more.
-      latched = false;
-      holding = false;
+      // This press ends the latch; its release does nothing more. While
+      // writes are locked the set is not sent but the release is, and
+      // the server ends an interrupt its owner releases: the key keeps
+      // its latch until the state says the talk is off, so the screen
+      // never shows a talk ended before it is.
       off();
+      if (!mixer.locked) latched = false;
+      return;
+    }
+    if (active) {
+      // Lit by another client or a script: this press stops it. One
+      // another session owns can only be stopped there (the server
+      // refuses the write), so say who holds it instead.
+      const owner = mixer.ownerOf(path);
+      if (owner && !mixer.isMine(owner)) mixer.notify('conflict', `${name} talk is held by ${mixer.ownerLabel(owner)}`, path);
+      else mixer.set(path, false);
       return;
     }
     if (mixer.locked || source === null) return;
@@ -102,7 +115,7 @@
     aria-disabled={mixer.locked || source === null}
     aria-pressed={active}
     aria-label={`${name} talk${latched ? ', latched' : ''}`}
-    title={source === null ? 'Choose a talkback source first' : 'Hold to talk into this output; tap to latch, tap again to stop'}
+    title={source === null ? 'Choose a talkback source first' : 'Hold to talk into this output; tap to latch; a tap on a lit key stops the talk'}
     onpointerdown={down}
     onpointerup={lift}
     onpointercancel={abort}
