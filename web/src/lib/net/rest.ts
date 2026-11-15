@@ -40,10 +40,9 @@ export class RestClient {
       try {
         res = await fetch(base + path, {
           method,
-          headers:
-            body === undefined
-              ? { 'X-Samplez-Request': '1' }
-              : { 'Content-Type': 'application/json', 'X-Samplez-Request': '1' },
+          // Every state-changing request carries both, a body-less DELETE
+          // too: the server refuses one without them (api/openapi.yaml).
+          headers: { 'Content-Type': 'application/json', 'X-Samplez-Request': '1' },
           body: body === undefined ? undefined : JSON.stringify(body),
           signal: abort.signal,
         });
