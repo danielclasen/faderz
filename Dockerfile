@@ -43,7 +43,9 @@ FROM scratch AS dist
 COPY --from=build /out/usr/local/bin/faderz /out/usr/share/licenses/faderz/THIRD-PARTY.txt \
      /out/usr/share/licenses/faderz/THIRD-PARTY-WEB.txt /
 
-FROM debian:trixie-20261027@sha256:2dc419c6d7fe3dad0a2f9fd469c34cc90b0f9ba642d8fde837fe3d7d34a0e7f1
+# The slim variant of the Debian release the builder and foldz use: the
+# binary needs glibc and libgcc_s alone.
+FROM debian:trixie-20261027-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
 COPY --from=build /out/ /
 # The replicated state's default data directory; a deployment mounts a
