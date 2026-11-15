@@ -23,7 +23,10 @@
   });
   const name = (n: string) => n.replace(/_total$/, '');
 
+  // While the commit banner holds the notice line, notices wait unseen:
+  // they are timed only from when the line shows them again.
   $effect(() => {
+    if (mixer.notCommitting) return;
     const timers = mixer.notices.map((n) => setTimeout(() => mixer.dismiss(n.id), n.kind === 'error' || n.kind === 'request' ? 8000 : 4000));
     return () => timers.forEach(clearTimeout);
   });

@@ -11,13 +11,15 @@
   import { tip } from '../lib/tip';
   const mixer = getMixer();
   const outbox = $derived(mixer.status.outbox);
-  const text = $derived(`Changes not committing - audio continues on the last committed state. ${outbox} pending: sent again until a replica commits them or 3 s pass.`);
+  /** Its accessible name: fixed, so a changing count announces nothing. */
+  const NAME = 'Changes not committing - audio continues on the last committed state';
+  const text = $derived(`${NAME}. ${outbox} pending: sent again until a replica commits them or 3 s pass.`);
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<div class="banner" role="alert" data-testid="commit-banner" tabindex="0" use:tip={text} aria-label={text}>
+<div class="banner" role="status" data-testid="commit-banner" tabindex="0" use:tip={text} aria-label={NAME}>
   <span class="text"><b><span class="long">CHANGES{' '}</span>NOT COMMITTING</b><span class="tail">{' '}- audio continues</span></span>
-  <span class="count num" data-testid="commit-pending">{outbox}<span class="long">{' '}pending</span></span>
+  <span class="count num" data-testid="commit-pending" aria-hidden="true">{outbox}<span class="long">{' '}pending</span></span>
 </div>
 
 <style>
