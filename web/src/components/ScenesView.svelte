@@ -4,6 +4,7 @@
   import { recallSafePath } from '../lib/state/paths';
   import { createScene, deleteScene, recallScene, storeScene } from '../lib/state/actions';
   import Matrix from './Matrix.svelte';
+  import { tick } from 'svelte';
 
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
@@ -38,18 +39,36 @@
   }
   /** An armed STORE or DEL disarms after this long, on Escape and on a press anywhere else. */
   const ARM_MS = 4000;
+  let list: HTMLOListElement | undefined = $state();
+  /** Focuses the key of a scene row marked data-key={key} once it is rendered. */
+  async function focusKey(key: string): Promise<void> {
+    await tick();
+    list?.querySelector<HTMLElement>(`[data-key="${key}"]`)?.focus();
+  }
+  /** Arms STORE or DEL of a scene: CONFIRM takes its place and the focus, so a keyboard confirms in time. */
+  function arm(kind: 'store' | 'del', id: string): void {
+    confirmStore = kind === 'store' ? id : null;
+    confirmDelete = kind === 'del' ? id : null;
+    void focusKey(`confirm-${kind}-${id}`);
+  }
+  /**
+   * Disarms both. A CONFIRM that had the focus hands it back to its STORE
+   * or DEL key, unless a press elsewhere is moving it there.
+   */
+  function disarm(keepFocus = true): void {
+    const focused = document.activeElement instanceof HTMLElement ? document.activeElement.dataset['key'] : undefined;
+    confirmStore = null;
+    confirmDelete = null;
+    if (keepFocus && focused?.startsWith('confirm-')) void focusKey(focused.slice('confirm-'.length));
+  }
   $effect(() => {
     if (confirmStore === null && confirmDelete === null) return;
-    const disarm = () => {
-      confirmStore = null;
-      confirmDelete = null;
-    };
     const t = setTimeout(disarm, ARM_MS);
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') disarm();
     };
     const press = (e: PointerEvent) => {
-      if (!(e.target instanceof Element && e.target.closest('[data-confirm]'))) disarm();
+      if (!(e.target instanceof Element && e.target.closest('[data-confirm]'))) disarm(false);
     };
     window.addEventListener('keydown', key);
     window.addEventListener('pointerdown', press, true);
@@ -81,7 +100,7 @@
       <span class="scope" title="Elements with recall-safe groups keep those groups">{safeCount} recall-safe</span>
       <button class="key go" aria-disabled={mixer.locked || next === null} disabled={next === null} onclick={() => next && recall(next)} aria-label="Recall the picked scene">GO</button>
     </div>
-    <ol>
+    <ol bind:this={list}>
       {#each scenes as s, i (s.id)}
         <li class:recalled={current === s.id} class:next={next === s.id} data-scene={s.id}>
           <span class="num idx">{i + 1}</span>
@@ -91,14 +110,14 @@
           </button>
           <span class="num when">{time(s.storedAt)}</span>
           {#if confirmStore === s.id}
-            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void storeScene(mixer, s.id); confirmStore = null; }} aria-label={`Confirm store into ${s.name}`} data-confirm>CONFIRM</button>
+            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void storeScene(mixer, s.id); disarm(); }} aria-label={`Confirm store into ${s.name}`} data-confirm data-key={`confirm-store-${s.id}`}>CONFIRM</button>
           {:else}
-            <button class="key" aria-disabled={mixer.locked} onclick={() => (confirmStore = s.id)} aria-label={`Store into ${s.name}`}>STORE</button>
+            <button class="key" aria-disabled={mixer.locked} onclick={() => arm('store', s.id)} aria-label={`Store into ${s.name}`} data-key={`store-${s.id}`}>STORE</button>
           {/if}
           {#if confirmDelete === s.id}
-            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void deleteScene(mixer, s.id); confirmDelete = null; }} aria-label={`Confirm delete of ${s.name}`} data-confirm>CONFIRM</button>
+            <button class="key mute" aria-disabled={mixer.locked} aria-pressed="true" onclick={() => { void deleteScene(mixer, s.id); disarm(); }} aria-label={`Confirm delete of ${s.name}`} data-confirm data-key={`confirm-del-${s.id}`}>CONFIRM</button>
           {:else}
-            <button class="key" aria-disabled={mixer.locked} onclick={() => (confirmDelete = s.id)} aria-label={`Delete ${s.name}`}>DEL</button>
+            <button class="key" aria-disabled={mixer.locked} onclick={() => arm('del', s.id)} aria-label={`Delete ${s.name}`} data-key={`del-${s.id}`}>DEL</button>
           {/if}
         </li>
       {:else}
@@ -164,7 +183,9 @@
   }
   li {
     display: grid;
-    grid-template-columns: 24px minmax(0, 1fr) auto 9ch 6ch;
+    /* STORE and DEL columns both fit CONFIRM, which takes their place
+       when armed: arming moves nothing. */
+    grid-template-columns: 24px minmax(0, 1fr) 66px 9ch 66px;
     gap: 6px;
     align-items: center;
     padding: 6px 4px;
@@ -183,6 +204,10 @@
     gap: 8px;
     min-width: 0;
     cursor: pointer;
+  }
+  li .key {
+    width: 100%;
+    padding: 0;
   }
   .pick:focus-visible {
     outline: 2px solid var(--focus);

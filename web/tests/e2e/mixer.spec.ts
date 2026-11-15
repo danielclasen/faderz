@@ -119,6 +119,45 @@ test('stores and recalls a scene', async ({ page, request }) => {
   await expect(page.getByTestId('fader-value-ch18')).toHaveText(formatDb(stored));
 });
 
+test('arms and confirms a scene store and delete from the keyboard alone, within the arm time', async ({ page }) => {
+  await live(page);
+  const name = `E2E keys ${Date.now()}`;
+  await page.getByRole('button', { name: 'Scenes' }).click();
+  await page.getByLabel('New scene name').fill(name);
+  await page.getByRole('button', { name: 'STORE NEW' }).click();
+  const store = page.getByRole('button', { name: `Store into ${name}`, exact: true });
+  const del = page.getByRole('button', { name: `Delete ${name}`, exact: true });
+  await expect(store).toBeVisible();
+  // Arming hands the focus to CONFIRM, and disarming hands it back.
+  await store.focus();
+  await page.keyboard.press('Enter');
+  const confirmStore = page.getByRole('button', { name: `Confirm store into ${name}` });
+  await expect(confirmStore).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(store).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(confirmStore).toBeFocused();
+  // The arm time runs out: the focus is back on STORE, not on the page.
+  await expect(confirmStore).toBeHidden({ timeout: 6000 });
+  await expect(store).toBeFocused();
+  // CONFIRM fits its column: nothing spills or moves when it arms.
+  await del.focus();
+  const before = await del.boundingBox();
+  await page.keyboard.press(' ');
+  const confirmDelete = page.getByRole('button', { name: `Confirm delete of ${name}` });
+  await expect(confirmDelete).toBeFocused();
+  const fit = await confirmDelete.evaluate((b) => {
+    const li = b.closest('li')!.getBoundingClientRect();
+    const r = b.getBoundingClientRect();
+    return { spill: b.scrollWidth - b.clientWidth, past: r.right - li.right, w: r.width };
+  });
+  expect(fit.spill).toBeLessThanOrEqual(0);
+  expect(fit.past).toBeLessThanOrEqual(0);
+  expect(fit.w).toBeCloseTo(before!.width, 0);
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(name)).toBeHidden();
+});
+
 test('refuses a fader held by another session with 409 and shows its value and owner', async ({ page, baseURL, request }) => {
   const frames: string[] = [];
   page.on('websocket', (ws) => ws.on('framereceived', (f) => typeof f.payload === 'string' && frames.push(f.payload)));
