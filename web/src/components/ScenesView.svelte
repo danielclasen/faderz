@@ -131,7 +131,7 @@
   </section>
   <section class="safe">
     <h2 class="panel-title">Recall safe</h2>
-    <Matrix label="Recall safe" rows={elements} cols={groups} get={safe} toggle={toggleSafe} />
+    <Matrix label="Recall safe" rows={elements} cols={groups} get={safe} toggle={toggleSafe} path={(row) => recallSafePath(row.id)} />
   </section>
 </div>
 

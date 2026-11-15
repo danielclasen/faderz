@@ -37,6 +37,7 @@
       groups={[{ name: 'Buses', span: shape.buses.length }, { name: 'VCA', span: shape.vcas.length }]}
       {get}
       {toggle}
+      path={(row, col) => (col.kind === 'bus' ? channelPath(row.id, 'routes', col.id) : vcaPath(col.id, 'members'))}
     />
   </section>
   <section class="outputs">

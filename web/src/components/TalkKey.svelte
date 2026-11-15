@@ -171,7 +171,7 @@
     class="key"
     class:on={active}
     class:latched
-    aria-disabled={frozen || source === null}
+    aria-disabled={(frozen && !active && !latched) || source === null}
     aria-pressed={active}
     aria-label={`${name} talk${latched ? ', latched' : ''}`}
     title={source === null ? 'Choose a talkback source first' : 'Hold to talk into this output; tap to latch; a tap on a lit key stops the talk'}

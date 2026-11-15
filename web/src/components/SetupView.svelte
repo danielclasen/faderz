@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pendingWrite } from '../lib/pending';
   import { loudnessUnit, setLoudnessUnit } from '../lib/loudnessUnit.svelte';
   import type { LoudnessPreset, LoudnessScale } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -37,7 +38,7 @@
     <h2 class="panel-title" id="setup-loudness">Loudness</h2>
     <div class="radios" role="radiogroup" aria-label="Loudness preset">
       {#each PRESETS as p (p.id)}
-        <button
+        <button {@attach pendingWrite(mixer, '/metering/loudness/preset')}
           class="key"
           role="radio"
           aria-checked={metering.loudness.preset === p.id}
@@ -62,7 +63,7 @@
     </div>
     <div class="radios" role="radiogroup" aria-label="Loudness meter scale">
       {#each SCALES as s (s.id)}
-        <button
+        <button {@attach pendingWrite(mixer, '/metering/scale')}
           class="key"
           role="radio"
           aria-checked={metering.scale === s.id}
@@ -76,18 +77,18 @@
   <section class="card" aria-labelledby="setup-tone">
     <h2 class="panel-title" id="setup-tone">Line-up tone 1 kHz</h2>
     <div class="radios">
-      <button class="key tone-on" aria-disabled={mixer.locked} aria-pressed={tone.on} aria-label="Line-up tone" onclick={() => mixer.set('/tone/on', !tone.on)}>TONE {tone.on ? 'ON' : 'OFF'}</button>
-      <button class="key" aria-disabled={mixer.locked} aria-pressed={tone.ident} onclick={() => mixer.set('/tone/ident', !tone.ident)} title="Stops the tone on one leg at a time to identify the legs">IDENT</button>
+      <button {@attach pendingWrite(mixer, '/tone/on')} class="key tone-on" aria-disabled={mixer.locked} aria-pressed={tone.on} aria-label="Line-up tone" onclick={() => mixer.set('/tone/on', !tone.on)}>TONE {tone.on ? 'ON' : 'OFF'}</button>
+      <button {@attach pendingWrite(mixer, '/tone/ident')} class="key" aria-disabled={mixer.locked} aria-pressed={tone.ident} onclick={() => mixer.set('/tone/ident', !tone.ident)} title="Stops the tone on one leg at a time to identify the legs">IDENT</button>
     </div>
     <div class="radios" role="radiogroup" aria-label="Tone level">
       {#each TONE_LEVELS as l (l.level)}
-        <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={tone.level === l.level} title={l.hint} onclick={() => mixer.set('/tone/level', l.level)}>{l.level} dBFS</button>
+        <button {@attach pendingWrite(mixer, '/tone/level')} class="key" role="radio" aria-disabled={mixer.locked} aria-checked={tone.level === l.level} title={l.hint} onclick={() => mixer.set('/tone/level', l.level)}>{l.level} dBFS</button>
       {/each}
     </div>
     <NumberEntry path="/tone/level" label="Level" min={-30} max={0} step={1} unit="dBFS" />
     <div class="targets" role="group" aria-label="Tone outputs">
       {#each outputs as o (o.id)}
-        <button class="key" aria-disabled={mixer.locked} aria-pressed={tone.targets.includes(o.id)} aria-label={`Tone on ${o.name}`} title={o.name} onclick={() => toggleTarget(o.id)}>{o.name}</button>
+        <button {@attach pendingWrite(mixer, '/tone/targets')} class="key" aria-disabled={mixer.locked} aria-pressed={tone.targets.includes(o.id)} aria-label={`Tone on ${o.name}`} title={o.name} onclick={() => toggleTarget(o.id)}>{o.name}</button>
       {/each}
     </div>
   </section>
@@ -97,8 +98,8 @@
     <NumberEntry path="/monitor/dimDepth" label="Dim depth" min={0} max={60} step={1} unit="dB" />
     <NumberEntry path="/monitor/monoCompensation" label="Mono compensation" min={0} max={6} step={0.5} unit="dB" />
     <div class="radios" role="radiogroup" aria-label="Monitor downmix of wider sources">
-      <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'loRo'} title="ITU-R BS.775 Lo/Ro" onclick={() => mixer.set('/monitor/downmix', 'loRo')}>Lo/Ro</button>
-      <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'lr'} title="Left and right legs only" onclick={() => mixer.set('/monitor/downmix', 'lr')}>L/R only</button>
+      <button {@attach pendingWrite(mixer, '/monitor/downmix')} class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'loRo'} title="ITU-R BS.775 Lo/Ro" onclick={() => mixer.set('/monitor/downmix', 'loRo')}>Lo/Ro</button>
+      <button {@attach pendingWrite(mixer, '/monitor/downmix')} class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'lr'} title="Left and right legs only" onclick={() => mixer.set('/monitor/downmix', 'lr')}>L/R only</button>
     </div>
   </section>
 

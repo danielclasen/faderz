@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pendingWrite } from '../lib/pending';
   import type { BusState, ChannelState, EqBandType, RecallGroup, Solo, StereoImage, Tap } from '../lib/contract/types';
   import { TAPS, TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
   import { LAYOUT_LABELS, RECALL_GROUPS, SCRIBBLE_COLORS } from '../lib/contract/types';
@@ -97,7 +98,7 @@
         <div class="taps colors" role="radiogroup" aria-label={`${element.name} strip colour`}>
           <span class="lbl">Colour</span>
           {#each SCRIBBLE_COLORS as c (c)}
-            <button
+            <button {@attach pendingWrite(mixer, p('color'))}
               class="key swatch"
               role="radio"
               data-color={c}
@@ -114,7 +115,7 @@
         <div class="taps" role="radiogroup" aria-label={`${element.name} input source`}>
           <span class="lbl">Source</span>
           {#each ['a', 'b'] as const as src (src)}
-            <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={ch?.input === src} aria-label={`Input ${src.toUpperCase()}`} onclick={() => mixer.set(p('input'), src)}>{src.toUpperCase()}</button>
+            <button {@attach pendingWrite(mixer, p('input'))} class="key" role="radio" aria-disabled={mixer.locked} aria-checked={ch?.input === src} aria-label={`Input ${src.toUpperCase()}`} onclick={() => mixer.set(p('input'), src)}>{src.toUpperCase()}</button>
           {/each}
         </div>
       {/if}
@@ -129,15 +130,15 @@
       <div class="polarity" role="group" aria-label={`${element.name} polarity per leg`}>
         <span class="lbl">Pol</span>
         {#each legs as leg, i (i)}
-          <button class="key" aria-disabled={mixer.locked} aria-pressed={st.polarity[i]} onclick={() => toggle('polarity', i)} aria-label={`${element.name} ${leg} polarity invert`}>{leg}</button>
+          <button {@attach pendingWrite(mixer, p('polarity', i))} class="key" aria-disabled={mixer.locked} aria-pressed={st.polarity[i]} onclick={() => toggle('polarity', i)} aria-label={`${element.name} ${leg} polarity invert`}>{leg}</button>
         {/each}
         {#if element.width > 1}
-          <button class="key" aria-disabled={mixer.locked} aria-pressed={st.polarity.every(Boolean)} onclick={invertAll} aria-label={`${element.name} all legs polarity invert`}>ALL</button>
+          <button {@attach pendingWrite(mixer, st.polarity.map((_, i) => p('polarity', i)))} class="key" aria-disabled={mixer.locked} aria-pressed={st.polarity.every(Boolean)} onclick={invertAll} aria-label={`${element.name} all legs polarity invert`}>ALL</button>
         {/if}
       </div>
       {#if ch}
         <div class="row">
-          <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('hpf', 'enabled')} onclick={() => toggle('hpf', 'enabled')}>HPF</button>
+          <button {@attach pendingWrite(mixer, p('hpf', 'enabled'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('hpf', 'enabled')} onclick={() => toggle('hpf', 'enabled')}>HPF</button>
         </div>
       {/if}
       {#if ch}
@@ -150,7 +151,7 @@
           <div class="taps" role="radiogroup" aria-label={`${element.name} ${caption === 'Meter' ? 'meter' : 'direct out'} pick-up point`}>
             <span class="lbl">{caption}</span>
             {#each TAPS as tap (tap)}
-              <button
+              <button {@attach pendingWrite(mixer, path)}
                 class="key"
                 role="radio"
                 aria-disabled={mixer.locked}
@@ -174,7 +175,7 @@
         <div class="taps" role="radiogroup" aria-label={`${element.name} stereo image`}>
           <span class="lbl">Image</span>
           {#each IMAGES as im (im.id)}
-            <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={ch.image === im.id} aria-label={im.label} title={im.label} onclick={() => mixer.set(p('image'), im.id)}>{im.key}</button>
+            <button {@attach pendingWrite(mixer, p('image'))} class="key" role="radio" aria-disabled={mixer.locked} aria-checked={ch.image === im.id} aria-label={im.label} title={im.label} onclick={() => mixer.set(p('image'), im.id)}>{im.key}</button>
           {/each}
         </div>
       {/if}
@@ -183,7 +184,7 @@
     <div class="col eq" data-section="eq">
       <div class="row">
         <h3 class="panel-title">EQ</h3>
-        <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('eq', 'enabled')} onclick={() => toggle('eq', 'enabled')}>EQ IN</button>
+        <button {@attach pendingWrite(mixer, p('eq', 'enabled'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('eq', 'enabled')} onclick={() => toggle('eq', 'enabled')}>EQ IN</button>
       </div>
       <EqCurve eq={st.eq} hpf={ch?.hpf ?? null} width={300} height={96} grid />
       <div class="bands">
@@ -208,7 +209,7 @@
     <div class="col" data-section="dynamics">
       <div class="row">
         <h3 class="panel-title">Gate</h3>
-        <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('gate', 'enabled')} onclick={() => toggle('gate', 'enabled')}>IN</button>
+        <button {@attach pendingWrite(mixer, p('gate', 'enabled'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('gate', 'enabled')} onclick={() => toggle('gate', 'enabled')}>IN</button>
       </div>
       <Param path={p('gate', 'threshold')} label="Thr" min={-80} max={0} unit=" dB" />
       <Param path={p('gate', 'range')} label="Range" min={0} max={80} unit=" dB" />
@@ -216,7 +217,7 @@
       <Param path={p('gate', 'release')} label="Rel" min={5} max={5000} step={1} log unit=" ms" />
       <div class="row">
         <h3 class="panel-title">Compressor</h3>
-        <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('comp', 'enabled')} onclick={() => toggle('comp', 'enabled')}>IN</button>
+        <button {@attach pendingWrite(mixer, p('comp', 'enabled'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('comp', 'enabled')} onclick={() => toggle('comp', 'enabled')}>IN</button>
       </div>
       <Param path={p('comp', 'threshold')} label="Thr" min={-60} max={0} unit=" dB" />
       <Param path={p('comp', 'ratio')} label="Ratio" min={1} max={20} log format={(v) => `${v.toFixed(1)}:1`} />
@@ -225,7 +226,7 @@
       <Param path={p('comp', 'makeup')} label="Gain" min={0} max={24} unit=" dB" />
       <div class="row">
         <span class="lbl">Order</span>
-        <button
+        <button {@attach pendingWrite(mixer, p('dynamicsBeforeEq'))}
           class="key"
           aria-disabled={mixer.locked}
           aria-pressed={flag('dynamicsBeforeEq')}
@@ -236,7 +237,7 @@
       {#if !ch}
         <div class="row">
           <h3 class="panel-title">Limiter</h3>
-          <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('limiter', 'enabled')} onclick={() => toggle('limiter', 'enabled')} aria-label={`${element.name} true-peak limiter`}>IN</button>
+          <button {@attach pendingWrite(mixer, p('limiter', 'enabled'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('limiter', 'enabled')} onclick={() => toggle('limiter', 'enabled')} aria-label={`${element.name} true-peak limiter`}>IN</button>
         </div>
         <Param path={p('limiter', 'ceiling')} label="Ceil" min={-10} max={0} unit=" dBTP" />
       {/if}
@@ -247,25 +248,25 @@
         <h3 class="panel-title">Sends</h3>
         {#each shape.auxes as aux (aux.id)}
           <div class="send">
-            <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('sends', aux.id, 'on')} onclick={() => toggle('sends', aux.id, 'on')}>{aux.name}</button>
-            <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('sends', aux.id, 'pre')} onclick={() => toggle('sends', aux.id, 'pre')} title="Pre-fader when lit">PRE</button>
+            <button {@attach pendingWrite(mixer, p('sends', aux.id, 'on'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('sends', aux.id, 'on')} onclick={() => toggle('sends', aux.id, 'on')}>{aux.name}</button>
+            <button {@attach pendingWrite(mixer, p('sends', aux.id, 'pre'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('sends', aux.id, 'pre')} onclick={() => toggle('sends', aux.id, 'pre')} title="Pre-fader when lit">PRE</button>
             <Param path={p('sends', aux.id, 'level')} label="Lvl" min={-90} max={10} fader format={(v) => formatDb(v)} />
           </div>
         {/each}
         <h3 class="panel-title" data-section="assign">Assign</h3>
         <div class="grid">
           {#each shape.buses as bus (bus.id)}
-            <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('routes', bus.id)} onclick={() => toggle('routes', bus.id)}>{bus.name}</button>
+            <button {@attach pendingWrite(mixer, p('routes', bus.id))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('routes', bus.id)} onclick={() => toggle('routes', bus.id)}>{bus.name}</button>
           {/each}
           {#each shape.vcas as vca (vca.id)}
-            <button class="key" aria-disabled={mixer.locked} aria-pressed={mixer.state!.vcas[vca.id]!.members.includes(id)} onclick={() => toggleVca(vca.id)}>VCA {vca.name}</button>
+            <button {@attach pendingWrite(mixer, pointer('vcas', vca.id, 'members'))} class="key" aria-disabled={mixer.locked} aria-pressed={mixer.state!.vcas[vca.id]!.members.includes(id)} onclick={() => toggleVca(vca.id)}>VCA {vca.name}</button>
           {/each}
         </div>
         <h3 class="panel-title">Listen</h3>
         <div class="grid">
           <!-- Off is both keys unlit, never a lit key of its own. -->
           {#each ['pfl', 'afl'] as const as mode (mode)}
-            <button
+            <button {@attach pendingWrite(mixer, p('solo'))}
               class="key {mode}"
               aria-disabled={mixer.locked}
               aria-pressed={mixer.value<Solo>(p('solo')) === mode}
@@ -281,7 +282,7 @@
       <div class="grid">
         {#each RECALL_GROUPS as g (g)}
           {#if ch || !['pan', 'sends', 'routing', 'afv'].includes(g)}
-            <button class="key" aria-disabled={mixer.locked} aria-pressed={safe.includes(g)} onclick={() => toggleSafe(g)}>{g}</button>
+            <button {@attach pendingWrite(mixer, recallSafePath(id))} class="key" aria-disabled={mixer.locked} aria-pressed={safe.includes(g)} onclick={() => toggleSafe(g)}>{g}</button>
           {/if}
         {/each}
       </div>

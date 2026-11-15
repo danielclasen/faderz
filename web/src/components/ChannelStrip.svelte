@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pendingWrite } from '../lib/pending';
   import { centre, fit } from '../lib/format';
   import type { ChannelShape, ChannelState, Solo } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -144,7 +145,7 @@
   <div class="routes" role="group" aria-label={`${channel.name} bus assignment`} onclick={() => coarse.current && onselect(channel.id, 'assign')}>
     {#each mixer.shape!.buses as bus (bus.id)}
       {@const path = pointer('channels', channel.id, 'routes', bus.id)}
-      <button
+      <button {@attach pendingWrite(mixer, path)}
         class="chip"
         tabindex="-1"
         class:on={st.routes[bus.id]}
@@ -167,11 +168,10 @@
   </div>
 
   <div class="ctl">
-    <button class="key pfl" class:pending={mixer.pendingKey(channelPath(channel.id, 'solo'))} aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
-    <button class="key afl" class:pending={mixer.pendingKey(channelPath(channel.id, 'solo'))} aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
-    <button
+    <button {@attach pendingWrite(mixer, channelPath(channel.id, 'solo'))} class="key pfl" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
+    <button {@attach pendingWrite(mixer, channelPath(channel.id, 'solo'))} class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
+    <button {@attach pendingWrite(mixer, channelPath(channel.id, 'mute'))}
       class="key mute big"
-      class:pending={mixer.pendingKey(channelPath(channel.id, 'mute'))}
       aria-disabled={mixer.locked}
       aria-pressed={mute}
       class:vca-muted={vcaMuted && !mute}

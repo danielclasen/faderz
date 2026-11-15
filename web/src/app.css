@@ -217,14 +217,16 @@ select {
   }
 }
 /* A key pressed while the serving replica cannot commit, its write not
-   committed yet: its state is shown, desaturated, inside a dashed edge.
-   Filter and outline only, so nothing changes size. */
-.key.pending {
+   committed yet (lib/pending.ts): its state is shown, desaturated,
+   inside a dashed edge. Filter and outline only, so nothing changes
+   size. */
+[data-pending] {
   outline: 1px dashed currentColor;
   outline-offset: -4px;
 }
-.key.pending[aria-pressed='true'],
-.key.pending[aria-checked='true'] {
+[data-pending][aria-pressed='true'],
+[data-pending][aria-checked='true'],
+.chip.on[data-pending] {
   filter: saturate(0.15) brightness(0.8);
 }
 /* Write controls while writes are blocked: the link transmits nothing, or the desk is locked. */

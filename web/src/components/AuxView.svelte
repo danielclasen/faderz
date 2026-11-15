@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pendingWrite } from '../lib/pending';
   import { fit } from '../lib/format';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -64,7 +65,7 @@
                   {@const lvl = mixer.value<number>(sendPath(ch.id, aux.id, 'level'))}
                   <td class:off={!on}>
                     <div class="send">
-                      <button class="key" class:pending={mixer.pendingKey(sendPath(ch.id, aux.id, 'on'))} aria-disabled={mixer.locked} aria-pressed={on} aria-label={`${ch.name} send to ${aux.name}`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'on'), !on)}>ON</button>
+                      <button {@attach pendingWrite(mixer, sendPath(ch.id, aux.id, 'on'))} class="key" aria-disabled={mixer.locked} aria-pressed={on} aria-label={`${ch.name} send to ${aux.name}`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'on'), !on)}>ON</button>
                       <Slider
                         path={sendPath(ch.id, aux.id, 'level')}
                         label={`${ch.name} send level to ${aux.name}`}
@@ -73,7 +74,7 @@
                         valueText={`${formatDb(lvl)} dB`}
                       />
                       <span class="num db fixed">{fit(formatDb(lvl), 5)}</span>
-                      <button class="key" class:pending={mixer.pendingKey(sendPath(ch.id, aux.id, 'pre'))} aria-disabled={mixer.locked} aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
+                      <button {@attach pendingWrite(mixer, sendPath(ch.id, aux.id, 'pre'))} class="key" aria-disabled={mixer.locked} aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
                     </div>
                   </td>
                 {/each}
@@ -90,7 +91,7 @@
           <span><b>{mm.name}</b> = {shape.buses.find((b) => b.id === mm.bus)?.name ?? mm.bus} before bus processing, minus the marked channels.</span>
         {/each}
       </p>
-      <Matrix label="Mix-minus exclusions" rows={shape.channels} cols={shape.mixMinus} get={excluded} toggle={toggleExclude} />
+      <Matrix label="Mix-minus exclusions" rows={shape.channels} cols={shape.mixMinus} get={excluded} toggle={toggleExclude} path={(_, col) => mixMinusPath(col.id, 'exclude')} />
     </section>
   </div>
 </div>

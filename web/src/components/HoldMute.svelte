@@ -3,6 +3,7 @@
   // HOLD_MS (pointer, Space or Enter) while a bar fills; letting go
   // earlier cancels. Unmuting is one press. Channel mutes stay one press,
   // as on a console.
+  import { pendingWrite } from '../lib/pending';
   import { getMixer } from '../lib/state/mixer.svelte';
 
   const HOLD_MS = 500;
@@ -44,10 +45,9 @@
   }
 </script>
 
-<button
+<button {@attach pendingWrite(mixer, path)}
   class="key mute protected"
   class:arming
-  class:pending={mixer.pendingKey(path)}
   style:--hold={`${HOLD_MS}ms`}
   aria-disabled={mixer.locked}
   aria-pressed={muted}

@@ -1,5 +1,6 @@
 <script lang="ts" generics="Row extends { id: string; name: string }, Col extends { id: string; name: string }">
   import { getMixer } from '../lib/state/mixer.svelte';
+  import { pendingWrite } from '../lib/pending';
   // Grid of on/off cells with arrow-key navigation (one tab stop).
   interface Props {
     label: string;
@@ -8,8 +9,10 @@
     groups?: Array<{ name: string; span: number }>;
     get: (row: Row, col: Col) => boolean;
     toggle: (row: Row, col: Col) => void;
+    /** The control a cell writes, for its pending mark. */
+    path: (row: Row, col: Col) => string;
   }
-  let { label, rows, cols, groups = [], get, toggle }: Props = $props();
+  let { label, rows, cols, groups = [], get, toggle, path }: Props = $props();
   const mixer = getMixer();
   let focus = $state({ r: 0, c: 0 });
   let table: HTMLTableElement | undefined = $state();
@@ -48,6 +51,7 @@
             {@const on = get(row, col)}
             <td>
               <button
+                {@attach pendingWrite(mixer, path(row, col))}
                 role="switch"
                 aria-disabled={mixer.locked}
                 aria-checked={on}

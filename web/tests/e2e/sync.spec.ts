@@ -356,7 +356,7 @@ test('without a replica that can commit the client stays put, keeps its controls
   await request.post('/__mock/audit/reset');
   await mute.click();
   await expect(mute).toHaveAttribute('aria-pressed', String(!was));
-  await expect(mute).toHaveClass(/\bpending\b/);
+  await expect(mute).toHaveAttribute('data-pending', '');
   await expect(page.getByTestId('commit-pending')).toContainText('1');
   // Refused, not applied, and sent again until it expires; then the key
   // shows the committed state again.
@@ -365,9 +365,20 @@ test('without a replica that can commit the client stays put, keeps its controls
   expect(new Set(sets().map((m) => m.id)).size).toBe(1);
   expect((await audit(request)).entries).toEqual([]);
   await expect(mute).toHaveAttribute('aria-pressed', String(was), { timeout: 5000 });
-  await expect(mute).not.toHaveClass(/\bpending\b/);
+  await expect(mute).not.toHaveAttribute('data-pending');
   await expect(page.getByTestId('commit-pending')).toContainText('0');
   expect((await serverState(request)).state.channels['ch3']!.mute).toBe(was);
+  // Every view's keys take the mark: TONE ON in Setup.
+  await page.getByRole('button', { name: 'Setup', exact: true }).click();
+  const tone = page.getByRole('button', { name: 'Line-up tone' });
+  await expect(tone).toHaveAttribute('aria-disabled', 'false');
+  await tone.click();
+  await expect(tone).toHaveAttribute('aria-pressed', 'true');
+  await expect(tone).toHaveAttribute('data-pending', '');
+  await expect(tone).toHaveAttribute('aria-pressed', 'false', { timeout: 5000 });
+  await expect(tone).not.toHaveAttribute('data-pending');
+  expect((await serverState(request)).state.tone.on).toBe(false);
+  await page.getByRole('button', { name: 'Mixer', exact: true }).click();
   // No replica could commit: no failover, and the standby was kept.
   expect(await debug(page, 'failovers')).toBe(0);
   expect(await debug(page, 'primaryReplica')).toBe(primary);

@@ -49,6 +49,8 @@ describe('TALK key', () => {
     expect(posted).toEqual([{ type: 'release', path: ACTIVE }]);
     expect(button.getAttribute('aria-label')).toBe('N-1 Phone 1 talk, latched');
     expect(button.getAttribute('aria-pressed')).toBe('true');
+    // On air, the key that ends the talk never looks disabled.
+    expect(button.getAttribute('aria-disabled')).toBe('false');
     s.apply({ type: 'patch', input: 99, changes: [[ACTIVE, false]], owners: [], status: noQuorum });
     flushSync();
     expect(button.getAttribute('aria-label')).toBe('N-1 Phone 1 talk');
@@ -59,6 +61,7 @@ describe('TALK key', () => {
     flushSync();
     expect(posted.filter((m) => m.type !== 'release')).toEqual([]);
     expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.getAttribute('aria-disabled')).toBe('true');
     unmount(key);
   });
 
