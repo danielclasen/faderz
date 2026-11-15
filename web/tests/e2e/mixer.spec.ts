@@ -208,7 +208,13 @@ test('refuses a fader held by another session at the gesture and shows its value
     // The held fader refuses the gesture itself: no write left this client,
     // and the strip names the holder in words.
     expect((await commands(request)).filter((c) => c.path === path && c.type === 'set')).toEqual([]);
-    await expect(page.getByTestId('holder-ch4')).toHaveText(`web client ${tag}`);
+    // The strip shows the tag in full; the label is in the tooltip.
+    const holder = page.getByTestId('holder-ch4');
+    await expect(holder).toHaveText(tag);
+    expect(await holder.locator('span').evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+    await expect(holder).toHaveAccessibleName(`Fader held by web client ${tag}`);
+    await holder.focus();
+    await expect(page.getByRole('tooltip')).toHaveText(`Fader held by web client ${tag}`);
     // The notice sits in the status bar, clear of the monitor and masters.
     const box = (await notice.boundingBox())!;
     const monitor = (await page.getByRole('region', { name: 'Monitor' }).boundingBox())!;

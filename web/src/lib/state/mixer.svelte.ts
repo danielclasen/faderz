@@ -141,6 +141,16 @@ export class MixerStore {
     return `${principal}${kind} ${handleTag(owner.handle)}`;
   }
 
+  /**
+   * An owner in a form that fits a small slot: "you", a console's name, or
+   * the handle tag other screens show for a session.
+   */
+  ownerShort(owner: Owner): string {
+    if (this.isMine(owner)) return 'you';
+    const c = owner.kind === 'console' ? this.state?.consoles.find((x) => x.handle === owner.handle) : undefined;
+    return c ? c.name : handleTag(owner.handle);
+  }
+
   // ---- writing -----------------------------------------------------------
 
   set(path: string, value: unknown): void {

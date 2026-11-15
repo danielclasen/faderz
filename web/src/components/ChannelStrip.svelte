@@ -36,7 +36,13 @@
   const level = $derived(mixer.value<number>(levelPath));
   const holder = $derived(mixer.ownerOf(levelPath));
   const holderMine = $derived(mixer.isMine(holder));
-  const holderName = $derived(holder ? (holderMine ? 'YOU' : mixer.ownerLabel(holder)) : '');
+  /**
+   * The strip names the holder in a short form that fits its slot: YOU, a
+   * console's name, or the handle tag other screens show for a session.
+   * The full label is in the tooltip and the accessible name.
+   */
+  const holderName = $derived(holder ? (holderMine ? 'YOU' : mixer.ownerShort(holder)) : '');
+  const holderText = $derived(holder ? `Fader held by ${mixer.ownerLabel(holder)}` : '');
   const vcas = $derived(
     (mixer.shape?.vcas ?? []).filter((v) => mixer.state!.vcas[v.id]?.members.includes(channel.id)),
   );
@@ -176,9 +182,18 @@
 
   <div class="foot">
     <output class="num value" data-testid={`fader-value-${channel.id}`}><span class="fixed">{fit(formatDb(level), 5)}</span></output>
-    <!-- Who holds the fader, in words; the slot is there whether held or not. -->
-    <span class="holder" class:held={holder !== null} class:mine={holderMine} title={holder ? `Fader held by ${holderName === 'YOU' ? 'you' : holderName}` : undefined} data-testid={`holder-${channel.id}`}
-      ><span>{holderName}</span></span
+    <!-- Who holds the fader, in words; the slot is there whether held or
+         not, and reachable by keyboard while another session holds it. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <span
+      class="holder"
+      class:held={holder !== null}
+      class:mine={holderMine}
+      role="note"
+      tabindex={holder && !holderMine ? 0 : -1}
+      aria-label={holderText || undefined}
+      use:tip={holderText}
+      data-testid={`holder-${channel.id}`}><span>{holderName}</span></span
     >
     <!-- One fixed row, whatever the memberships: the full list and the
          effective gain are in its tooltip and its accessible name. -->
@@ -503,6 +518,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     contain: strict;
+  }
+  .holder:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -2px;
   }
   .holder.held {
     background: var(--owned);

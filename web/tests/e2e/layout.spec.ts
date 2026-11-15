@@ -4,7 +4,7 @@
 // excuse, and the total must be 0.
 
 import { expect, test, type Page } from '@playwright/test';
-import { HEADERS, debug, dragFader, live, patch, resetMock } from './support';
+import { HEADERS, RawClient, debug, dragFader, live, patch, resetMock } from './support';
 
 interface Shift {
   value: number;
@@ -237,13 +237,16 @@ test('every fader fits its box, VCA masters included', async ({ page }) => {
   expect(over).toEqual([]);
 });
 
-test('no visible label is cut off without its full text in a tooltip reachable by keyboard', async ({ page, request }) => {
-  // A long channel name (ch8), a long VCA name (vca2) and a listen list
-  // longer than the monitor's box.
+test('no visible label is cut off without its full text in a tooltip reachable by keyboard', async ({ page, request, baseURL }) => {
+  // A long channel name (ch8), a long VCA name (vca2), a listen list
+  // longer than the monitor's box and a fader another session holds.
+  const other = await RawClient.open(baseURL!);
+  expect((await other.command({ type: 'touch', path: '/channels/ch4/fader' })).type).toBe('delta');
   for (const ch of ['ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6', 'ch8']) await patch(request, `/channels/${ch}/solo`, 'pfl');
   await patch(request, '/channels/ch7/solo', 'afl');
   await patch(request, '/vcas/vca2/members', ['ch3', 'ch4', 'ch5', 'ch6', 'ch8']);
   await live(page);
+  await expect(page.getByTestId('holder-ch4')).not.toHaveText('');
   await page.evaluate(() => document.fonts.ready);
   const views = ['Mixer', 'Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup'];
   const problems: string[] = [];
@@ -295,6 +298,8 @@ test('no visible label is cut off without its full text in a tooltip reachable b
   }
   for (const ch of ['ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6', 'ch7', 'ch8']) await patch(request, `/channels/${ch}/solo`, 'off');
   await patch(request, '/vcas/vca2/members', ['ch3', 'ch4', 'ch5', 'ch6']);
+  await other.command({ type: 'release', path: '/channels/ch4/fader' });
+  other.close();
   expect(problems).toEqual([]);
 });
 

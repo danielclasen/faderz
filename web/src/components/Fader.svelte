@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getMixer } from '../lib/state/mixer.svelte';
   import { FADER_MARKS, FADER_OFF_DB, dbToPosition, dragDb, formatDb, keyStepDb, stepDb } from '../lib/audio/db';
+  import { tip } from '../lib/tip';
 
   interface Props {
     path: string;
@@ -150,7 +151,8 @@
     aria-valuemax={10}
     aria-valuenow={value}
     aria-valuetext={`${formatDb(value)} dB${foreign ? `, held by ${ownerName}` : ''}`}
-    title={foreign ? `Held by ${ownerName}` : 'Drag; Shift for fine; arrows step, Alt+0 for 0 dB, Alt+End closes'}
+    title={foreign ? undefined : 'Drag; Shift for fine; arrows step, Alt+0 for 0 dB, Alt+End closes'}
+    use:tip={foreign ? `Held by ${ownerName}` : ''}
     onpointerdown={pointerdown}
     onpointermove={pointermove}
     onpointerup={pointerup}
@@ -162,7 +164,7 @@
   >
     <div class="slot"></div>
     {#if owner}
-      <span class="owner" class:mine data-testid="owner" data-owner-kind={owner.kind}>{ownerName}</span>
+      <span class="owner" class:mine data-testid="owner" data-owner-kind={owner.kind}>{mixer.ownerShort(owner)}</span>
     {/if}
     {#each FADER_MARKS as mark (mark)}
       <i class="tick" class:unity={mark === 0} style:bottom="calc({dbToPosition(mark)} * (100% - 34px) + 17px)"></i>
