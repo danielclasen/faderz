@@ -139,7 +139,9 @@
   }
   /* The count comes and goes with every write. A flex item is never a
      relayout boundary, so it sits in a block child of fixed size with
-     strict containment: a change lays out the box, not the page. */
+     size and layout containment: a change lays out the box, not the
+     page. Paint is not contained, so a count wider than the slot still
+     shows in full rather than clipped. */
   .slot.pend {
     display: block;
     width: 11ch;
@@ -149,7 +151,7 @@
     height: 14px;
     line-height: 14px;
     text-align: center;
-    contain: strict;
+    contain: size layout style;
   }
   /* Left-aligned, with its text padded at the end: the target replica
      appearing after the source moves nothing. */
