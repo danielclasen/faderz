@@ -12,7 +12,7 @@ use crate::app::App;
 use crate::config::Config;
 use crate::shape::Shape;
 use crate::state::Mixer;
-use crate::{api, replica, ws};
+use crate::{api, replica, ui, ws};
 
 pub struct Server {
     pub api: SocketAddr,
@@ -44,6 +44,7 @@ impl Server {
         )
         .map_err(|e| format!("config: {e}"))?
         .api(api::router(app.clone()))
+        .ui(ui::router())
         .ws(move |socket, connect| ws::serve(ws_app.clone(), socket, connect));
         let bound = service
             .bind()

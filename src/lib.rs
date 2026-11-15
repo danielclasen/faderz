@@ -5,7 +5,7 @@
 //! replica, and [`replica`] keeps it on the data directory as a set of one
 //! voter. [`api`] serves the REST routes and [`ws`] the WebSocket of the
 //! contract in `api/`, which [`contract`] compiles in; [`app`] holds what
-//! they share.
+//! they share, and [`ui`] serves the web UI built into the binary.
 
 pub mod api;
 pub mod app;
@@ -15,4 +15,5 @@ pub mod replica;
 pub mod server;
 pub mod shape;
 pub mod state;
+pub mod ui;
 pub mod ws;
