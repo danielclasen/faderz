@@ -16,13 +16,16 @@ struct Assets;
 /// worker, styles, fonts, the icon, and the API over HTTP and WebSocket.
 /// No page may frame it. The WebSocket origin of `host` is named beside
 /// `'self'`, which Safari before 15.4 does not take to cover `ws:` and
-/// `wss:`.
+/// `wss:`. Only a host name or IPv4 address with an optional port, of a
+/// DNS name's length at most, is named: CSP source expressions have no
+/// form for an IPv6 literal, and anything else could end the directive.
 pub fn csp(host: Option<&str>) -> String {
     let ws = host
         .filter(|h| {
             !h.is_empty()
+                && h.len() <= MAX_HOST
                 && h.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-.:[]".contains(&b))
+                    .all(|b| b.is_ascii_alphanumeric() || b"-.:".contains(&b))
         })
         .map(|h| format!(" ws://{h} wss://{h}"))
         .unwrap_or_default();
@@ -32,6 +35,9 @@ pub fn csp(host: Option<&str>) -> String {
          base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     )
 }
+
+/// A DNS name's longest form, plus a port.
+const MAX_HOST: usize = 253 + 6;
 
 /// Answered at `/` by a binary built without `web/dist`.
 const NO_UI: &str = "This faderz binary was built without its web UI: run `npm run build` \
@@ -62,13 +68,19 @@ async fn serve(method: Method, uri: Uri, headers: HeaderMap) -> Response {
     } else {
         "no-cache"
     };
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    // HTTP/2 carries the host in the URI's authority, not in Host.
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .or_else(|| uri.authority().map(|a| a.as_str()));
     let headers = [
         (header::CONTENT_TYPE, file.metadata.mimetype().to_owned()),
         (header::CACHE_CONTROL, cache.to_owned()),
         (header::CONTENT_SECURITY_POLICY, csp(host)),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
         (header::X_FRAME_OPTIONS, "DENY".to_owned()),
+        // The policy depends on the host it was asked under.
+        (header::VARY, "Host".to_owned()),
     ];
     (headers, file.data).into_response()
 }
@@ -105,6 +117,7 @@ mod tests {
         let protections = |r: &Response| {
             assert_eq!(r.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
             assert_eq!(r.headers()[header::X_FRAME_OPTIONS], "DENY");
+            assert_eq!(r.headers()[header::VARY], "Host");
             let csp = r.headers()[header::CONTENT_SECURITY_POLICY]
                 .to_str()
                 .unwrap();
@@ -132,6 +145,24 @@ mod tests {
         assert_eq!(get("/nope.js").await.status(), StatusCode::NOT_FOUND);
     }
 
+    /// Without a Host header, as over HTTP/2, the host comes from the
+    /// request's authority.
+    #[tokio::test]
+    async fn the_policy_takes_the_host_from_the_authority_without_a_host_header() {
+        if Assets::get("index.html").is_none() {
+            eprintln!("web/dist was not built: nothing to serve");
+            return;
+        }
+        let req = Request::get("http://mixer.example:8080/")
+            .body(Body::empty())
+            .unwrap();
+        let r = router().oneshot(req).await.unwrap();
+        let csp = r.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("wss://mixer.example:8080"), "{csp}");
+    }
+
     /// Safari before 15.4 does not take 'self' to cover the WebSocket.
     #[test]
     fn the_policy_names_the_websocket_origin_of_the_host() {
@@ -140,7 +171,12 @@ mod tests {
             policy.contains("connect-src 'self' ws://mixer.example:8443 wss://mixer.example:8443;"),
             "{policy}"
         );
-        assert!(csp(Some("[::1]:8080")).contains("wss://[::1]:8080"));
+        assert!(
+            csp(Some("[::1]:8080")).contains("connect-src 'self';"),
+            "no IPv6 literal"
+        );
+        let long = format!("{}.example", "a".repeat(MAX_HOST));
+        assert!(csp(Some(&long)).contains("connect-src 'self';"), "too long");
         // Nothing that could end the directive or add one gets in.
         for bad in ["evil.example; script-src *", "a b", ""] {
             assert!(csp(Some(bad)).contains("connect-src 'self';"), "{bad}");
