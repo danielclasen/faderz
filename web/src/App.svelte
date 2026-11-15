@@ -154,6 +154,11 @@
     grid-template-rows: auto minmax(0, 1fr) auto;
     height: 100%;
   }
+  /* Height of the header, set beside each header layout: panels that
+     open under it (StatusArea, Users, the dev mock key) start below it. */
+  :global(:root) {
+    --header-h: 44px;
+  }
   .top {
     display: flex;
     align-items: center;
@@ -231,6 +236,9 @@
      view tabs, so a view stays one tap away. The rows have fixed heights
      at this size whatever happens, so nothing moves. */
   @media (orientation: portrait) and (min-width: 701px) and (max-width: 1023px) and (min-height: 501px) {
+    :global(:root) {
+      --header-h: 76px;
+    }
     .top {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);
@@ -265,6 +273,9 @@
      the view menu, the notices and the connection state; the status bar
      is gone, so the faders get the height. */
   @media (max-height: 500px) {
+    :global(:root) {
+      --header-h: 36px;
+    }
     .top {
       height: 36px;
       min-height: 36px;

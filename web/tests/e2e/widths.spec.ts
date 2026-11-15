@@ -130,6 +130,39 @@ test('a tablet in portrait has the view tabs on a second header row, one tap eac
   expect((await page.locator('header.top').boundingBox())!.height).toBe(44);
 });
 
+test('rotating a tablet swaps the tab row and the menu, moves nothing else, and panels follow the header', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.addInitScript(() => {
+    const w = window as unknown as { __shifts: number };
+    w.__shifts = 0;
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries() as Array<PerformanceEntry & { value: number; hadRecentInput: boolean }>) if (!e.hadRecentInput) w.__shifts += e.value;
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await live(page);
+  const header = page.locator('header.top');
+  const tabs = page.getByRole('navigation', { name: 'Views' });
+  const menu = page.getByRole('combobox', { name: 'View' });
+  const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const shifts = () => page.evaluate(() => (window as unknown as { __shifts: number }).__shifts);
+  for (const [width, height, rows] of [[1000, 768, 44], [768, 1024, 76], [1023, 768, 44], [834, 1194, 76]] as const) {
+    await page.setViewportSize({ width, height });
+    await settle();
+    const box = (await header.boundingBox())!;
+    expect(box.height, `${width}x${height}`).toBe(rows);
+    await expect(rows === 76 ? tabs : menu).toBeVisible();
+    await expect(rows === 76 ? menu : tabs).toBeHidden();
+    // The header height every panel under it reads is the one drawn.
+    const h = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--header-h').trim());
+    expect(h, `${width}x${height}`).toBe(`${rows}px`);
+    // After the rotation itself, nothing moves on its own.
+    const after = await shifts();
+    await page.waitForTimeout(1000);
+    expect(await shifts(), `${width}x${height}`).toBe(after);
+  }
+});
+
 test('the theme switches from the Setup view at every width, where the header has no theme key', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 740 });
   await live(page);
