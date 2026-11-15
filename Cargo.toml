@@ -26,4 +26,5 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 [dev-dependencies]
 futures-util = { version = "=0.3.34", default-features = false, features = ["alloc", "sink"] }
 tokio = { version = "=1.54.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+serde_yaml = "=0.9.34"
 tokio-tungstenite = "=0.29.0"

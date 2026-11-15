@@ -33,21 +33,44 @@ fn shape() -> Value {
     })
 }
 
-/// A fresh data directory under the target directory.
-fn data_dir() -> PathBuf {
+/// A fresh data directory under the target directory, removed when
+/// dropped.
+struct Dir(PathBuf);
+
+impl std::ops::Deref for Dir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn data_dir() -> Dir {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "faderz-server-{}-{}",
         std::process::id(),
         DIRS.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    dir
+    Dir(dir)
 }
 
 async fn start(dir: &std::path::Path) -> Server {
+    start_with(dir, json!({ "mode": "none" })).await
+}
+
+async fn start_with(dir: &std::path::Path, auth: Value) -> Server {
     let listener = json!({ "bind": "127.0.0.1", "port": 0 });
     let config = json!({
         "listeners": { "api": listener, "ops": listener, "nmos": listener },
+        "auth": auth,
+        // The listeners take port 0, which the default origins name.
+        "api": { "allowedOrigins": ["http://faderz.test"] },
         "replica": { "name": "r1", "dataDir": dir },
         "shape": shape(),
     });
@@ -335,14 +358,29 @@ async fn a_restart_keeps_the_state_and_its_epoch() {
     a.answer(&id).await;
     let id = a.command("touch", "/channels/ch2/fader", None).await;
     a.answer(&id).await;
+    let id = a
+        .command("set", "/mixMinus/mm1/interrupt/source", Some(json!("ch1")))
+        .await;
+    a.answer(&id).await;
     drop(a);
+    // From a snapshot as well as from the log.
+    let raft = server.app.replica.raft().clone();
+    raft.trigger().snapshot().await.unwrap();
+    raft.wait(Some(Duration::from_secs(5)))
+        .metrics(|m| m.snapshot.is_some(), "snapshot")
+        .await
+        .unwrap();
     server.stop().await;
     let server = start(&dir).await;
     let mut a = Client::connect(&server, SESSION_A).await;
     let after = a.hello().await;
     assert_eq!(after["epoch"], before["epoch"]);
-    assert_eq!(after["revision"], 2);
+    assert_eq!(after["revision"], 3);
     assert_eq!(after["state"]["channels"]["ch1"]["fader"], -7);
+    assert_eq!(
+        after["state"]["mixMinus"]["mm1"]["interrupt"]["source"],
+        "ch1"
+    );
     assert!(
         after["owners"].get("/channels/ch2/fader").is_some(),
         "ownership is state"
@@ -355,6 +393,286 @@ async fn a_restart_keeps_the_state_and_its_epoch() {
         a.hello().await["epoch"],
         before["epoch"],
         "an empty start draws a new epoch"
+    );
+    server.stop().await;
+}
+
+/// The REST routes, every answer checked against api/openapi.yaml.
+struct Rest {
+    addr: std::net::SocketAddr,
+    registry: jsonschema::Registry<'static>,
+}
+
+const OPENAPI: &str = "https://github.com/danielclasen/faderz/raw/main/api/openapi.yaml";
+
+impl Rest {
+    fn new(server: &Server) -> Rest {
+        let openapi: Value = serde_yaml::from_str(include_str!("../api/openapi.yaml")).unwrap();
+        let model: Value =
+            serde_json::from_str(include_str!("../api/ws/model.schema.json")).unwrap();
+        let registry = jsonschema::Registry::new()
+            .add(OPENAPI, openapi)
+            .unwrap()
+            .add(
+                "https://github.com/danielclasen/faderz/raw/main/api/ws/model.schema.json",
+                model,
+            )
+            .unwrap()
+            .prepare()
+            .unwrap();
+        Rest {
+            addr: server.api,
+            registry,
+        }
+    }
+
+    /// Sends a request and checks the answer against the schema at
+    /// `pointer` in openapi.yaml; `None` for an answer without a body.
+    async fn call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        pointer: Option<&str>,
+    ) -> (u16, Value) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let body = body.map(|b| b.to_string()).unwrap_or_default();
+        let mut tcp = TcpStream::connect(self.addr).await.unwrap();
+        let request = format!(
+            "{method} /api/v1{path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             X-Samplez-Request: 1\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        tcp.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        tcp.read_to_string(&mut answer).await.unwrap();
+        let status: u16 = answer[9..12].parse().unwrap();
+        let text = answer.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+        let value = if text.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(text).unwrap()
+        };
+        match pointer {
+            Some(pointer) => {
+                let schema = json!({ "$ref": format!("{OPENAPI}#{pointer}") });
+                let v = jsonschema::options()
+                    .with_registry(&self.registry)
+                    .should_validate_formats(true)
+                    .build(&schema)
+                    .unwrap();
+                check(&v, &value)
+                    .unwrap_or_else(|e| panic!("{method} {path} {status}: {e}: {value}"));
+            }
+            None => assert!(text.is_empty(), "{method} {path} {status}: {text}"),
+        }
+        (status, value)
+    }
+}
+
+const RESULT: &str = "/components/schemas/CommandResult";
+const ERROR: &str = "/components/schemas/Error";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rest_answers_match_the_contract() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let rest = Rest::new(&server);
+    let id = || faderz::app::uuid().unwrap();
+    let (s, _) = rest
+        .call(
+            "GET",
+            "/state",
+            None,
+            Some("/paths/~1state/get/responses/200/content/application~1json/schema"),
+        )
+        .await;
+    assert_eq!(s, 200);
+    let (s, _) = rest
+        .call(
+            "GET",
+            "/replicas",
+            None,
+            Some("/paths/~1replicas/get/responses/200/content/application~1json/schema"),
+        )
+        .await;
+    assert_eq!(s, 200);
+    let write =
+        json!({ "commandId": id(), "changes": [{ "path": "/channels/ch1/fader", "value": -3 }] });
+    let (s, r) = rest
+        .call("PATCH", "/state", Some(write.clone()), Some(RESULT))
+        .await;
+    assert_eq!((s, r["result"].as_str()), (200, Some("applied")));
+    assert!(r["atIndex"].as_u64().is_some());
+    let (_, r) = rest
+        .call("PATCH", "/state", Some(write), Some(RESULT))
+        .await;
+    assert_eq!(r["result"], "duplicate");
+    let unknown =
+        json!({ "commandId": id(), "changes": [{ "path": "/channels/zz/fader", "value": 0 }] });
+    assert_eq!(
+        rest.call("PATCH", "/state", Some(unknown), Some(ERROR))
+            .await
+            .0,
+        404
+    );
+    let invalid =
+        json!({ "commandId": id(), "changes": [{ "path": "/channels/ch1/fader", "value": 99 }] });
+    assert_eq!(
+        rest.call("PATCH", "/state", Some(invalid), Some(ERROR))
+            .await
+            .0,
+        400
+    );
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    let t = a.command("touch", "/channels/ch2/fader", None).await;
+    a.answer(&t).await;
+    let owned =
+        json!({ "commandId": id(), "changes": [{ "path": "/channels/ch2/fader", "value": 0 }] });
+    let (s, e) = rest.call("PATCH", "/state", Some(owned), Some(ERROR)).await;
+    assert_eq!(
+        (s, &e["conflicts"][0]["path"]),
+        (409, &json!("/channels/ch2/fader"))
+    );
+    let scene_result = "/components/responses/SceneResult/content/application~1json/schema";
+    let (s, created) = rest
+        .call(
+            "POST",
+            "/scenes",
+            Some(json!({ "commandId": id(), "name": "Opening" })),
+            Some(scene_result),
+        )
+        .await;
+    assert_eq!(s, 201);
+    let scene = created["scene"]["id"].as_str().unwrap().to_owned();
+    let (s, _) = rest
+        .call(
+            "PUT",
+            &format!("/scenes/{scene}"),
+            Some(json!({ "commandId": id(), "name": "Open" })),
+            Some(scene_result),
+        )
+        .await;
+    assert_eq!(s, 200);
+    let recall = json!({ "commandId": id(), "crossfadeMs": 0 });
+    assert_eq!(
+        rest.call(
+            "POST",
+            &format!("/scenes/{scene}/recall"),
+            Some(recall),
+            Some(RESULT)
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest.call("DELETE", &format!("/scenes/{scene}"), None, Some(RESULT))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        rest.call("DELETE", &format!("/scenes/{scene}"), None, Some(ERROR))
+            .await
+            .0,
+        404
+    );
+    let tally = json!({ "source": "CAM1", "state": "program" });
+    assert_eq!(
+        rest.call("POST", "/afv/tally", Some(tally), Some(RESULT))
+            .await
+            .0,
+        200
+    );
+    let tally = json!({ "sources": { "CAM2": "preview" } });
+    assert_eq!(
+        rest.call("PUT", "/afv/tally", Some(tally), Some(RESULT))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        rest.call(
+            "POST",
+            "/loudness/reset",
+            Some(json!({ "ids": ["pgm"] })),
+            None
+        )
+        .await
+        .0,
+        204
+    );
+    assert_eq!(
+        rest.call(
+            "POST",
+            "/loudness/reset",
+            Some(json!({ "ids": ["ch1"] })),
+            Some(ERROR)
+        )
+        .await
+        .0,
+        404
+    );
+    server.stop().await;
+}
+
+/// A replica that cannot order commands answers them not applied, with
+/// the command, so the client sends it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_that_cannot_be_ordered_is_not_applied() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    server.app.replica.shutdown().await;
+    let id = a
+        .command("set", "/channels/ch1/fader", Some(json!(-3)))
+        .await;
+    let e = a.answer(&id).await;
+    assert_eq!(
+        (e["type"].as_str(), e["code"].as_u64()),
+        (Some("error"), Some(503))
+    );
+    assert_eq!(e["path"], "/channels/ch1/fader");
+    server.stop().await;
+}
+
+/// A viewer's command is refused before it is ordered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_viewer_cannot_write() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let dir = data_dir();
+    let auth = json!({ "mode": "proxy", "proxy": { "groupRoles": { "watchers": "viewer" } } });
+    let server = start_with(&dir, auth).await;
+    let url = format!("ws://{}/api/v1/ws?session={SESSION_A}", server.api);
+    let mut request = url.into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("X-Forwarded-User", "vera".parse().unwrap());
+    request
+        .headers_mut()
+        .insert("X-Forwarded-Groups", "watchers".parse().unwrap());
+    // In proxy mode an upgrade without an allowed Origin is refused.
+    request
+        .headers_mut()
+        .insert("Origin", "http://faderz.test".parse().unwrap());
+    let (ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let mut v = Client {
+        ws,
+        session: SESSION_A.into(),
+        seq: 0,
+    };
+    assert_eq!(v.hello().await["you"]["principal"], "vera");
+    let id = v
+        .command("set", "/channels/ch1/fader", Some(json!(-3)))
+        .await;
+    let e = v.answer(&id).await;
+    assert_eq!(
+        (e["code"].as_u64(), e["message"].as_str()),
+        (Some(400), Some("operator role required"))
     );
     server.stop().await;
 }
