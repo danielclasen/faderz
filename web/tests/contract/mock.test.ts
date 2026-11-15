@@ -8,7 +8,7 @@ import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { Cluster, DEDUP_RETENTION_MS, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, type ClusterOptions } from '../../dev/mock/cluster';
+import { Cluster, DEDUP_RETENTION_MS, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, sessionKey, type ClusterOptions } from '../../dev/mock/cluster';
 import { Contract } from '../../dev/mock/contract';
 import { MockServer } from '../../dev/mock/server';
 import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
@@ -423,12 +423,21 @@ describe('commands', () => {
     expect(answer.revision).toBeLessThan(delta.revision);
   }, 10_000);
 
-  it('answers a hello on a partitioned replica at once, marked stale', async () => {
+  it('answers a hello on a partitioned replica at once, marked stale, even behind lastRevision', async () => {
+    // Lagging, it has not applied the client's revision: a replica that
+    // could still catch up would hold its answer for the read index.
+    expect((await control('POST', '/replicas/r3/lag?ms=5000')).status).toBe(200);
+    const w = await new Client().open(onReplica('r1'));
+    await w.hello();
+    await w.answer(w.set('/channels/ch9/trim', cluster.state.channels['ch9']!.trim === 1 ? 2 : 1));
+    expect(cluster.replica('r3')!.applied).toBeLessThan(cluster.revision);
     expect((await control('POST', '/replicas/r3/partition')).status).toBe(200);
     const c = await new Client().open(onReplica('r3'));
+    const asked = Date.now();
     const answer = (await c.hello('primary', cluster.revision)) as SnapshotMessage;
-    expect(answer.type).toBe('resume');
+    expect(Date.now() - asked).toBeLessThan(READ_INDEX_HOLD_MS / 2);
     expect(answer.stale).toBe(true);
+    expect(answer.revision).toBeLessThan(cluster.revision);
     const healthy = await new Client().open(onReplica('r1'));
     expect(((await healthy.hello()) as SnapshotMessage).stale).toBeUndefined();
   });
@@ -519,12 +528,14 @@ describe('commands', () => {
     expect(await a.answer(a.command('touch', path, touchId, touchSeq))).toMatchObject({ type: 'ack', result: 'stale' });
     expect((await owners())[path]).toBeUndefined();
     // A touch at a higher seq takes it; a release at an older seq leaves it.
-    const touched = await a.answer<DeltaMessage>(a.command('touch', path));
+    const takenSeq = a.nextSeq();
+    const touched = await a.answer<DeltaMessage>(a.command('touch', path, undefined, takenSeq));
     expect(touched.owners).toEqual([{ path, owner: a.you }]);
     expect(await a.answer(a.command('release', path, undefined, touchSeq))).toMatchObject({ type: 'ack', result: 'stale' });
     expect((await owners())[path]).toEqual(a.you);
-    // Set, touch and release share the counter: a set below the touch is stale too.
-    expect(await a.answer(a.set(path, true, undefined, touchSeq + 1))).toMatchObject({ type: 'ack', result: 'stale' });
+    // Set, touch and release share the counter: a set at the touch's own
+    // seq, above every release, is stale too.
+    expect(await a.answer(a.set(path, true, undefined, takenSeq))).toMatchObject({ type: 'ack', result: 'stale' });
     expect((await a.answer<DeltaMessage>(a.command('release', path))).owners).toEqual([{ path, owner: null }]);
   });
 
@@ -942,7 +953,10 @@ describe('/__mock', () => {
     expect(copy(0, id)).toMatchObject({ type: 'ack', result: 'stale' });
     cluster.prune(now + LEASE_MS + SEQ_RETENTION_MS - 500);
     expect(copy(0)).toMatchObject({ type: 'ack', result: 'stale' });
+    expect(cluster['leases'].has(sessionKey(owner))).toBe(true);
     cluster.prune(now + LEASE_MS + SEQ_RETENTION_MS + 500);
+    // The lease goes with the seqs, so the store does not grow with every session ever seen.
+    expect(cluster['leases'].has(sessionKey(owner))).toBe(false);
     expect(copy(-1)).toBeNull();
     cluster.flush();
   });
