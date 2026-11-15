@@ -3,7 +3,7 @@
 // control (contract/continuous.ts) that has not been sent yet is replaced
 // by a newer set of the same control; every other command keeps its
 // place. After a failover, a not-applied answer, or a snapshot answering
-// a hello or resync it was sent before, a sent command is queued again
+// a hello or resync it was sent before or answering none, a sent command is queued again
 // with its id, which the server applies at most
 // once; nothing else sends it again, as the server answers every command
 // it reads, so a sent command counts in flight until it is answered or

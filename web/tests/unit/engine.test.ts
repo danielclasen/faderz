@@ -383,6 +383,19 @@ describe('sync engine: commands', () => {
     expect(tick()?.changes).toContainEqual([F1, -9]);
   });
 
+  it('resends every sent command after a snapshot answering no request', () => {
+    // The server sends a snapshot in place of deltas when its queue for
+    // this client fills; the deltas it skips may have answered any sent
+    // command.
+    const { engine, primary } = live();
+    engine.input({ type: 'set', path: F1, value: -5 });
+    const [set] = primary.ofType('set');
+    expect(engine.link).toBe('Live');
+    primary.deliver(snapshot(R1, 15));
+    expect(primary.ofType('set').map((m) => m.id)).toEqual([set!.id, set!.id]);
+    expect(engine.outbox.inFlight).toBe(1);
+  });
+
   it('resends after a snapshot only commands sent before the resync it answers', () => {
     // A command sent after the resync is read after it and answered after
     // its snapshot: a copy would hold a second place in the server's

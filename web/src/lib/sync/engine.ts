@@ -621,8 +621,11 @@ export class SyncEngine {
     // after it and answered after the snapshot, so it is not sent again.
     // The request it answers is the last one sent: the engine sends a
     // resync only once the previous request is answered or its
-    // connection is left.
-    this.outbox.failover(this.syncRequests);
+    // connection is left. A snapshot that arrives with no request
+    // unanswered answers none (the server's queue for this client filled
+    // with deltas), so it can skip the answer to every sent command.
+    const answering = this.link === 'Syncing' || this.link === 'Resyncing';
+    this.outbox.failover(answering ? this.syncRequests : Infinity);
     this.primarySynced('snapshot');
   }
 
