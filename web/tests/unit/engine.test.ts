@@ -517,12 +517,14 @@ describe('sync engine: unanswered commands', () => {
     engine.input({ type: 'set', path: MUTE, value: true });
     const [set] = primary.ofType('set');
     primary.deliver({ type: 'error', replica: R1, code: 503, message: 'not applied', commandId: set!.id, path: MUTE });
-    expect(primary.ofType('set')).toHaveLength(1);
-    expect(engine.outbox.size).toBe(1);
+    // A command sent meanwhile does not take the held one along.
+    engine.input({ type: 'set', path: '/channels/ch2/mute', value: true });
+    expect(primary.ofType('set').filter((m) => m.id === set!.id)).toHaveLength(1);
+    expect(engine.outbox.size).toBe(2);
     beats(clock, NOT_APPLIED_RETRY_MS + HEARTBEAT_MS, [primary, R1], [standby, R2]);
-    expect(primary.ofType('set')).toEqual([set, set]);
+    expect(primary.ofType('set').filter((m) => m.id === set!.id)).toEqual([set, set]);
     primary.deliver(delta(R1, 11, { changes: [{ path: MUTE, value: true }], origins: [{ owner: YOU, commandId: set!.id, seq: set!.seq }] }));
-    expect(engine.outbox.size).toBe(0);
+    expect(engine.outbox.size).toBe(1);
   });
 
   it('touches again when its touch, resent after not applied, is refused as stale behind a later set', () => {
@@ -569,7 +571,8 @@ describe('sync engine: unanswered commands', () => {
   });
 
   it('touches again with a new command when an unanswered touch expires while still touching', () => {
-    const { engine, primary, standby, clock } = live();
+    const { engine, primary, standby, clock, tick } = live();
+    tick();
     engine.input({ type: 'touch', path: F1 });
     const [touch] = primary.ofType('touch');
     beats(clock, COMMAND_EXPIRY_MS + HEARTBEAT_MS, [primary, R1], [standby, R2]);
@@ -578,6 +581,23 @@ describe('sync engine: unanswered commands', () => {
     expect(fresh).toHaveLength(1);
     expect(fresh[0]!.seq).toBeGreaterThan(touch!.seq);
     expect(engine.touches.get(F1)).toBe('Touching');
+    // The expired notice names writes not confirmed; a touch is no write.
+    expect(tick()?.notices).toBeUndefined();
+  });
+
+  it('ends the touch of a control whose release expires unanswered, and releases again while it still owns it', () => {
+    const { engine, primary, standby, clock } = live();
+    engine.input({ type: 'touch', path: F1 });
+    const [touch] = primary.ofType('touch');
+    primary.deliver(delta(R1, 11, { owners: [{ path: F1, owner: YOU }], origins: [{ owner: YOU, commandId: touch!.id, seq: touch!.seq }] }));
+    engine.input({ type: 'release', path: F1 });
+    const [release] = primary.ofType('release');
+    expect(engine.touches.get(F1)).toBe('Releasing');
+    beats(clock, COMMAND_EXPIRY_MS + HEARTBEAT_MS, [primary, R1], [standby, R2]);
+    expect(engine.touches.has(F1)).toBe(false);
+    const fresh = primary.ofType('release').filter((m) => m.id !== release!.id);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]!.seq).toBeGreaterThan(release!.seq);
   });
 });
 
@@ -853,6 +873,18 @@ describe('sync engine: ahead of the cluster', () => {
     expect(engine.link).toBe('Ahead');
     expect(standby.closed).toBe(true);
     expect(engine.standbyState).toBe('Idle');
+  });
+
+  it('leaves a primary that answers no snapshot within the sync timeout after adopt', () => {
+    const { engine, primary, clock } = live();
+    primary.deliver({ type: 'ahead', replica: R1, epoch: EPOCH, revision: 7, lastRevision: 10 });
+    engine.input({ type: 'adopt' });
+    expect(engine.link).toBe('Resyncing');
+    beats(clock, SYNC_TIMEOUT_MS - HEARTBEAT_MS, [primary, R1]);
+    expect(primary.closed).toBe(false);
+    beats(clock, 2 * HEARTBEAT_MS, [primary, R1]);
+    expect(primary.closed).toBe(true);
+    expect(engine.status().failover).toMatchObject({ reason: 'noAnswer' });
   });
 
   it('ignores adopt while not ahead', () => {

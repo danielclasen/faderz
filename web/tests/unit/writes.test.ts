@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { INITIAL_STATUS, MixerStore } from '../../src/lib/state/mixer.svelte';
 import { writesLockReason } from '../../src/lib/state/writes';
+import { recallScene } from '../../src/lib/state/actions';
 import type { SyncStatus, ToWorker } from '../../src/lib/sync/messages';
 import { exampleShape, initialState } from '../../dev/mock/shape';
 
@@ -89,6 +90,13 @@ describe('mixer store without quorum', () => {
     expect(s.locked).toBe(false);
     s.set(path, before + 3);
     expect(posted).toEqual([{ type: 'set', path, value: before + 3 }]);
+  });
+
+  it('sends no REST action while writes are off and names the lock reason in its notice', async () => {
+    const { s } = store();
+    s.apply({ type: 'patch', input: 0, changes: [], owners: [], status: status({ link: 'Offline', replicas: [], primaryReplica: null }) });
+    expect(await recallScene(s, 's1', 0)).toBeNull();
+    expect(s.notices.at(-1)).toMatchObject({ kind: 'error', text: 'Scene recall not sent: no replica reachable' });
   });
 
   it('still releases a touch made before quorum was lost', () => {
