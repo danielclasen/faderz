@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fit } from '../lib/format';
+  import { fit, levelText } from '../lib/format';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import type { MeterGroup, MeterReading } from '../lib/meters/store';
@@ -40,14 +40,13 @@
   }
 
   /** One decimal place at most (EBU Tech 3341); every value fits 5 characters. */
-  const fmt = (v: number | null | undefined) => fit(v === null || v === undefined ? '--.-' : v <= -100 ? '-inf' : v.toFixed(1), 5);
+  const fmt = (v: number | null | undefined) => levelText(v);
   const signed = (v: number | null | undefined) => fit(v === null || v === undefined ? '--.--' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`, 5);
   const settings = $derived(mixer.state!.metering);
   const target = $derived(settings.loudness.target);
   /** Loudness values as read on this screen: LUFS, or LU relative to the target. */
   const relative = $derived(loudnessUnit.value === 'LU');
-  const lu = (v: number | null | undefined) =>
-    !relative ? fmt(v) : v === null || v === undefined ? fit('--.-', 5) : fit(`${v - target >= 0 ? '+' : ''}${(v - target).toFixed(1)}`, 5);
+  const lu = (v: number | null | undefined) => levelText(v, relative ? target : undefined);
   const tolerance = $derived(settings.loudness.tolerance);
   const l = $derived(reading?.loudness);
   const dev = $derived(l?.integrated == null ? null : l.integrated - target);
