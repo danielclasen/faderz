@@ -35,9 +35,9 @@
   <div class="members">
     {members.length} ch
   </div>
-  <button class="key pfl" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`VCA ${vca.name} PFL, all members`}>PFL</button>
-  <button class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`VCA ${vca.name} AFL, all members`}>AFL</button>
-  <button class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
+  <button class="key pfl" class:pending={mixer.pendingKey(vcaPath(vca.id, 'solo'))} aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`VCA ${vca.name} PFL, all members`}>PFL</button>
+  <button class="key afl" class:pending={mixer.pendingKey(vcaPath(vca.id, 'solo'))} aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`VCA ${vca.name} AFL, all members`}>AFL</button>
+  <button class="key mute" class:pending={mixer.pendingKey(vcaPath(vca.id, 'mute'))} aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
   <div class="f"><Fader path={vcaPath(vca.id, 'offset')} label={`VCA ${vca.name} offset`} /></div>
   <output class="num value"><span class="fixed">{fit(formatDb(offset), 5)}</span></output>
 </section>

@@ -15,13 +15,11 @@ const writesBlocked = (s: SyncStatus) => writesLockReason(s) !== null;
 const status = (extra: Partial<SyncStatus>): SyncStatus => ({ ...INITIAL_STATUS, link: 'Live', primaryReplica: 'r1', ...extra });
 
 describe('writesLockReason', () => {
-  it('blocks writes when the serving replica cannot commit and no standby is ready', () => {
-    expect(writesBlocked(status({ replicas: replicas(false, false, false), standby: 'Idle' }))).toBe(true);
-    expect(writesBlocked(status({ replicas: replicas(false, false, false), standby: 'Syncing' }))).toBe(true);
-  });
-
-  it('allows writes while a ready standby can take over', () => {
-    expect(writesBlocked(status({ replicas: replicas(false, true, true), standby: 'Ready' }))).toBe(false);
+  it('blocks no write for a serving replica that cannot commit, with or without a standby: the operator can still try', () => {
+    for (const standby of ['Idle', 'Syncing', 'Ready'] as const) {
+      expect(writesBlocked(status({ replicas: replicas(false, false, false), standby })), standby).toBe(false);
+      expect(writesBlocked(status({ replicas: replicas(false, true, true), standby })), standby).toBe(false);
+    }
   });
 
   it('allows writes when the serving replica can commit, whatever the others report', () => {
@@ -51,7 +49,7 @@ describe('writesLockReason', () => {
       // A link that transmits nothing is the reason even without quorum.
       expect(writesLockReason(status({ link, replicas: replicas(false, false, false), standby: 'Idle' })), link).toBe(reason);
     }
-    expect(writesLockReason(status({ replicas: replicas(false, false, false), standby: 'Idle' }))).toBe('no quorum and no ready standby');
+    expect(writesLockReason(status({ replicas: replicas(false, false, false), standby: 'Idle' }))).toBeNull();
     expect(writesLockReason(status(ok))).toBeNull();
   });
 
@@ -73,23 +71,26 @@ describe('mixer store without quorum', () => {
   const lose = (s: MixerStore, commitable: boolean) =>
     s.apply({ type: 'patch', input: 0, changes: [], owners: [], status: status({ replicas: replicas(commitable, commitable, commitable) }) });
 
-  it('neither applies nor sends writes and touches, and sends them again once quorum returns', () => {
+  it('keeps every control usable and shows a key pressed meanwhile pending until its write is answered', () => {
     const { s, posted } = store();
-    const path = '/channels/ch1/fader';
-    const before = s.value<number>(path);
+    const mute = '/channels/ch1/mute';
+    expect(s.notCommitting).toBe(false);
     lose(s, false);
-    expect(s.locked).toBe(true);
-    expect(s.lockReason).toBe('no quorum and no ready standby');
-    s.touch(path);
-    s.set(path, before + 3);
-    s.set('/channels/ch1/mute', true);
-    expect(posted).toEqual([]);
-    expect(s.value<number>(path)).toBe(before);
-    expect(s.held.has(path)).toBe(false);
-    lose(s, true);
+    expect(s.notCommitting).toBe(true);
     expect(s.locked).toBe(false);
-    s.set(path, before + 3);
-    expect(posted).toEqual([{ type: 'set', path, value: before + 3 }]);
+    s.set(mute, true);
+    expect(posted).toEqual([{ type: 'set', path: mute, value: true }]);
+    expect(s.value<boolean>(mute)).toBe(true);
+    const report = (pendingKeys: string[], commitable = false) =>
+      s.apply({ type: 'patch', input: 1, changes: [], owners: [], status: status({ replicas: replicas(commitable, commitable, commitable), pendingKeys }) });
+    report([mute]);
+    expect(s.pendingKey(mute)).toBe(true);
+    expect(s.pendingKey('/channels/ch2/mute')).toBe(false);
+    // Committing again, a write on its way is not marked: it is the normal round trip.
+    report([mute], true);
+    expect(s.pendingKey(mute)).toBe(false);
+    report([], false);
+    expect(s.pendingKey(mute)).toBe(false);
   });
 
   it('sends no REST action while writes are off and names the lock reason in its notice', async () => {
@@ -99,12 +100,13 @@ describe('mixer store without quorum', () => {
     expect(s.notices.at(-1)).toMatchObject({ kind: 'error', text: 'Scene recall not sent: no replica reachable' });
   });
 
-  it('still releases a touch made before quorum was lost', () => {
+  it('still touches and releases while quorum is lost', () => {
     const { s, posted } = store();
     const path = '/channels/ch1/fader';
     s.touch(path);
     lose(s, false);
     s.release(path);
-    expect(posted).toEqual([{ type: 'touch', path }, { type: 'release', path }]);
+    s.touch(path);
+    expect(posted).toEqual([{ type: 'touch', path }, { type: 'release', path }, { type: 'touch', path }]);
   });
 });

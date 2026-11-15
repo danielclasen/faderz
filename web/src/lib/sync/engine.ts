@@ -90,6 +90,14 @@ export const RESYNC_RETRY_MS = 250;
 export const SYNC_TIMEOUT_MS = 3000;
 /** A command answered not applied is sent again with its id after this. */
 export const NOT_APPLIED_RETRY_MS = 250;
+/**
+ * A primary that reports it cannot commit is left for the standby only
+ * if the standby still reports, this long later, that it can: a quorum
+ * lost by every replica reaches the two connections at slightly
+ * different times, and a standby whose own report is still on its way
+ * would otherwise be promoted onto a replica that cannot commit either.
+ */
+export const COMMIT_SETTLE_MS = HEARTBEAT_MS;
 /** Credits are topped up to the cap once this many or fewer are outstanding. */
 export const CREDIT_REFILL_AT = METER_CREDIT_CAP / 2;
 const NOTICE_LIMIT = 20;
@@ -168,6 +176,7 @@ export class SyncEngine {
   private cancelStandbyRetry: (() => void) | null = null;
   private cancelResyncRetry: (() => void) | null = null;
   private cancelSyncTimeout: (() => void) | null = null;
+  private cancelCommitSettle: (() => void) | null = null;
 
   constructor(private readonly deps: EngineDeps) {
     if (deps.endpoints.length === 0) throw new Error('no endpoints');
@@ -493,6 +502,8 @@ export class SyncEngine {
     this.meters = null;
     const sb = this.standby;
     const n = (this.failoverInfo?.n ?? 0) + 1;
+    this.cancelCommitSettle?.();
+    this.cancelCommitSettle = null;
     if (sb && this.standbyState === 'Ready') {
       this.standbyEvent('promote');
       this.standby = null;
@@ -539,10 +550,21 @@ export class SyncEngine {
     this.standby = this.connect('standby', index);
   }
 
+  /** Whether the replica of a link reports that it can commit; undefined before it has reported. */
+  private commitable(link: Link | null): boolean | undefined {
+    const id = link?.replica?.id;
+    return id ? link.replicas?.find((r) => r.id === id)?.commitable : undefined;
+  }
+
+  /** A standby on another replica than the primary's; whether it can commit is checkCommitable's matter. */
   private standbySuitable(link: Link): boolean {
     const id = link.replica?.id;
-    if (!id || id === this.primary?.replica?.id) return false;
-    return link.replicas?.find((r) => r.id === id)?.commitable !== false;
+    return !!id && id !== this.primary?.replica?.id;
+  }
+
+  /** A ready standby whose replica reports that it can commit. */
+  private promotable(): boolean {
+    return this.standbyState === 'Ready' && this.commitable(this.standby) === true;
   }
 
   private dropStandby(link: Link): void {
@@ -552,11 +574,36 @@ export class SyncEngine {
     this.scheduleStandby();
   }
 
+  /**
+   * Acts on what the replicas report about committing, once the reports
+   * have held for COMMIT_SETTLE_MS. A primary that cannot commit is left
+   * only for a standby that reports it can. A standby that cannot commit
+   * is let go, to look for a better one, only while the primary can: with
+   * no replica able to commit the client stays on its primary and keeps
+   * its standby, so nothing fails over or reconnects until one reports
+   * it can.
+   */
   private checkCommitable(): void {
     const p = this.primary;
-    if (!p || !TRANSMITTING.has(this.link) || this.standbyState !== 'Ready') return;
-    const own = p.replicas?.find((r) => r.id === p.replica?.id);
-    if (own && !own.commitable) this.failover('notCommitable');
+    if (!p || !TRANSMITTING.has(this.link)) return;
+    const due = () => {
+      if (this.commitable(p) === false && this.promotable()) return 'failover';
+      const sb = this.standby;
+      if (sb && this.standbyState !== 'Connecting' && this.commitable(sb) === false && this.commitable(p) !== false) return 'drop';
+      return null;
+    };
+    if (due() === null) {
+      this.cancelCommitSettle?.();
+      this.cancelCommitSettle = null;
+      return;
+    }
+    this.cancelCommitSettle ??= this.deadline(() => {
+      this.cancelCommitSettle = null;
+      if (p !== this.primary || !TRANSMITTING.has(this.link)) return;
+      const act = due();
+      if (act === 'failover') this.failover('notCommitable');
+      else if (act === 'drop') this.dropStandby(this.standby!);
+    }, COMMIT_SETTLE_MS);
   }
 
   private linkEvent(e: LinkEvent): void {
@@ -859,6 +906,7 @@ export class SyncEngine {
       primaryReplica: this.primary?.replica?.id ?? null,
       primaryEndpoint: this.primary ? this.deps.endpoints[this.primary.endpoint]! : null,
       standbyReplica: this.standby?.replica?.id ?? null,
+      pendingKeys: this.outbox.discreteSetPaths(),
       replicas: this.primary?.replicas ?? this.standby?.replicas ?? [],
       revision: this.revision,
       outbox: this.outbox.size + this.limiter.size,

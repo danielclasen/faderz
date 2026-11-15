@@ -56,6 +56,11 @@ export class Outbox {
     return this.entries.some((e) => e.msg.type === type && e.msg.path === path);
   }
 
+  /** Controls with an unanswered set of a discrete control (a key), each once, in order. */
+  discreteSetPaths(): string[] {
+    return [...new Set(this.entries.filter((e) => e.msg.type === 'set' && !e.continuous).map((e) => e.msg.path))];
+  }
+
   /** Commands sent and not answered yet. */
   get inFlight(): number {
     return this.entries.filter((e) => e.state === 'Sent').length;

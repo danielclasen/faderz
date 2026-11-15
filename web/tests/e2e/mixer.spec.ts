@@ -1254,20 +1254,29 @@ test('writes the tally on the strip in words: PGM, PVW, and CLOSED when the AFV 
   await expect(page.getByTestId('tally-ch15')).not.toHaveCSS('text-decoration-line', 'line-through');
 });
 
-test('says in the header that changes are not committing while the serving replica has no quorum', { tag: '@mock' }, async ({ page, request }) => {
+test('says in the notice line that changes are not committing while the serving replica has no quorum', { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
   await live(page);
   const banner = page.getByTestId('commit-banner');
   await expect(banner).toHaveCount(0);
   const strip = (await page.locator('[data-channel="ch1"]').boundingBox())!;
+  const status = (await page.getByTestId('status').boundingBox())!;
   const primary = (await debug(page, 'primaryReplica'))!;
   for (const r of REPLICAS.filter((x) => x !== primary)) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
   await expect(banner).toBeVisible();
   await expect(banner).toContainText('CHANGES NOT COMMITTING');
   await expect(banner).toContainText('audio continues');
-  // In the header: nothing under it moved, and the controls stay reachable.
-  expect((await banner.boundingBox())!.y).toBeLessThan(strip.y);
+  await expect(page.getByTestId('commit-pending')).toHaveText('0 pending');
+  // In the notice line of the status bar, whole and over no control:
+  // nothing under it moved and the connection state stays in view.
+  const box = (await banner.boundingBox())!;
+  const bar = (await page.locator('footer.bar').boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(bar.y);
+  expect(box.y + box.height).toBeLessThanOrEqual(bar.y + bar.height);
+  expect(await banner.locator('.text').evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
   expect(await page.locator('[data-channel="ch1"]').boundingBox()).toEqual(strip);
+  expect(await page.getByTestId('status').boundingBox()).toEqual(status);
+  await expect(page.getByTestId('quorum')).toBeVisible();
   for (const r of REPLICAS) await request.post(`/__mock/replicas/${r}/restore`);
   await expect(banner).toHaveCount(0);
 });

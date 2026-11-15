@@ -49,6 +49,7 @@ export const INITIAL_STATUS: SyncStatus = {
   primaryReplica: null,
   primaryEndpoint: null,
   standbyReplica: null,
+  pendingKeys: [],
   replicas: [],
   revision: 0,
   outbox: 0,
@@ -109,10 +110,21 @@ export class MixerStore {
   fine = $state(false);
   /** The operator locked this screen: it shows everything and changes nothing. */
   deskLock = $state(false);
-  /** Why write controls are disabled and send nothing (link not transmitting, or no quorum and no ready standby), or null. */
+  /** Why write controls are disabled and send nothing (the link transmits no commands), or null. */
   readonly lockReason = $derived(writesLockReason(this.status));
   /** Write controls are disabled and send nothing: for lockReason, or the desk is locked. */
   readonly locked = $derived(this.lockReason !== null || this.deskLock);
+  /**
+   * The serving replica reports that it cannot commit: audio runs on the
+   * last committed state, and what is written now is answered not
+   * applied and sent again until a replica commits it or it expires.
+   */
+  readonly notCommitting = $derived(this.status.replicas.find((r) => r.id === this.status.primaryReplica)?.commitable === false);
+
+  /** A key whose write is not committed while the serving replica cannot commit: it shows its state desaturated. */
+  pendingKey(path: string): boolean {
+    return this.notCommitting && this.status.pendingKeys.includes(path);
+  }
 
   // ---- reading -----------------------------------------------------------
 

@@ -47,6 +47,7 @@
 <button
   class="key mute protected"
   class:arming
+  class:pending={mixer.pendingKey(path)}
   style:--hold={`${HOLD_MS}ms`}
   aria-disabled={mixer.locked}
   aria-pressed={muted}

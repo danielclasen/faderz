@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONNECT_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import { COMMIT_SETTLE_MS, CONNECT_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
 import { ownerHandle } from '../../src/lib/net/handle';
 import type { Patch } from '../../src/lib/sync/messages';
@@ -293,9 +293,11 @@ describe('sync engine: heartbeat and failure detection', () => {
     expect(engine.link).toBe('Live');
   });
 
-  it('fails over when the serving replica reports it cannot commit', () => {
-    const { engine, primary, standby } = live();
+  it('fails over when the serving replica reports it cannot commit and the standby still can a moment later', () => {
+    const { clock, engine, primary, standby } = live();
     primary.deliver(replicas(R1, ['r1']));
+    expect(primary.closed).toBe(false);
+    beats(clock, COMMIT_SETTLE_MS, [primary, R1], [standby, R2]);
     expect(primary.closed).toBe(true);
     expect(standby.ofType('promote')).toHaveLength(1);
     expect(engine.status().failover?.reason).toBe('notCommitable');
@@ -312,8 +314,63 @@ describe('sync engine: heartbeat and failure detection', () => {
     sb.open();
     sb.deliver(replicas(R2, ['r1']));
     sb.deliver(resume(R2, 1));
+    beats(t.clock, COMMIT_SETTLE_MS, [t.sockets[0]!, R1], [sb, R2]);
     expect(t.sockets[0]!.closed).toBe(true);
     expect(sb.ofType('promote')).toHaveLength(1);
+  });
+
+  it('stays on its primary and keeps its standby while no replica can commit, and fails over once the standby can', () => {
+    const { clock, engine, primary, standby, sockets } = live();
+    const all = ['r1', 'r2', 'r3'];
+    primary.deliver(replicas(R1, all));
+    standby.deliver(replicas(R2, all));
+    beats(clock, 10_000, [primary, R1], [standby, R2]);
+    expect(primary.closed).toBe(false);
+    expect(standby.closed).toBe(false);
+    expect(sockets).toHaveLength(2);
+    expect(standby.ofType('promote')).toEqual([]);
+    expect(engine.status()).toMatchObject({ link: 'Live', primaryReplica: 'r1', standby: 'Ready', standbyReplica: 'r2', failover: null });
+    standby.deliver(replicas(R2, ['r1', 'r3']));
+    beats(clock, COMMIT_SETTLE_MS, [primary, R1], [standby, R2]);
+    expect(standby.ofType('promote')).toHaveLength(1);
+    expect(engine.status().failover).toMatchObject({ from: 'r1', to: 'r2', reason: 'notCommitable' });
+  });
+
+  it('fails nothing over onto a standby whose own report of losing commit arrives just after the primary one', () => {
+    const { clock, primary, standby } = live();
+    const all = ['r1', 'r2', 'r3'];
+    primary.deliver(replicas(R1, all));
+    clock.advance(COMMIT_SETTLE_MS / 2);
+    standby.deliver(replicas(R2, all));
+    beats(clock, 2000, [primary, R1], [standby, R2]);
+    expect(primary.closed).toBe(false);
+    expect(standby.closed).toBe(false);
+    expect(standby.ofType('promote')).toEqual([]);
+  });
+
+  it('keeps its standby when the standby hears first that no replica can commit', () => {
+    const { clock, primary, standby } = live();
+    const all = ['r1', 'r2', 'r3'];
+    standby.deliver(replicas(R2, all));
+    clock.advance(COMMIT_SETTLE_MS / 2);
+    primary.deliver(replicas(R1, all));
+    beats(clock, 2000, [primary, R1], [standby, R2]);
+    expect(standby.closed).toBe(false);
+    expect(primary.closed).toBe(false);
+  });
+
+  it('lets a standby that cannot commit go once the primary can again, to look for one that can', () => {
+    const { clock, primary, standby, sockets } = live();
+    const all = ['r1', 'r2', 'r3'];
+    primary.deliver(replicas(R1, all));
+    standby.deliver(replicas(R2, all));
+    expect(standby.closed).toBe(false);
+    primary.deliver(replicas(R1, ['r2']));
+    expect(standby.closed).toBe(false);
+    beats(clock, COMMIT_SETTLE_MS, [primary, R1], [standby, R2]);
+    expect(standby.closed).toBe(true);
+    clock.advance(STANDBY_RETRY_MS);
+    expect(sockets).toHaveLength(3);
   });
 
   it('opens a new standby on another replica after a promote, retrying until it does', () => {
@@ -1078,6 +1135,16 @@ describe('sync engine: patches', () => {
     expect(p.snapshot).toBeDefined();
     expect(p.changes).toEqual([[F1, -7]]);
     expect(p.input).toBe(3);
+  });
+
+  it('reports the keys with an unanswered write, not the continuous controls', () => {
+    const { engine, primary } = live();
+    engine.input({ type: 'set', path: '/channels/ch1/mute', value: true });
+    engine.input({ type: 'set', path: F1, value: -3 });
+    expect(engine.status().pendingKeys).toEqual(['/channels/ch1/mute']);
+    const id = primary.ofType('set').find((m) => m.path === '/channels/ch1/mute')!.id;
+    primary.deliver(delta(R1, 11, { changes: [{ path: '/channels/ch1/mute', value: true }], origins: [{ owner: YOU, commandId: id }] }));
+    expect(engine.status().pendingKeys).toEqual([]);
   });
 
   it('posts nothing on a tick with nothing new', () => {

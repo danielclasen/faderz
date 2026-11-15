@@ -7,6 +7,7 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import { TRANSMITTING } from '../lib/sync/machines';
   import { tip } from '../lib/tip';
+  import CommitBanner from './CommitBanner.svelte';
   const mixer = getMixer();
   const latest = $derived(mixer.notices.at(-1) ?? null);
   const others = $derived(mixer.notices.length - 1);
@@ -19,7 +20,10 @@
 </script>
 
 <div class="notice-line" role="log" aria-live="polite" aria-label="Notices">
-  {#if latest}
+  <!-- While nothing commits that is what the line says; the notices wait. -->
+  {#if mixer.shape && mixer.notCommitting}
+    <CommitBanner />
+  {:else if latest}
     <!-- A text cut off at the end is whole in the tooltip, which focus
          shows too. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->

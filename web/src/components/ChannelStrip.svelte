@@ -167,10 +167,11 @@
   </div>
 
   <div class="ctl">
-    <button class="key pfl" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
-    <button class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
+    <button class="key pfl" class:pending={mixer.pendingKey(channelPath(channel.id, 'solo'))} aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`${channel.name} PFL`}>PFL</button>
+    <button class="key afl" class:pending={mixer.pendingKey(channelPath(channel.id, 'solo'))} aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`${channel.name} AFL`}>AFL</button>
     <button
       class="key mute big"
+      class:pending={mixer.pendingKey(channelPath(channel.id, 'mute'))}
       aria-disabled={mixer.locked}
       aria-pressed={mute}
       class:vca-muted={vcaMuted && !mute}

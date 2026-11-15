@@ -72,10 +72,10 @@
   </div>
   <div class="speakers" role="group" aria-label="Monitor speakers" style:grid-template-columns={`repeat(${legs.length}, minmax(0, 1fr))`}>
     {#each legs as leg, i (i)}
-      <button class="key mute" aria-disabled={mixer.locked} aria-pressed={monitor.speakerMute[i]} aria-label={`Mute speaker ${leg}`} title={`Mute speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerMute', i), !monitor.speakerMute[i])}>{leg}</button>
+      <button class="key mute" class:pending={mixer.pendingKey(pointer('monitor', 'speakerMute', i))} aria-disabled={mixer.locked} aria-pressed={monitor.speakerMute[i]} aria-label={`Mute speaker ${leg}`} title={`Mute speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerMute', i), !monitor.speakerMute[i])}>{leg}</button>
     {/each}
     {#each legs as leg, i (i)}
-      <button class="key solo" aria-disabled={mixer.locked} aria-pressed={monitor.speakerSolo[i]} aria-label={`Solo speaker ${leg}`} title={`Solo speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerSolo', i), !monitor.speakerSolo[i])}>S</button>
+      <button class="key solo" class:pending={mixer.pendingKey(pointer('monitor', 'speakerSolo', i))} aria-disabled={mixer.locked} aria-pressed={monitor.speakerSolo[i]} aria-label={`Solo speaker ${leg}`} title={`Solo speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerSolo', i), !monitor.speakerSolo[i])}>S</button>
     {/each}
   </div>
   {#if output?.layout === 'stereo'}
@@ -107,11 +107,12 @@
       {/if}
     </div>
     <div class="flags">
-      <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('dim')} onclick={() => mixer.set(monitorPath('dim'), !flag('dim'))}>DIM</button>
-      <button class="key mute" aria-disabled={mixer.locked} aria-pressed={flag('cut')} onclick={() => mixer.set(monitorPath('cut'), !flag('cut'))}>CUT</button>
-      <button class="key" aria-disabled={mixer.locked} aria-pressed={flag('mono')} onclick={() => mixer.set(monitorPath('mono'), !flag('mono'))}>MONO</button>
+      <button class="key" class:pending={mixer.pendingKey(monitorPath('dim'))} aria-disabled={mixer.locked} aria-pressed={flag('dim')} onclick={() => mixer.set(monitorPath('dim'), !flag('dim'))}>DIM</button>
+      <button class="key mute" class:pending={mixer.pendingKey(monitorPath('cut'))} aria-disabled={mixer.locked} aria-pressed={flag('cut')} onclick={() => mixer.set(monitorPath('cut'), !flag('cut'))}>CUT</button>
+      <button class="key" class:pending={mixer.pendingKey(monitorPath('mono'))} aria-disabled={mixer.locked} aria-pressed={flag('mono')} onclick={() => mixer.set(monitorPath('mono'), !flag('mono'))}>MONO</button>
       <button
         class="key"
+        class:pending={mixer.pendingKey(monitorPath('talkbackDim'))}
         aria-disabled={mixer.locked}
         aria-pressed={flag('talkbackDim')}
         aria-label="Dim the monitor while talkback is active"

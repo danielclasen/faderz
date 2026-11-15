@@ -44,7 +44,7 @@
               <td class="num idx">{i + 1}</td>
               <td class="name">{ch.name}</td>
               <td>
-                <button class="key onoff" aria-disabled={mixer.locked} aria-pressed={enabled} aria-label={`${ch.name} AFV`} onclick={() => mixer.set(afvPath(ch.id, 'enabled'), !enabled)}>
+                <button class="key onoff" class:pending={mixer.pendingKey(afvPath(ch.id, 'enabled'))} aria-disabled={mixer.locked} aria-pressed={enabled} aria-label={`${ch.name} AFV`} onclick={() => mixer.set(afvPath(ch.id, 'enabled'), !enabled)}>
                   <span class="fixed">{fit(enabled ? 'ON' : 'OFF', 3)}</span>
                 </button>
               </td>

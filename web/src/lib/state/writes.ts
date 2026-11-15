@@ -11,15 +11,13 @@ const LINK_LOCK: Partial<Record<LinkState, string>> = {
 };
 
 /**
- * Why writes are blocked, or null while they are not. They are blocked
- * while the link transmits no commands (connecting, offline, failing
- * over, ahead of the cluster) and while the serving replica reports that
- * it cannot commit and no ready standby can take over: a command written
- * then goes unanswered or commits nowhere. With a ready standby the
- * worker fails over instead.
+ * Why writes are blocked, or null while they are not: while the link
+ * transmits no commands (connecting, offline, failing over, ahead of the
+ * cluster). A serving replica that cannot commit blocks nothing: the
+ * operator can still try, a write is answered not applied and sent again
+ * until it commits or expires, and the screen shows it pending meanwhile
+ * (MixerStore.pendingKey, CommitBanner).
  */
-export function writesLockReason(status: Pick<SyncStatus, 'link' | 'primaryReplica' | 'replicas' | 'standby'>): string | null {
-  if (!TRANSMITTING.has(status.link)) return LINK_LOCK[status.link] ?? status.link;
-  const serving = status.replicas.find((r) => r.id === status.primaryReplica);
-  return serving !== undefined && !serving.commitable && status.standby !== 'Ready' ? 'no quorum and no ready standby' : null;
+export function writesLockReason(status: Pick<SyncStatus, 'link'>): string | null {
+  return TRANSMITTING.has(status.link) ? null : (LINK_LOCK[status.link] ?? status.link);
 }

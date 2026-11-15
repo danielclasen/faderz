@@ -38,6 +38,8 @@ export interface SyncStatus {
   primaryReplica: string | null;
   primaryEndpoint: string | null;
   standbyReplica: string | null;
+  /** Keys (discrete controls) with a write not answered yet. */
+  pendingKeys: string[];
   replicas: ReplicaStatus[];
   revision: Revision;
   /** Unanswered commands plus writes held by the rate limiter. */

@@ -216,7 +216,18 @@ select {
     height: 32px;
   }
 }
-/* Write controls while writes are blocked: no quorum and no standby. */
+/* A key pressed while the serving replica cannot commit, its write not
+   committed yet: its state is shown, desaturated, inside a dashed edge.
+   Filter and outline only, so nothing changes size. */
+.key.pending {
+  outline: 1px dashed currentColor;
+  outline-offset: -4px;
+}
+.key.pending[aria-pressed='true'],
+.key.pending[aria-checked='true'] {
+  filter: saturate(0.15) brightness(0.8);
+}
+/* Write controls while writes are blocked: the link transmits nothing, or the desk is locked. */
 [aria-disabled='true'],
 input:disabled,
 select:disabled {

@@ -38,6 +38,30 @@ function latched() {
 }
 
 describe('TALK key', () => {
+  it('while the serving replica cannot commit, stops a latched talk with the release alone and keeps the latch until the state says it is off', () => {
+    const { s, posted, key, button } = latched();
+    const noQuorum = { ...LIVE, primaryReplica: 'r1', replicas: [{ id: 'r1', role: 'leader' as const, healthy: true, commitable: false }] };
+    s.apply({ type: 'patch', input: 99, changes: [], owners: [], status: noQuorum });
+    flushSync();
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    button.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
+    flushSync();
+    expect(posted).toEqual([{ type: 'release', path: ACTIVE }]);
+    expect(button.getAttribute('aria-label')).toBe('N-1 Phone 1 talk, latched');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    s.apply({ type: 'patch', input: 99, changes: [[ACTIVE, false]], owners: [], status: noQuorum });
+    flushSync();
+    expect(button.getAttribute('aria-label')).toBe('N-1 Phone 1 talk');
+    // No talk starts while nothing commits.
+    posted.length = 0;
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    button.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
+    flushSync();
+    expect(posted.filter((m) => m.type !== 'release')).toEqual([]);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    unmount(key);
+  });
+
   it('ends a latched talk when it unmounts: clears and releases it', async () => {
     const { posted, key } = latched();
     unmount(key);

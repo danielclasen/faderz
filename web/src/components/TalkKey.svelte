@@ -33,21 +33,28 @@
   let holding = false;
   let pressedAt = 0;
   let latched = $state(false);
+  /**
+   * Writes locked, or the serving replica cannot commit: no talk starts,
+   * and a stop sends only the release, so the key never shows a talk
+   * ended before the state says it is.
+   */
+  const frozen = $derived(mixer.locked || mixer.notCommitting);
 
   function off(): void {
-    mixer.set(path, false);
+    if (!mixer.notCommitting) mixer.set(path, false);
     mixer.release(path);
   }
   function press(): void {
     if (holding) return;
     if (latched) {
       // This press ends the latch; its release does nothing more. While
-      // writes are locked the set is not sent but the release is, and
+      // writes are locked or nothing commits the set is not sent but the
+      // release is, and
       // the server ends an interrupt its owner releases: the key keeps
       // its latch until the state says the talk is off, so the screen
       // never shows a talk ended before it is.
       off();
-      if (!mixer.locked) latched = false;
+      if (!frozen) latched = false;
       return;
     }
     if (active) {
@@ -60,10 +67,10 @@
       const owner = mixer.ownerOf(path);
       if (owner && !mixer.isMine(owner)) mixer.notify('conflict', `${name} talk is held by ${mixer.ownerLabel(owner)}`, path);
       else if (owner) off();
-      else mixer.set(path, false);
+      else if (!mixer.notCommitting) mixer.set(path, false);
       return;
     }
-    if (mixer.locked || source === null) return;
+    if (frozen || source === null) return;
     holding = true;
     pressedAt = performance.now();
     mixer.touch(path);
@@ -96,7 +103,7 @@
     if (holding) abort();
     else if (latched) {
       off();
-      if (!mixer.locked) latched = false;
+      if (!frozen) latched = false;
     } else if (endedAway === null) return;
     endedAway = why;
   }
@@ -164,7 +171,7 @@
     class="key"
     class:on={active}
     class:latched
-    aria-disabled={mixer.locked || source === null}
+    aria-disabled={frozen || source === null}
     aria-pressed={active}
     aria-label={`${name} talk${latched ? ', latched' : ''}`}
     title={source === null ? 'Choose a talkback source first' : 'Hold to talk into this output; tap to latch; a tap on a lit key stops the talk'}

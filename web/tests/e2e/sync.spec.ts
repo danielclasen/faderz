@@ -331,52 +331,56 @@ test('a promote onto a lagging replica never shows an older value', { tag: '@moc
   expect(seen.slice(seen.indexOf(formatDb(target)))).not.toContain(formatDb(before));
 });
 
-test('without quorum and standby the client stays connected and disables every write control', { tag: '@mock' }, async ({ page, request }) => {
+test('without a replica that can commit the client stays put, keeps its controls and shows what it pressed as pending', { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
+  const sent: Array<{ type: string; id?: string; path?: string }> = [];
+  page.on('websocket', (ws) => ws.on('framesent', (f) => typeof f.payload === 'string' && sent.push(JSON.parse(f.payload))));
   await live(page);
-  const faderPath = '/channels/ch3/fader';
-  const slider = page.locator(`[role="slider"][data-path="${faderPath}"]`);
   const mute = page.locator('button[data-path="/channels/ch3/mute"]');
-  await expect(slider).toHaveAttribute('aria-disabled', 'false');
-  await expect(mute).toHaveAttribute('aria-disabled', 'false');
   const before = await serverState(request);
+  const was = before.state.channels['ch3']!.mute;
   const primary = (await debug(page, 'primaryReplica'))!;
+  const standby = (await debug(page, 'standbyReplica'))!;
   const others = REPLICAS.filter((r) => r !== primary);
   for (const r of others) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
 
   const quorum = page.getByTestId('quorum');
   await expect(quorum).toHaveText('NO Q');
   await expect(quorum).toHaveAttribute('data-commitable', 'false');
-  await expect(quorum).toHaveAttribute('title', 'Every write control is disabled: no quorum and no ready standby');
-  await expect(quorum).toBeVisible();
+  const banner = page.getByTestId('commit-banner');
+  await expect(banner).toBeVisible();
   await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
-  await expect(slider).toHaveAttribute('aria-disabled', 'true');
-  await expect(mute).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.locator('[role="slider"][aria-disabled="false"]')).toHaveCount(0);
-  await expect(page.locator('button[aria-pressed][aria-disabled="false"]').filter({ hasText: /MUTE|PFL|AFL/ })).toHaveCount(0);
+  // The controls stay usable: the operator can still try.
+  await expect(mute).toHaveAttribute('aria-disabled', 'false');
+  await expect(page.locator('[role="slider"][data-path="/channels/ch3/fader"]')).toHaveAttribute('aria-disabled', 'false');
   await request.post('/__mock/audit/reset');
-
-  // force: Playwright waits for an aria-disabled control to become enabled.
-  await dragFader(page, faderPath, -60);
-  await mute.click({ force: true });
-  await slider.focus();
-  await page.keyboard.press('ArrowUp');
-  await page.keyboard.press('PageUp');
-  await page.waitForTimeout(1000);
+  await mute.click();
+  await expect(mute).toHaveAttribute('aria-pressed', String(!was));
+  await expect(mute).toHaveClass(/\bpending\b/);
+  await expect(page.getByTestId('commit-pending')).toContainText('1');
+  // Refused, not applied, and sent again until it expires; then the key
+  // shows the committed state again.
+  const sets = () => sent.filter((m) => m.type === 'set' && m.path === '/channels/ch3/mute');
+  await expect.poll(() => sets().length).toBeGreaterThan(1);
+  expect(new Set(sets().map((m) => m.id)).size).toBe(1);
   expect((await audit(request)).entries).toEqual([]);
-  expect(await commands(request)).toEqual([]);
-  expect(await debug(page, 'outbox')).toBe(0);
-  await expect(page.getByTestId('fader-value-ch3')).toHaveText(formatDb(before.state.channels['ch3']!.fader));
-  await expect(mute).toHaveAttribute('aria-pressed', String(before.state.channels['ch3']!.mute));
+  await expect(mute).toHaveAttribute('aria-pressed', String(was), { timeout: 5000 });
+  await expect(mute).not.toHaveClass(/\bpending\b/);
+  await expect(page.getByTestId('commit-pending')).toContainText('0');
+  expect((await serverState(request)).state.channels['ch3']!.mute).toBe(was);
+  // No replica could commit: no failover, and the standby was kept.
+  expect(await debug(page, 'failovers')).toBe(0);
+  expect(await debug(page, 'primaryReplica')).toBe(primary);
+  expect(await debug(page, 'standbyReplica')).toBe(standby);
 
   for (const r of others) expect((await request.post(`/__mock/replicas/${r}/heal`)).ok()).toBe(true);
   await expect(quorum).toHaveText('Q');
-  await expect(slider).toHaveAttribute('aria-disabled', 'false');
-  await expect(mute).toHaveAttribute('aria-disabled', 'false');
+  await expect(banner).toHaveCount(0);
   await mute.click();
   await settled(page);
   await expect.poll(async () => (await audit(request)).entries.map((e) => e.path)).toContain('/channels/ch3/mute');
-  expect((await serverState(request)).state.channels['ch3']!.mute).toBe(!before.state.channels['ch3']!.mute);
+  expect((await serverState(request)).state.channels['ch3']!.mute).toBe(!was);
+  await patch(request, '/channels/ch3/mute', was);
 });
 
 test('with every replica down the client disables every write control and sends nothing written then', { tag: '@mock' }, async ({ page, request }) => {

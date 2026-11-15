@@ -350,13 +350,22 @@ export class Cluster {
     return r.healthy && r.frozen === 'none';
   }
 
+  /** A majority of the replicas is ready and not partitioned. */
+  private quorum(): boolean {
+    return this.replicas.filter((x) => this.ready(x) && !x.partitioned).length > this.replicas.length / 2;
+  }
+
+  /** A ready replica that is not partitioned, while there is a quorum: it can commit. */
+  private commitable(r: Replica): boolean {
+    return this.ready(r) && !r.partitioned && this.quorum();
+  }
+
   replicaStatus(): ReplicaStatus[] {
-    const quorum = this.replicas.filter((r) => this.ready(r) && !r.partitioned).length > this.replicas.length / 2;
     return this.replicas.map((r) => ({
       id: r.id,
       role: r.role,
       healthy: this.ready(r),
-      commitable: this.ready(r) && !r.partitioned && quorum,
+      commitable: this.commitable(r),
     }));
   }
 
@@ -564,8 +573,10 @@ export class Cluster {
       case 'select':
         return this.select(conn, msg.element);
     }
-    // A partitioned replica cannot commit: every command is answered not applied.
-    if (r.partitioned) {
+    // A replica cut off from the quorum, partitioned or left without one,
+    // answers every command not applied. A hung one that still applies
+    // (freeze mode apply) commits what it reads.
+    if (r.partitioned || !this.quorum()) {
       return this.emit(conn, { type: 'error', replica: this.ref(r), code: 503, commandId: msg.id, path: msg.path, message: 'not applied: no quorum' });
     }
     const owner = conn.owner;

@@ -64,7 +64,7 @@
                   {@const lvl = mixer.value<number>(sendPath(ch.id, aux.id, 'level'))}
                   <td class:off={!on}>
                     <div class="send">
-                      <button class="key" aria-disabled={mixer.locked} aria-pressed={on} aria-label={`${ch.name} send to ${aux.name}`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'on'), !on)}>ON</button>
+                      <button class="key" class:pending={mixer.pendingKey(sendPath(ch.id, aux.id, 'on'))} aria-disabled={mixer.locked} aria-pressed={on} aria-label={`${ch.name} send to ${aux.name}`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'on'), !on)}>ON</button>
                       <Slider
                         path={sendPath(ch.id, aux.id, 'level')}
                         label={`${ch.name} send level to ${aux.name}`}
@@ -73,7 +73,7 @@
                         valueText={`${formatDb(lvl)} dB`}
                       />
                       <span class="num db fixed">{fit(formatDb(lvl), 5)}</span>
-                      <button class="key" aria-disabled={mixer.locked} aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
+                      <button class="key" class:pending={mixer.pendingKey(sendPath(ch.id, aux.id, 'pre'))} aria-disabled={mixer.locked} aria-pressed={pre} aria-label={`${ch.name} send to ${aux.name} pre-fader`} onclick={() => mixer.set(sendPath(ch.id, aux.id, 'pre'), !pre)}>{pre ? 'PRE' : 'POST'}</button>
                     </div>
                   </td>
                 {/each}

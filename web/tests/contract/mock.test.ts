@@ -831,6 +831,23 @@ describe('heartbeats', () => {
 });
 
 describe('replica faults', () => {
+  it('a replica left without quorum reports itself not commitable and answers commands not applied, though not partitioned', async () => {
+    const c = await new Client().open(onReplica('r1'));
+    await c.hello();
+    const from = c.messages.length;
+    expect((await control('POST', '/replicas/r2/partition')).status).toBe(200);
+    expect((await control('POST', '/replicas/r3/partition')).status).toBe(200);
+    const status = await c.next<ReplicasMessage>((m) => m.type === 'replicas' && m.replicas.every((r) => !r.commitable), from);
+    expect(status.replicas.find((r) => r.id === 'r1')).toMatchObject({ healthy: true, commitable: false });
+    const before = cluster.state.channels['ch12']!.mute;
+    const id = c.set('/channels/ch12/mute', !before);
+    expect(await c.answer(id, from)).toMatchObject({ type: 'error', code: 503, commandId: id });
+    expect(cluster.state.channels['ch12']!.mute).toBe(before);
+    await control('POST', '/replicas/r2/heal');
+    await control('POST', '/replicas/r3/heal');
+    await c.close();
+  });
+
   it('a partitioned replica reports itself not commitable and answers commands not applied until healed', async () => {
     const c = await new Client().open(onReplica('r3'));
     await c.hello();

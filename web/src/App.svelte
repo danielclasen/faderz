@@ -17,7 +17,6 @@
   import LockKey from './components/LockKey.svelte';
   import Users from './components/Users.svelte';
   import TouchInfo from './components/TouchInfo.svelte';
-  import CommitBanner from './components/CommitBanner.svelte';
 
   const mixer = getMixer();
   /** A phone in landscape: notices move from the status bar into the header. */
@@ -35,7 +34,6 @@
     const max = mixer.state?.metering.zones.truePeakMax;
     if (max !== undefined) mixer.meters.truePeakMax = max;
   });
-  const commitable = $derived(mixer.status.replicas.find((r) => r.id === mixer.status.primaryReplica)?.commitable ?? true);
 
   const VIEWS = [
     { id: 'mixer', label: 'Mixer' },
@@ -94,11 +92,11 @@
       {/each}
     </nav>
     <div class="right">
-      <!-- Free header space: the commit banner when it is up, otherwise
-           the notices on a short screen. It grows into the room the fixed
-           items leave, so what it shows moves none of them. -->
+      <!-- Free header space: the notice line on a short screen, which has
+           no status bar. It grows into the room the fixed items leave, so
+           what it shows moves none of them. -->
       <div class="mid">
-        {#if mixer.shape && !commitable}<CommitBanner />{:else if short.current}<NoticeLine />{/if}
+        {#if short.current}<NoticeLine />{/if}
       </div>
       <Consoles />
       <StatusArea />
