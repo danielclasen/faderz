@@ -806,8 +806,9 @@ describe('sync engine: ahead of the cluster', () => {
   });
 
   it('goes Ahead from Live on a snapshot of another epoch on the open primary, and applies no delta after it', () => {
-    // A replica that changes its epoch in place catches the connection up
-    // with a snapshot of the new history; its deltas follow.
+    // A server that does not close its connections on an epoch change, as
+    // the contract has it, sends a snapshot of the new history on an open
+    // one; its deltas follow.
     const { engine, primary, standby, tick } = live();
     primary.deliver(snapshot(R1, 15, {}, YOU, RESTORED));
     expect(engine.link).toBe('Ahead');

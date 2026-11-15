@@ -8,7 +8,10 @@
 // it reads, so a sent command counts in flight until it is answered or
 // dropped. A command still unanswered at its expiry is
 // dropped, so none is sent beyond the time the server remembers its id
-// and seq.
+// and seq. A command held after a not-applied answer can be overtaken by
+// later commands of other controls, so the server may apply commands of
+// different controls in another order than they were issued; seq keeps
+// the commands of one control in order.
 
 import type { CommandId, CommandMessage } from '../contract/types';
 import { COMMAND, TERMINAL, step, type CommandEvent, type CommandState } from './machines';

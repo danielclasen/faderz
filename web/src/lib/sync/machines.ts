@@ -48,8 +48,9 @@ export const LINK_EVENTS: readonly LinkEvent[] = [
 export const LINK: Table<LinkState, LinkEvent> = {
   Connecting: { open: 'Syncing', exhausted: 'Offline' },
   Syncing: { synced: 'Live', lost: 'Connecting', beatsMissed: 'Connecting', ahead: 'Ahead' },
-  // A replica that changes its epoch in place sends a snapshot of the new
-  // one on an open connection: ahead from Live and Suspect too.
+  // A replica closes every connection when its epoch changes; ahead from
+  // Live and Suspect guards against a server that does not and sends a
+  // snapshot of the new epoch on an open connection.
   Live: { resync: 'Resyncing', beatLate: 'Suspect', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver', ahead: 'Ahead' },
   Suspect: { beat: 'Live', resync: 'Resyncing', beatsMissed: 'FailingOver', lost: 'FailingOver', notCommitable: 'FailingOver', ahead: 'Ahead' },
   FailingOver: { promoted: 'Resyncing', noStandby: 'Connecting' },
