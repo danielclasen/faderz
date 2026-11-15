@@ -128,6 +128,7 @@ jobs:
       - name: Check the release binary runs here
         run: |
           test -s dist/THIRD-PARTY.txt
+          cmp dist/LICENSE LICENSE
           grep -q '^svelte ' dist/THIRD-PARTY-WEB.txt
           grep -q 'SIL OPEN FONT LICENSE' dist/THIRD-PARTY-WEB.txt
           if grep -E '&(quot|amp|lt|gt|#x[0-9a-fA-F]+);' dist/THIRD-PARTY.txt; then
@@ -135,6 +136,14 @@ jobs:
             exit 1
           fi
           dist/faderz --version | grep -q '^faderz '
+      # The release checks the attached binary against the published
+      # image's byte for byte; they come from separate builds on
+      # separate runners, so two builds of one source have to agree.
+      - name: Build the release binary again and compare
+        run: |
+          touch web/src/main.ts LICENSE
+          docker buildx build --no-cache --target dist --output type=local,dest=dist-again .
+          cmp dist/faderz dist-again/faderz
 
   web:
     runs-on: ubuntu-24.04
