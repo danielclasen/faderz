@@ -1225,7 +1225,8 @@ test('pauses the loudness integration of an output after a hold and runs it on w
   const integrated = page.getByTestId('loudness-i-pgm20');
   await expect(integrated).not.toHaveText(/--\.-/, { timeout: 10_000 });
   const run = master.getByRole('button', { name: 'Loudness integration running, hold to pause' });
-  await expect(run).toHaveAttribute('aria-pressed', 'true');
+  await expect(run).toHaveAttribute('aria-pressed', 'false');
+  await expect(run).toHaveText('PAUSE');
   // A tap pauses nothing.
   await run.click();
   await page.waitForTimeout(800);
@@ -1238,7 +1239,11 @@ test('pauses the loudness integration of an output after a hold and runs it on w
   await page.mouse.up();
   await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']).toEqual({ running: false });
   const paused = master.getByRole('button', { name: 'Loudness integration paused, press to run' });
-  await expect(paused).toHaveAttribute('aria-pressed', 'false');
+  await expect(paused).toHaveAttribute('aria-pressed', 'true');
+  await expect(paused).toHaveText('PAUSED');
+  // Lit, unlike a running one, and whole at the master's width.
+  expect(await paused.evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe(await master.getByRole('button', { name: /^Reset loudness/ }).evaluate((e) => getComputedStyle(e).backgroundColor));
+  expect(await paused.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
   await expect(integrated).toHaveAttribute('title', /Integration paused/);
   // Paused, the integrated value holds while the programme goes on.
   const held = await integrated.textContent();
@@ -1248,7 +1253,7 @@ test('pauses the loudness integration of an output after a hold and runs it on w
   }
   await paused.click();
   await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']).toEqual({ running: true });
-  await expect(run).toHaveAttribute('aria-pressed', 'true');
+  await expect(run).toHaveAttribute('aria-pressed', 'false');
   await expect(integrated).not.toHaveAttribute('title', /.+/);
 });
 
