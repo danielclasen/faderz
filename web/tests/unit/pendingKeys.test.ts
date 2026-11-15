@@ -32,8 +32,8 @@ function buttons(src: string): string[] {
 /**
  * Keys with a pressed or checked state that write nothing to the mixer
  * state, so they carry no pending mark: what they show is this screen's
- * own (selection, view, bank, FINE, the desk lock, the loudness readout
- * unit, the delay entry unit), a REST action that says in a notice when
+ * own (selection, view, bank, FINE, the desk lock, the theme, the
+ * loudness readout unit, the delay entry unit), a REST action that says in a notice when
  * it is refused (scene store and delete), or TALK, which starts nothing
  * while nothing commits (TalkKey). Each entry is a file and a fragment of
  * the key's tag found in exactly one key.
@@ -53,6 +53,7 @@ const EXEMPT: ReadonlyArray<[file: string, fragment: string]> = [
   ['ScenesView.svelte', 'storeScene(mixer, s.id)'],
   ['ScenesView.svelte', 'deleteScene(mixer, s.id)'],
   ['SetupView.svelte', 'aria-checked={loudnessUnit.value === u}'],
+  ['SetupView.svelte', 'aria-checked={theme.value === t.id}'],
   ['TalkKey.svelte', 'aria-pressed={active}'],
 ];
 
