@@ -33,6 +33,16 @@ jobs:
           restore-keys: |
             cargo-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-
             cargo-
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # The binary carries the UI it is built with.
+      - run: npm run build
+        working-directory: web
       - name: Format, lint, test and build in the builder image
         run: |
           mkdir -p .cargo-registry .cargo-git
@@ -45,13 +55,6 @@ jobs:
               cargo test --locked
               cargo build --locked
             '
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22.22.3
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci
-        working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - name: Check the backend against the contract
@@ -64,12 +67,18 @@ jobs:
         working-directory: web
         env:
           FADERZ_E2E_BACKEND: ../target/debug/faderz
+      - name: Run the UI from the binary in each auth mode
+        run: npm run test:binary
+        working-directory: web
+        env:
+          FADERZ_BIN: ../target/debug/faderz
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-backend
           path: |
             web/playwright-report/
+            web/playwright-report-binary/
             web/test-results/
           retention-days: 14
       # Saved from main only, so per-PR snapshots do not evict the main
