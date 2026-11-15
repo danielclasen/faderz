@@ -54,6 +54,19 @@ test('gives each meter a level for assistive technology and shows the channel me
   await patch(request, '/channels/ch1/meterTap', 'preFader');
 });
 
+test("a meter's level for assistive technology ends where its bars do when the meters stop", async ({ page, request }) => {
+  test.setTimeout(60_000);
+  await live(page);
+  const meters = page.locator('[role="meter"][data-meter^="channels/"]');
+  await expect(meters.first()).toHaveAttribute('aria-valuetext', /^peak -?\d+ dBFS/, { timeout: 5000 });
+  for (const r of REPLICAS) expect((await request.post(`/__mock/replicas/${r}/kill`)).ok()).toBe(true);
+  // Bars and holds fall to the floor within about 8 s, then nothing draws.
+  await page.waitForTimeout(10_000);
+  const texts = await meters.evaluateAll((list) => list.filter((m) => m.getBoundingClientRect().width > 0).map((m) => m.getAttribute('aria-valuetext')));
+  expect(texts.length).toBeGreaterThan(0);
+  expect(texts.filter((t) => t !== 'no signal')).toEqual([]);
+});
+
 test('keeps the fader cap under the pointer while dragging', async ({ page, request }) => {
   await live(page);
   await patch(request, '/channels/ch3/fader', -20);

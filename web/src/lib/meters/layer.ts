@@ -253,7 +253,9 @@ export class MeterLayer {
     this.drawn = true;
     for (const s of this.slots.values()) this.step(s, fresh, since, now, dt);
     this.draw();
-    if (now - this.lastAria >= ARIA_MS) {
+    // The last draw before the layer goes idle is described too, so the
+    // accessible values end where the bars do.
+    if (now - this.lastAria >= ARIA_MS || (!fresh && !this.falling())) {
       this.lastAria = now;
       this.describe();
     }
