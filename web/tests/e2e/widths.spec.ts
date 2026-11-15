@@ -130,3 +130,23 @@ test('a tablet in portrait has the view tabs on a second header row, one tap eac
   expect((await page.locator('header.top').boundingBox())!.height).toBe(44);
 });
 
+test('the theme switches from the Setup view at every width, where the header has no theme key', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  await live(page);
+  await expect(page.getByRole('button', { name: /theme$/ })).toBeHidden();
+  await page.getByRole('combobox', { name: 'View' }).selectOption('setup');
+  const themes = page.getByRole('radiogroup', { name: 'Theme of this screen' });
+  await expect(themes.getByRole('radio', { name: 'DARK' })).toHaveAttribute('aria-checked', 'true');
+  await themes.getByRole('radio', { name: 'LIGHT' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(themes.getByRole('radio', { name: 'LIGHT' })).toHaveAttribute('aria-checked', 'true');
+  // Kept for this screen, and the header key agrees where it is shown.
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect(page.getByRole('button', { name: 'Switch to dark theme' })).toHaveText('DARK');
+  await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+  await page.getByRole('button', { name: 'Setup', exact: true }).click();
+  await expect(page.getByRole('radiogroup', { name: 'Theme of this screen' }).getByRole('radio', { name: 'DARK' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});

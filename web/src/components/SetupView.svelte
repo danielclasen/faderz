@@ -3,6 +3,7 @@
   import type { LoudnessPreset, LoudnessScale } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import NumberEntry from './NumberEntry.svelte';
+  import { setTheme, theme, type Theme } from '../lib/theme.svelte';
 
   const mixer = getMixer();
   const metering = $derived(mixer.state!.metering);
@@ -21,6 +22,10 @@
   function toggleTarget(id: string): void {
     mixer.set('/tone/targets', tone.targets.includes(id) ? tone.targets.filter((t) => t !== id) : [...tone.targets, id]);
   }
+  const THEMES: Array<{ id: Theme; label: string }> = [
+    { id: 'dark', label: 'DARK' },
+    { id: 'light', label: 'LIGHT' },
+  ];
   const SCALES: Array<{ id: LoudnessScale; label: string }> = [
     { id: 'ebu9', label: 'EBU +9' },
     { id: 'ebu18', label: 'EBU +18' },
@@ -94,6 +99,17 @@
     <div class="radios" role="radiogroup" aria-label="Monitor downmix of wider sources">
       <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'loRo'} title="ITU-R BS.775 Lo/Ro" onclick={() => mixer.set('/monitor/downmix', 'loRo')}>Lo/Ro</button>
       <button class="key" role="radio" aria-disabled={mixer.locked} aria-checked={monitorState.downmix === 'lr'} title="Left and right legs only" onclick={() => mixer.set('/monitor/downmix', 'lr')}>L/R only</button>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="setup-screen">
+    <h2 class="panel-title" id="setup-screen">This screen</h2>
+    <!-- The header's theme key is not shown on the narrowest phones; this
+         one is reached at every width. -->
+    <div class="radios" role="radiogroup" aria-label="Theme of this screen">
+      {#each THEMES as t (t.id)}
+        <button class="key" role="radio" aria-checked={theme.value === t.id} onclick={() => setTheme(t.id)}>{t.label}</button>
+      {/each}
     </div>
   </section>
 

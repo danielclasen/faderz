@@ -10,7 +10,7 @@ import { MixerStore, mixerContext } from './lib/state/mixer.svelte';
 import { configureRest } from './lib/state/actions';
 import { resolveEndpoints } from './lib/sync/endpoints';
 import { startSync } from './lib/sync/client';
-import { initTheme } from './lib/theme';
+import { initTheme } from './lib/theme.svelte';
 import { renderFatal } from './lib/fatal';
 
 const root = document.getElementById('app')!;

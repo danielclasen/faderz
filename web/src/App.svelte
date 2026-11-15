@@ -1,7 +1,7 @@
 <script lang="ts">
   import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from './lib/state/mixer.svelte';
-  import { setTheme, type Theme } from './lib/theme';
+  import { setTheme, theme } from './lib/theme.svelte';
   import MixerView from './components/MixerView.svelte';
   import RoutingView from './components/RoutingView.svelte';
   import AuxView from './components/AuxView.svelte';
@@ -50,7 +50,6 @@
   let selected = $state<string | null>(null);
   /** Processing section to show first when a strip's chip selected the channel. */
   let section = $state<string | null>(null);
-  let theme = $state<Theme>((document.documentElement.dataset['theme'] as Theme) ?? 'dark');
 
   /** Moves focus to a region; on a narrow screen the masters open first. */
   function skip(e: MouseEvent, id: string): void {
@@ -59,8 +58,7 @@
     requestAnimationFrame(() => document.getElementById(id)?.focus());
   }
   function toggleTheme(): void {
-    theme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(theme);
+    setTheme(theme.value === 'dark' ? 'light' : 'dark');
   }
   /** Selecting never closes: a second press on the selected strip keeps it; CLOSE or Escape closes. */
   function select(id: string, to: string | null = null): void {
@@ -111,8 +109,8 @@
         >
       </span>
       <LockKey />
-      <button class="key theme" onclick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
-        {theme === 'dark' ? 'LIGHT' : 'DARK'}
+      <button class="key theme" onclick={toggleTheme} aria-label={`Switch to ${theme.value === 'dark' ? 'light' : 'dark'} theme`}>
+        {theme.value === 'dark' ? 'LIGHT' : 'DARK'}
       </button>
     </div>
   </header>
