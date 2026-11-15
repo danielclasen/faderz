@@ -67,12 +67,15 @@
     e.preventDefault();
     if (mixer.locked || mixer.refuseIfHeld(path)) return;
     // The value is rounded to its resolution, so a step smaller than that
-    // would round back to where it was: widen it until the value moves,
-    // so every press moves by at least one step of the value.
+    // would round back to where it was, or, from a value off the grid,
+    // behind it: widen the step until the value moves the key's way, so
+    // every press moves by at least one step of the value, or not at all
+    // at the end of the range.
     const at = (k: number) => Math.min(1, Math.max(0, pos + delta * k));
+    const ahead = (k: number) => (delta > 0 ? fromPos(at(k)) > value : fromPos(at(k)) < value);
     let k = 1;
-    while (fromPos(at(k)) === value && at(k) !== at(k + 1)) k++;
-    write(at(k));
+    while (!ahead(k) && at(k) !== at(k + 1)) k++;
+    if (ahead(k)) write(at(k));
   }
 </script>
 

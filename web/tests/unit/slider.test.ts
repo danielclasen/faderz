@@ -75,4 +75,19 @@ describe('parameter slider keys', () => {
     unmount(p);
     document.body.replaceChildren();
   });
+
+  it('never moves against the key from a value off the grid', () => {
+    // 0.005 dB rounds to 0 at a 0.1 step: ArrowRight must not write 0.
+    for (const [key, up] of [['ArrowRight', true], ['ArrowLeft', false]] as const) {
+      const c: Case = { what: 'trim', path: '/channels/ch1/trim', start: 0.005, props: { min: -20, max: 20 }, fine: 'latch' };
+      const { s, posted, p, press } = param(c);
+      press(key);
+      const v = s.value<number>(c.path);
+      if (up) expect(v).toBeGreaterThan(0.005);
+      else expect(v).toBeLessThan(0.005);
+      expect(posted.filter((m) => m.type === 'set')).toHaveLength(1);
+      unmount(p);
+      document.body.replaceChildren();
+    }
+  });
 });
