@@ -85,6 +85,37 @@ describe('mock loudness measurement', () => {
     expect(resumed.maxMomentary!).toBeGreaterThan(running.maxMomentary! + 20);
   });
 
+  it('lets no paused audio into the integration: a pause drops the windows in progress and running starts new ones', () => {
+    const shape = exampleShape();
+    const state = initialState(shape);
+    const sources = new SourceModel(shape);
+    const meters = new ReplicaMeters(shape);
+    const pgm = shape.buses.findIndex((b) => b.id === 'pgm20');
+    const level = (db: number) => {
+      for (const c of shape.channels) sources.levels.set(c.id, Array<number>(c.width).fill(db));
+    };
+    const run = (n: number) => {
+      let last = meters.frame(state, sources).buses[pgm]!.loudness;
+      for (let i = 1; i < n; i++) last = meters.frame(state, sources).buses[pgm]!.loudness;
+      return last;
+    };
+    level(-40);
+    const quiet = run(300);
+    expect(quiet.lra).not.toBeNull();
+    expect(quiet.maxShortTerm).not.toBeNull();
+    // A loud break while paused, then quiet programme again.
+    state.loudness['pgm20']!.running = false;
+    level(-10);
+    run(200);
+    level(-40);
+    state.loudness['pgm20']!.running = true;
+    const after = run(300);
+    expect(after.maxShortTerm!).toBeLessThan(quiet.maxShortTerm! + 1);
+    expect(after.maxMomentary!).toBeLessThan(quiet.maxMomentary! + 1);
+    expect(Math.abs(after.integrated! - quiet.integrated!)).toBeLessThan(1);
+    expect(after.lra!).toBeLessThan(quiet.lra! + 1);
+  });
+
   it('counts only running time towards a stable LRA', () => {
     const shape = exampleShape();
     const state = initialState(shape);

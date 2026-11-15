@@ -166,6 +166,8 @@ export function applyImage(image: StereoImage, legs: readonly number[]): number[
 
 class LoudnessMeter {
   private frames: number[] = [];
+  /** The latest meter periods of running time only, for the integration. */
+  private runFrames: number[] = [];
   private blocks: number[] = [];
   private shortTerms: number[] = [];
   private tick = 0;
@@ -187,24 +189,26 @@ class LoudnessMeter {
   }
 
   /**
-   * One meter period. While not running the integrated measurement, LRA
-   * and the maxima take in nothing and hold their values; momentary and
-   * short-term are measured throughout.
+   * One meter period. Momentary and short-term are measured throughout
+   * from `frames`. The integration (gating blocks, short-term values for
+   * LRA, the maxima) reads `runFrames` instead, which holds running time
+   * only: a pause drops the gating block and the 3 s window in progress,
+   * and running again starts new ones, so no paused audio enters
+   * integrated loudness, LRA or a maximum.
    */
   push(z: number, running: boolean): Loudness {
     this.frames.push(z);
     if (this.frames.length > 75) this.frames.shift();
-    const mean = (n: number) => {
-      const xs = this.frames.slice(-n);
-      return xs.reduce((a, b) => a + b, 0) / xs.length;
+    const mean = (xs: readonly number[], n: number) => {
+      const w = xs.slice(-n);
+      return w.reduce((a, b) => a + b, 0) / w.length;
     };
     const lufs = (zz: number) => (zz <= 1e-12 ? null : -0.691 + 10 * Math.log10(zz));
-    const momentary = this.frames.length >= 10 ? lufs(mean(10)) : null;
-    const shortTerm = this.frames.length >= 75 ? lufs(mean(75)) : null;
+    const window = (xs: readonly number[], n: number) => (xs.length >= n ? lufs(mean(xs, n)) : null);
     const clampL = (v: number | null) => (v === null ? null : Math.round(Math.max(-120, Math.min(30, v)) * 10) / 10);
     const loudness = (): Loudness => ({
-      momentary: clampL(momentary),
-      shortTerm: clampL(shortTerm),
+      momentary: clampL(window(this.frames, 10)),
+      shortTerm: clampL(window(this.frames, 75)),
       integrated: clampL(this.cachedIntegrated),
       lra: this.cachedLra === null ? null : Math.round(Math.min(100, this.cachedLra) * 10) / 10,
       maxMomentary: this.maxMomentary,
@@ -212,10 +216,18 @@ class LoudnessMeter {
       integratedValid: true,
       lraStable: this.since >= LRA_STABLE_PERIODS,
     });
-    if (!running) return loudness();
+    if (!running) {
+      this.runFrames = [];
+      this.tick = 0;
+      return loudness();
+    }
+    this.runFrames.push(z);
+    if (this.runFrames.length > 75) this.runFrames.shift();
+    const momentary = window(this.runFrames, 10);
+    const shortTerm = window(this.runFrames, 75);
     this.tick++;
-    if (this.tick % 3 === 0 && this.frames.length >= 10) {
-      this.blocks.push(mean(10));
+    if (this.tick % 3 === 0 && this.runFrames.length >= 10) {
+      this.blocks.push(mean(this.runFrames, 10));
       if (this.blocks.length > 6000) this.blocks.shift();
     }
     if (this.tick % 25 === 0) {

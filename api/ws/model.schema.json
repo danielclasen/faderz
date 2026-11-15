@@ -1426,7 +1426,7 @@
           }
         },
         "loudness": {
-          "description": "Loudness measurement of each bus, aux and mix-minus output, keyed by its id. Not part of scenes: recalling one leaves every measurement as it is.",
+          "description": "Loudness measurement of each bus, aux and mix-minus output, keyed by its id, with an entry for every one of them in every snapshot. Not part of scenes: recalling one leaves every measurement as it is.",
           "type": "object",
           "propertyNames": {
             "$ref": "#/$defs/Id"
@@ -2659,7 +2659,7 @@
       }
     },
     "LoudnessMeasurement": {
-      "description": "Integration of an output's loudness measurement (EBU Tech 3341: start, pause and reset of the integrated measurement). While running is true, integrated loudness, LRA, maxMomentary and maxShortTerm take in the audio; while false they hold their values and take in nothing, and the 60 s before LRA is stable count only running time. Momentary and short-term loudness, true peak and the other meters are measured whether running or not. A change takes effect at its atIndex, the same sample on every replica. POST /loudness/reset restarts the measurement and leaves running as it is.",
+      "description": "Integration of an output's loudness measurement (EBU Tech 3341: start, pause and reset of the integrated measurement). While running is true, integrated loudness, LRA, maxMomentary and maxShortTerm take in the audio; while false they hold their values and take in nothing, and the 60 s before LRA is stable count only running time. Only audio of running time enters the integration: pausing drops the 400 ms gating block and the 3 s short-term window in progress, and running again starts new ones, so a gating block or a short-term value counts towards integrated loudness, LRA or a maximum only when it lies wholly in running time. Momentary and short-term loudness as displayed, true peak and the other meters are measured whether running or not; the maximum true peak a client holds goes on too, because start and pause act on the integrating loudness measurements (EBU Tech 3341, with LRA after EBU Tech 3342) and a true-peak over on an output is a fault whether or not the measurement runs. A change takes effect at its atIndex, the same sample on every replica. POST /loudness/reset restarts the measurement and leaves running as it is.",
       "type": "object",
       "required": [
         "running"
