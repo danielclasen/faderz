@@ -77,14 +77,16 @@ export class Outbox {
 
   /**
    * Queued commands in order, each marked Sent, until `limit` are in
-   * flight; one held after a not-applied answer waits for its time.
+   * flight; one held after a not-applied answer waits for its time, and
+   * one issued at or before `issuedAfter` is past its expiry and never
+   * sent.
    */
-  transmit(now = 0, limit = Infinity): CommandMessage[] {
+  transmit(now = 0, limit = Infinity, issuedAfter = -Infinity): CommandMessage[] {
     const out: CommandMessage[] = [];
     let n = this.inFlight;
     for (const e of this.entries) {
       if (n >= limit) break;
-      if (e.state !== 'Queued' || e.holdUntil > now) continue;
+      if (e.state !== 'Queued' || e.holdUntil > now || e.issuedAt <= issuedAfter) continue;
       e.state = step(COMMAND, e.state, 'transmit');
       out.push(e.msg);
       n++;

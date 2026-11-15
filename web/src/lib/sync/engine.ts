@@ -231,7 +231,11 @@ export class SyncEngine {
   private transmit(): void {
     const p = this.primary;
     if (!p?.opened || !TRANSMITTING.has(this.link)) return;
-    for (const m of this.outbox.transmit(this.clock.now(), MAX_COMMANDS_IN_FLIGHT)) this.send(p, m);
+    // A command past its expiry between two sweeps is left for the next
+    // one to drop: the contract has no command sent more than
+    // COMMAND_EXPIRY_MS after it was issued.
+    const now = this.clock.now();
+    for (const m of this.outbox.transmit(now, MAX_COMMANDS_IN_FLIGHT, now - COMMAND_EXPIRY_MS)) this.send(p, m);
   }
 
   private answer(id: string, event: 'ack' | 'reject' | 'stale'): void {

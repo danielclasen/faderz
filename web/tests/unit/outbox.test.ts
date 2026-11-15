@@ -106,6 +106,14 @@ describe('outbox', () => {
     expect(o.inFlight).toBe(3);
   });
 
+  it('never sends a command issued at or before the given expiry', () => {
+    const o = new Outbox();
+    o.enqueue(set('a', '/a', 1), false, 0);
+    o.enqueue(set('b', '/b', 1), false, 1);
+    expect(ids(o.transmit(3001, Infinity, 0))).toEqual(['b']);
+    expect(o.states()).toEqual([{ id: 'a', state: 'Queued' }, { id: 'b', state: 'Sent' }]);
+  });
+
   it('drops commands issued at or before the expiry, whatever their state', () => {
     const o = new Outbox();
     o.enqueue(set('a', '/f', 1), true, 0);

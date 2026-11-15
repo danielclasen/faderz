@@ -575,6 +575,30 @@ describe('sync engine: offline', () => {
   });
 });
 
+describe('sync engine: expiry between sweeps', () => {
+  it('never sends a queued command older than its expiry when the link comes back between two sweeps', () => {
+    const t = setup(['ws://a/ws', 'ws://b/ws']);
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 1));
+    t.sockets[0]!.drop();
+    t.clock.advance(100);
+    t.engine.input({ type: 'set', path: '/channels/ch1/mute', value: true });
+    // Back 3050 ms after the set, before the sweep at 3250 drops it.
+    t.clock.advance(3050);
+    const s = t.sockets.filter((x) => x.onopen && !x.closed).at(-1)!;
+    s.open();
+    s.deliver(replicas(R2));
+    s.deliver(resume(R2, 1));
+    expect(t.engine.link).toBe('Live');
+    expect(s.ofType('set')).toEqual([]);
+    t.clock.advance(HEARTBEAT_MS);
+    expect(t.engine.outbox.size).toBe(0);
+    expect(t.tick()!.notices).toContainEqual({ kind: 'expired', paths: ['/channels/ch1/mute'] });
+    expect(s.ofType('set')).toEqual([]);
+  });
+});
+
 describe('sync engine: read index', () => {
   it('sends its revision on promote and resync and never applies an older snapshot or resume', () => {
     const { engine, primary, standby, clock } = live();
