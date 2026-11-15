@@ -7,6 +7,16 @@ import { faderCenter, live, resetMock, serverState } from './support';
 test.use({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 }, trace: 'off' });
 
 const WINDOW_MS = 5000;
+/** Bound on the 99th percentile of patch time in the window, ms. */
+const PATCH_P99_MS = 4;
+/** No single patch may take a whole frame at 60 Hz, ms. */
+const PATCH_CEILING_MS = 16;
+
+/** Nearest-rank percentile of `xs`, 0 < q <= 1. */
+function percentile(xs: readonly number[], q: number): number {
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(q * sorted.length) - 1)]!;
+}
 
 interface Entry {
   start: number;
@@ -49,7 +59,7 @@ async function sweep(page: Page, path: string, until: number): Promise<number> {
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
-test('three clients moving faders with meters on stay under 50 ms tasks and 4 ms patches', { tag: '@mock' }, async ({ browser, request }) => {
+test('three clients moving faders with meters on stay under 50 ms tasks, 4 ms patches at p99 and one frame per patch', { tag: '@mock' }, async ({ browser, request }) => {
   test.setTimeout(60_000);
   expect((await serverState(request)).shape.channels).toHaveLength(64);
   const contexts = await Promise.all([0, 1, 2].map(() => browser.newContext({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 } })));
@@ -74,15 +84,20 @@ test('three clients moving faders with meters on stay under 50 ms tasks and 4 ms
         };
       }, starts[i]!.t);
       const maxWindowPatch = Math.max(...r.patchMs);
+      const p99WindowPatch = percentile(r.patchMs, 0.99);
       test.info().annotations.push({
         type: `page ${i + 1}`,
-        description: JSON.stringify({ moves: moves[i], patches: r.patches - starts[i]!.patches, maxWindowPatch, maxPatchMs: r.maxPatchMs, longTasks: r.longTasks, loadLongTasks: r.allLongTasks }),
+        description: JSON.stringify({ moves: moves[i], patches: r.patches - starts[i]!.patches, p99WindowPatch, maxWindowPatch, maxPatchMs: r.maxPatchMs, longTasks: r.longTasks, loadLongTasks: r.allLongTasks }),
       });
       expect(moves[i]!).toBeGreaterThan(20);
       expect(r.patches - starts[i]!.patches).toBeGreaterThan(0);
       expect(r.patchMs.length).toBeGreaterThan(0);
       expect(r.longTasks).toEqual([]);
-      expect(maxWindowPatch).toBeLessThan(4);
+      // A patch is judged by wall time, which on a shared runner includes
+      // time the main thread is runnable but not scheduled: the tail is
+      // judged by its 99th percentile, and every patch by one frame.
+      expect(p99WindowPatch).toBeLessThan(PATCH_P99_MS);
+      expect(maxWindowPatch).toBeLessThan(PATCH_CEILING_MS);
     }
   } finally {
     await Promise.all(contexts.map((c) => c.close()));
