@@ -2,8 +2,9 @@
 // origins, an ack or an error. Bounded and ordered. A set of a continuous
 // control (contract/continuous.ts) that has not been sent yet is replaced
 // by a newer set of the same control; every other command keeps its
-// place. After a failover, a snapshot or a not-applied answer a sent
-// command is queued again with its id, which the server applies at most
+// place. After a failover, a not-applied answer, or a snapshot answering
+// a hello or resync it was sent before, a sent command is queued again
+// with its id, which the server applies at most
 // once; nothing else sends it again, as the server answers every command
 // it reads, so a sent command counts in flight until it is answered or
 // dropped. A command still unanswered at its expiry is
@@ -26,6 +27,8 @@ export interface OutboxEntry {
   readonly issuedAt: number;
   /** Not sent again before this clock time (after a not-applied answer). */
   holdUntil: number;
+  /** Sync generation it was last sent in (transmit's `generation`). */
+  sentIn: number;
 }
 
 export type EnqueueResult =
@@ -73,7 +76,7 @@ export class Outbox {
       }
     }
     if (this.entries.length >= this.capacity) return { accepted: false };
-    this.entries.push({ msg, continuous, state: 'Queued', issuedAt: now, holdUntil: -Infinity });
+    this.entries.push({ msg, continuous, state: 'Queued', issuedAt: now, holdUntil: -Infinity, sentIn: -Infinity });
     this.count(msg, 1);
     return { accepted: true, superseded };
   }
@@ -82,15 +85,16 @@ export class Outbox {
    * Queued commands in order, each marked Sent, until `limit` are in
    * flight; one held after a not-applied answer waits for its time, and
    * one issued at or before `issuedAfter` is past its expiry and never
-   * sent.
+   * sent. Each one sent is stamped with `generation`.
    */
-  transmit(now = 0, limit = Infinity, issuedAfter = -Infinity): CommandMessage[] {
+  transmit(now = 0, limit = Infinity, issuedAfter = -Infinity, generation = 0): CommandMessage[] {
     const out: CommandMessage[] = [];
     let n = this.inFlight;
     for (const e of this.entries) {
       if (n >= limit) break;
       if (e.state !== 'Queued' || e.holdUntil > now || e.issuedAt <= issuedAfter) continue;
       e.state = step(COMMAND, e.state, 'transmit');
+      e.sentIn = generation;
       out.push(e.msg);
       n++;
     }
@@ -129,10 +133,14 @@ export class Outbox {
     return out;
   }
 
-  /** The connection failed: every sent command is queued again. Returns how many. */
-  failover(): number {
+  /**
+   * Every sent command is queued again (the connection failed), or only
+   * those sent in a generation below `sentBefore`. Returns how many.
+   */
+  failover(sentBefore = Infinity): number {
     let n = 0;
     for (const e of this.entries) {
+      if (e.sentIn >= sentBefore) continue;
       const next = step(COMMAND, e.state, 'failover');
       if (next !== e.state) n++;
       e.state = next;

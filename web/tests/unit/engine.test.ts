@@ -369,6 +369,9 @@ describe('sync engine: commands', () => {
     const { engine, primary, tick } = live();
     engine.input({ type: 'set', path: F1, value: -5 });
     const [set] = primary.ofType('set');
+    // A revision gap: the resync is answered with a snapshot.
+    primary.deliver(delta(R1, 12, {}));
+    expect(primary.ofType('resync')).toHaveLength(1);
     primary.deliver(snapshot(R1, 15));
     const sets = primary.ofType('set');
     expect(sets).toHaveLength(2);
@@ -378,6 +381,23 @@ describe('sync engine: commands', () => {
     tick();
     primary.deliver(delta(R1, 16, { changes: [{ path: F1, value: -9 }] }));
     expect(tick()?.changes).toContainEqual([F1, -9]);
+  });
+
+  it('resends after a snapshot only commands sent before the resync it answers', () => {
+    // A command sent after the resync is read after it and answered after
+    // its snapshot: a copy would hold a second place in the server's
+    // 64-command read window that the client never counts.
+    const { engine, primary } = live();
+    engine.input({ type: 'set', path: F1, value: -5 });
+    primary.deliver(delta(R1, 12, {}));
+    expect(engine.link).toBe('Resyncing');
+    engine.input({ type: 'set', path: F2, value: -6 });
+    const [before, after] = primary.ofType('set');
+    expect(after!.path).toBe(F2);
+    primary.deliver(snapshot(R1, 15));
+    const sets = primary.ofType('set');
+    expect(sets.map((m) => m.id)).toEqual([before!.id, after!.id, before!.id]);
+    expect(engine.outbox.inFlight).toBe(2);
   });
 
   it('answers a command from a delta seen on the standby, so it is not resent', () => {
@@ -1032,5 +1052,19 @@ describe('sync engine: meters', () => {
     primary.deliver(frame(1, other));
     primary.deliver(frame(2, other));
     expect(primary.ofType('resync')).toEqual([{ type: 'resync', lastRevision: 10, epoch: EPOCH, full: true }]);
+  });
+
+  it('sends no layout resync while a resync is unanswered, and sends it once live again', () => {
+    // One request at a time: a snapshot then answers the last one sent,
+    // which tells which commands it answers for.
+    const { primary } = live();
+    primary.deliver(delta(R1, 12, {}));
+    const other = deriveMeterLayout(exampleShape(3));
+    primary.deliver(frame(1, other));
+    expect(primary.ofType('resync')).toHaveLength(1);
+    primary.deliver(resume(R1, 12, [delta(R1, 11, {}), delta(R1, 12, {})]));
+    primary.deliver(frame(2, other));
+    expect(primary.ofType('resync').at(-1)).toEqual({ type: 'resync', lastRevision: 12, epoch: EPOCH, full: true });
+    expect(primary.ofType('resync')).toHaveLength(2);
   });
 });

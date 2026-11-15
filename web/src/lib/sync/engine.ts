@@ -154,6 +154,8 @@ export class SyncEngine {
   private standbyAttempts = 0;
   private lastPrimaryReplica: string | null = null;
   private failoverInfo: FailoverInfo | null = null;
+  /** Hellos and resyncs sent on primaries: the generation a command is sent in. */
+  private syncRequests = 0;
   private lastSync: SyncStatus['lastSync'] = null;
   private inputs = 0;
   private cancelRetry: (() => void) | null = null;
@@ -251,7 +253,7 @@ export class SyncEngine {
     // one to drop: the contract has no command sent more than
     // COMMAND_EXPIRY_MS after it was issued.
     const now = this.clock.now();
-    for (const m of this.outbox.transmit(now, MAX_COMMANDS_IN_FLIGHT, now - COMMAND_EXPIRY_MS)) this.send(p, m);
+    for (const m of this.outbox.transmit(now, MAX_COMMANDS_IN_FLIGHT, now - COMMAND_EXPIRY_MS, this.syncRequests)) this.send(p, m);
   }
 
   private answer(id: string, event: 'ack' | 'reject' | 'stale'): void {
@@ -355,7 +357,9 @@ export class SyncEngine {
   }
 
   private send(link: Link, msg: ClientMessage): void {
-    if (link.opened) link.socket.send(JSON.stringify(msg));
+    if (!link.opened) return;
+    if (link === this.primary && (msg.type === 'hello' || msg.type === 'resync')) this.syncRequests++;
+    link.socket.send(JSON.stringify(msg));
   }
 
   private opened(link: Link): void {
@@ -611,9 +615,14 @@ export class SyncEngine {
     this.dirty.clear();
     this.ownersDirty.clear();
     this.meters = null;
-    // A snapshot can skip the deltas that answered sent commands; they go
-    // out again with their ids and the server answers each one.
-    this.outbox.failover();
+    // A snapshot can skip the deltas that answered commands sent before the
+    // hello or resync it answers; they go out again with their ids and the
+    // server answers each one. A command sent after that request is read
+    // after it and answered after the snapshot, so it is not sent again.
+    // The request it answers is the last one sent: the engine sends a
+    // resync only once the previous request is answered or its
+    // connection is left.
+    this.outbox.failover(this.syncRequests);
     this.primarySynced('snapshot');
   }
 
@@ -786,6 +795,10 @@ export class SyncEngine {
       this.meters = { replica: f.replica, sequence: f.sequence, values: flattenMeterFrame(layout, f) };
     } catch (e) {
       if (!(e instanceof MeterFrameError) || e.reason !== 'fingerprint' || this.layoutResyncSent) return;
+      // Not while a hello or resync is unanswered: its answer may bring
+      // the new layout, and one request at a time tells a snapshot which
+      // commands it answers for (primarySnapshot).
+      if (this.link !== 'Live' && this.link !== 'Suspect') return;
       this.layoutResyncSent = true;
       this.resync(true);
     }
