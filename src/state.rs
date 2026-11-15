@@ -137,9 +137,18 @@ impl Holder {
     }
 }
 
-/// Answers kept per session, the newest; as many as the dedup table keeps
-/// command ids of one session, so a duplicate finds its answer.
-const ANSWERS_KEPT: usize = 1024;
+/// Answers kept per session, the newest: as many as samplez-replica's
+/// dedup table keeps command ids of one session. Only some commands get
+/// one, so every command id the table still answers as a duplicate
+/// finds its answer; the table also retires ids by age and by its total,
+/// which only shortens what it holds.
+fn answers_kept() -> usize {
+    samplez_replica::dedup::Limits::defaults(crate::replica::RATE).max_session_commands
+}
+
+/// Tally sources the state holds at most: a source once named stays,
+/// `off` after a `PUT` that leaves it out.
+pub const MAX_TALLY_SOURCES: usize = 256;
 
 #[derive(Default)]
 pub struct Mixer {
@@ -289,7 +298,7 @@ impl Mixer {
 
     fn record(&mut self, session: &SessionKey, id: &str, answer: Answer) {
         let kept = self.answers.entry(session.clone()).or_default();
-        if kept.len() == ANSWERS_KEPT {
+        if kept.len() >= answers_kept() {
             kept.pop_front();
         }
         kept.push_back((id.to_owned(), answer));
@@ -338,7 +347,6 @@ impl Mixer {
         let afv = all
             .iter()
             .any(|(p, _)| p.starts_with("/afv/") || p.starts_with("/tally/"));
-        let opens = afv.then(|| self.afv_open());
         let mut changed: Vec<(String, Value)> = Vec::new();
         for (path, value) in all {
             if self.state.pointer(&path) != Some(&value) {
@@ -347,9 +355,9 @@ impl Mixer {
                 changed.push((path, value));
             }
         }
-        if let Some(before) = opens {
+        if afv {
             for (channel, open) in self.afv_open() {
-                if before.get(&channel) != Some(&open) {
+                if self.state["afv"][&channel]["open"] != open {
                     let path = format!("/afv/{channel}/open");
                     set_at(&mut self.state, &path, json!(open));
                     changed.push((path, json!(open)));
@@ -585,10 +593,12 @@ impl Mixer {
                     if safe.as_array().is_some_and(|s| s.iter().any(|x| x == g)) {
                         continue;
                     }
+                    // A scene keeps the ids of the shape it was stored in.
                     if self
                         .state
                         .pointer(&path)
                         .is_some_and(|current| *current != v)
+                        && self.check_references(&path, &v).is_ok()
                     {
                         written.push((path, v));
                     }
@@ -599,7 +609,21 @@ impl Mixer {
         changed(self.write(written))
     }
 
-    fn tally(&mut self, sources: &BTreeMap<String, String>, replace: bool) -> Effect<Edits> {
+    fn tally(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        sources: &BTreeMap<String, String>,
+        replace: bool,
+    ) -> Effect<Edits> {
+        let known = self.state["tally"].as_object().map_or(0, Map::len);
+        let new = sources
+            .keys()
+            .filter(|s| self.state["tally"].get(s.as_str()).is_none());
+        if known + new.count() > MAX_TALLY_SOURCES {
+            let message = format!("at most {MAX_TALLY_SOURCES} tally sources");
+            return self.refuse(session, id, Answer::Invalid { message });
+        }
         let mut all = sources.clone();
         if replace {
             for name in self.state["tally"]
@@ -637,13 +661,14 @@ impl Mixer {
                 _ if group == "recallSafe" => {
                     tokens(&path).get(1).is_some_and(|id| shape.recallable(id))
                 }
-                Some(old) => {
-                    std::mem::discriminant(old) == std::mem::discriminant(&value)
-                        && check(
-                            &contract().state_change,
-                            &json!({ "path": path, "value": value }),
-                        )
-                        .is_ok()
+                // The schema types the value by its path, a nullable one
+                // included.
+                Some(_) => {
+                    check(
+                        &contract().state_change,
+                        &json!({ "path": path, "value": value }),
+                    )
+                    .is_ok()
                         && self.check_references(&path, &value).is_ok()
                 }
                 None => false,
@@ -687,8 +712,10 @@ impl Product for Mixer {
             Command::DeleteScene { id, scene } => self.delete_scene(&session, id, scene),
             Command::Recall { id, scene, at } => self.recall(&session, id, scene, at),
             Command::Tally {
-                sources, replace, ..
-            } => self.tally(sources, *replace),
+                id,
+                sources,
+                replace,
+            } => self.tally(&session, id, sources, *replace),
         }
     }
 
@@ -1491,6 +1518,8 @@ mod tests {
                 ("/vcas/vca1/members", json!(["ch1", "ch2"])),
             ],
         );
+        touch(&mut m, "a", 1, "/channels/ch2/fader");
+        touch(&mut m, "a", 1, "/channels/ch1/fader");
         let mut smaller = small();
         smaller["channels"].as_array_mut().unwrap().remove(1);
         smaller["channels"][1]["width"] = json!(1);
@@ -1513,5 +1542,145 @@ mod tests {
             "{dropped:?}"
         );
         check(&contract().state, back.state()).unwrap();
+        let owners = back.owners();
+        let owned: Vec<&String> = owners.as_object().unwrap().keys().collect();
+        assert_eq!(
+            owned,
+            ["/channels/ch1/fader"],
+            "no owner of a control the shape lost"
+        );
+    }
+
+    /// Controls whose initial value is null load back with what was set.
+    #[test]
+    fn nullable_controls_load_back() {
+        let mut m = mixer();
+        patch(
+            &mut m,
+            "p",
+            &[
+                ("/afv/ch1/enabled", json!(true)),
+                ("/afv/ch1/source", json!("CAM1")),
+                ("/mixMinus/mm1/interrupt/source", json!("ch2")),
+            ],
+        );
+        let mut back = mixer();
+        back.load(&m.save()).unwrap();
+        assert!(back.dropped().is_empty(), "{:?}", back.dropped());
+        assert_eq!(*at(&back, "/afv/ch1/source"), json!("CAM1"));
+        assert_eq!(*at(&back, "/mixMinus/mm1/interrupt/source"), json!("ch2"));
+    }
+
+    #[test]
+    fn forget_drops_the_answers_of_a_session() {
+        let mut m = mixer();
+        touch(&mut m, "a", 1, "/channels/ch1/fader");
+        set(&mut m, "b", 1, "/channels/ch1/fader", json!(0));
+        assert!(m.answer(&origin("b").key(), "b-1").is_some());
+        m.forget(&origin("b").key());
+        assert!(m.answer(&origin("b").key(), "b-1").is_none());
+    }
+
+    /// A set refused for its value leaves the seq of its control alone.
+    #[test]
+    fn a_refused_set_does_not_take_its_seq() {
+        let mut m = mixer();
+        assert_eq!(
+            set(&mut m, "a", 5, "/channels/ch1/fader", json!(99)),
+            Effect::Unchanged
+        );
+        assert!(matches!(
+            m.answer(&origin("a").key(), "a-5"),
+            Some(Answer::Invalid { .. })
+        ));
+        assert!(matches!(
+            set(&mut m, "a", 5, "/channels/ch1/fader", json!(-1)),
+            Effect::Changed(_)
+        ));
+    }
+
+    /// A recall writes no id the current shape lacks.
+    #[test]
+    fn a_recall_skips_ids_the_shape_lacks() {
+        let mut m = mixer();
+        let scene = store(&mut m, "s1", None, "Opening");
+        m.scenes.get_mut(&scene).unwrap()["vcas"]["vca1"]["members"] = json!(["ch1", "gone"]);
+        m.scenes.get_mut(&scene).unwrap()["vcas"]["vca1"]["offset"] = json!(-3);
+        let at_ = "2026-11-15T12:01:00.000Z".to_owned();
+        let v = values(&rest(
+            &mut m,
+            Command::Recall {
+                id: "r".into(),
+                scene,
+                at: at_,
+            },
+        ));
+        assert!(v.contains(&("/vcas/vca1/offset".into(), json!(-3))));
+        assert_eq!(*at(&m, "/vcas/vca1/members"), json!([]));
+    }
+
+    /// The stage follows bindings and tally whatever it reads now, as the
+    /// mock does.
+    #[test]
+    fn a_tally_reasserts_a_stage_that_contradicts_it() {
+        let mut m = mixer();
+        set_at(&mut m.state, "/afv/ch1/open", json!(false));
+        let sources = BTreeMap::from([("CAM9".to_owned(), "program".to_owned())]);
+        let v = values(&rest(
+            &mut m,
+            Command::Tally {
+                id: "t".into(),
+                sources,
+                replace: false,
+            },
+        ));
+        assert!(v.contains(&("/afv/ch1/open".into(), json!(true))), "{v:?}");
+    }
+
+    #[test]
+    fn tally_sources_are_bounded() {
+        let mut m = mixer();
+        let sources: BTreeMap<String, String> = (0..MAX_TALLY_SOURCES)
+            .map(|n| (format!("CAM{n}"), "off".to_owned()))
+            .collect();
+        assert!(matches!(
+            rest(
+                &mut m,
+                Command::Tally {
+                    id: "t1".into(),
+                    sources,
+                    replace: false
+                }
+            ),
+            Effect::Changed(_)
+        ));
+        let one = BTreeMap::from([("CAM0".to_owned(), "program".to_owned())]);
+        assert!(matches!(
+            rest(
+                &mut m,
+                Command::Tally {
+                    id: "t2".into(),
+                    sources: one,
+                    replace: false
+                }
+            ),
+            Effect::Changed(_)
+        ));
+        let more = BTreeMap::from([("NEW".to_owned(), "program".to_owned())]);
+        assert_eq!(
+            rest(
+                &mut m,
+                Command::Tally {
+                    id: "t3".into(),
+                    sources: more,
+                    replace: false
+                }
+            ),
+            Effect::Unchanged
+        );
+        assert!(matches!(
+            m.answer(&rest_key(), "t3"),
+            Some(Answer::Invalid { .. })
+        ));
     }
 }
