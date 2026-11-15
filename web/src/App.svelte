@@ -324,9 +324,13 @@
   .skip a:focus {
     left: 8px;
   }
+  /* Sized by the header alone: without inline-size containment the
+     unbroken width of a notice or banner counts in the header's
+     min-content width, and a phone widens its layout viewport to fit. */
   .mid {
     flex: 1 1 0;
     min-width: 0;
+    contain: inline-size;
   }
   .right {
     flex: 1 0 auto;
