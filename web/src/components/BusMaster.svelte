@@ -32,9 +32,15 @@
   const tone = $derived(mixer.state!.tone);
   /** Line-up tone replaces this output's programme. */
   const toned = $derived(tone.on && tone.targets.includes(element.id));
+  /**
+   * A master of more than two legs grows by LEG_W per leg, so each leg's
+   * column under the meter fits its label ("LFE", "Lrs") at 8.5 px.
+   */
+  const LEG_W = 15;
+  const WIDE_BASE_W = 82;
 </script>
 
-<section class="master" class:wide={element.width > 2} class:selected aria-label={`${element.name} master`} data-master={element.id}>
+<section class="master" class:selected style:width={element.width > 2 ? `${WIDE_BASE_W + element.width * LEG_W}px` : undefined} aria-label={`${element.name} master`} data-master={element.id}>
   <button class="head" class:toned onclick={() => onselect?.(element.id)} disabled={!onselect} aria-pressed={selected} use:tip={element.name}>
     <span class="name">{element.name}</span>
     <!-- Both tags keep their place, shown or not: the name never rewraps. -->
@@ -75,9 +81,6 @@
     background: var(--panel);
     border-left: 1px solid var(--line);
     min-height: 0;
-  }
-  .master.wide {
-    width: 136px;
   }
   .master.selected {
     box-shadow: inset 0 2px 0 var(--accent);

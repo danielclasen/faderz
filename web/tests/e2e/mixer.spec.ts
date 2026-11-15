@@ -567,7 +567,10 @@ test('labels every leg of a 5.1 master under its own bar', async ({ page }) => {
     const m = el.querySelector<HTMLElement>('[data-meter]')!.getBoundingClientRect();
     return { x: m.x, w: m.width, labels: [...el.querySelectorAll<HTMLElement>('.legs span')].map((s) => {
       const r = s.getBoundingClientRect();
-      return { text: s.textContent, centre: r.x + r.width / 2 };
+      const range = document.createRange();
+      range.selectNodeContents(s);
+      const t = range.getBoundingClientRect();
+      return { text: s.textContent, centre: r.x + r.width / 2, left: t.left, right: t.right };
     }) };
   });
   // Bar geometry of meters/layer.ts: an 18 px scale, then equal bars 1 px apart.
@@ -578,6 +581,9 @@ test('labels every leg of a 5.1 master under its own bar', async ({ page }) => {
     const left = geometry.x + 18 + i * (bw + 1);
     expect(l.centre, l.text!).toBeGreaterThanOrEqual(left);
     expect(l.centre, l.text!).toBeLessThanOrEqual(left + bw);
+    // The text itself stays inside its column: no label touches the next.
+    expect(l.left, l.text!).toBeGreaterThanOrEqual(left - 0.5);
+    expect(l.right, l.text!).toBeLessThanOrEqual(left + bw + 0.5);
   });
 });
 
