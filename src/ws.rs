@@ -8,11 +8,13 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::future::BoxFuture;
 use samplez_replica::entry::SessionKey;
 use samplez_service::replica::{Ack, Begin, NotApplied, Resolution};
-use samplez_service::ws::{Admission, Answer, CatchUp, ClientQueue, Encode, Reply, serve_client};
+use samplez_service::ws::{
+    Admission, Answer, CatchUp, ClientQueue, Encode, Frame, Reply, To, serve_client,
+};
 use samplez_service::{Connect, Owner, OwnerHandle, Position};
 use serde_json::{Value, json};
 
-use crate::app::{App, splice};
+use crate::app::{App, SELECTIONS, splice};
 use crate::contract::{check, contract};
 use crate::state::{self, Action, Command, Control};
 
@@ -36,6 +38,8 @@ struct Hello {
 /// Serves one WebSocket client until it closes or fails.
 pub async fn serve(app: Arc<App>, socket: WebSocket, connect: Connect) {
     let queue = app.hub.subscribe(&connect.owner);
+    let session = SessionKey::from(&connect.owner);
+    app.connected(&session);
     let hello = Arc::new(Mutex::new(Hello::default()));
     let encoder = Encoder {
         app: app.clone(),
@@ -51,6 +55,7 @@ pub async fn serve(app: Arc<App>, socket: WebSocket, connect: Connect) {
         |message, admission| on_message(&app, &connect, &queue, &hello, message, admission),
     )
     .await;
+    app.disconnected(&session);
     tracing::debug!(connection = %connect.owner.connection, ?ended, "connection ended");
 }
 
@@ -219,7 +224,18 @@ fn on_message<'a>(
         let mut h = hello.lock().expect("hello lock poisoned");
         h.kind = msg["kind"].as_str().map(str::to_owned);
         h.greet = true;
+        drop(h);
+        // Meter frames and control requests go to primary connections only.
         queue.set_primary(msg["mode"] == "primary");
+        // Queued now, sent once the answer to the hello has gone out.
+        let to = To::Connection {
+            principal: &connect.owner.principal,
+            connection: &connect.owner.connection,
+        };
+        app.hub.send(
+            to,
+            Frame::Status(SELECTIONS, app.selections_message().into()),
+        );
         return Reply::CatchUp(CatchUp {
             since: position(&msg),
             full: false,
@@ -245,6 +261,24 @@ fn on_message<'a>(
             grant(queue, kept);
             Reply::Promote(position(&msg))
         }
+        "select" => {
+            let owner = owner_record(&connect.owner, &client_kind);
+            app.select(
+                SessionKey::from(&connect.owner),
+                owner,
+                msg["element"].as_str(),
+            );
+            Reply::Now(None)
+        }
+        "request" => {
+            let (app, asker) = (app.clone(), owner_record(&connect.owner, &client_kind));
+            let (from, path) = (
+                SessionKey::from(&connect.owner),
+                msg["path"].as_str().unwrap_or_default().to_owned(),
+            );
+            tokio::spawn(async move { app.request(from, asker, path).await });
+            Reply::Now(None)
+        }
         "resync" => Reply::CatchUp(CatchUp {
             since: position(&msg),
             full: msg["full"] == true,
@@ -260,11 +294,6 @@ fn on_message<'a>(
             Reply::Now(None)
         }
         "set" | "touch" | "release" => control(app, connect, &client_kind, &msg, admission),
-        // Not commands and not answered (client-message.schema.json Select,
-        // Request). This replica does not deliver them yet: sending a
-        // selections or controlRequest message to other connections needs
-        // a server-initiated text frame that samplez-service does not have.
-        "select" | "request" => Reply::Now(None),
         // A type the contract has but this server does not handle: refused,
         // never taken for a command.
         _ => Reply::Now(Some(error(

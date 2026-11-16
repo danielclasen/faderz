@@ -218,6 +218,11 @@ impl Mixer {
             .map(|(_, a)| a)
     }
 
+    /// The session that owns `path`, when one does.
+    pub fn owner_of(&self, path: &str) -> Option<SessionKey> {
+        self.owners.get(path).map(Holder::key)
+    }
+
     /// The leaves the last [`Product::load`] dropped.
     pub fn dropped(&self) -> &[String] {
         &self.dropped

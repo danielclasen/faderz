@@ -104,9 +104,20 @@ impl Client {
             .unwrap();
     }
 
-    /// The next message other than a heartbeat, checked against the
-    /// contract, within 5 s: heartbeats do not extend the wait.
+    /// The next message other than a heartbeat or `selections`, checked
+    /// against the contract.
     async fn next(&mut self) -> Value {
+        loop {
+            let value = self.recv().await;
+            if value["type"] != "selections" {
+                return value;
+            }
+        }
+    }
+
+    /// The next message other than a heartbeat, `selections` included,
+    /// within 5 s: heartbeats do not extend the wait.
+    async fn recv(&mut self) -> Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let message = tokio::time::timeout_at(deadline, self.ws.next())
@@ -127,11 +138,26 @@ impl Client {
         }
     }
 
+    /// The messages other than heartbeats within `wait`, pings answered
+    /// meanwhile so the server keeps the connection.
+    async fn during(&mut self, wait: Duration) -> Vec<Value> {
+        let end = tokio::time::Instant::now() + wait;
+        let mut got = Vec::new();
+        while let Ok(m) = tokio::time::timeout_at(end, self.recv()).await {
+            got.push(m);
+        }
+        got
+    }
+
     /// The next message of `kind` within [`WAIT`], skipping others.
     async fn next_of(&mut self, kind: &str) -> Value {
         let wait = async {
             loop {
-                let m = self.next().await;
+                let m = if kind == "selections" {
+                    self.recv().await
+                } else {
+                    self.next().await
+                };
                 if m["type"] == kind {
                     return m;
                 }
@@ -143,8 +169,12 @@ impl Client {
     }
 
     async fn hello(&mut self) -> Value {
+        self.hello_as("primary").await
+    }
+
+    async fn hello_as(&mut self, mode: &str) -> Value {
         let session = self.session.clone();
-        self.send(json!({ "type": "hello", "session": session, "kind": "ui", "mode": "primary" }))
+        self.send(json!({ "type": "hello", "session": session, "kind": "ui", "mode": mode }))
             .await;
         assert_eq!(
             self.next().await["type"],
@@ -204,7 +234,7 @@ async fn a_client_gets_the_state_and_its_own_writes_as_deltas() {
         .command("set", "/channels/ch1/fader", Some(json!(-3)))
         .await;
     let delta = a.answer(&id).await;
-    assert_eq!(delta["type"], "delta");
+    assert_eq!(delta["type"], "delta", "{delta}");
     assert_eq!(delta["revision"], 1);
     assert_eq!(
         delta["changes"],
@@ -717,5 +747,185 @@ async fn a_viewer_cannot_write() {
         (e["code"].as_u64(), e["message"].as_str()),
         (Some(400), Some("operator role required"))
     );
+    server.stop().await;
+}
+
+const SESSION_C: &str = "session-c-0123456789abcdef";
+
+/// A selection reaches every connection, the selecting one's included; one
+/// of an element the shape lacks changes nothing; a connection opened later
+/// gets the selections after its snapshot, and a selection goes with its
+/// session's last connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selections_reach_every_connection() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    assert_eq!(
+        a.next_of("selections").await["selections"],
+        json!([]),
+        "after the snapshot"
+    );
+    let mut b = Client::connect(&server, SESSION_B).await;
+    b.hello().await;
+    b.next_of("selections").await;
+    a.send(json!({ "type": "select", "element": "nope" })).await;
+    a.send(json!({ "type": "select", "element": "ch2" })).await;
+    let seen = b.next_of("selections").await;
+    let list = seen["selections"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "{seen}");
+    assert_eq!(list[0]["element"], "ch2");
+    assert_eq!(
+        list[0]["session"]["handle"],
+        samplez_service::OwnerHandle::of(SESSION_A).as_str()
+    );
+    let mut c = Client::connect(&server, SESSION_C).await;
+    c.hello().await;
+    assert_eq!(
+        c.next_of("selections").await["selections"][0]["element"],
+        "ch2"
+    );
+    a.send(json!({ "type": "select", "element": null })).await;
+    assert_eq!(b.next_of("selections").await["selections"], json!([]));
+    // A selection goes with the last connection of its session, at once
+    // rather than with the lease a second or more later.
+    let mut a2 = Client::connect(&server, SESSION_A).await;
+    a2.hello_as("standby").await;
+    let a2 = keep_open(a2);
+    a.send(json!({ "type": "select", "element": "ch1" })).await;
+    assert_eq!(
+        b.next_of("selections").await["selections"][0]["element"],
+        "ch1"
+    );
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut d = Client::connect(&server, "session-d-0123456789abcdef").await;
+    d.hello().await;
+    assert_eq!(
+        d.next_of("selections").await["selections"][0]["element"],
+        "ch1",
+        "a's standby connection is still open"
+    );
+    a2.abort();
+    let gone = tokio::time::timeout(Duration::from_millis(900), b.next_of("selections"))
+        .await
+        .expect("gone with the last connection");
+    assert_eq!(gone["selections"], json!([]));
+    server.stop().await;
+}
+
+/// A request for a control another session holds reaches that session's
+/// primary connections only, a standby once promoted, and a repeat within
+/// 3 s is dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_control_request_reaches_the_holders_primary_connections() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let path = "/channels/ch1/fader";
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    let mut standby = Client::connect(&server, SESSION_A).await;
+    let snapshot = standby.hello_as("standby").await;
+    let t = a.command("touch", path, None).await;
+    a.answer(&t).await;
+    let mut b = Client::connect(&server, SESSION_B).await;
+    b.hello().await;
+    b.send(json!({ "type": "request", "path": path })).await;
+    let r = a.next_of("controlRequest").await;
+    assert_eq!(r["path"], path);
+    assert_eq!(
+        r["from"]["handle"],
+        samplez_service::OwnerHandle::of(SESSION_B).as_str()
+    );
+    // The standby got the touch's delta but no request.
+    let delta = standby.next_of("delta").await;
+    assert!(delta["owners"].is_array(), "{delta}");
+    b.send(json!({ "type": "request", "path": path })).await;
+    let epoch = snapshot["epoch"].clone();
+    standby
+        .send(json!({ "type": "promote", "lastRevision": 1, "epoch": epoch }))
+        .await;
+    let mut c = Client::connect(&server, SESSION_C).await;
+    c.hello().await;
+    c.send(json!({ "type": "request", "path": path })).await;
+    let promoted = standby.next_of("controlRequest").await;
+    assert_eq!(
+        promoted["from"]["handle"],
+        samplez_service::OwnerHandle::of(SESSION_C).as_str(),
+        "b's repeat was dropped"
+    );
+    assert_eq!(
+        a.next_of("controlRequest").await["from"]["handle"],
+        samplez_service::OwnerHandle::of(SESSION_C).as_str(),
+        "the primary connection got c's request as well"
+    );
+    // A request of the holder itself, and one for a control nobody holds,
+    // go nowhere, and c's repeat within 3 s is dropped; the one after them
+    // goes out.
+    a.send(json!({ "type": "request", "path": path })).await;
+    b.send(json!({ "type": "request", "path": "/channels/ch2/fader" }))
+        .await;
+    c.send(json!({ "type": "request", "path": path })).await;
+    let wait = Duration::from_millis(3100);
+    let (got, _, _) = tokio::join!(a.during(wait), b.during(wait), c.during(wait));
+    let requests: Vec<&Value> = got
+        .iter()
+        .filter(|m| m["type"] == "controlRequest")
+        .collect();
+    assert!(requests.is_empty(), "{requests:?}");
+    c.send(json!({ "type": "request", "path": path })).await;
+    assert_eq!(
+        a.next_of("controlRequest").await["from"]["handle"],
+        samplez_service::OwnerHandle::of(SESSION_C).as_str()
+    );
+    server.stop().await;
+}
+
+/// Keeps `client` open, answering pings, until the task is aborted, which
+/// closes it.
+fn keep_open(mut client: Client) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            client.during(Duration::from_secs(1)).await;
+        }
+    })
+}
+
+/// A selection made right after the hello stays, though its session has
+/// no lease yet: samplez renews the leases of live sessions once a second.
+/// Four sessions select a quarter of a second apart, so some select before
+/// their first renewal whatever its phase.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_selection_made_right_after_the_hello_stays() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let mut clients = Vec::new();
+    for (session, element) in [
+        (SESSION_A, "ch1"),
+        (SESSION_B, "ch2"),
+        (SESSION_C, "pgm"),
+        ("session-d-0123456789abcdef", "mm1"),
+    ] {
+        let mut c = Client::connect(&server, session).await;
+        c.hello().await;
+        c.send(json!({ "type": "select", "element": element }))
+            .await;
+        clients.push(keep_open(c));
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(1250)).await;
+    let mut late = Client::connect(&server, "session-e-0123456789abcdef").await;
+    late.hello().await;
+    let seen = late.next_of("selections").await;
+    let mut elements: Vec<&str> = seen["selections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["element"].as_str().unwrap())
+        .collect();
+    elements.sort_unstable();
+    assert_eq!(elements, ["ch1", "ch2", "mm1", "pgm"], "{seen}");
+    clients.iter().for_each(|c| c.abort());
     server.stop().await;
 }
