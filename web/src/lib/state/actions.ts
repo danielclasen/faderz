@@ -10,12 +10,19 @@ import type { MixerStore } from './mixer.svelte';
 let rest: RestClient | null = null;
 let endpoints: readonly string[] = [];
 
-export function configureRest(list: readonly string[], mixer: MixerStore): void {
+/** `onUnauthorized` runs when a request is answered 401. */
+export function configureRest(list: readonly string[], mixer: MixerStore, onUnauthorized?: () => void): void {
   endpoints = list;
-  rest = new RestClient(() => {
-    const current = mixer.endpoint ?? endpoints[0]!;
-    return [current, ...endpoints.filter((e) => e !== current)].map(restBase);
-  });
+  rest = new RestClient(
+    () => {
+      const current = mixer.endpoint ?? endpoints[0]!;
+      return [current, ...endpoints.filter((e) => e !== current)].map(restBase);
+    },
+    undefined,
+    undefined,
+    undefined,
+    onUnauthorized,
+  );
 }
 
 function client(): RestClient {

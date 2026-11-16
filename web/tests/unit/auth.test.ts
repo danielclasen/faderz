@@ -176,3 +176,69 @@ describe('the signed-in user in the status bar', () => {
     done();
   });
 });
+
+/** A browser that records where the store sends it. */
+function fakeBrowser() {
+  const store = new Map<string, string>();
+  const went: string[] = [];
+  return {
+    went,
+    browser: {
+      location: () => ({ pathname: '/', search: '?endpoints=/api/v1/ws' }),
+      assign: (url: string) => void went.push(url),
+      storage: () => ({ getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) }),
+    },
+  };
+}
+
+describe('a session that ends while the console runs', () => {
+  it('reads the session again on a 401 from the REST client', async () => {
+    const { RestClient } = await import('../../src/lib/net/rest');
+    let unauthorized = 0;
+    const rest = new RestClient(() => [BASE], 1, 0, 1000, () => unauthorized++);
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => json({ code: 401, message: 'not authenticated' }, 401)) as typeof fetch;
+    try {
+      await expect(rest.request('GET', '/state')).rejects.toThrow();
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect(unauthorized).toBe(1);
+  });
+
+  it('goes to the sign-in in oidc mode, once per window', async () => {
+    let signedIn = true;
+    const { f } = fakeFetch({ 'GET /api/v1/session': () => json({ mode: 'oidc', user: signedIn ? 'alice' : null, role: signedIn ? 'operator' : null }) });
+    const { browser, went } = fakeBrowser();
+    const auth = new AuthStore(BASE, f, browser);
+    await auth.recheck();
+    expect(went).toEqual([]);
+    signedIn = false;
+    await auth.recheck();
+    expect(went).toEqual(['/api/v1/login?return=%2F%3Fendpoints%3D%2Fapi%2Fv1%2Fws']);
+    await auth.recheck();
+    expect(went).toHaveLength(1);
+    expect(auth.signedOut).toBe(true);
+  });
+
+  it('reads the session again when the link leaves Live and signs in', async () => {
+    let signedIn = true;
+    const { f, calls } = fakeFetch({ 'GET /api/v1/session': () => json({ mode: 'oidc', user: signedIn ? 'alice' : null, role: signedIn ? 'operator' : null }) });
+    const { browser, went } = fakeBrowser();
+    const auth = new AuthStore(BASE, f, browser);
+    await auth.refresh();
+    const mixer = new MixerStore();
+    mixer.status = { ...mixer.status, link: 'Live' };
+    const { done } = mountWith(SignIn, auth, mixer);
+    await settle();
+    const reads = calls.length;
+    expect(went).toEqual([]);
+    // The server closes the WebSocket of the ended session.
+    signedIn = false;
+    mixer.status = { ...mixer.status, link: 'Connecting' };
+    await settle();
+    expect(calls.length).toBeGreaterThan(reads);
+    expect(went).toHaveLength(1);
+    done();
+  });
+});

@@ -1,9 +1,10 @@
 <script lang="ts">
   // The sign-in prompt over the console while it is not signed in: the
   // API token in token mode, a link to the identity provider in oidc mode.
-  // While the link is down the session is checked again every few seconds,
-  // so an ended session shows the prompt rather than a console that never
-  // reconnects.
+  // When the link leaves Live, which it does when the server closes the
+  // WebSocket of an ended session, and every few seconds while it is down,
+  // the session is read again; an ended one goes to the sign-in in oidc
+  // mode (AuthStore.signInIfSignedOut) or shows the prompt.
   import { getAuth } from '../lib/auth.svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { signInUrl } from '../lib/net/auth';
@@ -18,10 +19,14 @@
   $effect(() => {
     mixer.viewer = auth.session?.role === 'viewer';
   });
+  // Derived, so that only a change of either re-runs the effect below, not
+  // every session read or status update.
+  const mode = $derived(auth.session?.mode);
+  const down = $derived(mixer.status.link !== 'Live');
   $effect(() => {
-    const mode = auth.session?.mode;
-    if (mixer.status.link === 'Live' || (mode !== 'token' && mode !== 'oidc')) return;
-    const t = setInterval(() => void auth.refresh(), RECHECK_MS);
+    if (!down || (mode !== 'token' && mode !== 'oidc')) return;
+    void auth.recheck();
+    const t = setInterval(() => void auth.recheck(), RECHECK_MS);
     return () => clearInterval(t);
   });
 

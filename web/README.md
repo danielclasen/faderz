@@ -151,9 +151,12 @@ which sends the browser to the identity provider and back; if it went
 there within the last 30 s it shows a prompt with a SIGN IN link
 instead, so a sign-in that does not take cannot loop. In `token` mode
 it shows a prompt for the API token, which it exchanges with
-`POST /api/v1/login` for a session cookie. While the link is down the
-page reads the session again every 5 s, so an ended session brings the
-prompt back. The status bar names the user and role, and in `token` and
+`POST /api/v1/login` for a session cookie. When the link leaves Live and
+while it is down the
+page reads the session again (then every 5 s), so an ended session brings the
+prompt back, or in `oidc` mode goes to the sign-in again (within the
+same 30 s guard); a REST request answered 401 reads the session again
+too. The status bar names the user and role, and in `token` and
 `oidc` mode offers Sign out (`POST /api/v1/logout`), which in `oidc`
 mode continues to the provider's end-session endpoint when it has one.
 A viewer's write controls are locked with the reason "signed in as a
@@ -173,7 +176,9 @@ variable and the variable over the file (`faderz --help`):
 | `scopes` | `--oidc-scopes` | `FADERZ_OIDC_SCOPES` | none besides `openid` |
 | `operatorRole` | `--oidc-operator-role` | `FADERZ_OIDC_OPERATOR_ROLE` | `faderz-operator` |
 | `viewerRole` | `--oidc-viewer-role` | `FADERZ_OIDC_VIEWER_ROLE` | none |
-| `audience` | `--oidc-audience` | `FADERZ_OIDC_AUDIENCE` | the client id |
+| `allowedClients` | `--oidc-allowed-clients` | `FADERZ_OIDC_ALLOWED_CLIENTS` | the client id |
+| `audience` | `--oidc-audience` | `FADERZ_OIDC_AUDIENCE` | none: not checked |
+| `sessionTtl` | `--oidc-session-ttl` | `FADERZ_OIDC_SESSION_TTL` | `8h` |
 | `sessionKey.file` | `--oidc-session-key-file` | `FADERZ_OIDC_SESSION_KEY_FILE` | drawn per process |
 
 `auth.mode` is `--auth-mode` and `FADERZ_AUTH_MODE`. The redirect URI to
@@ -183,11 +188,26 @@ holds `operatorRole` is an operator; any other user is a viewer, or,
 with `viewerRole` set, a viewer only when the claim holds that and
 refused otherwise. A value matches with or without a leading `/`, as
 group paths are written, and a `roleClaim` with `.` that is no
-top-level claim is followed as a path (`realm_access.roles`). The
-session lasts as long as the ID token, 12 h at most. API clients send
-an access token of the provider whose `aud` holds `audience`, or the
-`auth.token` when one is configured. Without `sessionKey` a session holds
-on the process that signed it and ends when that restarts.
+top-level claim is followed as a path (`realm_access.roles`). The role is
+the one at sign-in; a change at the provider applies from the next one.
+A session lasts `sessionTtl` from the sign-in (seconds, or a number with
+`s`, `m`, `h` or `d`, 60 s to 7 d), whatever the ID token's lifetime.
+Signing out ends it on the replica that answers, for every copy of the
+cookie, and closes the WebSockets opened with it there; WebSockets are
+also closed when it expires. `issuerUrl` and every endpoint the provider
+publishes need `https`, or `http` to a loopback address, as does
+`publicUrl`, and `sessionKey` needs 32 bytes or more. Without
+`sessionKey` a session holds on the process that signed it and ends when
+that restarts.
+
+API clients send the `auth.token` when one is configured, or an access
+token of the provider: not an ID token (no `nonce`, no `typ` `ID`), with
+an `azp` among `allowedClients`, and an `aud` holding `audience` when that
+is set. Keycloak puts `account` into an access token's `aud` and the
+client id only through an audience mapper; with `audience` unset, `azp`
+alone binds the token to the allowed clients. faderz logs at start
+which auth mode applies and whether the file, a flag or a variable set
+it.
 
 `window.__faderz` is a read-only view of the sync state for tests:
 `connection`, `standby`, `primaryReplica`, `standbyReplica`, `session`

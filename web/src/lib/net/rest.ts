@@ -23,6 +23,8 @@ export class RestClient {
     private readonly attempts = 4,
     private readonly retryDelayMs = 300,
     private readonly timeoutMs = REST_TIMEOUT_MS,
+    /** Called on a 401: the session ended, the caller signs in again. */
+    private readonly onUnauthorized: () => void = () => {},
   ) {}
 
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -67,6 +69,7 @@ export class RestClient {
       // not-applied answers the 404 is someone else's delete.
       if (method === 'DELETE' && res.status === 404 && mayHaveApplied) return null as T;
       const json = parseJson(text);
+      if (res.status === 401) this.onUnauthorized();
       if (!res.ok) throw new ApiRequestError(res.status, isApiError(json) ? json : null);
       if (json === undefined) throw new Error(`HTTP ${res.status}: response is not JSON`);
       return json as T;
