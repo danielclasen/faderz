@@ -48,6 +48,7 @@ import type { FailoverInfo, Patch, SyncStatus, ToWorker, WorkerNotice } from './
 import { withSession } from './session';
 import { isContinuousPath } from '../contract/continuous';
 import { Outbox } from './outbox';
+import { backoff, RttEstimator } from './rtt';
 
 export interface SocketLike {
   binaryType: string;
@@ -67,27 +68,51 @@ export interface EngineDeps {
   socket(url: string): SocketLike;
   clock: Clock;
   post(patch: Patch, transfer: Transferable[]): void;
+  /** Uniform in [0, 1), for retry jitter; Math.random when absent. */
+  random?: () => number;
 }
 
-/** A socket that has not opened by then is abandoned. */
+// Deadlines follow the link: each is a floor that holds on a LAN, raised
+// by the measured round-trip time (rtt.ts) and doubled per consecutive
+// failure, up to a cap. A socket still opening is never abandoned at a
+// LAN-sized deadline on a link that needs longer; a socket the peer
+// refuses or closes fails over at once, whatever the deadlines.
+
+/** Floor of the time a socket may take to open. */
 export const CONNECT_TIMEOUT_MS = 2000;
+/** The time a socket may take to open while nothing is known about the link. */
+export const FIRST_CONNECT_TIMEOUT_MS = 10_000;
+/** An open takes TCP, TLS and the upgrade: about three round trips, and one spare. */
+export const CONNECT_ROUND_TRIPS = 4;
+export const CONNECT_TIMEOUT_CAP_MS = 30_000;
 /** Delay before the next primary attempt, by consecutive failures. */
 export const PRIMARY_RETRY_MS: readonly number[] = [0, 250, 500];
 /** Consecutive failed primary attempts that make the link Offline. */
 export const PRIMARY_ATTEMPTS = 3;
+/** Delay before leaving Offline, doubled per Offline in a row up to the cap. */
 export const OFFLINE_RETRY_MS = 2000;
+export const RETRY_CAP_MS = 15_000;
 /** Standby attempts in a row before the standby backs off. */
 export const STANDBY_TRIES = 4;
 export const STANDBY_RETRY_MS = 100;
+/** First standby backoff, doubled per further failed attempt up to RETRY_CAP_MS. */
 export const STANDBY_BACKOFF_MS = 2000;
 /** Delay before asking again after an answer older than the client's revision. */
 export const RESYNC_RETRY_MS = 250;
 /**
- * A primary that has answered a hello, resync or promote with no state
- * this client can apply by then is left for another endpoint. Above the
- * 2 s a replica holds an answer for its read index.
+ * Floor of the time a primary has to answer a hello, resync or promote
+ * with state this client can apply; one that has not by then is left for
+ * another endpoint. Above the 2 s a replica holds an answer for its read
+ * index (READ_INDEX_HOLD_MS).
  */
 export const SYNC_TIMEOUT_MS = 3000;
+export const READ_INDEX_HOLD_MS = 2000;
+export const SYNC_TIMEOUT_CAP_MS = 30_000;
+/**
+ * Most the heartbeat watch and the commit settle are lengthened by on a
+ * slow link: the server closes a silent connection within 7 s.
+ */
+export const SLACK_CAP_MS = 5000;
 /** A command answered not applied is sent again with its id after this. */
 export const NOT_APPLIED_RETRY_MS = 250;
 /**
@@ -112,6 +137,7 @@ class Link {
   opened = false;
   suspect = false;
   lastRx: number;
+  readonly createdAt: number;
   cancelWatch: (() => void) | null = null;
 
   constructor(
@@ -121,6 +147,7 @@ class Link {
     now: number,
   ) {
     this.lastRx = now;
+    this.createdAt = now;
   }
 }
 
@@ -145,6 +172,7 @@ export class SyncEngine {
   private selectionsDirty = false;
 
   private readonly clock: Clock;
+  private readonly random: () => number;
   /** Owner handle of this session: how its ownership appears in records. */
   private readonly handle: string;
   private readonly limiter: RateLimiter;
@@ -166,6 +194,16 @@ export class SyncEngine {
   private primaryIndex = 0;
   private primaryAttempts = 0;
   private standbyAttempts = 0;
+  /** Offline periods in a row, since the last sync. */
+  private offlineRounds = 0;
+  /** Sockets in a row, primary or standby, abandoned before they opened. */
+  private connectTimeouts = 0;
+  /** Primaries in a row left for giving no state in time. */
+  private syncTimeouts = 0;
+  /** Round trips of pings, and the page's own request to the server. */
+  readonly rtt = new RttEstimator();
+  /** How long sockets took from creation to open. */
+  readonly opening = new RttEstimator();
   private lastPrimaryReplica: string | null = null;
   private failoverInfo: FailoverInfo | null = null;
   /** Hellos and resyncs sent on primaries: the generation a command is sent in. */
@@ -181,8 +219,71 @@ export class SyncEngine {
   constructor(private readonly deps: EngineDeps) {
     if (deps.endpoints.length === 0) throw new Error('no endpoints');
     this.clock = deps.clock;
+    this.random = deps.random ?? Math.random;
     this.handle = ownerHandle(deps.session);
     this.limiter = new RateLimiter(this.clock, (path, value) => this.issueSet(path, value));
+  }
+
+  // ---- timing ----------------------------------------------------------------
+
+  /**
+   * Round-trip time the deadlines assume: the ping estimate, else a third
+   * of the open estimate (an open is about three round trips, so this
+   * bounds one from above), else null.
+   */
+  private roundTrip(): number | null {
+    const r = this.rtt.rto;
+    if (r !== null) return r;
+    const o = this.opening.rto;
+    return o === null ? null : o / 3;
+  }
+
+  /**
+   * How long a new socket may take to open: FIRST_CONNECT_TIMEOUT_MS while
+   * nothing is known about the link, else the larger of the floor,
+   * CONNECT_ROUND_TRIPS round trips and the open estimate; doubled per
+   * socket in a row abandoned unopened, up to the cap.
+   */
+  connectTimeout(): number {
+    const rt = this.rtt.rto;
+    const open = this.opening.rto;
+    const base =
+      rt === null && open === null
+        ? FIRST_CONNECT_TIMEOUT_MS
+        : Math.max(CONNECT_TIMEOUT_MS, CONNECT_ROUND_TRIPS * (rt ?? 0), open ?? 0);
+    return backoff(base, this.connectTimeouts, CONNECT_TIMEOUT_CAP_MS);
+  }
+
+  /**
+   * How long a primary has to answer with state: the read-index hold plus
+   * two round trips, at least SYNC_TIMEOUT_MS; doubled per primary in a
+   * row left for not answering, up to the cap.
+   */
+  syncTimeout(): number {
+    const base = Math.max(SYNC_TIMEOUT_MS, READ_INDEX_HOLD_MS + 2 * (this.roundTrip() ?? 0));
+    return backoff(base, this.syncTimeouts, SYNC_TIMEOUT_CAP_MS);
+  }
+
+  /**
+   * What the heartbeat watch and the commit settle add on this link: one
+   * round-trip timeout. A loss on a slow TCP path holds every later
+   * message back for about that long, so a silence that short is the link,
+   * not a dead peer. Nothing on a LAN, where it is a few milliseconds.
+   */
+  private slack(): number {
+    // Whole milliseconds: a fractional deadline can round to just short of
+    // itself, and a watch woken short of it re-arms for no time at all.
+    return Math.ceil(Math.min(SLACK_CAP_MS, this.rtt.rto ?? 0));
+  }
+
+  /** Silence after which a connection is suspect. */
+  suspectMs(): number {
+    return SUSPECT_MS + this.slack();
+  }
+
+  /** Silence after which a connection is dead. */
+  deadMs(): number {
+    return DEAD_MS + this.slack();
   }
 
   start(): void {
@@ -213,6 +314,8 @@ export class SyncEngine {
   }
 
   input(msg: ToWorker): void {
+    // A round trip the page measured is not a page input a patch answers.
+    if (msg.type === 'rtt') return this.rtt.sample(msg.ms);
     this.inputs++;
     switch (msg.type) {
       case 'set':
@@ -368,7 +471,13 @@ export class SyncEngine {
     const socket = this.deps.socket(withSession(this.deps.endpoints[index]!, this.deps.session));
     socket.binaryType = 'arraybuffer';
     const link = new Link(role, index, socket, this.clock.now());
-    link.cancelWatch = this.deadline(() => this.closed(link, 'lost'), CONNECT_TIMEOUT_MS);
+    // Only a socket still opening at its deadline is abandoned here; one
+    // the peer refuses or closes fails through onclose at once.
+    link.cancelWatch = this.deadline(() => {
+      if (link !== this.primary && link !== this.standby) return;
+      this.connectTimeouts++;
+      this.closed(link, 'lost');
+    }, this.connectTimeout());
     socket.onopen = () => this.opened(link);
     socket.onmessage = (ev) => this.message(link, ev.data);
     socket.onclose = () => this.closed(link, 'lost');
@@ -396,6 +505,8 @@ export class SyncEngine {
   private opened(link: Link): void {
     link.opened = true;
     link.lastRx = this.clock.now();
+    this.opening.sample(link.lastRx - link.createdAt);
+    this.connectTimeouts = 0;
     this.watch(link);
     if (link.role === 'primary') {
       this.credits = 0;
@@ -420,17 +531,18 @@ export class SyncEngine {
   }
 
   /**
-   * Re-arms the traffic watch of a link: suspect after SUSPECT_MS, dead
-   * after DEAD_MS. A late watch yields to the messages a stall held up
-   * before it counts the silence (deadline()).
+   * Re-arms the traffic watch of a link: suspect after suspectMs(), dead
+   * after deadMs(), SUSPECT_MS and DEAD_MS on a LAN. A late watch yields
+   * to the messages a stall held up before it counts the silence
+   * (deadline()).
    */
   private watch(link: Link): void {
     link.cancelWatch?.();
-    const due = link.lastRx + (link.suspect ? DEAD_MS : SUSPECT_MS) - this.clock.now();
+    const due = Math.ceil(link.lastRx + (link.suspect ? this.deadMs() : this.suspectMs()) - this.clock.now());
     link.cancelWatch = this.deadline(() => {
       const silence = this.clock.now() - link.lastRx;
-      if (silence >= DEAD_MS) return this.closed(link, 'dead');
-      if (silence >= SUSPECT_MS && !link.suspect) {
+      if (silence >= this.deadMs()) return this.closed(link, 'dead');
+      if (silence >= this.suspectMs() && !link.suspect) {
         link.suspect = true;
         if (link === this.primary) this.linkEvent('beatLate');
       }
@@ -464,11 +576,12 @@ export class SyncEngine {
     this.cancelRetry?.();
     if (this.primaryAttempts >= PRIMARY_ATTEMPTS) {
       this.linkEvent('exhausted');
+      const delay = backoff(OFFLINE_RETRY_MS, this.offlineRounds++, RETRY_CAP_MS, this.random);
       this.cancelRetry = this.clock.schedule(() => {
         this.primaryAttempts = 0;
         this.linkEvent('retry');
         this.openPrimary();
-      }, OFFLINE_RETRY_MS);
+      }, delay);
       return;
     }
     this.cancelRetry = this.clock.schedule(() => this.openPrimary(), PRIMARY_RETRY_MS[this.primaryAttempts] ?? 0);
@@ -476,7 +589,7 @@ export class SyncEngine {
 
   /**
    * Leaves the primary when it has given no state this client can apply
-   * SYNC_TIMEOUT_MS after now: a replica that holds its answer longer, or
+   * syncTimeout() after now: a replica that holds its answer longer, or
    * answers only with older state, is passed over.
    */
   private awaitSync(): void {
@@ -484,8 +597,11 @@ export class SyncEngine {
     const p = this.primary;
     this.cancelSyncTimeout = this.deadline(() => {
       this.cancelSyncTimeout = null;
-      if (p === this.primary && p && (this.link === 'Syncing' || this.link === 'Resyncing')) this.closed(p, 'noAnswer');
-    }, SYNC_TIMEOUT_MS);
+      if (p === this.primary && p && (this.link === 'Syncing' || this.link === 'Resyncing')) {
+        this.syncTimeouts++;
+        this.closed(p, 'noAnswer');
+      }
+    }, this.syncTimeout());
   }
 
   private failover(reason: FailoverInfo['reason']): void {
@@ -533,7 +649,10 @@ export class SyncEngine {
 
   private scheduleStandby(): void {
     if (this.standbyState !== 'Idle' || this.cancelStandbyRetry) return;
-    const delay = this.standbyAttempts < STANDBY_TRIES ? STANDBY_RETRY_MS : STANDBY_BACKOFF_MS;
+    const delay =
+      this.standbyAttempts < STANDBY_TRIES
+        ? STANDBY_RETRY_MS
+        : backoff(STANDBY_BACKOFF_MS, this.standbyAttempts - STANDBY_TRIES, RETRY_CAP_MS, this.random);
     this.cancelStandbyRetry = this.clock.schedule(() => {
       this.cancelStandbyRetry = null;
       this.startStandby();
@@ -604,7 +723,7 @@ export class SyncEngine {
       const act = due();
       if (act === 'failover') this.failover('notCommitable');
       else if (act === 'drop') this.dropStandby(this.standby!);
-    }, COMMIT_SETTLE_MS);
+    }, COMMIT_SETTLE_MS + this.slack());
   }
 
   /** A report of the primary or the standby names a replica other than theirs that can commit. */
@@ -645,7 +764,8 @@ export class SyncEngine {
       case 'ping':
         return this.send(link, { type: 'pong', t: msg.t });
       case 'pong':
-        return;
+        // t is this clock's time the ping was sent, floored.
+        return this.rtt.sample(this.clock.now() - msg.t);
       case 'replicas':
         link.replicas = msg.replicas;
         if (link === this.standby && this.standbyState !== 'Connecting' && !this.standbySuitable(link)) {
@@ -751,6 +871,8 @@ export class SyncEngine {
     this.cancelSyncTimeout = null;
     this.lastSync = kind;
     this.primaryAttempts = 0;
+    this.offlineRounds = 0;
+    this.syncTimeouts = 0;
     this.linkEvent('synced');
     const replica = this.primary?.replica?.id ?? null;
     if (this.failoverInfo && this.failoverInfo.to === null) this.failoverInfo = { ...this.failoverInfo, to: replica };

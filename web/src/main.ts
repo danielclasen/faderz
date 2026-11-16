@@ -52,9 +52,15 @@ try {
   const auth = new AuthStore(restBase(endpoints[0]!));
   // A 401 means the session ended: look again, which starts the sign-in.
   configureRest(endpoints, mixer, () => void auth.recheck());
-  startSync(mixer, endpoints);
+  const sync = startSync(mixer, endpoints);
 
-  void Promise.all([auth.refresh(), loadFonts()])
+  // The session request is one round trip to the server: the sync worker
+  // sizes its first deadlines from it.
+  const asked = performance.now();
+  const session = auth.refresh().then(() => {
+    if (auth.session !== null) sync.rtt(performance.now() - asked);
+  });
+  void Promise.all([session, loadFonts()])
     .then(() => {
       if (auth.signInIfSignedOut()) return;
       mount(App, { target: root, context: new Map<symbol, unknown>([...mixerContext(mixer), ...authContext(auth)]) });

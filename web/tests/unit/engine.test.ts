@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { COMMIT_SETTLE_MS, CONNECT_TIMEOUT_MS, NOT_APPLIED_RETRY_MS, RESYNC_RETRY_MS, SYNC_TIMEOUT_MS, SyncEngine, STANDBY_RETRY_MS } from '../../src/lib/sync/engine';
+import {
+  COMMIT_SETTLE_MS,
+  CONNECT_TIMEOUT_CAP_MS,
+  CONNECT_TIMEOUT_MS,
+  FIRST_CONNECT_TIMEOUT_MS,
+  NOT_APPLIED_RETRY_MS,
+  OFFLINE_RETRY_MS,
+  PRIMARY_RETRY_MS,
+  RESYNC_RETRY_MS,
+  RETRY_CAP_MS,
+  SLACK_CAP_MS,
+  SYNC_TIMEOUT_CAP_MS,
+  SYNC_TIMEOUT_MS,
+  SyncEngine,
+  STANDBY_RETRY_MS,
+} from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
 import { ownerHandle } from '../../src/lib/net/handle';
 import type { Patch } from '../../src/lib/sync/messages';
@@ -32,7 +47,7 @@ const SEQ_BASE = 1_700_000_000_000;
 const EPOCH = '18446744073709551557';
 const RESTORED = '18446744073709551556';
 
-function setup(endpoints = ['ws://svc/api/v1/ws'], seqBase = SEQ_BASE) {
+function setup(endpoints = ['ws://svc/api/v1/ws'], seqBase = SEQ_BASE, random = () => 0) {
   const clock = new FakeClock();
   const sockets: FakeSocket[] = [];
   const patches: Patch[] = [];
@@ -47,6 +62,7 @@ function setup(endpoints = ['ws://svc/api/v1/ws'], seqBase = SEQ_BASE) {
     },
     clock,
     post: (p) => patches.push(structuredClone(p)),
+    random,
   });
   engine.start();
   const tick = () => {
@@ -263,7 +279,7 @@ describe('sync engine: heartbeat and failure detection', () => {
   it('abandons no socket for its connect timeout over a stall whose open was queued meanwhile', () => {
     const t = setup();
     const s = t.sockets[0]!;
-    t.clock.stall(CONNECT_TIMEOUT_MS + 500);
+    t.clock.stall(FIRST_CONNECT_TIMEOUT_MS + 500);
     s.open();
     t.clock.advance(0);
     expect(s.closed).toBe(false);
@@ -748,7 +764,8 @@ describe('sync engine: offline', () => {
     const p = t.tick()!;
     expect(p.notices).toContainEqual({ kind: 'expired', paths: ['/channels/ch1/mute', F1] });
     const before = t.sockets.length;
-    t.clock.advance(2000);
+    // The Offline retry has backed off, at most to its cap.
+    t.clock.advance(RETRY_CAP_MS);
     const s = t.sockets.slice(before).find((x) => x.onopen && !x.closed)!;
     s.open();
     s.deliver(replicas(R2));
@@ -1239,5 +1256,166 @@ describe('sync engine: meters', () => {
     primary.deliver(frame(2, other));
     expect(primary.ofType('resync').at(-1)).toEqual({ type: 'resync', lastRevision: 12, epoch: EPOCH, full: true });
     expect(primary.ofType('resync')).toHaveLength(2);
+  });
+});
+
+describe('sync engine: slow and lossy links', () => {
+  /** Advances in 50 ms steps and returns every link state seen. */
+  function states(t: ReturnType<typeof setup>, ms: number): Set<string> {
+    const seen = new Set<string>([t.engine.link]);
+    for (let left = ms; left > 0; left -= 50) {
+      t.clock.advance(Math.min(50, left));
+      seen.add(t.engine.link);
+    }
+    return seen;
+  }
+
+  /** Pings of this client answered so far, per socket. */
+  const answered = new WeakMap<FakeSocket, number>();
+
+  /**
+   * Heartbeat steps over a link with round trip `rtt`: the replicas' pings
+   * arrive every period, and every ping of this client is answered `rtt`
+   * after it was sent.
+   */
+  function slowBeats(clock: FakeClock, ms: number, rtt: number, ...peers: Array<[FakeSocket, ReplicaRef]>) {
+    for (let left = ms; left > 0; left -= HEARTBEAT_MS) {
+      clock.advance(Math.min(HEARTBEAT_MS, left));
+      for (const [s, r] of peers) {
+        s.deliver({ type: 'ping', replica: r, t: clock.now() });
+        const pings = s.ofType('ping');
+        let i = answered.get(s) ?? 0;
+        for (; i < pings.length && pings[i]!.t <= clock.now() - rtt; i++) s.deliver({ type: 'pong', replica: r, t: pings[i]!.t });
+        answered.set(s, i);
+      }
+    }
+  }
+
+  it('connects on the first attempt over a link whose socket opens after 6 s, and never shows Offline', () => {
+    const t = setup(['ws://a/ws', 'ws://b/ws']);
+    const seen = states(t, 6000);
+    expect(t.sockets).toHaveLength(1);
+    expect(t.sockets[0]!.closed).toBe(false);
+    expect([...seen]).toEqual(['Connecting']);
+    t.sockets[0]!.open();
+    expect(t.engine.link).toBe('Syncing');
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 1));
+    expect(t.engine.link).toBe('Live');
+  });
+
+  it('fails over at once from an endpoint that refuses, and waits for the next one to open slowly', () => {
+    const t = setup(['ws://a/ws', 'ws://b/ws']);
+    t.sockets[0]!.drop();
+    expect(t.engine.link).toBe('Connecting');
+    t.clock.advance(PRIMARY_RETRY_MS[1]!);
+    expect(t.sockets).toHaveLength(2);
+    const b = t.sockets[1]!;
+    expect(b.url).toBe(`ws://b/ws?session=${SESSION}`);
+    const seen = states(t, 5000);
+    expect(seen.has('Offline')).toBe(false);
+    expect(b.closed).toBe(false);
+    expect(t.sockets).toHaveLength(2);
+    b.open();
+    expect(t.engine.link).toBe('Syncing');
+  });
+
+  it('gives each socket in a row abandoned unopened twice the time, up to the cap', () => {
+    const t = setup();
+    t.clock.advance(FIRST_CONNECT_TIMEOUT_MS - 1);
+    expect(t.sockets[0]!.closed).toBe(false);
+    t.clock.advance(1);
+    expect(t.sockets[0]!.closed).toBe(true);
+    t.clock.advance(PRIMARY_RETRY_MS[1]!);
+    const second = t.sockets[1]!;
+    t.clock.advance(2 * FIRST_CONNECT_TIMEOUT_MS - 1);
+    expect(second.closed).toBe(false);
+    t.clock.advance(1);
+    expect(second.closed).toBe(true);
+    t.clock.advance(PRIMARY_RETRY_MS[2]!);
+    const third = t.sockets[2]!;
+    t.clock.advance(CONNECT_TIMEOUT_CAP_MS - 1);
+    expect(third.closed).toBe(false);
+    t.clock.advance(1);
+    expect(third.closed).toBe(true);
+    expect(t.engine.link).toBe('Offline');
+  });
+
+  it('backs off its Offline retries exponentially, jittered below the unjittered delay', () => {
+    const t = setup(['ws://a/ws'], SEQ_BASE, () => 0.5);
+    const delays: number[] = [];
+    let offlineAt: number | null = null;
+    let seen = 0;
+    for (let i = 0; i < 6000 && delays.length < 5; i++) {
+      // Every endpoint refuses at once.
+      for (; seen < t.sockets.length; seen++) t.sockets[seen]!.drop();
+      if (offlineAt !== null && t.engine.link === 'Connecting') {
+        delays.push(t.clock.now() - offlineAt);
+        offlineAt = null;
+      }
+      if (offlineAt === null && t.engine.link === 'Offline') offlineAt = t.clock.now();
+      t.clock.advance(10);
+    }
+    expect(delays).toEqual([0.9 * OFFLINE_RETRY_MS, 0.9 * 2 * OFFLINE_RETRY_MS, 0.9 * 4 * OFFLINE_RETRY_MS, 0.9 * RETRY_CAP_MS, 0.9 * RETRY_CAP_MS]);
+  });
+
+  it('raises and lowers its deadlines with the measured round trip, within their floors and caps', () => {
+    const t = setup();
+    expect(t.engine.connectTimeout()).toBe(FIRST_CONNECT_TIMEOUT_MS);
+    const feed = (ms: number, n: number) => {
+      for (let i = 0; i < n; i++) t.engine.input({ type: 'rtt', ms });
+    };
+    feed(1, 50);
+    expect(t.engine.connectTimeout()).toBe(CONNECT_TIMEOUT_MS);
+    expect(t.engine.syncTimeout()).toBe(SYNC_TIMEOUT_MS);
+    expect(t.engine.deadMs()).toBeLessThan(DEAD_MS + 5);
+    expect(t.engine.suspectMs()).toBeLessThan(SUSPECT_MS + 5);
+
+    feed(1500, 50);
+    expect(t.engine.connectTimeout()).toBeGreaterThanOrEqual(4 * 1500);
+    expect(t.engine.connectTimeout()).toBeLessThan(4 * 1550);
+    expect(t.engine.syncTimeout()).toBeGreaterThanOrEqual(2000 + 2 * 1500);
+    expect(t.engine.syncTimeout()).toBeLessThan(2000 + 2 * 1550);
+    expect(t.engine.deadMs()).toBeGreaterThanOrEqual(DEAD_MS + 1500);
+    expect(t.engine.deadMs()).toBeLessThan(DEAD_MS + 1550);
+
+    feed(50_000, 50);
+    expect(t.engine.connectTimeout()).toBe(CONNECT_TIMEOUT_CAP_MS);
+    expect(t.engine.syncTimeout()).toBe(SYNC_TIMEOUT_CAP_MS);
+    expect(t.engine.deadMs()).toBe(DEAD_MS + SLACK_CAP_MS);
+
+    feed(1, 100);
+    expect(t.engine.connectTimeout()).toBe(CONNECT_TIMEOUT_MS);
+    expect(t.engine.syncTimeout()).toBe(SYNC_TIMEOUT_MS);
+    expect(t.engine.deadMs()).toBeLessThan(DEAD_MS + 5);
+  });
+
+  it('measures the round trip from the pongs that answer its pings', () => {
+    const { clock, engine, primary } = live();
+    beats(clock, 2000, [primary, R1]);
+    primary.deliver({ type: 'pong', replica: R1, t: clock.now() - 1500 });
+    expect(engine.rtt.srtt).toBe(1500);
+  });
+
+  it('keeps a live link over a 1.5 s round trip whose traffic stalls behind a retransmission', () => {
+    const { clock, engine, primary, standby, tick } = live();
+    slowBeats(clock, 5000, 1500, [primary, R1], [standby, R2]);
+    expect(engine.link).toBe('Live');
+    // A lost segment holds everything on the primary back: a TCP
+    // retransmission timeout after the next ping was due.
+    beats(clock, 1900, [standby, R2]);
+    slowBeats(clock, 3000, 1500, [primary, R1], [standby, R2]);
+    expect(primary.closed).toBe(false);
+    expect(standby.ofType('promote')).toHaveLength(0);
+    expect(engine.link).toBe('Live');
+    expect(tick()!.status!.failover).toBeNull();
+  });
+
+  it('still fails over from a primary silent for far longer than the round trip', () => {
+    const { clock, engine, primary, standby } = live();
+    slowBeats(clock, 5000, 1500, [primary, R1], [standby, R2]);
+    beats(clock, engine.deadMs() + HEARTBEAT_MS, [standby, R2]);
+    expect(primary.closed).toBe(true);
+    expect(standby.ofType('promote')).toHaveLength(1);
   });
 });

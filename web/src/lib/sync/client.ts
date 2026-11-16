@@ -39,7 +39,12 @@ declare global {
   }
 }
 
-export function startSync(store: MixerStore, endpoints: string[]): void {
+export interface SyncHandle {
+  /** Hands the worker a round trip the page measured to the server, in ms. */
+  rtt(ms: number): void;
+}
+
+export function startSync(store: MixerStore, endpoints: string[]): SyncHandle {
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   worker.onmessage = (ev: MessageEvent<FromWorker>) => store.apply(ev.data);
   worker.onerror = (ev) => store.notify('error', `Sync worker failed: ${ev.message}`);
@@ -59,6 +64,7 @@ export function startSync(store: MixerStore, endpoints: string[]): void {
   document.addEventListener('visibilitychange', follow);
   follow();
   exposeDebug(store, () => stop !== null);
+  return { rtt: (ms) => worker.postMessage({ type: 'rtt', ms } satisfies ToWorker) };
 }
 
 function exposeDebug(store: MixerStore, ticking: () => boolean): void {

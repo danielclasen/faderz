@@ -17,14 +17,16 @@ export type ToWorker =
   /** Take the cluster state while the link is Ahead. */
   | { type: 'adopt' }
   /** The page rendered a frame and wants the changes since the last patch. */
-  | { type: 'tick' };
+  | { type: 'tick' }
+  /** A round trip the page measured to the server, in ms: a sample for the deadlines. */
+  | { type: 'rtt'; ms: number };
 
 export interface FailoverInfo {
   /** Counts failovers since the worker started. */
   n: number;
   from: string | null;
   to: string | null;
-  /** noAnswer: no state it could apply within SYNC_TIMEOUT_MS of a resync or promote. */
+  /** noAnswer: no state it could apply within the sync timeout of a resync or promote. */
   reason: 'lost' | 'dead' | 'notCommitable' | 'noAnswer';
 }
 
