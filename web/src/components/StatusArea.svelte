@@ -14,7 +14,7 @@
   });
 
   const LABEL: Record<LinkState, string> = {
-    Connecting: 'RECONNECTING',
+    Connecting: 'CONNECTING',
     Syncing: 'SYNC',
     Live: 'LIVE',
     Suspect: 'SUSPECT',
@@ -25,7 +25,7 @@
   };
   /** A short screen (App.svelte): the words fit 8ch, so the notice line keeps room. */
   const short = new MediaQuery('max-height: 500px');
-  const BRIEF: Record<LinkState, string> = { ...LABEL, Connecting: 'RECONN' };
+  const BRIEF: Record<LinkState, string> = { ...LABEL, Connecting: 'CONN' };
   const status = $derived(mixer.status);
   const failover = $derived(
     status.failover && mixer.failoverAt !== null && now - mixer.failoverAt < 8000 ? status.failover : null,
@@ -238,6 +238,8 @@
     background: var(--ok);
     box-shadow: 0 0 6px var(--ok);
   }
+  /* A socket still opening is waited for, not failed: amber, like a sync. */
+  .link[data-state='Connecting'] i,
   .link[data-state='Syncing'] i,
   .link[data-state='Resyncing'] i,
   .link[data-state='Ahead'] i,
@@ -245,7 +247,6 @@
     background: var(--warn);
     box-shadow: 0 0 6px var(--warn);
   }
-  .link[data-state='Connecting'] i,
   .link[data-state='FailingOver'] i,
   .link[data-state='Offline'] i {
     background: var(--err);

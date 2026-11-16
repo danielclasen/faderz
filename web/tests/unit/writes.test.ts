@@ -38,7 +38,7 @@ describe('writesLockReason', () => {
   it('names why writes are blocked: the link state when it transmits nothing, else the quorum', () => {
     const ok = { replicas: replicas(true, true, true), standby: 'Ready' as const };
     const reasons = {
-      Connecting: 'reconnecting',
+      Connecting: 'connecting',
       Syncing: 'waiting for the replica to sync',
       FailingOver: 'failing over',
       Ahead: 'this client is ahead of the cluster',

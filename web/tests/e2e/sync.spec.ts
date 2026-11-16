@@ -406,7 +406,7 @@ test('with every replica down the client disables every write control and sends 
   // The quorum slot says why writes are off: the link, not the quorum.
   const lock = page.getByTestId('quorum');
   await expect(lock).toHaveText('LOCK');
-  await expect(lock).toHaveAttribute('title', /^Every write control is disabled: (reconnecting|no replica reachable)$/);
+  await expect(lock).toHaveAttribute('title', /^Every write control is disabled: (connecting|no replica reachable)$/);
   await expect(slider).toHaveAttribute('aria-disabled', 'true');
   await expect(mute).toHaveAttribute('aria-disabled', 'true');
   await expect(page.locator('[role="slider"][aria-disabled="false"]')).toHaveCount(0);

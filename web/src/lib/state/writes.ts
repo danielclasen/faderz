@@ -3,7 +3,7 @@ import type { SyncStatus } from '../sync/messages';
 
 /** Why writes are blocked in each link state that transmits no commands. */
 const LINK_LOCK: Partial<Record<LinkState, string>> = {
-  Connecting: 'reconnecting',
+  Connecting: 'connecting',
   Syncing: 'waiting for the replica to sync',
   FailingOver: 'failing over',
   Ahead: 'this client is ahead of the cluster',
