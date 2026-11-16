@@ -18,6 +18,10 @@ ARG CARGO_ABOUT_VERSION=0.9.3
 # Caps cargo's parallel jobs when set.
 ARG CARGO_BUILD_JOBS
 
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libcap2-bin \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install --locked --root /opt/cargo-about --features cli \
       ${CARGO_BUILD_JOBS:+--jobs "$CARGO_BUILD_JOBS"} \
@@ -27,12 +31,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 WORKDIR /src
 COPY . .
 COPY --from=web /src/web/dist web/dist
+# cap_sys_nice and cap_ipc_lock are permitted, not effective: exec never
+# fails without them, and samplez raises what the container grants
+# (`capabilities.add`) into its effective set at start.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked --bin faderz \
       ${CARGO_BUILD_JOBS:+--jobs "$CARGO_BUILD_JOBS"} \
  && install -Dm0755 target/release/faderz /out/usr/local/bin/faderz \
+ && setcap cap_sys_nice,cap_ipc_lock=p /out/usr/local/bin/faderz \
+ && getcap /out/usr/local/bin/faderz \
  && install -Dm0644 LICENSE /out/usr/share/licenses/faderz/LICENSE \
  && /opt/cargo-about/bin/cargo-about generate --locked --fail \
       -o /out/usr/share/licenses/faderz/THIRD-PARTY.txt about.hbs \
