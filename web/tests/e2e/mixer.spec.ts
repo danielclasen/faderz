@@ -1424,7 +1424,7 @@ test('lists the consoles and every other session with what it holds, each once',
   try {
     await other.command({ type: 'touch', path: '/channels/ch4/fader' });
     await surface.command({ type: 'touch', path: '/channels/ch5/fader' });
-    const key = page.getByRole('button', { name: /^USERS/ });
+    const key = page.getByRole('button', { name: /^Users \d+$/ });
     // Two connected surfaces and one web client.
     await expect(key).toHaveText('USERS  3');
     await key.click();

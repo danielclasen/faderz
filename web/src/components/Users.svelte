@@ -29,11 +29,12 @@
   const others = $derived(holders.filter((h) => !mixer.isMine(h.owner) && !(h.owner.kind === 'console' && consoles.some((c) => c.handle === h.owner.handle))));
   /** A short screen (App.svelte): USR, so the notice line keeps room. */
   const short = new MediaQuery('max-height: 500px');
+  const count = $derived(others.length + consoles.filter((c) => c.connected).length);
 </script>
 
 <div class="users">
-  <button class="key" aria-expanded={open} aria-controls="users-panel" onclick={() => (open = !open)} title="Who works on this mixer"
-    ><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(others.length + consoles.filter((c) => c.connected).length).padStart(2)}</span></button
+  <button class="key" aria-label={`Users ${count}`} aria-expanded={open} aria-controls="users-panel" onclick={() => (open = !open)} title="Who works on this mixer"
+    ><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(count).padStart(2)}</span></button
   >
   <div class="panel" class:open id="users-panel" role="region" aria-label="Users">
     <div class="row you"><b>This screen</b><span class="num">{handleTag(mixer.status.handle)}</span></div>
