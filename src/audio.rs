@@ -183,9 +183,14 @@ impl Audio {
                 .collect(),
         };
         self.apply(&state, &mut sent, 0, true).await;
-        // A resend asked for meanwhile marks it ready once done.
-        if *self.resends_asked.lock().expect("resend lock poisoned") == 0 {
-            self.ops.set_engine_started(true);
+        // A resend asked for meanwhile marks it ready once done. The lock
+        // is held over the check and the store, so a hold() cannot fall
+        // between them and be overwritten.
+        {
+            let asked = self.resends_asked.lock().expect("resend lock poisoned");
+            if *asked == 0 {
+                self.ops.set_engine_started(true);
+            }
         }
         loop {
             let resent = tokio::select! {
