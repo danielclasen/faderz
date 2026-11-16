@@ -75,7 +75,7 @@
   <span class="slot pend">
     <span class="box">
       {#if status.outbox > 0}
-        <span class="pending fixed" data-testid="pending" title={`${status.outbox} commands waiting for confirmation`}>{short.current ? fit(String(status.outbox), 4) : fit(`${status.outbox} pending`, 11)}</span>
+        <span class="pending fixed" data-testid="pending" title={`${status.outbox} commands waiting for confirmation`}>{#if short.current}{fit(String(status.outbox), 4)}<span class="sr-only">{' pending'}</span>{:else}{fit(`${status.outbox} pending`, 11)}{/if}</span>
       {/if}
     </span>
   </span>

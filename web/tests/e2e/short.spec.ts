@@ -120,6 +120,11 @@ test('the commit banner shows its whole text to the keyboard on a short screen',
     await expect(banner).toHaveAttribute('aria-describedby', 'faderz-tip');
     await page.keyboard.press('Escape');
     await expect(tooltip).toBeHidden();
+    // A write pressed meanwhile waits: its bare count in the compact
+    // header still says what it counts to a screen reader.
+    await page.getByRole('button', { name: 'Pres 1 mute' }).click();
+    await expect(page.getByTestId('commit-pending')).toContainText('1');
+    await expect(page.getByTestId('pending')).toHaveText(/^\s*1 pending$/);
   } finally {
     for (const r of REPLICAS) await request.post(`/__mock/replicas/${r}/restore`);
   }
