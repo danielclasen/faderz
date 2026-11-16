@@ -10,7 +10,8 @@ COPY api /src/api
 COPY web ./
 RUN npm run build && node build/check-licenses.mjs
 
-FROM ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba AS build
+# cargo-about in a stage of its own, so that it builds while faderz does.
+FROM ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba AS about
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -18,15 +19,22 @@ ARG CARGO_ABOUT_VERSION=0.9.3
 # Caps cargo's parallel jobs when set.
 ARG CARGO_BUILD_JOBS
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libcap2-bin \
- && rm -rf /var/lib/apt/lists/*
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=cargo-about-registry,target=/usr/local/cargo/registry \
     cargo install --locked --root /opt/cargo-about --features cli \
       ${CARGO_BUILD_JOBS:+--jobs "$CARGO_BUILD_JOBS"} \
       "cargo-about@${CARGO_ABOUT_VERSION}" \
  && /opt/cargo-about/bin/cargo-about --version
+
+FROM ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba AS build
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+# Caps cargo's parallel jobs when set.
+ARG CARGO_BUILD_JOBS
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libcap2-bin \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .
@@ -41,8 +49,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       ${CARGO_BUILD_JOBS:+--jobs "$CARGO_BUILD_JOBS"} \
  && install -Dm0755 target/release/faderz /out/usr/local/bin/faderz \
  && setcap cap_sys_nice,cap_ipc_lock=p /out/usr/local/bin/faderz \
- && getcap /out/usr/local/bin/faderz \
- && install -Dm0644 LICENSE /out/usr/share/licenses/faderz/LICENSE \
+ && getcap /out/usr/local/bin/faderz
+COPY --from=about /opt/cargo-about /opt/cargo-about
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    install -Dm0644 LICENSE /out/usr/share/licenses/faderz/LICENSE \
  && /opt/cargo-about/bin/cargo-about generate --locked --fail \
       -o /out/usr/share/licenses/faderz/THIRD-PARTY.txt about.hbs \
  && install -Dm0644 web/dist/THIRD-PARTY-WEB.txt /out/usr/share/licenses/faderz/THIRD-PARTY-WEB.txt
