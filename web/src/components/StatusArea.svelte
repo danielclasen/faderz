@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fit } from '../lib/format';
   import { onMount } from 'svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { TRANSMITTING, type LinkState } from '../lib/sync/machines';
 
@@ -22,6 +23,9 @@
     Ahead: 'AHEAD',
     Offline: 'OFFLINE',
   };
+  /** A short screen (App.svelte): the words fit 8ch, so the notice line keeps room. */
+  const short = new MediaQuery('max-height: 500px');
+  const BRIEF: Record<LinkState, string> = { ...LABEL, Connecting: 'RECONN' };
   const status = $derived(mixer.status);
   const failover = $derived(
     status.failover && mixer.failoverAt !== null && now - mixer.failoverAt < 8000 ? status.failover : null,
@@ -71,7 +75,7 @@
   <span class="slot pend">
     <span class="box">
       {#if status.outbox > 0}
-        <span class="pending fixed" data-testid="pending" title="Commands waiting for confirmation">{fit(`${status.outbox} pending`, 11)}</span>
+        <span class="pending fixed" data-testid="pending" title={`${status.outbox} commands waiting for confirmation`}>{short.current ? fit(String(status.outbox), 4) : fit(`${status.outbox} pending`, 11)}</span>
       {/if}
     </span>
   </span>
@@ -99,7 +103,7 @@
       data-testid="link"
       title={`Revision ${status.revision}; primary ${status.primaryReplica ?? '-'}, standby ${status.standbyReplica ?? '-'} (${status.standby})`}
     >
-      <i></i><b>{LABEL[status.link]}</b>
+      <i></i><b>{(short.current ? BRIEF : LABEL)[status.link]}</b>
     </span>
   </button>
   <div class="details" class:open id="connection-details" role="region" aria-label="Connection details">
@@ -369,6 +373,17 @@
   @media (max-width: 700px) {
     .slot.pend {
       display: none;
+    }
+  }
+  /* Short screens: the link word and the pending count take less of the
+     one header row, which the notice line needs (App.svelte). */
+  @media (max-height: 500px) {
+    .link b {
+      width: 8ch;
+    }
+    .slot.pend,
+    .pending {
+      width: 4ch;
     }
   }
 </style>

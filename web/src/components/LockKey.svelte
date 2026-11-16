@@ -2,6 +2,7 @@
   // Desk lock: the screen keeps showing everything and changes nothing.
   // Locking and unlocking both take a hold of HOLD_MS (pointer, Space or
   // Enter), so neither happens by a stray press.
+  import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from '../lib/state/mixer.svelte';
 
   const HOLD_MS = 500;
@@ -29,6 +30,8 @@
     if (down && !e.repeat) press();
     else if (!down) lift();
   }
+  /** A short screen (App.svelte): the key reads DESK, as wide as LOCKED. */
+  const short = new MediaQuery('max-height: 500px');
 </script>
 
 <button
@@ -51,7 +54,7 @@
   onlostpointercapture={lift}
   onkeydown={(e) => key(e, true)}
   onkeyup={(e) => key(e, false)}
-  onblur={lift}><span class="fixed label">{mixer.deskLock ? 'LOCKED' : 'LOCK DESK'}</span></button
+  onblur={lift}><span class="fixed label">{mixer.deskLock ? 'LOCKED' : short.current ? 'DESK' : 'LOCK DESK'}</span></button
 >
 
 <style>
@@ -111,5 +114,10 @@
   .lock.arming::after {
     transform: scaleX(1);
     transition: transform var(--hold) linear;
+  }
+  @media (max-height: 500px) {
+    .label {
+      width: 6ch;
+    }
   }
 </style>

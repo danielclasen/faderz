@@ -91,6 +91,9 @@ test('a notice longer than the header slot widens nothing and moves no header it
     const text = notice.locator('.text');
     expect(await text.evaluate((el) => el.scrollWidth > el.clientWidth), 'the notice is cut off').toBe(true);
     expect(await notice.getAttribute('data-tip')).toBe(await text.textContent());
+    // The compact header (link word, pending count, DESK, USR, gaps)
+    // leaves the text room to be read, not only a tooltip.
+    expect(await text.evaluate((el) => el.clientWidth), 'notice text width').toBeGreaterThanOrEqual(90);
   } finally {
     await other.command({ type: 'release', path });
     other.close();

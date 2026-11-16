@@ -388,6 +388,21 @@
     height: 100%;
     color: var(--text-dim);
   }
+  /* Short screens: narrower gaps on the right, so the notice line in
+     the one header row has room for its text. After the .right rule,
+     which it overrides. */
+  @media (max-height: 500px) {
+    .right {
+      gap: 6px;
+    }
+    .tone-slot {
+      width: 36px;
+    }
+    .tone {
+      padding: 0 3px;
+      letter-spacing: 0;
+    }
+  }
   /* The narrowest phones: the brand mark and the theme key go (the theme
      stays as set) and the gaps narrow, so the view menu, quorum, link,
      tone lamp and a locked desk's key fit 320 px. Last in the sheet: it

@@ -4,6 +4,7 @@
   // carries holders (owners), consoles and selections, not a list of
   // connected screens: a session that holds nothing shows only as the
   // initial on the strip it has selected.
+  import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { describePath } from '../lib/state/paths';
   import { handleTag } from '../lib/net/handle';
@@ -26,11 +27,13 @@
   /** What a console holds goes in its own row: each console is counted and listed once. */
   const heldBy = (handle: string) => holders.find((h) => h.owner.kind === 'console' && h.owner.handle === handle);
   const others = $derived(holders.filter((h) => !mixer.isMine(h.owner) && !(h.owner.kind === 'console' && consoles.some((c) => c.handle === h.owner.handle))));
+  /** A short screen (App.svelte): USR, so the notice line keeps room. */
+  const short = new MediaQuery('max-height: 500px');
 </script>
 
 <div class="users">
   <button class="key" aria-expanded={open} aria-controls="users-panel" onclick={() => (open = !open)} title="Who works on this mixer"
-    ><span class="fixed">USERS {String(others.length + consoles.filter((c) => c.connected).length).padStart(2)}</span></button
+    ><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(others.length + consoles.filter((c) => c.connected).length).padStart(2)}</span></button
   >
   <div class="panel" class:open id="users-panel" role="region" aria-label="Users">
     <div class="row you"><b>This screen</b><span class="num">{handleTag(mixer.status.handle)}</span></div>
