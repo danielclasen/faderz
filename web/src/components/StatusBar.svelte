@@ -6,7 +6,26 @@
   import { onMount } from 'svelte';
   import { tip } from '../lib/tip';
   import { CounterRates, WARN_WINDOW_MS, engineLamp } from '../lib/counters';
+  import { getAuth } from '../lib/auth.svelte';
   const mixer = getMixer();
+  // Absent where the status bar is mounted without the sign-in state.
+  const auth = getAuth() as ReturnType<typeof getAuth> | undefined;
+  /** Who is signed in, where a mode names anybody or has a role to show. */
+  const who = $derived.by(() => {
+    const s = auth?.session;
+    if (!s?.role || s.mode === 'none') return null;
+    return `${s.user ?? 'token'} (${s.role})`;
+  });
+  const canSignOut = $derived(auth?.session?.role != null && (auth.session.mode === 'token' || auth.session.mode === 'oidc'));
+  async function leave(): Promise<void> {
+    if (!auth) return;
+    try {
+      const next = await auth.signOut();
+      if (next) location.assign(next);
+    } catch (e) {
+      mixer.notify('error', e instanceof Error ? e.message : String(e));
+    }
+  }
   /** Same query as the header's: on a short screen the notices show there. */
   const short = new MediaQuery('max-height: 500px');
   const counters = $derived(Object.entries(mixer.counters));
@@ -56,6 +75,10 @@
       </div>
     {/if}
   </div>
+  {#if who}
+    <span class="who" data-testid="user">{who}</span>
+    {#if canSignOut}<button class="out" onclick={leave}>Sign out</button>{/if}
+  {/if}
   <!-- A fixed box with left-aligned text: the endpoint empties while
        reconnecting and comes back, and nothing moves. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -90,6 +113,22 @@
     .bar .engine {
       height: 26px;
     }
+  }
+  .who {
+    flex: none;
+    color: var(--text-dim);
+  }
+  .out {
+    all: unset;
+    flex: none;
+    padding: 0 4px;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .out:focus-visible {
+    outline: 2px solid var(--focus);
   }
   .engine-wrap {
     position: relative;

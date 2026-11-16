@@ -564,6 +564,21 @@ async fn rest_answers_match_the_contract() {
         )
         .await;
     assert_eq!(s, 200);
+    let (s, v) = rest
+        .call(
+            "GET",
+            "/session",
+            None,
+            Some("/paths/~1session/get/responses/200/content/application~1json/schema"),
+        )
+        .await;
+    assert_eq!(
+        (s, v),
+        (
+            200,
+            json!({ "mode": "none", "user": null, "role": "operator" })
+        )
+    );
     let (s, _) = rest
         .call(
             "GET",
@@ -749,6 +764,30 @@ async fn a_viewer_cannot_write() {
         (e["code"].as_u64(), e["message"].as_str()),
         (Some(400), Some("operator role required"))
     );
+    server.stop().await;
+}
+
+/// The session route tells a client how to sign in, and in oidc mode
+/// nothing else is served without a sign-in. The provider is read on first
+/// use, so faderz starts without reaching it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oidc_mode_answers_the_session_route_and_wants_a_sign_in() {
+    let dir = data_dir();
+    let auth = json!({ "mode": "oidc", "oidc": {
+        "issuerUrl": "http://127.0.0.1:9/realms/r",
+        "clientId": "faderz",
+        "publicUrl": "http://faderz.test",
+    } });
+    let server = start_with(&dir, auth).await;
+    let rest = Rest::new(&server);
+    let session = "/paths/~1session/get/responses/200/content/application~1json/schema";
+    let (s, v) = rest.call("GET", "/session", None, Some(session)).await;
+    assert_eq!(s, 200);
+    assert_eq!(v, json!({ "mode": "oidc", "user": null, "role": null }));
+    assert_eq!(rest.call("GET", "/state", None, Some(ERROR)).await.0, 401);
+    let logout = "/paths/~1logout/post/responses/200/content/application~1json/schema";
+    let (s, v) = rest.call("POST", "/logout", None, Some(logout)).await;
+    assert_eq!((s, v), (200, json!({ "redirect": null })));
     server.stop().await;
 }
 

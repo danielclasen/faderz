@@ -17,6 +17,7 @@
   import LockKey from './components/LockKey.svelte';
   import Users from './components/Users.svelte';
   import TouchInfo from './components/TouchInfo.svelte';
+  import SignIn from './components/SignIn.svelte';
 
   const mixer = getMixer();
   /** A phone in landscape: notices move from the status bar into the header. */
@@ -146,6 +147,7 @@
 
   <StatusBar />
   <TouchInfo />
+  <SignIn />
 </div>
 
 <style>

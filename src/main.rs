@@ -1,26 +1,29 @@
-//! `faderz --config <file>`: serves the mixer state until SIGINT or
-//! SIGTERM.
+//! `faderz --config <file> [flags]`: serves the mixer state until SIGINT
+//! or SIGTERM. `faderz --help` lists the flags.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use faderz::config::Config;
+use faderz::config::{self, Command, Config};
 use faderz::server::Server;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
-    let path = match args.as_slice() {
-        [_, flag, path] if flag == "--config" => PathBuf::from(path),
-        [_, flag] if flag == "--version" => {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (path, flags) = match config::command(&args) {
+        Ok(Command::Run { config, flags }) => (config, flags),
+        Ok(Command::Version) => {
             println!("faderz {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        _ => {
-            eprintln!("usage: faderz --config <file>");
+        Ok(Command::Help) => {
+            print!("{}", config::usage());
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("faderz: {e}\n\n{}", config::usage());
             return ExitCode::from(2);
         }
     };
-    let (config, shape, name) = match Config::load(&path) {
+    let (config, shape, name) = match Config::load(&path, &flags) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("faderz: config: {e}");

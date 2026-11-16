@@ -110,8 +110,10 @@ export class MixerStore {
   fine = $state(false);
   /** The operator locked this screen: it shows everything and changes nothing. */
   deskLock = $state(false);
-  /** Why write controls are disabled and send nothing (the link transmits no commands), or null. */
-  readonly lockReason = $derived(writesLockReason(this.status));
+  /** Signed in as a viewer, whose writes the server refuses. */
+  viewer = $state(false);
+  /** Why write controls are disabled and send nothing (a viewer's console, or the link transmits no commands), or null. */
+  readonly lockReason = $derived(this.viewer ? 'signed in as a viewer' : writesLockReason(this.status));
   /** Write controls are disabled and send nothing: for lockReason, or the desk is locked. */
   readonly locked = $derived(this.lockReason !== null || this.deskLock);
   /**

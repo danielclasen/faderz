@@ -61,6 +61,12 @@ FROM debian:trixie-20261027-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
+# oidc mode reaches the identity provider over https, verified against
+# the system's CA certificates.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /opt/mxl/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
 RUN ln -s libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1 \
  && ln -s libmxl.so.1 /opt/mxl/lib/libmxl.so

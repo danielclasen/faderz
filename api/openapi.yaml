@@ -43,6 +43,11 @@ info:
     identifier: Apache-2.0
 servers:
   - url: /api/v1
+# None in none and proxy mode, where the proxy in front authenticates.
+security:
+  - {}
+  - bearer: []
+  - session: []
 paths:
   /state:
     get:
@@ -356,7 +361,134 @@ paths:
           description: session missing or not a SessionId.
         "403":
           description: Origin not allowed.
+  /session:
+    get:
+      operationId: getSession
+      summary: The auth mode and who the request is signed in as.
+      description: |
+        Answered without credentials as well, with role null when the
+        request is not signed in: in oidc mode a client signs in at
+        GET /login, in token mode with POST /login.
+      security: [{}]
+      responses:
+        "200":
+          description: The mode and the identity, if any.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "403":
+          description: Host not allowed.
+  /login:
+    post:
+      operationId: logIn
+      summary: Exchange the API token for a session cookie; token mode only.
+      security: [{}]
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        "204":
+          description: Session cookie set for 12 h.
+        "401":
+          description: Wrong token.
+        "403":
+          description: Host not allowed or request header missing.
+    get:
+      operationId: signIn
+      summary: Start a sign-in at the OpenID Connect provider; oidc mode only.
+      description: |
+        Redirects to the provider's authorization endpoint with the
+        authorization code flow, PKCE (S256), state and nonce, which a
+        cookie holds for 10 min. The provider returns the browser to
+        <auth.oidc.publicUrl>/api/v1/login/callback.
+      security: [{}]
+      parameters:
+        - name: return
+          in: query
+          required: false
+          description: The path on this origin to return to after the sign-in; / when absent or not such a path.
+          schema:
+            type: string
+      responses:
+        "303":
+          description: To the provider.
+        "403":
+          description: Host not allowed.
+        "502":
+          description: The provider's metadata could not be read.
+  /login/callback:
+    get:
+      operationId: signInCallback
+      summary: The redirect URI of oidc mode.
+      description: |
+        Redeems the code, checks the ID token and sets the session cookie,
+        valid until the ID token expires and 12 h at most. Failures answer
+        in text/plain.
+      security: [{}]
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "303":
+          description: Signed in; to the path the sign-in started from.
+        "400":
+          description: No sign-in in progress, or another one's state.
+        "401":
+          description: The provider refused the sign-in, or the ID token is invalid.
+        "403":
+          description: Host not allowed, or the user has no role.
+        "502":
+          description: The provider could not be reached or did not redeem the code.
+  /logout:
+    post:
+      operationId: logOut
+      summary: Clear the session cookie; token and oidc mode.
+      security: [{}]
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      responses:
+        "200":
+          description: Session cookie cleared.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Logout"
+        "403":
+          description: Host not allowed or request header missing.
 components:
+  securitySchemes:
+    bearer:
+      description: The API token (token mode, and oidc mode when configured) or, in oidc mode, an access token of the provider.
+      type: http
+      scheme: bearer
+    session:
+      description: Set by POST /login in token mode and by the sign-in in oidc mode.
+      type: apiKey
+      in: cookie
+      name: samplez_session
   parameters:
     RequestHeader:
       name: X-Samplez-Request
@@ -373,6 +505,28 @@ components:
       schema:
         $ref: "./ws/model.schema.json#/$defs/Id"
   schemas:
+    Session:
+      type: object
+      required: [mode, user, role]
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum: [none, token, proxy, oidc]
+        user:
+          description: The user the proxy or the OpenID provider names; null when not signed in, in none and token mode.
+          type: [string, "null"]
+        role:
+          description: null when not signed in. A viewer's writes are refused.
+          enum: [operator, viewer, null]
+    Logout:
+      type: object
+      required: [redirect]
+      additionalProperties: false
+      properties:
+        redirect:
+          description: In oidc mode with a provider that has an end-session endpoint, where the browser goes next to end its session there too.
+          type: [string, "null"]
     CommandResult:
       type: object
       required: [result, revision]
@@ -392,7 +546,7 @@ components:
     Error:
       description: |
         A refused request. Requests without valid credentials get 401 in
-        token mode, and requests the browser protections refuse get 403,
+        token and oidc mode, and requests the browser protections refuse get 403,
         with this body as well.
       type: object
       required: [code, message]

@@ -8,12 +8,22 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import { MixerStore, mixerContext } from './lib/state/mixer.svelte';
 import { configureRest } from './lib/state/actions';
-import { resolveEndpoints } from './lib/sync/endpoints';
+import { resolveEndpoints, restBase } from './lib/sync/endpoints';
+import { AuthStore, authContext } from './lib/auth.svelte';
+import { mayRedirect, signInUrl } from './lib/net/auth';
 import { startSync } from './lib/sync/client';
 import { initTheme } from './lib/theme.svelte';
 import { renderFatal } from './lib/fatal';
 
 const root = document.getElementById('app')!;
+
+function storage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 function fail(e: unknown): void {
   console.error(e);
@@ -50,9 +60,18 @@ try {
   const endpoints = resolveEndpoints(new URLSearchParams(location.search).get('endpoints'), location);
   configureRest(endpoints, mixer);
   startSync(mixer, endpoints);
+  const auth = new AuthStore(restBase(endpoints[0]!));
 
-  void loadFonts()
-    .then(() => mount(App, { target: root, context: mixerContext(mixer) }))
+  void Promise.all([auth.refresh(), loadFonts()])
+    .then(() => {
+      // In oidc mode a page that is not signed in goes to the identity
+      // provider at once; the prompt shows instead if it just did.
+      if (auth.signedOut && auth.session?.mode === 'oidc' && mayRedirect(storage(), Date.now())) {
+        location.assign(signInUrl(auth.base, location));
+        return;
+      }
+      mount(App, { target: root, context: new Map<symbol, unknown>([...mixerContext(mixer), ...authContext(auth)]) });
+    })
     .catch(fail);
 } catch (e) {
   fail(e);

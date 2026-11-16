@@ -6,8 +6,16 @@ import { PORTS, TOKEN } from '../../playwright.binary.config';
 
 const WRITE = { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' };
 
-/** In token mode the browser exchanges the token for a session cookie first. */
+/**
+ * In token mode the browser exchanges the token for a session cookie
+ * first; in oidc mode the page signs in at the stand-in provider on load.
+ */
 async function signIn(page: Page, mode: string): Promise<void> {
+  if (mode === 'oidc') {
+    await page.goto('/');
+    await expect(page.getByTestId('user')).toHaveText('alice (operator)');
+    return;
+  }
   if (mode !== 'token') return;
   const res = await page.request.post('/api/v1/login', { headers: WRITE, data: { token: TOKEN } });
   expect(res.status()).toBe(204);
@@ -92,4 +100,42 @@ test('takes who the proxy names, not identity headers a client sends', { tag: '@
   });
   expect((snapshot['you'] as { principal: string }).principal).toBe('alice');
   socket!.close();
+});
+
+test('prompts for the token when not signed in', { tag: '@token' }, async ({ page }) => {
+  await page.goto('/');
+  const prompt = page.getByTestId('signin');
+  await expect(prompt).toBeVisible();
+  await prompt.getByLabel('API token').fill('not-the-token');
+  await prompt.getByRole('button', { name: 'SIGN IN' }).click();
+  await expect(prompt.getByRole('alert')).toHaveText('Wrong token.');
+  await prompt.getByLabel('API token').fill(TOKEN);
+  await prompt.getByRole('button', { name: 'SIGN IN' }).click();
+  await expect(prompt).toBeHidden();
+  // The link retries every 2 s, and now gets through.
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 10_000 });
+  await expect(page.getByTestId('user')).toHaveText('token (operator)');
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(prompt).toBeVisible();
+});
+
+test('signs in at the OpenID provider and out again', { tag: '@oidc' }, async ({ page }) => {
+  await page.goto('/?endpoints=/api/v1/ws');
+  // Through the provider and back to the page it started from.
+  await expect(page).toHaveURL(/\/\?endpoints=/);
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
+  await expect(page.getByTestId('user')).toHaveText('alice (operator)');
+  const session = await (await page.request.get('/api/v1/session')).json();
+  expect(session).toEqual({ mode: 'oidc', user: 'alice', role: 'operator' });
+  // Out at the provider too, which sends the browser back; a page that
+  // just went to sign in shows the prompt rather than going again.
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByTestId('signin')).toBeVisible();
+  expect((await page.request.get('/api/v1/state')).status()).toBe(401);
+});
+
+test('wants a session or an access token in oidc mode', { tag: '@oidc' }, async ({ request }) => {
+  expect((await request.get('/api/v1/state')).status()).toBe(401);
+  expect((await request.get('/api/v1/state', { headers: { Authorization: 'Bearer not-a-jwt' } })).status()).toBe(401);
+  expect(await (await request.get('/api/v1/session')).json()).toEqual({ mode: 'oidc', user: null, role: null });
 });

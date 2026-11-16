@@ -1,6 +1,8 @@
 //! The configuration file: listeners, auth and API settings of
 //! samplez-service, where the replicated state lives, the shape, and the
-//! MXL flows the engine reads and writes.
+//! MXL flows the engine reads and writes. The auth settings in
+//! [`SETTINGS`] can also be given as command-line flags or environment
+//! variables.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,6 +23,10 @@ pub struct Config {
     /// identity headers name, so it has to be reachable from the
     /// authenticating proxy alone: [`Config::parse`] refuses an API bind
     /// address other than loopback, where the proxy runs beside faderz.
+    ///
+    /// In `oidc` mode faderz signs users in against an OpenID Connect
+    /// provider itself (samplez-service `OidcConfig`); `auth.oidc.operatorRole`
+    /// defaults to [`DEFAULT_OPERATOR_ROLE`].
     #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
@@ -130,16 +136,266 @@ fn default_data_dir() -> PathBuf {
     PathBuf::from("/var/lib/faderz")
 }
 
+/// The role value `auth.oidc.operatorRole` takes when the file, the flags
+/// and the environment leave it out.
+pub const DEFAULT_OPERATOR_ROLE: &str = "faderz-operator";
+
+/// How a [`Setting`]'s value is written at its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A string.
+    Text,
+    /// A list of strings, separated by commas or spaces.
+    List,
+}
+
+/// A setting of the configuration file that a command-line flag or an
+/// environment variable sets as well. The flag wins over the variable, the
+/// variable over the file; an empty variable counts as unset.
+#[derive(Debug, Clone, Copy)]
+pub struct Setting {
+    pub flag: &'static str,
+    pub env: &'static str,
+    /// Where in the configuration file it goes.
+    pub path: &'static [&'static str],
+    pub kind: Kind,
+    pub help: &'static str,
+}
+
+const fn text(
+    flag: &'static str,
+    env: &'static str,
+    path: &'static [&'static str],
+    help: &'static str,
+) -> Setting {
+    Setting {
+        flag,
+        env,
+        path,
+        kind: Kind::Text,
+        help,
+    }
+}
+
+pub const SETTINGS: &[Setting] = &[
+    text(
+        "--auth-mode",
+        "FADERZ_AUTH_MODE",
+        &["auth", "mode"],
+        "none, token, proxy or oidc",
+    ),
+    text(
+        "--oidc-issuer-url",
+        "FADERZ_OIDC_ISSUER_URL",
+        &["auth", "oidc", "issuerUrl"],
+        "the provider's issuer; required in oidc mode",
+    ),
+    text(
+        "--oidc-client-id",
+        "FADERZ_OIDC_CLIENT_ID",
+        &["auth", "oidc", "clientId"],
+        "required in oidc mode",
+    ),
+    text(
+        "--oidc-client-secret-file",
+        "FADERZ_OIDC_CLIENT_SECRET_FILE",
+        &["auth", "oidc", "clientSecret", "file"],
+        "the client secret's file; absent for a public client",
+    ),
+    text(
+        "--oidc-public-url",
+        "FADERZ_OIDC_PUBLIC_URL",
+        &["auth", "oidc", "publicUrl"],
+        "scheme://host[:port] browsers reach faderz under; required in oidc mode",
+    ),
+    text(
+        "--oidc-role-claim",
+        "FADERZ_OIDC_ROLE_CLAIM",
+        &["auth", "oidc", "roleClaim"],
+        "the claim carrying roles or groups; default groups",
+    ),
+    Setting {
+        flag: "--oidc-scopes",
+        env: "FADERZ_OIDC_SCOPES",
+        path: &["auth", "oidc", "scopes"],
+        kind: Kind::List,
+        help: "scopes requested besides openid, comma- or space-separated",
+    },
+    text(
+        "--oidc-operator-role",
+        "FADERZ_OIDC_OPERATOR_ROLE",
+        &["auth", "oidc", "operatorRole"],
+        "the claim value granting operator; default faderz-operator",
+    ),
+    text(
+        "--oidc-viewer-role",
+        "FADERZ_OIDC_VIEWER_ROLE",
+        &["auth", "oidc", "viewerRole"],
+        "when set, required to sign in as viewer",
+    ),
+    text(
+        "--oidc-audience",
+        "FADERZ_OIDC_AUDIENCE",
+        &["auth", "oidc", "audience"],
+        "the audience of bearer access tokens; default the client id",
+    ),
+    text(
+        "--oidc-session-key-file",
+        "FADERZ_OIDC_SESSION_KEY_FILE",
+        &["auth", "oidc", "sessionKey", "file"],
+        "the session cookie key's file; replicas behind one host share it",
+    ),
+];
+
+/// What the command line asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    Run {
+        config: PathBuf,
+        /// `(flag, value)` of each [`SETTINGS`] flag given.
+        flags: Vec<(String, String)>,
+    },
+    Version,
+    Help,
+}
+
+/// Parses the arguments after the program name: `--config <file>` and
+/// any [`SETTINGS`] flag, each as `--flag value` or `--flag=value`, or
+/// `--version` or `--help` alone.
+pub fn command(args: &[String]) -> Result<Command, String> {
+    match args {
+        [only] if only == "--version" => return Ok(Command::Version),
+        [only] if only == "--help" || only == "-h" => return Ok(Command::Help),
+        _ => {}
+    }
+    let mut config = None;
+    let mut flags = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_owned())),
+            _ => (arg.as_str(), None),
+        };
+        let known = flag == "--config" || SETTINGS.iter().any(|s| s.flag == flag);
+        if !known {
+            return Err(format!("unknown argument {arg:?}"));
+        }
+        let value = match inline {
+            Some(v) => v,
+            None => args.next().ok_or(format!("{flag} needs a value"))?.clone(),
+        };
+        if flag == "--config" {
+            config = Some(PathBuf::from(value));
+        } else {
+            flags.push((flag.to_owned(), value));
+        }
+    }
+    let config = config.ok_or("--config <file> is required")?;
+    Ok(Command::Run { config, flags })
+}
+
+/// The usage text with every flag, its variable and its key.
+pub fn usage() -> String {
+    let mut text = String::from(
+        "usage: faderz --config <file> [flags]\n       faderz --version\n\n\
+         Each flag sets the configuration key named after it, as does its\n\
+         environment variable; the flag wins over the variable, the variable\n\
+         over the file. An empty variable counts as unset.\n\n",
+    );
+    for s in SETTINGS {
+        text.push_str(&format!(
+            "  {} <value>\n      {}, {}: {}\n",
+            s.flag,
+            s.env,
+            s.path.join("."),
+            s.help
+        ));
+    }
+    text
+}
+
+/// Sets each [`SETTINGS`] entry given in `flags`, else in `env`, at its
+/// path in `config`, then [`DEFAULT_OPERATOR_ROLE`] where an `auth.oidc`
+/// section has no operator role.
+pub fn apply(
+    config: &mut Value,
+    flags: &[(String, String)],
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    for s in SETTINGS {
+        let given = flags
+            .iter()
+            .rev()
+            .find(|(f, _)| f == s.flag)
+            .map(|(_, v)| v.clone())
+            .or_else(|| env(s.env).filter(|v| !v.is_empty()));
+        let Some(given) = given else { continue };
+        let value = match s.kind {
+            Kind::Text => json!(given),
+            Kind::List => json!(
+                given
+                    .split([',', ' '])
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>()
+            ),
+        };
+        let (last, parents) = s.path.split_last().expect("a path has a key");
+        let mut at = &mut *config;
+        for key in parents {
+            if !at.is_object() {
+                return Err(format!("{}: not an object", s.path.join(".")));
+            }
+            at = at
+                .as_object_mut()
+                .expect("checked above")
+                .entry(*key)
+                .or_insert_with(|| json!({}));
+            if at.is_null() {
+                *at = json!({});
+            }
+        }
+        match at.as_object_mut() {
+            Some(o) => o.insert((*last).to_owned(), value),
+            None => return Err(format!("{}: not an object", s.path.join("."))),
+        };
+    }
+    if let Some(oidc) = config
+        .pointer_mut("/auth/oidc")
+        .and_then(Value::as_object_mut)
+    {
+        oidc.entry("operatorRole")
+            .or_insert_with(|| json!(DEFAULT_OPERATOR_ROLE));
+    }
+    Ok(())
+}
+
 impl Config {
-    /// Reads and checks `path`: the shape against the contract and its
-    /// own rules ([`Shape::parse`]), the replica name against model `Id`.
-    pub fn load(path: &Path) -> Result<(Config, Shape, String), String> {
+    /// Reads and checks `path` with the [`SETTINGS`] given in `flags` or
+    /// the process environment on top: the shape against the contract and
+    /// its own rules ([`Shape::parse`]), the replica name against model
+    /// `Id`.
+    pub fn load(
+        path: &Path,
+        flags: &[(String, String)],
+    ) -> Result<(Config, Shape, String), String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Config::parse(&text, hostname)
+        Config::parse_with(&text, flags, |k| std::env::var(k).ok(), hostname)
     }
 
+    /// [`Config::parse_with`] without flags or environment.
     pub fn parse(text: &str, host: fn() -> String) -> Result<(Config, Shape, String), String> {
-        let config: Config = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        Config::parse_with(text, &[], |_| None, host)
+    }
+
+    pub fn parse_with(
+        text: &str,
+        flags: &[(String, String)],
+        env: impl Fn(&str) -> Option<String>,
+        host: fn() -> String,
+    ) -> Result<(Config, Shape, String), String> {
+        let mut value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        apply(&mut value, flags, env)?;
+        let config: Config = serde_json::from_value(value).map_err(|e| e.to_string())?;
         // In proxy mode the API takes who the identity headers name, so
         // only the proxy may reach it: the proxy runs beside faderz, as a
         // sidecar in its pod, and nothing else can connect to loopback.
@@ -304,6 +560,114 @@ mod tests {
         assert!(Config::parse(&config("10.0.0.5"), || unreachable!()).is_err());
         assert!(Config::parse(&config("127.0.0.1"), || unreachable!()).is_ok());
         assert!(Config::parse(&config("::1"), || unreachable!()).is_ok());
+    }
+
+    fn oidc_flags() -> Vec<(String, String)> {
+        let args: Vec<String> = [
+            "--config",
+            "/etc/faderz/config.json",
+            "--auth-mode",
+            "oidc",
+            "--oidc-issuer-url=https://idp.example/realms/media",
+            "--oidc-client-id",
+            "faderz",
+            "--oidc-public-url",
+            "https://faderz.example",
+            "--oidc-scopes",
+            "profile, groups",
+        ]
+        .map(String::from)
+        .into();
+        match command(&args).unwrap() {
+            Command::Run { config, flags } => {
+                assert_eq!(config, PathBuf::from("/etc/faderz/config.json"));
+                flags
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Every OIDC setting the file takes, the command line and the
+    /// environment take as well; the flag wins over the variable, the
+    /// variable over the file.
+    #[test]
+    fn oidc_settings_come_from_file_flags_or_environment() {
+        let file = json!({
+            "replica": { "name": "r1" },
+            "shape": small(),
+            "auth": { "oidc": { "clientId": "from-file", "roleClaim": "roles" } },
+        })
+        .to_string();
+        let env = |k: &str| match k {
+            "FADERZ_OIDC_CLIENT_ID" => Some("from-env".to_owned()),
+            "FADERZ_OIDC_VIEWER_ROLE" => Some("faderz-viewer".to_owned()),
+            "FADERZ_OIDC_SESSION_KEY_FILE" => Some("/run/secrets/key".to_owned()),
+            "FADERZ_OIDC_AUDIENCE" => Some(String::new()),
+            _ => None,
+        };
+        let (config, _, _) =
+            Config::parse_with(&file, &oidc_flags(), env, || unreachable!()).unwrap();
+        assert_eq!(config.auth.mode, AuthMode::Oidc);
+        let o = config.auth.oidc.unwrap();
+        assert_eq!(o.client_id, "faderz", "the flag over the variable");
+        assert_eq!(o.issuer_url, "https://idp.example/realms/media");
+        assert_eq!(o.public_url, "https://faderz.example");
+        assert_eq!(o.scopes, ["profile", "groups"]);
+        assert_eq!(o.role_claim, "roles", "the file where nothing else sets it");
+        assert_eq!(o.viewer_role.as_deref(), Some("faderz-viewer"));
+        assert_eq!(o.audience, None, "an empty variable is unset");
+        assert_eq!(
+            o.session_key.unwrap().file,
+            PathBuf::from("/run/secrets/key")
+        );
+        assert_eq!(o.operator_role, DEFAULT_OPERATOR_ROLE);
+
+        let flags = [
+            ("--oidc-client-secret-file", "/run/s"),
+            ("--oidc-issuer-url", "https://idp.example"),
+            ("--oidc-public-url", "https://faderz.example"),
+        ]
+        .map(|(f, v)| (f.to_owned(), v.to_owned()));
+        let (config, _, _) =
+            Config::parse_with(&file, &flags, |_| None, || unreachable!()).unwrap();
+        let o = config.auth.oidc.unwrap();
+        assert_eq!(o.client_id, "from-file");
+        assert_eq!(o.client_secret.unwrap().file, PathBuf::from("/run/s"));
+
+        // Every setting maps onto a key the file takes.
+        let all: Vec<(String, String)> = SETTINGS
+            .iter()
+            .map(|s| (s.flag.to_owned(), "x".to_owned()))
+            .collect();
+        let mut v = json!({});
+        apply(&mut v, &all, |_| None).unwrap();
+        v["auth"]["mode"] = json!("oidc");
+        serde_json::from_value::<AuthConfig>(v["auth"].clone()).unwrap();
+    }
+
+    #[test]
+    fn the_command_line_is_checked() {
+        let args = |a: &[&str]| command(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(args(&["--version"]), Ok(Command::Version));
+        assert_eq!(args(&["--help"]), Ok(Command::Help));
+        assert!(args(&[]).is_err());
+        assert!(
+            args(&["--oidc-client-id", "x"])
+                .unwrap_err()
+                .contains("--config")
+        );
+        assert!(args(&["--config"]).is_err());
+        assert!(
+            args(&["--config", "c", "--oidc-nope", "x"])
+                .unwrap_err()
+                .contains("unknown")
+        );
+        assert!(args(&["--config", "c", "--oidc-client-id"]).is_err());
+        assert!(args(&["--config", "c", "--version"]).is_err());
+        let help = usage();
+        for s in SETTINGS {
+            assert!(help.contains(s.flag) && help.contains(s.env), "{}", s.flag);
+        }
     }
 
     /// A name clients could not be told (`ReplicaRef.id`) refuses the
