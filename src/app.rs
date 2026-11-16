@@ -41,6 +41,19 @@ pub struct App {
     requests: Mutex<BTreeMap<(SessionKey, String), Instant>>,
 }
 
+/// A connection counted by [`App::connected`]; dropping it counts it
+/// closed.
+pub struct Connected<'a> {
+    app: &'a App,
+    session: SessionKey,
+}
+
+impl Drop for Connected<'_> {
+    fn drop(&mut self) {
+        self.app.disconnected(&self.session);
+    }
+}
+
 /// A session's selection.
 struct Selection {
     /// The owner record of the connection that made it.
@@ -243,15 +256,18 @@ impl App {
         }
     }
 
-    /// Counts a connection of `session` opened on this replica.
-    pub fn connected(&self, session: &SessionKey) {
+    /// Counts a connection of `session` opened on this replica until the
+    /// guard returned is dropped, as it also is by a panic or a cancelled
+    /// serve.
+    pub fn connected(&self, session: SessionKey) -> Connected<'_> {
         let mut connections = self.connections.lock().expect("connections lock poisoned");
         *connections.entry(session.clone()).or_default() += 1;
+        Connected { app: self, session }
     }
 
     /// Counts a connection of `session` closed, and drops the session's
     /// selection with its last one.
-    pub fn disconnected(&self, session: &SessionKey) {
+    fn disconnected(&self, session: &SessionKey) {
         let last = {
             let mut connections = self.connections.lock().expect("connections lock poisoned");
             let open = connections.get_mut(session).expect("counted when opened");
@@ -391,7 +407,7 @@ pub fn uuid() -> std::io::Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::contract::{check, contract};
     use crate::replica;
@@ -408,7 +424,7 @@ mod tests {
 
     /// An App over a fresh replica of two channels, its [`App::publish`]
     /// loop not running, and the data directory to remove after.
-    async fn app() -> (Arc<App>, PathBuf) {
+    pub(crate) async fn app() -> (Arc<App>, PathBuf) {
         let deps = std::env::current_exe().unwrap();
         let dir = deps.parent().unwrap().join(format!(
             "faderz-app-{}-{}",
@@ -438,7 +454,7 @@ mod tests {
         (app, dir)
     }
 
-    fn owner(session: &str) -> Owner {
+    pub(crate) fn owner(session: &str) -> Owner {
         Owner {
             principal: "anonymous".into(),
             session: session.into(),
@@ -463,7 +479,7 @@ mod tests {
         .expect("the lease entry applied");
     }
 
-    fn selected(app: &App, session: &SessionKey) -> bool {
+    pub(crate) fn selected(app: &App, session: &SessionKey) -> bool {
         app.selections.lock().unwrap().contains_key(session)
     }
 
@@ -483,6 +499,29 @@ mod tests {
         }
         app.lapse_selections();
         assert!(!selected(&app, &s), "lapsed after one lease");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A selection made before the session's first lease lapses as soon
+    /// as the lease that arrived after it ends, however recent it is.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_selection_made_before_the_lease_lapses_when_it_ends() {
+        let (app, dir) = app().await;
+        let o = owner("s-a");
+        let s = SessionKey::from(&o);
+        app.select(s.clone(), json!({}), Some("ch1"));
+        app.replica.renew_sessions(std::slice::from_ref(&o));
+        until_lease(&app, &s, true).await;
+        app.lapse_selections();
+        assert!(selected(&app, &s), "kept while leased");
+        let renewed = app.replica.store().with_state(|sm| sm.leases[&s]);
+        app.replica.append(Body::LeaseExpiry {
+            session: s.clone(),
+            renewed,
+        });
+        until_lease(&app, &s, false).await;
+        app.lapse_selections();
+        assert!(!selected(&app, &s), "lapsed with the lease");
         let _ = std::fs::remove_dir_all(dir);
     }
 

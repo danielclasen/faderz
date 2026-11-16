@@ -38,8 +38,7 @@ struct Hello {
 /// Serves one WebSocket client until it closes or fails.
 pub async fn serve(app: Arc<App>, socket: WebSocket, connect: Connect) {
     let queue = app.hub.subscribe(&connect.owner);
-    let session = SessionKey::from(&connect.owner);
-    app.connected(&session);
+    let _connected = app.connected(SessionKey::from(&connect.owner));
     let hello = Arc::new(Mutex::new(Hello::default()));
     let encoder = Encoder {
         app: app.clone(),
@@ -55,7 +54,6 @@ pub async fn serve(app: Arc<App>, socket: WebSocket, connect: Connect) {
         |message, admission| on_message(&app, &connect, &queue, &hello, message, admission),
     )
     .await;
-    app.disconnected(&session);
     tracing::debug!(connection = %connect.owner.connection, ?ended, "connection ended");
 }
 
@@ -433,4 +431,85 @@ fn refusal(app: &App, id: &str, path: &str, answer: &state::Answer) -> Message {
 fn grant(queue: &ClientQueue, n: u64) {
     let room = CREDIT_CAP.saturating_sub(queue.meter_credits());
     queue.grant_meter_credits(n.min(room));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::tests::{app, owner, selected};
+    use axum::Router;
+    use axum::extract::ws::WebSocketUpgrade;
+    use axum::routing::get;
+    use futures_util::{SinkExt, StreamExt};
+    use samplez_service::ws::Sessions;
+    use samplez_service::{Identity, Role};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+    use tokio::task::JoinHandle;
+    use tokio_tungstenite::tungstenite::Message as Sent;
+
+    /// A serve cancelled mid-connection still counts its connection
+    /// closed, so the session's selection goes with its last connection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cancelled_serve_counts_its_connection_closed() {
+        let (app, dir) = app().await;
+        let session = "session-a-0123456789abcdef";
+        let sessions = Arc::new(Sessions::new("r1").unwrap());
+        let (served, mut serving) = mpsc::unbounded_channel::<JoinHandle<()>>();
+        let ws_app = app.clone();
+        let router = Router::new().route(
+            "/ws",
+            get(move |upgrade: WebSocketUpgrade| {
+                let (app, sessions, served) = (ws_app.clone(), sessions.clone(), served.clone());
+                async move {
+                    upgrade.on_upgrade(move |socket| async move {
+                        let mut owner = owner(session);
+                        owner.connection = crate::app::uuid().unwrap();
+                        let connect = Connect {
+                            identity: Identity {
+                                user: None,
+                                role: Role::Operator,
+                            },
+                            owner,
+                            sessions,
+                        };
+                        let _ = served.send(tokio::spawn(serve(app, socket, connect)));
+                    })
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        let key = SessionKey::from(&owner(session));
+        let hello = json!({ "type": "hello", "session": session, "kind": "ui", "mode": "primary" });
+
+        // Served once it answers: counted by then.
+        let (mut first, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let serve_first = serving.recv().await.unwrap();
+        first.send(Sent::text(hello.to_string())).await.unwrap();
+        first.next().await.unwrap().unwrap();
+        serve_first.abort();
+        assert!(serve_first.await.unwrap_err().is_cancelled());
+
+        let (mut second, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        let serve_second = serving.recv().await.unwrap();
+        second.send(Sent::text(hello.to_string())).await.unwrap();
+        let select = json!({ "type": "select", "element": "ch1" });
+        second.send(Sent::text(select.to_string())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !selected(&app, &key) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("selected");
+        drop(second);
+        tokio::time::timeout(Duration::from_secs(5), serve_second)
+            .await
+            .expect("the second connection ends")
+            .unwrap();
+        assert!(!selected(&app, &key), "gone with the last connection");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
