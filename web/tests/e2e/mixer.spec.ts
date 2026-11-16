@@ -1265,6 +1265,9 @@ test('says in the notice line that changes are not committing while the serving 
   for (const r of REPLICAS.filter((x) => x !== primary)) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
   await expect(banner).toBeVisible();
   await expect(banner).toContainText('CHANGES NOT COMMITTING');
+  // A status of its own, in no other live region: announced once.
+  expect(await banner.evaluate((el) => el.parentElement!.closest('[aria-live], [role="log"], [role="status"], [role="alert"]') === null)).toBe(true);
+  await expect(page.getByRole('log', { name: 'Notices' })).toHaveCount(0);
   await expect(banner).toContainText('audio continues');
   await expect(page.getByTestId('commit-pending')).toHaveText('0 pending');
   // In the notice line of the status bar, whole and over no control:

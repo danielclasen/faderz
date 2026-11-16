@@ -19,11 +19,15 @@
   const releasable = $derived(latest?.kind === 'request' && latest.path !== undefined && mixer.isMine(mixer.ownerOf(latest.path)) ? latest.path : null);
 </script>
 
-<div class="notice-line" role="log" aria-live="polite" aria-label="Notices">
+<!-- The banner is a status of its own, outside the notices' live
+     region, so a screen reader announces it once. -->
+<div class="notice-line">
   <!-- While nothing commits that is what the line says; the notices wait. -->
   {#if mixer.shape && mixer.notCommitting}
     <CommitBanner />
-  {:else if latest}
+  {:else}
+  <div role="log" aria-live="polite" aria-label="Notices">
+  {#if latest}
     <!-- A text cut off at the end is whole in the tooltip, which focus
          shows too. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -51,6 +55,8 @@
       {/if}
       <button onclick={() => mixer.dismiss(latest.id)} aria-label="Dismiss notice">x</button>
     </div>
+  {/if}
+  </div>
   {/if}
 </div>
 
