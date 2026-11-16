@@ -304,6 +304,7 @@ impl Reader {
             block: B,
             margin: 0,
             max_catchup_blocks: 0,
+            resync_budget: 0,
         };
         generation.attach(0, &cfg, &timing).unwrap();
         Reader {
