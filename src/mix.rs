@@ -2,13 +2,14 @@
 //! (the legs of each channel in shape order) and one column per output
 //! channel (the legs of each shape output in shape order).
 //!
-//! What a matrix coefficient can carry is applied: trim, leg trim and
-//! polarity, fader, mute, VCA offsets and mutes, AFV open or closed, pan
-//! of a mono leg and the fold-down of a wider channel, bus routes, sends
+//! What a matrix coefficient can carry is applied: fader, mute, VCA
+//! offsets and mutes, AFV open or closed, pan of a mono leg and the
+//! fold-down of a wider channel, bus routes, sends
 //! and their levels, bus, aux and mix-minus faders, mutes and polarity,
 //! the mix-minus exclusions, and the monitor's source, downmix, level,
 //! dim, cut, mono and speaker mutes and solos. Everything else in the
-//! state is kept and not applied.
+//! state is the input's strip ([`crate::strip`]) or is kept and not
+//! applied.
 
 use serde_json::Value;
 
@@ -39,9 +40,10 @@ fn on(v: &Value) -> bool {
 /// Where a channel's signal is taken.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tap {
-    /// The selected input, before trim.
+    /// The selected input; the engine has no tap before the strip, so
+    /// it is the pre-fader signal.
     Input,
-    /// After trim, leg trim and polarity.
+    /// After the strip: trim, leg trim, polarity and processing.
     PreFader,
     /// After fader, mute and VCAs, before AFV.
     PostFader,
@@ -49,17 +51,15 @@ enum Tap {
     Mix,
 }
 
-/// The gain of leg `leg` of channel `id` at `tap`.
-fn channel(state: &Value, id: &str, leg: usize, tap: Tap) -> f64 {
-    if tap == Tap::Input {
+/// The gain of channel `id` at `tap`, the same on every leg.
+fn channel(state: &Value, id: &str, tap: Tap) -> f64 {
+    // Trim, leg trim, polarity and the processing are the input's strip,
+    // which runs before the matrix: the input tap is after it too.
+    if matches!(tap, Tap::Input | Tap::PreFader) {
         return 1.0;
     }
     let c = &state["channels"][id];
-    let sign = if on(&c["polarity"][leg]) { -1.0 } else { 1.0 };
-    let mut g = sign * gain(num(&c["trim"]) + num(&c["legTrim"][leg]));
-    if tap == Tap::PreFader {
-        return g;
-    }
+    let mut g = 1.0;
     let mut db = num(&c["fader"]);
     let mut muted = on(&c["mute"]);
     if let Some(vcas) = state["vcas"].as_object() {
@@ -158,7 +158,7 @@ fn element(shape: &Shape, state: &Value, id: &str) -> Vec<Vec<f64>> {
         let feed = feed(shape, state, &c.id, id);
         if let Some((tap, level, p)) = feed {
             for i in 0..c.width {
-                let at = channel(state, &c.id, i, tap) * level;
+                let at = channel(state, &c.id, tap) * level;
                 for (j, out) in g[row + i].iter_mut().enumerate() {
                     *out = at * pan(c.width, width, i, j, p);
                 }
@@ -350,8 +350,8 @@ mod tests {
         assert!(close(m[0][0], 1.0) && close(m[0][1], 0.0));
     }
 
-    /// Fader, trim, polarity, mute, VCA and bus fader all multiply into
-    /// one coefficient.
+    /// Fader, mute, VCA and bus fader multiply into one coefficient;
+    /// trim, leg trim and polarity are the strip's, so not in it.
     #[test]
     fn the_gain_stages_multiply() {
         let shape = shape();
@@ -365,9 +365,9 @@ mod tests {
         s["vcas"]["vca1"]["members"] = json!(["st1"]);
         s["vcas"]["vca1"]["offset"] = json!(1);
         let m = matrix(&shape, &s);
-        assert!(close(m[2][0], gain(3.0 - 6.0 + 1.0 - 10.0)));
+        assert!(close(m[2][0], gain(-6.0 + 1.0 - 10.0)));
         assert!(close(m[2][1], 0.0));
-        assert!(close(m[3][1], -gain(3.0 - 3.0 - 6.0 + 1.0 - 10.0)));
+        assert!(close(m[3][1], gain(-6.0 + 1.0 - 10.0)));
         s["vcas"]["vca1"]["mute"] = json!(true);
         assert!(matrix(&shape, &s)[2].iter().take(2).all(|g| *g == 0.0));
         s["vcas"]["vca1"]["mute"] = json!(false);

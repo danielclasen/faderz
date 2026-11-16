@@ -1,7 +1,8 @@
 //! The samplez engine under the replicated state: started with the gain
-//! matrix of the state it opens with, it follows every applied delta with
-//! gain changes and input routes at the delta's `atIndex`, and its output
-//! meters go to the primary connections as meter frames.
+//! matrix of the state it opens with, it is sent every channel's strip,
+//! then follows every applied delta with strip and gain changes and input
+//! routes at the delta's `atIndex`, and its output meters go to the
+//! primary connections as meter frames.
 //!
 //! The engine keeps its own log ([`Engine::start`]): the state is a set
 //! of one voter, so the order the replica applies deltas in is the order
@@ -12,7 +13,8 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 
 use samplez::rt::ProcessStatus;
-use samplez::{Engine, EntryError, GainError};
+use samplez::{Counters, Engine, EntryError, GainError};
+use samplez_dsp::StripParam;
 use samplez_replica::Replica;
 use samplez_service::ws::{Frame, Hub};
 use samplez_service::{Counter, Gauge, Ops, Position, ReplicatedState};
@@ -21,9 +23,9 @@ use tokio::sync::Notify;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::meters::Layout;
-use crate::mix;
 use crate::shape::Shape;
 use crate::state::{Mixer, set_at};
+use crate::{mix, strip};
 
 /// The meter period: 25 frames per second.
 pub const METER_PERIOD: Duration = Duration::from_millis(40);
@@ -55,6 +57,10 @@ pub struct Audio {
 struct Sent {
     matrix: Vec<Vec<f32>>,
     routed: Vec<String>,
+    /// Each input's strip parameters ([`strip::params`]); `None` for one
+    /// not sent, as all are at start: the engine's strip passes its input
+    /// unchanged until set.
+    strips: Vec<Vec<Option<StripParam>>>,
 }
 
 impl Sent {
@@ -64,6 +70,7 @@ impl Sent {
     /// one built on a loaded host can be late again.
     fn clear(&mut self, engine: &Engine) {
         self.matrix.iter_mut().flatten().for_each(|g| *g = f32::NAN);
+        self.strips.iter_mut().flatten().for_each(|p| *p = None);
         for (routed, input) in self.routed.iter_mut().zip(engine.status().inputs) {
             *routed = input.flow_id;
         }
@@ -158,7 +165,14 @@ impl Audio {
         let mut sent = Sent {
             matrix: mix::matrix(&self.shape, &state),
             routed: self.started_on.clone(),
+            strips: self
+                .shape
+                .channels
+                .iter()
+                .map(|c| vec![None; strip::params(&Value::Null, c.width).len()])
+                .collect(),
         };
+        self.apply(&state, &mut sent, 0).await;
         loop {
             let resent = tokio::select! {
                 () = replica.applied(revision + 1) => None,
@@ -211,28 +225,27 @@ impl Audio {
     /// waits.
     async fn apply(&self, state: &Value, sent: &mut Sent, at: u64) {
         let mut at = at.next_multiple_of(self.block);
+        for (slot, (c, sent)) in self.shape.channels.iter().zip(&mut sent.strips).enumerate() {
+            let next = strip::params(&state["channels"][&c.id], c.width);
+            for (p, n) in sent.iter_mut().zip(next) {
+                if *p != Some(n)
+                    && self
+                        .send(&mut at, |at| self.engine.set_strip(slot, n, at))
+                        .await
+                {
+                    *p = Some(n);
+                }
+            }
+        }
         let next = mix::matrix(&self.shape, state);
         for (input, (row, new)) in sent.matrix.iter_mut().zip(next).enumerate() {
             for (output, (g, n)) in row.iter_mut().zip(new).enumerate() {
-                if *g == n {
-                    continue;
-                }
-                loop {
-                    match self.engine.set_gain(input, output, n, at) {
-                        Ok(()) => {
-                            *g = n;
-                            break;
-                        }
-                        Err(GainError::TooNear { earliest, .. }) => {
-                            tracing::debug!(at, earliest, "the rest of a diff applies later");
-                            at = earliest.next_multiple_of(self.block);
-                        }
-                        Err(GainError::Full) => tokio::time::sleep(FULL_RETRY).await,
-                        Err(GainError::Invalid(e)) => {
-                            tracing::warn!(input, output, n, "gain change refused: {e}");
-                            break;
-                        }
-                    }
+                if *g != n
+                    && self
+                        .send(&mut at, |at| self.engine.set_gain(input, output, n, at))
+                        .await
+                {
+                    *g = n;
                 }
             }
         }
@@ -253,6 +266,27 @@ impl Audio {
         }
     }
 
+    /// Sends one change through `set` at `at`. When the engine no longer
+    /// takes that index, it and the rest of the diff go at the earliest
+    /// one it does; while it holds as many changes as it takes, it waits.
+    /// Whether the engine took it.
+    async fn send(&self, at: &mut u64, set: impl Fn(u64) -> Result<(), GainError>) -> bool {
+        loop {
+            match set(*at) {
+                Ok(()) => return true,
+                Err(GainError::TooNear { earliest, .. }) => {
+                    tracing::debug!(at, earliest, "the rest of a diff applies later");
+                    *at = earliest.next_multiple_of(self.block);
+                }
+                Err(GainError::Full) => tokio::time::sleep(FULL_RETRY).await,
+                Err(GainError::Invalid(e)) => {
+                    tracing::warn!("engine change refused: {e}");
+                    return false;
+                }
+            }
+        }
+    }
+
     /// Publishes a meter frame of the engine's output meters every meter
     /// period, numbered by the periods since the first; beats the ops
     /// heartbeat while the RT thread's advances; and asks for a resend
@@ -264,10 +298,7 @@ impl Audio {
         let mut ticks = tokio::time::interval_at(first, METER_PERIOD);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let counters = self.engine.counters();
-        let mut drops = Drops::new(
-            counters.command_late.load(Relaxed),
-            self.engine.status().diverged,
-        );
+        let mut drops = Drops::new(dropped(counters), self.engine.status().diverged);
         let mut beats = 0;
         loop {
             let tick = ticks.tick().await;
@@ -277,13 +308,13 @@ impl Audio {
                 self.ops.heartbeat().beat();
             }
             let status = self.engine.status();
-            let late = counters.command_late.load(Relaxed);
+            let late = dropped(counters);
             match drops.tick(late, &status.diverged, tick.into_std()) {
                 Act::None => {}
                 Act::Hold => self.hold(),
                 Act::Resend { log } => {
                     if log {
-                        tracing::warn!(late, diverged = ?status.diverged, "engine entries dropped: resending");
+                        tracing::warn!(?late, diverged = ?status.diverged, "engine entries dropped: resending");
                     }
                     self.resend();
                 }
@@ -309,11 +340,17 @@ enum Act {
     },
 }
 
-/// Whether the engine dropped entries: its `command_late` count rose or
-/// its divergence changed. A late route needs no resend: samplez holds
+/// The engine's counts of entries it did not apply: `command_late` and
+/// `strip_refused`.
+fn dropped(c: &Counters) -> [u64; 2] {
+    [c.command_late.load(Relaxed), c.strip_refused.load(Relaxed)]
+}
+
+/// Whether the engine dropped entries: a count of [`dropped`] rose or its
+/// divergence changed. A late route needs no resend: samplez holds
 /// the slot and swaps the generation in when it arrives.
 struct Drops {
-    late: u64,
+    late: [u64; 2],
     diverged: Option<String>,
     /// Drops seen and not resent yet.
     pending: bool,
@@ -323,7 +360,7 @@ struct Drops {
 }
 
 impl Drops {
-    fn new(late: u64, diverged: Option<String>) -> Drops {
+    fn new(late: [u64; 2], diverged: Option<String>) -> Drops {
         Drops {
             late,
             diverged,
@@ -333,8 +370,8 @@ impl Drops {
         }
     }
 
-    /// The engine's `command_late` and `diverged` at `now`.
-    fn tick(&mut self, late: u64, diverged: &Option<String>, now: std::time::Instant) -> Act {
+    /// The engine's [`dropped`] counts and `diverged` at `now`.
+    fn tick(&mut self, late: [u64; 2], diverged: &Option<String>, now: std::time::Instant) -> Act {
         let quiet = self.last.is_none_or(|t| now - t >= RESEND_EVERY);
         let seen = late != self.late || *diverged != self.diverged;
         if seen {
@@ -386,25 +423,43 @@ pub fn state_of(replica: &Replica<Mixer>) -> (Value, u64) {
 mod tests {
     use super::*;
 
-    /// A rise of command_late or a new divergence resends, at most once
+    /// A rise of a drop count or a new divergence resends, at most once
     /// per RESEND_EVERY, logged once per episode; generation_late is not
     /// read at all.
     #[test]
     fn dropped_entries_resend_with_a_backoff() {
         let t0 = std::time::Instant::now();
         let at = |ms: u64| t0 + Duration::from_millis(ms);
-        let mut d = Drops::new(0, None);
-        assert_eq!(d.tick(0, &None, at(0)), Act::None);
-        assert_eq!(d.tick(1, &None, at(40)), Act::Resend { log: true });
-        assert_eq!(d.tick(1, &None, at(80)), Act::None);
+        let mut d = Drops::new([0, 0], None);
+        assert_eq!(d.tick([0, 0], &None, at(0)), Act::None);
+        assert_eq!(d.tick([1, 0], &None, at(40)), Act::Resend { log: true });
+        assert_eq!(d.tick([1, 0], &None, at(80)), Act::None);
         // Another drop within the second waits, and readiness fails meanwhile.
-        assert_eq!(d.tick(2, &None, at(120)), Act::Hold);
-        assert_eq!(d.tick(3, &None, at(160)), Act::None);
-        assert_eq!(d.tick(3, &None, at(1_040)), Act::Resend { log: false });
+        assert_eq!(d.tick([2, 0], &None, at(120)), Act::Hold);
+        assert_eq!(d.tick([3, 0], &None, at(160)), Act::None);
+        assert_eq!(d.tick([3, 0], &None, at(1_040)), Act::Resend { log: false });
         // Quiet for a second: the next drop starts a new episode.
-        assert_eq!(d.tick(3, &None, at(2_100)), Act::None);
+        assert_eq!(d.tick([3, 0], &None, at(2_100)), Act::None);
         let diverged = Some("entry 9 late".to_owned());
-        assert_eq!(d.tick(3, &diverged, at(2_140)), Act::Resend { log: true });
-        assert_eq!(d.tick(3, &diverged, at(3_200)), Act::None);
+        assert_eq!(
+            d.tick([3, 0], &diverged, at(2_140)),
+            Act::Resend { log: true }
+        );
+        assert_eq!(d.tick([3, 0], &diverged, at(3_200)), Act::None);
+    }
+
+    /// A strip parameter the RT thread refused counts as a drop.
+    #[test]
+    fn a_refused_strip_entry_resends() {
+        let t0 = std::time::Instant::now();
+        let c = Counters::default();
+        let mut d = Drops::new(dropped(&c), None);
+        assert_eq!(d.tick(dropped(&c), &None, t0), Act::None);
+        c.strip_refused.store(1, Relaxed);
+        let at = t0 + Duration::from_millis(40);
+        assert_eq!(d.tick(dropped(&c), &None, at), Act::Resend { log: true });
+        c.command_late.store(1, Relaxed);
+        let at = t0 + Duration::from_millis(1_100);
+        assert_eq!(d.tick(dropped(&c), &None, at), Act::Resend { log: false });
     }
 }

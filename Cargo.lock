@@ -674,6 +674,7 @@ dependencies = [
  "openraft",
  "rust-embed",
  "samplez",
+ "samplez-dsp",
  "samplez-mxl",
  "samplez-replica",
  "samplez-service",
@@ -1833,7 +1834,7 @@ dependencies = [
 [[package]]
 name = "samplez"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=91e414d15a28c49d20eec6eb81c4c4343fa23335#91e414d15a28c49d20eec6eb81c4c4343fa23335"
+source = "git+https://github.com/danielclasen/samplez?rev=f3470892998fea4236deaeb79103dca3f08e7af2#f3470892998fea4236deaeb79103dca3f08e7af2"
 dependencies = [
  "libc",
  "mxl-sys",
@@ -1848,7 +1849,7 @@ dependencies = [
 [[package]]
 name = "samplez-dsp"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=91e414d15a28c49d20eec6eb81c4c4343fa23335#91e414d15a28c49d20eec6eb81c4c4343fa23335"
+source = "git+https://github.com/danielclasen/samplez?rev=f3470892998fea4236deaeb79103dca3f08e7af2#f3470892998fea4236deaeb79103dca3f08e7af2"
 dependencies = [
  "libm",
 ]
@@ -1856,7 +1857,7 @@ dependencies = [
 [[package]]
 name = "samplez-mxl"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=91e414d15a28c49d20eec6eb81c4c4343fa23335#91e414d15a28c49d20eec6eb81c4c4343fa23335"
+source = "git+https://github.com/danielclasen/samplez?rev=f3470892998fea4236deaeb79103dca3f08e7af2#f3470892998fea4236deaeb79103dca3f08e7af2"
 dependencies = [
  "mxl",
  "mxl-sys",
@@ -1866,7 +1867,7 @@ dependencies = [
 [[package]]
 name = "samplez-replica"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=91e414d15a28c49d20eec6eb81c4c4343fa23335#91e414d15a28c49d20eec6eb81c4c4343fa23335"
+source = "git+https://github.com/danielclasen/samplez?rev=f3470892998fea4236deaeb79103dca3f08e7af2#f3470892998fea4236deaeb79103dca3f08e7af2"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1874,8 +1875,11 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "openraft",
  "rustls",
+ "samplez",
+ "samplez-mxl",
  "samplez-service",
  "serde",
  "serde_json",
@@ -1888,7 +1892,7 @@ dependencies = [
 [[package]]
 name = "samplez-service"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=91e414d15a28c49d20eec6eb81c4c4343fa23335#91e414d15a28c49d20eec6eb81c4c4343fa23335"
+source = "git+https://github.com/danielclasen/samplez?rev=f3470892998fea4236deaeb79103dca3f08e7af2#f3470892998fea4236deaeb79103dca3f08e7af2"
 dependencies = [
  "axum",
  "futures-util",

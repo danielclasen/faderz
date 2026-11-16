@@ -96,6 +96,25 @@ struct Source {
 
 impl Source {
     fn start(domain: &Path, id: &str, values: Vec<f32>) -> Source {
+        let channels = values.len();
+        Source::signal(domain, id, channels, move |ch, _| values[ch])
+    }
+
+    /// A sine of `freq` Hz at amplitude `amp`, exact per sample index.
+    fn sine(domain: &Path, id: &str, amp: f32, freq: u64) -> Source {
+        Source::signal(domain, id, 1, move |_, idx| {
+            let phase = (freq * idx % 48_000) as f64 / 48_000.0;
+            amp * (2.0 * std::f64::consts::PI * phase).sin() as f32
+        })
+    }
+
+    /// A producer writing `signal(channel, index)` into every sample.
+    fn signal(
+        domain: &Path,
+        id: &str,
+        channels: usize,
+        signal: impl Fn(usize, u64) -> f32 + Send + 'static,
+    ) -> Source {
         let api = api();
         let instance = Instance::new(&api, domain).unwrap();
         let cfg = OutputConfig {
@@ -103,7 +122,7 @@ impl Source {
             label: "source",
             group: "source",
             role: "Audio",
-            channels: values.len() as u32,
+            channels: channels as u32,
             block: B,
             batch: B,
         };
@@ -113,15 +132,18 @@ impl Source {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = std::thread::spawn(move || {
-            let data: Vec<f32> = values
-                .iter()
-                .flat_map(|v| std::iter::repeat_n(*v, B as usize))
-                .collect();
+            let n = B as usize;
+            let mut data = vec![0.0f32; channels * n];
             let mut next: Option<u64> = None;
             while !flag.load(Ordering::Relaxed) {
                 let idx = time::timestamp_to_index(&api, time::now(&api));
                 if let Some(due) = (idx / B).checked_sub(1) {
                     for k in next.unwrap_or(due)..=due {
+                        for (ch, leg) in data.chunks_exact_mut(n).enumerate() {
+                            for (i, v) in leg.iter_mut().enumerate() {
+                                *v = signal(ch, k * B + i as u64);
+                            }
+                        }
                         writer.write_block(k, &data);
                     }
                     next = Some(due + 1);
@@ -299,6 +321,42 @@ impl Reader {
         let input = self.generation.input(0).unwrap();
         let o = input.read(&mut self.state, k, &GroupWait::Skipped, &mut self.buf);
         (o == Outcome::Copy).then_some(&self.buf[..])
+    }
+
+    /// The largest magnitude of each leg over the 50 blocks (50 ms) up to
+    /// 100 ms behind the clock, when all were written.
+    fn peaks(&mut self) -> Option<(f32, f32)> {
+        let api = self.generation.api();
+        let last = time::timestamp_to_index(api, time::now(api)) / B - 100;
+        let input = self.generation.input(0).unwrap();
+        let n = B as usize;
+        let mut peaks = (0.0f32, 0.0f32);
+        for k in last - 49..=last {
+            let o = input.read(&mut self.state, k, &GroupWait::Skipped, &mut self.buf);
+            if o != Outcome::Copy {
+                return None;
+            }
+            let (l, r) = self.buf.split_at(n);
+            peaks.0 = l.iter().fold(peaks.0, |p, v| p.max(v.abs()));
+            peaks.1 = r.iter().fold(peaks.1, |p, v| p.max(v.abs()));
+        }
+        Some(peaks)
+    }
+
+    /// Waits until the left leg's peak is within `tol` of `want`.
+    async fn expect_peak(&mut self, want: f32, tol: f32, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut last = None;
+        while Instant::now() < deadline {
+            if let Some((l, _)) = self.peaks() {
+                if (l - want).abs() <= tol {
+                    return;
+                }
+                last = Some(l);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("{what}: expected a peak of {want} +/- {tol}, last read {last:?}");
     }
 
     /// Waits until a whole block reads `left` and `right`, within the
@@ -521,5 +579,147 @@ async fn a_diff_beyond_the_engines_queue_lands_whole() {
     let h = std::f32::consts::FRAC_1_SQRT_2;
     let want = (CH1 + CH2B) * h;
     pgm.expect(want, want, "every channel open").await;
+    server.stop().await;
+}
+
+/// Each channel's strip processes its input: the high-pass takes out a
+/// low tone, an EQ bell lifts its centre frequency, polarity inverts one
+/// leg, the gate closes below its threshold and the compressor reduces
+/// above it, each by exactly its settled gain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_strip_processes_each_channel() {
+    let domain = domain("strip");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-strip");
+    let ids: Vec<String> = (0..6).map(|_| new_id()).collect();
+    let mono =
+        |id: &str| json!({ "id": id, "name": id, "width": 1, "layout": "mono", "altInput": false });
+    let mut shape = shape();
+    shape["channels"] = json!([
+        mono("hpf"),
+        mono("eq"),
+        mono("gate"),
+        mono("comp"),
+        { "id": "st1", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
+    ]);
+    shape["mixMinus"] = json!([]);
+    shape["outputs"] = json!([
+        { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+    ]);
+    let inputs = json!({
+        "hpf": { "flow": ids[0] },
+        "eq": { "flow": ids[1] },
+        "gate": { "flow": ids[2] },
+        "comp": { "flow": ids[3] },
+        "st1": { "flow": ids[4] },
+    });
+    // 40 Hz and 1 kHz tones, -40 dBFS and -6 dBFS steady levels.
+    let _hpf = Source::sine(&domain.0, &ids[0], 0.5, 40);
+    let _eq = Source::sine(&domain.0, &ids[1], 0.1, 1_000);
+    let _gate = Source::start(&domain.0, &ids[2], vec![0.01]);
+    let _comp = Source::start(&domain.0, &ids[3], vec![0.5]);
+    let _st1 = Source::start(&domain.0, &ids[4], ST1.to_vec());
+    let server = start_with(
+        &data.0,
+        &domain.0,
+        shape,
+        inputs,
+        json!({ "out-pgm": { "flow": ids[5] } }),
+    )
+    .await;
+    appears(&domain.0, &ids[5]).await;
+    let mut pgm = Reader::new(&domain.0, &ids[5]);
+    // One channel at a time, hard left at 0 dB.
+    let open = |id: &str, fader: i32| {
+        [
+            (format!("/channels/{id}/fader"), json!(fader)),
+            (format!("/channels/{id}/pan/lr"), json!(-1)),
+        ]
+    };
+    fn set(changes: &[(String, Value)]) -> Vec<(&str, Value)> {
+        changes
+            .iter()
+            .map(|(p, v)| (p.as_str(), v.clone()))
+            .collect()
+    }
+
+    patch(&server, &set(&open("hpf", 0))).await;
+    pgm.expect_peak(0.5, 0.005, "the 40 Hz tone, high-pass off")
+        .await;
+    patch(
+        &server,
+        &[
+            ("/channels/hpf/hpf/enabled", json!(true)),
+            ("/channels/hpf/hpf/freq", json!(500)),
+        ],
+    )
+    .await;
+    // 12 dB per octave from 500 Hz: about -44 dB at 40 Hz.
+    pgm.expect_peak(0.0, 0.005, "the 40 Hz tone under a 500 Hz high-pass")
+        .await;
+    patch(&server, &set(&open("hpf", -90))).await;
+
+    patch(&server, &set(&open("eq", 0))).await;
+    pgm.expect_peak(0.1, 0.001, "the 1 kHz tone, EQ off").await;
+    patch(
+        &server,
+        &[
+            ("/channels/eq/eq/enabled", json!(true)),
+            ("/channels/eq/eq/bands/1/type", json!("peak")),
+            ("/channels/eq/eq/bands/1/freq", json!(1000)),
+            ("/channels/eq/eq/bands/1/gain", json!(12)),
+            ("/channels/eq/eq/bands/1/q", json!(1)),
+        ],
+    )
+    .await;
+    // A bell has no phase shift at its centre: the samples scale by +12 dB.
+    let lift = 10f32.powf(12.0 / 20.0);
+    pgm.expect_peak(0.1 * lift, 0.002, "a +12 dB bell at 1 kHz")
+        .await;
+    patch(&server, &set(&open("eq", -90))).await;
+
+    patch(&server, &set(&open("gate", 0))).await;
+    pgm.expect(0.01, 0.0, "-40 dBFS, gate off").await;
+    patch(
+        &server,
+        &[
+            ("/channels/gate/gate/enabled", json!(true)),
+            ("/channels/gate/gate/threshold", json!(-30)),
+            ("/channels/gate/gate/range", json!(20)),
+            ("/channels/gate/gate/attack", json!(1)),
+            ("/channels/gate/gate/release", json!(50)),
+        ],
+    )
+    .await;
+    pgm.expect(0.001, 0.0, "-40 dBFS under a -30 dBFS gate, 20 dB range")
+        .await;
+    patch(&server, &set(&open("gate", -90))).await;
+
+    patch(&server, &set(&open("comp", 0))).await;
+    pgm.expect(0.5, 0.0, "-6 dBFS, compressor off").await;
+    patch(
+        &server,
+        &[
+            ("/channels/comp/comp/enabled", json!(true)),
+            ("/channels/comp/comp/threshold", json!(-20)),
+            ("/channels/comp/comp/ratio", json!(4)),
+            ("/channels/comp/comp/attack", json!(1)),
+            ("/channels/comp/comp/release", json!(50)),
+            ("/channels/comp/comp/makeup", json!(0)),
+        ],
+    )
+    .await;
+    // 13.98 dB over the threshold at 4:1 leaves 3.49 dB over it.
+    let level = 20.0 * 0.5f32.log10();
+    let want = 0.5 * 10f32.powf((level + 20.0) * (0.25 - 1.0) / 20.0);
+    pgm.expect_peak(want, 1e-4, "-6 dBFS into 4:1 from -20 dBFS")
+        .await;
+    patch(&server, &set(&open("comp", -90))).await;
+
+    patch(&server, &[("/channels/st1/fader", json!(0))]).await;
+    pgm.expect(ST1[0], ST1[1], "st1 as it is").await;
+    patch(&server, &[("/channels/st1/polarity/1", json!(true))]).await;
+    pgm.expect(ST1[0], -ST1[1], "st1's right leg inverted")
+        .await;
+
     server.stop().await;
 }

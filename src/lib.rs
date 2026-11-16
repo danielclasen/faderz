@@ -7,7 +7,8 @@
 //! contract in `api/`, which [`contract`] compiles in; [`app`] holds what
 //! they share, and [`ui`] serves the web UI built into the binary.
 //! [`audio`] runs the samplez engine under the state: [`mix`] turns the
-//! state into its gain matrix and [`meters`] its meters into meter frames.
+//! state into its gain matrix, [`strip`] a channel's processing into its
+//! input's strip, and [`meters`] its meters into meter frames.
 
 pub mod api;
 pub mod app;
@@ -20,5 +21,6 @@ pub mod replica;
 pub mod server;
 pub mod shape;
 pub mod state;
+pub mod strip;
 pub mod ui;
 pub mod ws;
