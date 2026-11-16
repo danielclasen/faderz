@@ -2,6 +2,10 @@
 //! 3): a 12-byte header, the replica id, then Int16 centi-dB values in
 //! shape order. An element's meters are those of the first output of the
 //! shape it is the source of; an element no output carries reads null.
+//! So a channel is metered at its direct out's tap, not at `meterTap`,
+//! and a monitor output after its level, dim, cut, mono and speaker
+//! mutes rather than before them as `MonitorMeter` says: the engine
+//! meters what an output flow carries.
 
 use samplez::OutputStatus;
 
@@ -101,13 +105,26 @@ impl Layout {
             put(loudness(|m| m.max_short_term));
             // The engine measures no correlation.
             put(NULL);
-            let flags = m.map_or(0, |m| {
-                i16::from(m.integrated.is_some()) | i16::from(m.range.is_some()) << 1
-            });
-            put(flags);
+            put(m.map_or(0, flags));
         }
         b
     }
+}
+
+/// Samples of running measurement after which the loudness range counts
+/// as stable (model `Loudness.lraStable`).
+const LRA_SETTLED: u64 = 60 * 48_000;
+/// Samples in one meter window.
+const WINDOW: u64 = 4_800;
+
+/// Bit 0 `integratedValid`: nothing dropped since the measurement
+/// started. Bit 1 `lraStable`: that, and 60 s measured since.
+fn flags(m: &samplez::OutputMeters) -> i16 {
+    let measured = match (m.window, m.since) {
+        (Some(w), Some(since)) => ((w + 1) * WINDOW).saturating_sub(since),
+        _ => 0,
+    };
+    i16::from(m.valid) | i16::from(m.valid && measured >= LRA_SETTLED) << 1
 }
 
 /// A full-scale-1.0 level in centi-dB; silence is null.
@@ -180,5 +197,95 @@ mod tests {
         assert_eq!(v(11), -602);
         assert_eq!(v(12), NULL);
         assert_eq!(v(17), -2300);
+    }
+
+    fn output(meters: samplez::OutputMeters) -> OutputStatus {
+        OutputStatus {
+            name: "o".into(),
+            realised: true,
+            reason: None,
+            attempts: 1,
+            races: 0,
+            create_failures: 0,
+            buffer_length: None,
+            hints: None,
+            meters,
+        }
+    }
+
+    fn lin(db: f64) -> f32 {
+        10f64.powf(db / 20.0) as f32
+    }
+
+    /// The example frame of server-message.schema.json `MeterFrame`,
+    /// encoded from engine meters holding its values. The engine measures
+    /// no correlation, so that value alone is null here.
+    #[test]
+    fn the_contracts_example_frame() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../api/ws/server-message.schema.json")).unwrap();
+        let hex = schema["$defs"]["MeterFrame"]["examples"][0]
+            .as_str()
+            .unwrap();
+        let mut want: Vec<u8> = hex
+            .split(' ')
+            .map(|b| u8::from_str_radix(b, 16).unwrap())
+            .collect();
+        // Correlation, the 16th value after the 16-byte header.
+        let corr = 16 + 2 * 15;
+        want[corr..corr + 2].copy_from_slice(&NULL.to_le_bytes());
+
+        let shape: Shape = serde_json::from_value(serde_json::json!({
+            "sampleRate": 48000,
+            "frameRate": { "numerator": 25, "denominator": 1 },
+            "channels": [{ "id": "ch1", "name": "c", "width": 1, "layout": "mono", "altInput": false }],
+            "buses": [{ "id": "pgm", "name": "p", "kind": "program", "width": 2, "layout": "stereo" }],
+            "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+            "outputs": [
+                { "id": "do", "name": "d", "source": "ch1", "width": 1, "layout": "mono" },
+                { "id": "out", "name": "o", "source": "pgm", "width": 2, "layout": "stereo" },
+            ],
+        }))
+        .unwrap();
+        let ch1 = samplez::OutputMeters {
+            peak: vec![lin(-6.5)],
+            true_peak: vec![lin(-5.9)],
+            momentary: Some(-20.0),
+            ..Default::default()
+        };
+        let pgm = samplez::OutputMeters {
+            window: Some(10),
+            since: Some(0),
+            valid: true,
+            peak: vec![lin(0.0), lin(3.21)],
+            true_peak: vec![lin(0.5), 0.0],
+            rms: vec![lin(-18.0), lin(-18.5)],
+            momentary: Some(-23.0),
+            integrated: Some(-23.46),
+            range: Some(7.25),
+            max_momentary: Some(-21.5),
+            ..Default::default()
+        };
+        let got = Layout::of(&shape).frame("rep", 258, &[output(ch1), output(pgm)]);
+        assert_eq!(got, want);
+    }
+
+    /// Loudness: integratedValid while nothing was dropped, lraStable from
+    /// 60 s of measurement on.
+    #[test]
+    fn the_loudness_flags_follow_validity_and_measured_time() {
+        let m = |valid, window| samplez::OutputMeters {
+            valid,
+            window: Some(window),
+            since: Some(4_800),
+            integrated: Some(-23.0),
+            range: Some(5.0),
+            ..Default::default()
+        };
+        assert_eq!(flags(&m(true, 10)), 1);
+        assert_eq!(flags(&m(true, 599)), 1);
+        assert_eq!(flags(&m(true, 600)), 3);
+        assert_eq!(flags(&m(false, 600)), 0);
+        assert_eq!(flags(&samplez::OutputMeters::default()), 0);
     }
 }

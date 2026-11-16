@@ -24,6 +24,8 @@ const B: u64 = 48;
 /// ch1 and the two legs of st1, as written into their flows.
 const CH1: f32 = 0.5;
 const ST1: [f32; 2] = [0.25, -0.25];
+/// Input b of ch2.
+const CH2B: f32 = 0.125;
 
 fn libmxl() -> PathBuf {
     let path = PathBuf::from(
@@ -53,8 +55,8 @@ fn dir(base: &Path, name: &str) -> Dir {
     Dir(dir)
 }
 
-/// An MXL domain on tmpfs, with a 1 s history.
-fn domain() -> Dir {
+/// An MXL domain on tmpfs, with a 1 s history, named for its test.
+fn domain(name: &str) -> Dir {
     let shm = Path::new("/dev/shm");
     let d = dir(
         if shm.is_dir() {
@@ -62,7 +64,7 @@ fn domain() -> Dir {
         } else {
             Path::new(env!("CARGO_TARGET_TMPDIR"))
         },
-        "mxl",
+        &format!("mxl-{name}"),
     );
     std::fs::write(
         d.0.join("options.json"),
@@ -152,7 +154,7 @@ fn shape() -> Value {
         "frameRate": { "numerator": 25, "denominator": 1 },
         "channels": [
             { "id": "ch1", "name": "Pres 1", "width": 1, "layout": "mono", "altInput": false },
-            { "id": "ch2", "name": "Pres 2", "width": 1, "layout": "mono", "altInput": false },
+            { "id": "ch2", "name": "Pres 2", "width": 1, "layout": "mono", "altInput": true },
             { "id": "st1", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
         ],
         "buses": [
@@ -172,31 +174,41 @@ fn shape() -> Value {
 struct Flows {
     ch1: String,
     ch2: String,
+    ch2b: String,
     st1: String,
     pgm: String,
     mm: String,
 }
 
 async fn start(data: &Path, domain: &Path, f: &Flows) -> Server {
+    let inputs = json!({
+        "ch1": { "flow": f.ch1 },
+        "ch2": { "flow": f.ch2, "altFlow": f.ch2b },
+        "st1": { "flow": f.st1 },
+    });
+    let outputs = json!({ "out-pgm": { "flow": f.pgm }, "out-mm": { "flow": f.mm } });
+    start_with(data, domain, shape(), inputs, outputs).await
+}
+
+async fn start_with(
+    data: &Path,
+    domain: &Path,
+    shape: Value,
+    inputs: Value,
+    outputs: Value,
+) -> Server {
     let listener = json!({ "bind": "127.0.0.1", "port": 0 });
     let config = json!({
         "listeners": { "api": listener, "ops": listener, "nmos": listener },
         "auth": { "mode": "none" },
         "api": { "allowedOrigins": ["http://faderz.test"] },
         "replica": { "name": "r1", "dataDir": data },
-        "shape": shape(),
+        "shape": shape,
         "mxl": {
             "libraryPath": libmxl(),
             "domains": [{ "name": "d", "path": domain }],
-            "inputs": {
-                "ch1": { "flow": f.ch1 },
-                "ch2": { "flow": f.ch2 },
-                "st1": { "flow": f.st1 },
-            },
-            "outputs": {
-                "out-pgm": { "flow": f.pgm },
-                "out-mm": { "flow": f.mm },
-            },
+            "inputs": inputs,
+            "outputs": outputs,
         },
         "rt": { "rtCpu": "none" },
     });
@@ -223,6 +235,32 @@ async fn patch(server: &Server, changes: &[(&str, Value)]) {
     let mut answer = String::new();
     tcp.read_to_string(&mut answer).await.unwrap();
     assert!(answer.starts_with("HTTP/1.1 200"), "{changes:?}: {answer}");
+}
+
+/// GET `path` from `addr`: status and body.
+async fn get(addr: std::net::SocketAddr, path: &str) -> (u16, String) {
+    let mut tcp = TcpStream::connect(addr).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    tcp.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    tcp.read_to_string(&mut answer).await.unwrap();
+    let status = answer[9..12].parse().unwrap();
+    (
+        status,
+        answer
+            .split_once("\r\n\r\n")
+            .map_or("", |(_, b)| b)
+            .to_owned(),
+    )
+}
+
+/// Waits for the output flow `id` to appear.
+async fn appears(domain: &Path, id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !domain.join(format!("{id}.mxl-flow")).exists() {
+        assert!(Instant::now() < deadline, "output flow {id} appears");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// Reads stereo blocks of `flow` a little behind libmxl's clock.
@@ -263,7 +301,8 @@ impl Reader {
         (o == Outcome::Copy).then_some(&self.buf[..])
     }
 
-    /// Waits until a whole block reads `left` and `right` exactly.
+    /// Waits until a whole block reads `left` and `right`, within the
+    /// rounding of an f32 gain.
     async fn expect(&mut self, left: f32, right: f32, what: &str) {
         let n = B as usize;
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -271,7 +310,8 @@ impl Reader {
         while Instant::now() < deadline {
             if let Some(b) = self.recent() {
                 let (l, r) = b.split_at(n);
-                if l.iter().all(|v| *v == left) && r.iter().all(|v| *v == right) {
+                let near = |v: &f32, want: f32| (v - want).abs() <= 1e-6;
+                if l.iter().all(|v| near(v, left)) && r.iter().all(|v| near(v, right)) {
                     return;
                 }
                 last = Some((l[n - 1], r[n - 1]));
@@ -320,25 +360,23 @@ async fn pgm_peak(server: &Server) -> i16 {
 /// follow the output.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_mix_reaches_the_output_flows_and_the_meters() {
-    let domain = domain();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let domain = domain("mix");
     let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
+        ch2b: new_id(),
         st1: new_id(),
         pgm: new_id(),
         mm: new_id(),
     };
     let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let _ch2b = Source::start(&domain.0, &flows.ch2b, vec![CH2B]);
     let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
-    // ch2 reads a flow nobody writes: silent, never in the way.
+    // ch2's input a reads a flow nobody writes: silent.
     let server = start(&data.0, &domain.0, &flows).await;
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !domain.0.join(format!("{}.mxl-flow", flows.pgm)).exists() {
-        assert!(Instant::now() < deadline, "the program output flow appears");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    appears(&domain.0, &flows.pgm).await;
     let mut pgm = Reader::new(&domain.0, &flows.pgm);
     let mut mm = Reader::new(&domain.0, &flows.mm);
     pgm.expect(0.0, 0.0, "every fader closed").await;
@@ -382,9 +420,106 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     patch(&server, &[("/channels/st1/routes/pgm", json!(false))]).await;
     pgm.expect(0.0, 0.0, "st1 off the program bus").await;
 
+    patch(
+        &server,
+        &[
+            ("/channels/ch2/fader", json!(0)),
+            ("/channels/ch2/pan/lr", json!(-1)),
+        ],
+    )
+    .await;
+    pgm.expect(0.0, 0.0, "ch2 open on its silent input a").await;
+    patch(&server, &[("/channels/ch2/input", json!("b"))]).await;
+    pgm.expect(CH2B, 0.0, "ch2 re-routed to input b").await;
+    patch(&server, &[("/channels/ch2/input", json!("a"))]).await;
+    pgm.expect(0.0, 0.0, "ch2 back on input a").await;
+    patch(&server, &[("/channels/ch2/input", json!("b"))]).await;
+    pgm.expect(CH2B, 0.0, "ch2 on input b again").await;
+
+    // An entry the engine dropped: the engine plays a gain the state does
+    // not have, until everything is sent again.
+    let audio = server.audio.clone().unwrap();
+    let api = api();
+    let mut at = (time::timestamp_to_index(&api, time::now(&api)) + 4_800).next_multiple_of(B);
+    while let Err(e) = audio.engine().set_gain(1, 0, 0.0, at) {
+        assert!(matches!(e, samplez::GainError::TooNear { .. }), "{e}");
+        at += 4_800;
+    }
+    pgm.expect(0.0, 0.0, "the engine diverged from the state")
+        .await;
+    audio.resend();
+    pgm.expect(CH2B, 0.0, "a resend restores the state's gains")
+        .await;
+    let (_, metrics) = get(server.ops, "/metrics").await;
+    assert!(
+        metrics.contains("faderz_engine_resends_total 1"),
+        "{metrics}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready again once resent");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    drop(audio);
     server.stop().await;
     assert!(
         !domain.0.join(format!("{}.mxl-flow", flows.pgm)).exists(),
         "stopping deletes the output flows"
     );
+
+    // A restart reads the selected input b from its first block.
+    let server = start(&data.0, &domain.0, &flows).await;
+    let inputs = server.audio.as_ref().unwrap().engine().status().inputs;
+    assert_eq!(inputs[1].flow_id, flows.ch2b, "ch2 starts on input b");
+    appears(&domain.0, &flows.pgm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    pgm.expect(CH2B, 0.0, "the restarted state on input b")
+        .await;
+    server.stop().await;
+}
+
+/// A diff larger than the changes the engine holds at once waits for
+/// room and lands whole.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_diff_beyond_the_engines_queue_lands_whole() {
+    const N: usize = 40;
+    let domain = domain("wide");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-wide");
+    let ids: Vec<String> = (0..N).map(|_| new_id()).collect();
+    let pgm_id = new_id();
+    let mut shape = shape();
+    shape["channels"] = (0..N)
+        .map(|i| json!({ "id": format!("c{i}"), "name": "c", "width": 1, "layout": "mono", "altInput": false }))
+        .collect();
+    shape["mixMinus"] = json!([]);
+    shape["outputs"] = json!([
+        { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+    ]);
+    let inputs: serde_json::Map<String, Value> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (format!("c{i}"), json!({ "flow": id })))
+        .collect();
+    let _c0 = Source::start(&domain.0, &ids[0], vec![CH1]);
+    let _c1 = Source::start(&domain.0, &ids[1], vec![CH2B]);
+    let server = start_with(
+        &data.0,
+        &domain.0,
+        shape,
+        Value::Object(inputs),
+        json!({ "out-pgm": { "flow": pgm_id } }),
+    )
+    .await;
+    appears(&domain.0, &pgm_id).await;
+    let mut pgm = Reader::new(&domain.0, &pgm_id);
+    pgm.expect(0.0, 0.0, "every fader closed").await;
+    // Centre pan: 2 N coefficients, beyond the engine's 64.
+    let paths: Vec<String> = (0..N).map(|i| format!("/channels/c{i}/fader")).collect();
+    let changes: Vec<(&str, Value)> = paths.iter().map(|p| (p.as_str(), json!(0))).collect();
+    patch(&server, &changes).await;
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    let want = (CH1 + CH2B) * h;
+    pgm.expect(want, want, "every channel open").await;
+    server.stop().await;
 }

@@ -25,7 +25,10 @@ pub struct Server {
     /// The engine, when the configuration has an `mxl` section.
     pub audio: Option<Arc<Audio>>,
     replica: Arc<Replica<Mixer>>,
-    serving: JoinHandle<()>,
+    /// Awaits the serving task, which ends only on a failure or a panic,
+    /// or stops it on `stop`.
+    watching: JoinHandle<()>,
+    stop: tokio::sync::oneshot::Sender<()>,
     failure: Arc<Mutex<Option<String>>>,
 }
 
@@ -54,7 +57,14 @@ impl Server {
                     .iter()
                     .map(|c| mxl.inputs[&c.id].alt_flow.clone());
                 let (live, revision) = audio::state_of(&state);
-                let audio = Audio::start(engine.clone(), process, &shape, alt.collect(), &live)?;
+                let audio = Audio::start(
+                    engine.clone(),
+                    process,
+                    &shape,
+                    alt.collect(),
+                    &live,
+                    ops_state.clone(),
+                )?;
                 Some((Arc::new(audio), live, revision))
             }
             _ => None,
@@ -97,13 +107,13 @@ impl Server {
             let follow = async {
                 match audio {
                     Some((audio, live, revision)) => {
-                        let meter = audio.meter(&tasks_app.hub, &ops_state, &name);
+                        let meter = audio.meter(&tasks_app.hub, &name);
                         tokio::join!(audio.follow(&tasks_state, live, revision), meter);
                     }
                     None => std::future::pending::<()>().await,
                 }
             };
-            let e = tokio::select! {
+            tokio::select! {
                 r = bound.serve() => match r {
                     Ok(()) => "the listeners stopped".to_owned(),
                     Err(e) => format!("serving: {e}"),
@@ -112,10 +122,22 @@ impl Server {
                 // Stop-gap until samplez-replica decides lease expiries.
                 () = replica::expire_leases(&tasks_state, estimate) => unreachable!("expiring never returns"),
                 () = follow => unreachable!("following the state never returns"),
-            };
-            *failed.lock().expect("failure lock poisoned") = Some(e);
-            // SAFETY: SIGTERM to this process ends the binary's sigwait.
-            unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+            }
+        });
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let watching = tokio::spawn(async move {
+            let mut serving = serving;
+            tokio::select! {
+                r = &mut serving => {
+                    *failed.lock().expect("failure lock poisoned") = Some(ended(r));
+                    // SAFETY: SIGTERM to this process ends the binary's sigwait.
+                    unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+                }
+                _ = stopped => {
+                    serving.abort();
+                    let _ = serving.await;
+                }
+            }
         });
         Ok(Server {
             api,
@@ -125,7 +147,8 @@ impl Server {
             app,
             audio: engine,
             replica: state,
-            serving,
+            watching,
+            stop,
             failure,
         })
     }
@@ -139,11 +162,31 @@ impl Server {
     /// Stops serving, stops the engine, which deletes its output flows,
     /// and shuts the replica down; what it applied is on its volume.
     pub async fn stop(self) {
-        self.serving.abort();
-        let _ = self.serving.await;
+        let _ = self.stop.send(());
+        let _ = self.watching.await;
         if let Some(audio) = self.audio.and_then(Arc::into_inner) {
             audio.stop();
         }
         self.replica.shutdown().await;
+    }
+}
+
+/// Why the serving task ended: its error, or its panic. A panic would
+/// otherwise leave the process running with no listeners.
+pub fn ended(r: Result<String, tokio::task::JoinError>) -> String {
+    r.unwrap_or_else(|e| format!("serving: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_panicking_server_task_is_a_failure() {
+        let task = tokio::spawn(async { panic!("follow broke") });
+        let e = ended(task.await);
+        assert!(e.contains("panicked"), "{e}");
+        let task = tokio::spawn(async { "the listeners stopped".to_owned() });
+        assert_eq!(ended(task.await), "the listeners stopped");
     }
 }

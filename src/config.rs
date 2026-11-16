@@ -78,7 +78,8 @@ pub struct Domain {
 pub struct Input {
     /// The flow of input a.
     pub flow: String,
-    /// The flow of input b, for a channel with `altInput`.
+    /// The flow of input b; required exactly for a channel with
+    /// `altInput`.
     #[serde(default)]
     pub alt_flow: Option<String>,
     /// Required with more than one domain.
@@ -186,8 +187,15 @@ impl Config {
         for c in &shape.channels {
             let at = format!("mxl.inputs.{}", c.id);
             let input = mxl.inputs.get(&c.id).ok_or(format!("{at}: missing"))?;
-            if input.alt_flow.is_some() && !c.alt_input {
-                return Err(format!("{at}.altFlow: the channel has no altInput"));
+            match (&input.alt_flow, c.alt_input) {
+                (Some(_), false) => {
+                    return Err(format!("{at}.altFlow: the channel has no altInput"));
+                }
+                // The state takes input b for it, which would read nothing.
+                (None, true) => {
+                    return Err(format!("{at}.altFlow: required, the channel has altInput"));
+                }
+                _ => {}
             }
             inputs.push(json!({
                 "name": c.id,
@@ -304,5 +312,27 @@ mod tests {
     fn a_name_that_is_not_an_id_is_refused() {
         let e = Config::parse(&with(json!({})), || "Host.example".into()).unwrap_err();
         assert!(e.contains("replica.name"), "{e}");
+    }
+
+    /// Every channel the state lets select input b has a flow for it.
+    #[test]
+    fn an_alt_input_needs_an_alt_flow() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let config = |ch1: Value| {
+            json!({
+                "replica": { "name": "r1" },
+                "shape": small(),
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                    "inputs": { "ch1": ch1, "ch2": { "flow": id(2) }, "st1": { "flow": id(3) } },
+                    "outputs": { "out-pgm": { "flow": id(4) } },
+                },
+            })
+            .to_string()
+        };
+        let e = Config::parse(&config(json!({ "flow": id(1) })), || unreachable!()).unwrap_err();
+        assert!(e.contains("mxl.inputs.ch1.altFlow: required"), "{e}");
+        let ok = config(json!({ "flow": id(1), "altFlow": id(5) }));
+        Config::parse(&ok, || unreachable!()).unwrap();
     }
 }

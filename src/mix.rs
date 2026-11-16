@@ -4,11 +4,11 @@
 //!
 //! What a matrix coefficient can carry is applied: trim, leg trim and
 //! polarity, fader, mute, VCA offsets and mutes, AFV open or closed, pan
-//! of a mono leg onto a stereo element and balance of a stereo one, bus
-//! routes, sends and their levels, bus, aux and mix-minus faders, mutes
-//! and polarity, the mix-minus exclusions, and the monitor's source,
-//! level, dim, cut, mono and speaker mutes and solos. Everything else in
-//! the state is kept and not applied.
+//! of a mono leg and the fold-down of a wider channel, bus routes, sends
+//! and their levels, bus, aux and mix-minus faders, mutes and polarity,
+//! the mix-minus exclusions, and the monitor's source, downmix, level,
+//! dim, cut, mono and speaker mutes and solos. Everything else in the
+//! state is kept and not applied.
 
 use serde_json::Value;
 
@@ -88,27 +88,44 @@ fn channel(state: &Value, id: &str, leg: usize, tap: Tap) -> f64 {
 }
 
 /// The gain from leg `i` of a `from`-leg signal to leg `j` of a `to`-leg
-/// element, `pan` being the pan (mono onto stereo, constant power) or
-/// balance (stereo onto stereo) from -1 to 1.
+/// element (model `Layout`: 1 mono, 2 stereo L R, 6 5.1 L R C LFE Ls Rs,
+/// 8 7.1 L R C LFE Ls Rs Lrs Rrs), per model `PanState`: a mono signal
+/// pans onto the first two legs at constant power by `pan` (-1 to 1);
+/// any other signal ignores `pan`, maps leg to leg by label onto an
+/// element as wide or wider, and folds down onto a narrower one.
 pub fn pan(from: usize, to: usize, i: usize, j: usize, pan: f64) -> f64 {
-    let pan = pan.clamp(-1.0, 1.0);
     match (from, to) {
         (1, 1) => 1.0,
-        // Mono onto the first two legs of a wider element.
         (1, _) => {
-            let theta = (pan + 1.0) * std::f64::consts::FRAC_PI_4;
+            let theta = (pan.clamp(-1.0, 1.0) + 1.0) * std::f64::consts::FRAC_PI_4;
             match j {
                 0 => theta.cos(),
                 1 => theta.sin(),
                 _ => 0.0,
             }
         }
-        // Stereo summed to mono at -6 dB, so a correlated pair keeps its
-        // level.
-        (_, 1) => 0.5,
-        (2, 2) if i == j => match i {
-            0 => (1.0 - pan).min(1.0),
-            _ => (1.0 + pan).min(1.0),
+        // Onto mono: the stereo fold summed at -6 dB, so a correlated
+        // pair keeps its level. The contract does not define it.
+        (_, 1) => (fold(from, 2, i, 0) + fold(from, 2, i, 1)) / 2.0,
+        _ => fold(from, to, i, j),
+    }
+}
+
+/// Leg to leg by label when `to` is at least as wide as `from`; else 5.1
+/// and 7.1 onto stereo by the ITU-R BS.775 Lo/Ro equations (centre and
+/// surrounds at -3 dB, LFE dropped) and 7.1 onto 5.1 by summing each back
+/// surround into the side surround at -3 dB.
+fn fold(from: usize, to: usize, i: usize, j: usize) -> f64 {
+    const H: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    match (from, to) {
+        (6 | 8, 2) => match (i, j) {
+            (0, 0) | (1, 1) => 1.0,
+            (2, _) | (4 | 6, 0) | (5 | 7, 1) => H,
+            _ => 0.0,
+        },
+        (8, 6) => match (i, j) {
+            (6, 4) | (7, 5) => H,
+            _ => f64::from(u8::from(i == j)),
         },
         _ => f64::from(u8::from(i == j)),
     }
@@ -212,8 +229,9 @@ fn scale(g: &mut [Vec<f64>], state: &Value, polarity: bool) {
     }
 }
 
-/// The monitor output: its source's legs onto the monitor's, then level,
-/// dim, cut, mono and the speaker mutes and solos.
+/// The monitor output: its source's legs onto the monitor's, folded down
+/// by `downmix` when the source is wider, then level, dim, cut, mono and
+/// the speaker mutes and solos.
 fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
     let m = &state["monitor"];
     let source = m["source"].as_str().unwrap_or_default();
@@ -226,6 +244,7 @@ fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
     if on(&m["cut"]) {
         level = 0.0;
     }
+    let lr = m["downmix"] == "lr";
     let mono = on(&m["mono"]);
     if mono {
         level *= gain(-num(&m["monoCompensation"]));
@@ -243,6 +262,9 @@ fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
                 .map(|j| {
                     let v: f64 = if mono {
                         legs.iter().sum()
+                    } else if lr && from > width {
+                        // lr plays only the source's L and R legs.
+                        legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
                     } else {
                         (0..from)
                             .map(|i| legs[i] * pan(from, width, i, j, 0.0))
@@ -405,5 +427,112 @@ mod tests {
                 .iter()
                 .all(|r| r[5] == 0.0 && r[6] == 0.0)
         );
+    }
+
+    /// PanState: a channel as wide as the bus maps leg to leg whatever its
+    /// pan; only a mono channel pans.
+    #[test]
+    fn a_stereo_channel_ignores_pan_and_a_mono_one_pans_hard_right() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["channels"]["ch1"]["fader"] = json!(0);
+        for p in [0.5, 1.0, -1.0] {
+            s["channels"]["st1"]["pan"]["lr"] = json!(p);
+            let m = matrix(&shape, &s);
+            assert!(close(m[2][0], 1.0) && close(m[2][1], 0.0), "pan {p}");
+            assert!(close(m[3][0], 0.0) && close(m[3][1], 1.0), "pan {p}");
+        }
+        s["channels"]["ch1"]["pan"]["lr"] = json!(1);
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][0], 0.0) && close(m[0][1], 1.0));
+    }
+
+    /// 5.1 and 7.1 onto stereo by ITU-R BS.775 Lo/Ro, 7.1 onto 5.1 by the
+    /// surround pairs, both at -3 dB, LFE dropped; narrower onto wider
+    /// leg to leg.
+    #[test]
+    fn wider_signals_fold_down_per_the_contract() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        // L R C LFE Ls Rs onto Lo.
+        let lo: Vec<f64> = (0..6).map(|i| pan(6, 2, i, 0, 0.7)).collect();
+        assert_eq!(lo, [1.0, 0.0, h, 0.0, h, 0.0]);
+        let ro: Vec<f64> = (0..8).map(|i| pan(8, 2, i, 1, 0.0)).collect();
+        assert_eq!(ro, [0.0, 1.0, h, 0.0, 0.0, h, 0.0, h]);
+        // Lrs into Ls, Rrs into Rs, the rest leg to leg.
+        assert_eq!(pan(8, 6, 6, 4, 0.0), h);
+        assert_eq!(pan(8, 6, 7, 5, 0.0), h);
+        assert_eq!(pan(8, 6, 2, 2, 0.0), 1.0);
+        assert_eq!(pan(8, 6, 6, 0, 0.0), 0.0);
+        assert_eq!(pan(2, 6, 1, 1, -1.0), 1.0);
+        assert_eq!(pan(2, 6, 1, 2, -1.0), 0.0);
+        // Stereo onto mono at -6 dB per leg; 5.1 onto mono through Lo/Ro.
+        assert_eq!(pan(2, 1, 0, 0, 0.0), 0.5);
+        assert_eq!(pan(6, 1, 2, 0, 0.0), h);
+        assert_eq!(pan(6, 1, 3, 0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn a_post_fader_send_follows_the_open_fader() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["sends"]["aux1"] =
+            json!({ "on": true, "level": -6, "pan": 0, "pre": false });
+        s["channels"]["ch1"]["fader"] = json!(-4);
+        assert!(close(matrix(&shape, &s)[0][2], gain(-10.0)));
+    }
+
+    #[test]
+    fn a_muted_bus_is_silent_and_its_mix_minus_is_not() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(0);
+        s["buses"]["pgm"]["mute"] = json!(true);
+        let m = matrix(&shape, &s);
+        assert_eq!((m[0][0], m[0][1]), (0.0, 0.0));
+        assert!(
+            m[0][3] > 0.0,
+            "the mix-minus is taken before bus processing"
+        );
+    }
+
+    /// VcaState: fader and offsets add up to +20 dB at most.
+    #[test]
+    fn vca_offsets_clamp_at_20_db() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(10);
+        s["channels"]["ch1"]["pan"]["lr"] = json!(-1);
+        s["vcas"]["vca1"]["members"] = json!(["ch1"]);
+        s["vcas"]["vca1"]["offset"] = json!(10);
+        assert!(close(matrix(&shape, &s)[0][0], gain(20.0)));
+        s["vcas"]["vca1"]["offset"] = json!(5);
+        assert!(close(matrix(&shape, &s)[0][0], gain(15.0)));
+    }
+
+    /// MonitorState downmix: lr plays only the L and R legs of a wider
+    /// source, loRo folds it.
+    #[test]
+    fn the_monitor_folds_a_wider_source_by_its_downmix() {
+        let mut v = small();
+        v["channels"] =
+            json!([{ "id": "c51", "name": "5.1", "width": 6, "layout": "5.1", "altInput": false }]);
+        v["buses"] = json!([{ "id": "sur", "name": "Surround", "kind": "program", "width": 6, "layout": "5.1" }]);
+        v["auxes"] = json!([]);
+        v["mixMinus"] = json!([]);
+        v["vcas"] = json!([]);
+        v["outputs"] = json!([{ "id": "o-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" }]);
+        let shape = Shape::parse(&v).unwrap();
+        let mut s = shape.initial_state();
+        s["channels"]["c51"]["fader"] = json!(0);
+        s["monitor"]["source"] = json!("sur");
+        s["monitor"]["level"] = json!(0);
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let m = matrix(&shape, &s);
+        assert!(close(m[2][0], h) && close(m[4][0], h) && m[3][0] == 0.0);
+        s["monitor"]["downmix"] = json!("lr");
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][0], 1.0) && close(m[1][1], 1.0));
+        assert!(m[2..].iter().all(|r| r[0] == 0.0 && r[1] == 0.0));
     }
 }
