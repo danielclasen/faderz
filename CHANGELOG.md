@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/danielclasen/faderz/compare/v0.1.1...v0.1.2) (2026-11-16)
+
+
+### Features
+
+* **auth:** sign in with OpenID Connect without a proxy in front ([#24](https://github.com/danielclasen/faderz/issues/24)) ([a4c58d0](https://github.com/danielclasen/faderz/commit/a4c58d09f340ea478d99154c916190d9504e01a6))
+
 ## [0.1.1](https://github.com/danielclasen/faderz/compare/v0.1.0...v0.1.1) (2026-11-16)
 
 
