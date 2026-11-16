@@ -229,6 +229,11 @@ export class MockServer {
           return { status: 200, body: c.patch(body.commandId, body.changes) };
         },
       },
+      // As a binary in auth mode none answers.
+      {
+        method: 'GET', pattern: /^\/session$/, template: '/session',
+        handler: () => ({ status: 200, body: { mode: 'none', user: null, role: 'operator' } }),
+      },
       {
         method: 'GET', pattern: /^\/replicas$/, template: '/replicas',
         handler: () => ({ status: 200, body: { replica: leader(), replicas: c.replicaStatus() } }),
