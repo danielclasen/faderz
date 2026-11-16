@@ -99,7 +99,8 @@ impl Server {
             .machine_addr()
             .transpose()
             .map_err(|e| e.to_string())?;
-        ops_state.set_engine_started(audio.is_some());
+        // Started once the engine plays the state: Audio::follow.
+        ops_state.set_engine_started(false);
         let engine = audio.as_ref().map(|(a, _, _)| a.clone());
         let (tasks_app, tasks_state) = (app.clone(), state.clone());
         let failure = Arc::new(Mutex::new(None));

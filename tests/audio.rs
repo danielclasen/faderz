@@ -343,6 +343,26 @@ impl Reader {
         Some(peaks)
     }
 
+    /// The left leg of every block the flow holds, up to 100 ms behind the
+    /// clock, oldest first.
+    fn history(&mut self) -> Vec<f32> {
+        let api = self.generation.api();
+        let last = time::timestamp_to_index(api, time::now(api)) / B - 100;
+        let input = self.generation.input(0).unwrap();
+        let n = B as usize;
+        let mut left = Vec::new();
+        // A reader's own state refuses blocks before the last it read.
+        let mut state = SlotState::default();
+        // The domain keeps 1 s.
+        for k in last - 900..=last {
+            let o = input.read(&mut state, k, &GroupWait::Skipped, &mut self.buf);
+            if o == Outcome::Copy {
+                left.extend_from_slice(&self.buf[..n]);
+            }
+        }
+        left
+    }
+
     /// Waits until the left leg's peak is within `tol` of `want`.
     async fn expect_peak(&mut self, want: f32, tol: f32, what: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -503,10 +523,12 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
         assert!(matches!(e, samplez::GainError::TooNear { .. }), "{e}");
         at += 4_800;
     }
+    let trim = samplez_dsp::StripParam::Trim { db: -20.0 };
+    audio.engine().set_strip(1, trim, at).unwrap();
     pgm.expect(0.0, 0.0, "the engine diverged from the state")
         .await;
     audio.resend();
-    pgm.expect(CH2B, 0.0, "a resend restores the state's gains")
+    pgm.expect(CH2B, 0.0, "a resend restores the state's gains and strips")
         .await;
     let (_, metrics) = get(server.ops, "/metrics").await;
     assert!(
@@ -518,6 +540,19 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
         assert!(Instant::now() < deadline, "ready again once resent");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+
+    // Trimmed and inverted before the restart: the restarted engine plays
+    // ch2 so from its first sample on.
+    patch(
+        &server,
+        &[
+            ("/channels/ch2/trim", json!(-6)),
+            ("/channels/ch2/polarity/0", json!(true)),
+        ],
+    )
+    .await;
+    let trimmed = -CH2B * 10f32.powf(-6.0 / 20.0);
+    pgm.expect(trimmed, 0.0, "ch2 trimmed and inverted").await;
 
     drop(audio);
     server.stop().await;
@@ -532,8 +567,17 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     assert_eq!(inputs[1].flow_id, flows.ch2b, "ch2 starts on input b");
     appears(&domain.0, &flows.pgm).await;
     let mut pgm = Reader::new(&domain.0, &flows.pgm);
-    pgm.expect(CH2B, 0.0, "the restarted state on input b")
+    pgm.expect(trimmed, 0.0, "the restarted state on input b")
         .await;
+    // Every sample since the output began: silence, then the fade-in of
+    // the processed signal, never the unprocessed one.
+    let left = pgm.history();
+    assert!(
+        left.iter().any(|v| *v != 0.0),
+        "the history holds the fade-in"
+    );
+    let wrong = left.iter().find(|v| **v > 0.0 || **v < trimmed - 1e-6);
+    assert!(wrong.is_none(), "unprocessed after the restart: {wrong:?}");
     server.stop().await;
 }
 
@@ -674,6 +718,24 @@ async fn the_strip_processes_each_channel() {
     // A bell has no phase shift at its centre: the samples scale by +12 dB.
     let lift = 10f32.powf(12.0 / 20.0);
     pgm.expect_peak(0.1 * lift, 0.002, "a +12 dB bell at 1 kHz")
+        .await;
+    // A near-limiter at -20 dBFS: after the bell it takes the tone down
+    // by about 11 dB; before it, the tone only reaches its threshold.
+    patch(
+        &server,
+        &[
+            ("/channels/eq/comp/enabled", json!(true)),
+            ("/channels/eq/comp/threshold", json!(-20)),
+            ("/channels/eq/comp/ratio", json!(20)),
+            ("/channels/eq/comp/attack", json!(0.1)),
+            ("/channels/eq/comp/release", json!(50)),
+        ],
+    )
+    .await;
+    pgm.expect_peak(0.11, 0.03, "the compressor after the EQ")
+        .await;
+    patch(&server, &[("/channels/eq/dynamicsBeforeEq", json!(true))]).await;
+    pgm.expect_peak(0.1 * lift, 0.002, "the compressor before the EQ")
         .await;
     patch(&server, &set(&open("eq", -90))).await;
 

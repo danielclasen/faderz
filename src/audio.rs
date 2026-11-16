@@ -44,6 +44,8 @@ pub struct Audio {
     /// The flow each channel's input read when the engine started.
     started_on: Vec<String>,
     block: u64,
+    /// The engine's ramp length, samples.
+    ramp: u64,
     ops: Ops,
     /// Resends asked for or held back; [`Audio::follow`] notes the count
     /// it resent at, and readiness changes only under this lock.
@@ -78,8 +80,9 @@ impl Sent {
 }
 
 impl Audio {
-    /// Starts the engine of `config` with the gain matrix of `state`, each
-    /// channel reading the flow its selected input names.
+    /// Starts the engine of `config`, silent (its matrix all zeros), each
+    /// channel reading the flow its selected input names; [`Audio::follow`]
+    /// sends the strips and then the gains of `state`.
     ///
     /// # Errors
     ///
@@ -92,7 +95,6 @@ impl Audio {
         state: &Value,
         ops: Ops,
     ) -> Result<Audio, String> {
-        config.matrix = mix::matrix(shape, state);
         let flows: Vec<(String, Option<String>)> = config
             .inputs
             .iter()
@@ -104,6 +106,7 @@ impl Audio {
             input.flow_id.clone_from(flow);
         }
         let block = u64::from(config.block_size);
+        let ramp = u64::from(config.ramp_samples);
         let engine = Engine::start(config, process, None).map_err(|e| format!("engine: {e}"))?;
         let metrics = ops.metrics();
         Ok(Audio {
@@ -112,6 +115,7 @@ impl Audio {
             flows,
             started_on,
             block,
+            ramp,
             resends_asked: Mutex::new(0),
             resend: Notify::new(),
             resends: metrics.counter(
@@ -162,8 +166,14 @@ impl Audio {
     /// The deltas waiting are taken together and sent as one diff against
     /// the newest state. Never returns.
     pub async fn follow(&self, replica: &Replica<Mixer>, mut state: Value, mut revision: u64) {
+        // The engine starts silent, its strips passing their input as it
+        // is: the strips go first and the gains once their ramps are over,
+        // so every output fades in processed. Ready from then on.
         let mut sent = Sent {
-            matrix: mix::matrix(&self.shape, &state),
+            matrix: mix::matrix(&self.shape, &state)
+                .into_iter()
+                .map(|row| vec![0.0; row.len()])
+                .collect(),
             routed: self.started_on.clone(),
             strips: self
                 .shape
@@ -172,7 +182,11 @@ impl Audio {
                 .map(|c| vec![None; strip::params(&Value::Null, c.width).len()])
                 .collect(),
         };
-        self.apply(&state, &mut sent, 0).await;
+        self.apply(&state, &mut sent, 0, true).await;
+        // A resend asked for meanwhile marks it ready once done.
+        if *self.resends_asked.lock().expect("resend lock poisoned") == 0 {
+            self.ops.set_engine_started(true);
+        }
         loop {
             let resent = tokio::select! {
                 () = replica.applied(revision + 1) => None,
@@ -206,7 +220,7 @@ impl Audio {
                 // engine takes it.
                 None => (state, revision) = state_of(replica),
             }
-            self.apply(&state, &mut sent, at).await;
+            self.apply(&state, &mut sent, at, false).await;
             if let Some(n) = resent {
                 let asked = self.resends_asked.lock().expect("resend lock poisoned");
                 if *asked == n {
@@ -222,8 +236,8 @@ impl Audio {
     /// flow differs, all at `at` rounded up to a block. When the engine no
     /// longer takes that index, the rest of the diff goes at the earliest
     /// one it does; while it holds as many changes as it takes, the next
-    /// waits.
-    async fn apply(&self, state: &Value, sent: &mut Sent, at: u64) {
+    /// waits. With `settle`, the gains wait for the strips' ramps.
+    async fn apply(&self, state: &Value, sent: &mut Sent, at: u64, settle: bool) {
         let mut at = at.next_multiple_of(self.block);
         for (slot, (c, sent)) in self.shape.channels.iter().zip(&mut sent.strips).enumerate() {
             let next = strip::params(&state["channels"][&c.id], c.width);
@@ -236,6 +250,9 @@ impl Audio {
                     *p = Some(n);
                 }
             }
+        }
+        if settle {
+            at = (at + self.ramp).next_multiple_of(self.block);
         }
         let next = mix::matrix(&self.shape, state);
         for (input, (row, new)) in sent.matrix.iter_mut().zip(next).enumerate() {
