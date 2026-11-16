@@ -105,6 +105,7 @@ test('the commit banner shows its whole text to the keyboard on a short screen',
     for (const r of REPLICAS.filter((x) => x !== primary)) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
     await expect(banner).toBeVisible();
     // The narrow line drops words; the tooltip carries them.
+    await expect(banner.getByText('audio continues')).toHaveCount(1);
     await expect(banner.getByText('audio continues')).toBeHidden();
     // The banner follows the view menu in the tab order.
     await page.getByRole('combobox', { name: 'View' }).focus();
