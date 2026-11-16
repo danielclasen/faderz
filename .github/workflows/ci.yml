@@ -15,8 +15,13 @@ permissions:
 env:
   BUILDER: ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba
 
+# The cargo caches hold dependencies only: faderz itself is rebuilt on
+# every checkout anyway (its sources are newer than any cached output),
+# so it is cleaned out before a save. They are saved from main only, so
+# per-PR snapshots do not evict the main caches from the shared Actions
+# cache.
 jobs:
-  backend:
+  rust:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -29,10 +34,10 @@ jobs:
             target
             .cargo-registry
             .cargo-git
-          key: cargo-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
+          key: cargo-rust-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
           restore-keys: |
-            cargo-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-
-            cargo-
+            cargo-rust-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-
+            cargo-rust-
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.22.3
@@ -43,46 +48,25 @@ jobs:
       # The binary carries the UI it is built with.
       - run: npm run build
         working-directory: web
-      - name: Format, lint, test and build in the builder image
+      - name: Format, lint and test in the builder image
         run: |
           mkdir -p .cargo-registry .cargo-git
-          docker run --rm --user "$(id -u):$(id -g)" \
+          docker run --rm --user "$(id -u):$(id -g)" -e CARGO_INCREMENTAL=0 \
             -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
             -v "$PWD/.cargo-git:/usr/local/cargo/git" \
             -w /w "$BUILDER" bash -euo pipefail -c '
               cargo fmt --all --check
               cargo clippy --all-targets --locked -- -D warnings
               cargo test --locked
-              cargo build --locked
             '
-      - run: npx playwright install --with-deps chromium
-        working-directory: web
-      - name: Check the backend against the contract
-        run: npm run test:backend
-        working-directory: web
-        env:
-          FADERZ_BIN: ../target/debug/faderz
-      - name: Run the e2e suite against the backend
-        run: npx playwright test
-        working-directory: web
-        env:
-          FADERZ_E2E_BACKEND: ../target/debug/faderz
-      - name: Run the UI from the binary in each auth mode
-        run: npm run test:binary
-        working-directory: web
-        env:
-          FADERZ_BIN: ../target/debug/faderz
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: playwright-report-backend
-          path: |
-            web/playwright-report/
-            web/playwright-report-binary/
-            web/test-results/
-          retention-days: 14
-      # Saved from main only, so per-PR snapshots do not evict the main
-      # cache from the shared Actions cache.
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        name: Clean faderz out of the cache
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
+            -v "$PWD/.cargo-git:/usr/local/cargo/git" \
+            -w /w "$BUILDER" cargo clean --locked -p faderz
+          du -sh target .cargo-registry .cargo-git
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -90,7 +74,125 @@ jobs:
             target
             .cargo-registry
             .cargo-git
-          key: cargo-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
+          key: cargo-rust-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
+
+  # The debug binary the backend suites run against, checked against
+  # the contract here and handed to them as an artifact.
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target
+            .cargo-registry
+            .cargo-git
+          key: cargo-build-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
+          restore-keys: |
+            cargo-build-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-
+            cargo-build-
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # The binary carries the UI it is built with.
+      - run: npm run build
+        working-directory: web
+      - name: Build in the builder image
+        run: |
+          mkdir -p .cargo-registry .cargo-git
+          docker run --rm --user "$(id -u):$(id -g)" -e CARGO_INCREMENTAL=0 \
+            -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
+            -v "$PWD/.cargo-git:/usr/local/cargo/git" \
+            -w /w "$BUILDER" cargo build --locked
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: faderz-debug
+          path: target/debug/faderz
+          retention-days: 1
+      - name: Check the backend against the contract
+        run: npm run test:backend
+        working-directory: web
+        env:
+          FADERZ_BIN: ../target/debug/faderz
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        name: Clean faderz out of the cache
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
+            -v "$PWD/.cargo-git:/usr/local/cargo/git" \
+            -w /w "$BUILDER" cargo clean --locked -p faderz
+          du -sh target .cargo-registry .cargo-git
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target
+            .cargo-registry
+            .cargo-git
+          key: cargo-build-${{ hashFiles('Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
+
+  # The e2e suite against the backend in three shards, and the UI from
+  # the binary in each auth mode, each on a runner of its own with a
+  # backend of its own. Every shard starts from the global setup's state.
+  backend:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: e2e-1
+            run: FADERZ_E2E_BACKEND=../target/debug/faderz npx playwright test --shard=1/3
+          - name: e2e-2
+            run: FADERZ_E2E_BACKEND=../target/debug/faderz npx playwright test --shard=2/3
+          - name: e2e-3
+            run: FADERZ_E2E_BACKEND=../target/debug/faderz npx playwright test --shard=3/3
+          - name: binary
+            run: FADERZ_BIN=../target/debug/faderz npm run test:binary
+    name: backend (${{ matrix.name }})
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: faderz-debug
+          path: target/debug
+      - run: chmod +x ../target/debug/faderz
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('web/package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      - name: Run against the backend
+        run: ${{ matrix.run }}
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-backend-${{ matrix.name }}
+          path: |
+            web/playwright-report/
+            web/playwright-report-binary/
+            web/test-results/
+          retention-days: 14
 
   deny:
     runs-on: ubuntu-24.04
@@ -136,14 +238,48 @@ jobs:
             exit 1
           fi
           dist/faderz --version | grep -q '^faderz '
-      # The release checks the attached binary against the published
-      # image's byte for byte; they come from separate builds on
-      # separate runners, so two builds of one source have to agree.
-      - name: Build the release binary again and compare
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: faderz-release
+          path: dist/faderz
+          retention-days: 1
+
+  # The release checks the attached binary against the published
+  # image's byte for byte; they come from separate builds on
+  # separate runners, so two builds of one source have to agree. This
+  # build runs without any cache on a runner of its own, in parallel with
+  # the image job's.
+  rebuild:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the release binary again
         run: |
           touch web/src/main.ts LICENSE
           docker buildx build --no-cache --target dist --output type=local,dest=dist-again .
-          cmp dist/faderz dist-again/faderz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: faderz-release-again
+          path: dist-again/faderz
+          retention-days: 1
+
+  reproducible:
+    needs: [image, rebuild]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: faderz-release
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: faderz-release-again
+          path: dist-again
+      - name: Compare the two release binaries
+        run: cmp dist/faderz dist-again/faderz
 
   web:
     runs-on: ubuntu-24.04
@@ -161,15 +297,51 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm test
       - run: npm run build
-      - run: npx playwright test
+
+  # The e2e suite against the mock in three shards, each on a runner of
+  # its own with dev servers of its own; every test resets the mock.
+  web-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/3, 2/3, 3/3]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - id: playwright
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('web/package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      # Saved from main only, as the cargo caches.
+      - if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          matrix.shard == '1/3' && steps.playwright.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('web/package-lock.json') }}
+      - run: npx playwright test --shard=${{ matrix.shard }}
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ strategy.job-index }}
           path: |
             web/playwright-report/
             web/test-results/
