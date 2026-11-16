@@ -564,6 +564,15 @@ pub(crate) mod tests {
             path: path.into(),
             value: None,
         });
+        // The lone voter leads before it counts itself: a write before that
+        // is refused not applied.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !app.replica.replica().commitable {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("commitable");
         let Begin::New(pending) = app.commands.begin(&holder, &id) else {
             panic!("a new command");
         };
