@@ -2155,7 +2155,7 @@ dependencies = [
 [[package]]
 name = "samplez"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=22976d55d601f03407c5ac48fdd6b36e3a3bd14d#22976d55d601f03407c5ac48fdd6b36e3a3bd14d"
+source = "git+https://github.com/danielclasen/samplez?rev=a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0#a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0"
 dependencies = [
  "libc",
  "mxl-sys",
@@ -2170,7 +2170,7 @@ dependencies = [
 [[package]]
 name = "samplez-dsp"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=22976d55d601f03407c5ac48fdd6b36e3a3bd14d#22976d55d601f03407c5ac48fdd6b36e3a3bd14d"
+source = "git+https://github.com/danielclasen/samplez?rev=a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0#a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0"
 dependencies = [
  "libm",
 ]
@@ -2178,7 +2178,7 @@ dependencies = [
 [[package]]
 name = "samplez-mxl"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=22976d55d601f03407c5ac48fdd6b36e3a3bd14d#22976d55d601f03407c5ac48fdd6b36e3a3bd14d"
+source = "git+https://github.com/danielclasen/samplez?rev=a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0#a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0"
 dependencies = [
  "mxl",
  "mxl-sys",
@@ -2188,7 +2188,7 @@ dependencies = [
 [[package]]
 name = "samplez-replica"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=22976d55d601f03407c5ac48fdd6b36e3a3bd14d#22976d55d601f03407c5ac48fdd6b36e3a3bd14d"
+source = "git+https://github.com/danielclasen/samplez?rev=a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0#a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2213,7 +2213,7 @@ dependencies = [
 [[package]]
 name = "samplez-service"
 version = "0.1.0"
-source = "git+https://github.com/danielclasen/samplez?rev=22976d55d601f03407c5ac48fdd6b36e3a3bd14d#22976d55d601f03407c5ac48fdd6b36e3a3bd14d"
+source = "git+https://github.com/danielclasen/samplez?rev=a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0#a0dd0c3566806cbfc6e60a2dc8bfac5e101b39c0"
 dependencies = [
  "axum",
  "base64 0.22.1",

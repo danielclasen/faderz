@@ -193,7 +193,9 @@ the one at sign-in; a change at the provider applies from the next one.
 A session lasts `sessionTtl` from the sign-in (seconds, or a number with
 `s`, `m`, `h` or `d`, 60 s to 7 d), whatever the ID token's lifetime.
 Signing out ends it on the replica that answers, for every copy of the
-cookie, and closes the WebSockets opened with it there; WebSockets are
+cookie, and closes the WebSockets opened with it there; that replica
+holds the sign-out in memory, so another replica, or the same one after
+a restart, takes a copy of the cookie until it expires; WebSockets are
 also closed when it expires. `issuerUrl` and every endpoint the provider
 publishes need `https`, or `http` to a loopback address, as does
 `publicUrl`, and `sessionKey` needs 32 bytes or more. Without
