@@ -390,13 +390,17 @@ components:
         atIndex:
           $ref: "./ws/model.schema.json#/$defs/SampleIndex"
     Error:
+      description: |
+        A refused request. Requests without valid credentials get 401 in
+        token mode, and requests the browser protections refuse get 403,
+        with this body as well.
       type: object
       required: [code, message]
       additionalProperties: false
       properties:
         code:
           type: integer
-          enum: [400, 403, 404, 409, 503]
+          enum: [400, 401, 403, 404, 409, 503]
         message:
           type: string
         conflicts:

@@ -82,6 +82,7 @@ impl Server {
         )
         .map_err(|e| format!("config: {e}"))?
         .api(api::router(app.clone()))
+        .refusal(api::refusal)
         .ui(ui::router())
         .ws(move |socket, connect| ws::serve(ws_app.clone(), socket, connect));
         let bound = service

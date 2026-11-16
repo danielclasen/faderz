@@ -528,19 +528,21 @@ impl Rest {
             serde_json::from_str(text).unwrap()
         };
         match pointer {
-            Some(pointer) => {
-                let schema = json!({ "$ref": format!("{OPENAPI}#{pointer}") });
-                let v = jsonschema::options()
-                    .with_registry(&self.registry)
-                    .should_validate_formats(true)
-                    .build(&schema)
-                    .unwrap();
-                check(&v, &value)
-                    .unwrap_or_else(|e| panic!("{method} {path} {status}: {e}: {value}"));
-            }
+            Some(pointer) => self.check(pointer, &value),
             None => assert!(text.is_empty(), "{method} {path} {status}: {text}"),
         }
         (status, value)
+    }
+
+    /// Checks `value` against the schema at `pointer` in openapi.yaml.
+    fn check(&self, pointer: &str, value: &Value) {
+        let schema = json!({ "$ref": format!("{OPENAPI}#{pointer}") });
+        let v = jsonschema::options()
+            .with_registry(&self.registry)
+            .should_validate_formats(true)
+            .build(&schema)
+            .unwrap();
+        check(&v, value).unwrap_or_else(|e| panic!("{pointer}: {e}: {value}"));
     }
 }
 
@@ -879,6 +881,31 @@ async fn a_control_request_reaches_the_holders_primary_connections() {
         a.next_of("controlRequest").await["from"]["handle"],
         samplez_service::OwnerHandle::of(SESSION_C).as_str()
     );
+    server.stop().await;
+}
+
+/// The auth and browser checks answer in the API's Error body.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refusals_of_the_auth_checks_carry_the_error_body() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let rest = Rest::new(&server);
+    let mut tcp = TcpStream::connect(server.api).await.unwrap();
+    let body = r#"{"commandId":"0b6b2c2e-7d1f-4a3c-9a55-0f5c1d8e2b41","changes":[]}"#;
+    let request = format!(
+        "PATCH /api/v1/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    tcp.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    tcp.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+    let text = answer.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    let value: Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}: {answer}"));
+    rest.check(ERROR, &value);
+    assert_eq!(value["code"], 403);
     server.stop().await;
 }
 

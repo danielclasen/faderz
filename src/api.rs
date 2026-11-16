@@ -41,6 +41,12 @@ pub fn router(app: Arc<App>) -> Router {
         .with_state(app)
 }
 
+/// What samplez-service's auth and browser checks refuse, 401 or 403, in
+/// the body api/openapi.yaml defines for a refusal.
+pub fn refusal(status: StatusCode, reason: &'static str) -> Response {
+    error(status, reason)
+}
+
 /// A refused request: model `Error`.
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
     let body = json!({ "code": status.as_u16(), "message": message.into() });
