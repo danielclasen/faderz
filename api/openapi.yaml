@@ -20,7 +20,12 @@ info:
     one revision may carry changes of several commands. A write is answered
     once the log entry carrying it has committed, and a read returns the
     state at a committed revision. A write the serving replica cannot commit
-    is answered 503 and changes nothing.
+    is answered 503: it was not applied when the answer was sent. It may
+    still be applied later, at most once, when it was proposed before the
+    replica gave up waiting for it to commit. Sending the request again with
+    the same commandId settles it: the answer is then the command's one
+    outcome, duplicate with the revision it was applied at if it was, or the
+    result of applying it now.
 
     WebSocket clients keep a primary connection and a standby connection
     to another replica, exchange heartbeats every 250 ms on both and fail
@@ -426,9 +431,11 @@ components:
             $ref: "#/components/schemas/Error"
     NotApplied:
       description: |
-        The serving replica cannot commit, for example while it has no
-        quorum. Nothing changed; the request may be sent again with the
-        same commandId.
+        The write was not applied when the serving replica answered, for example
+        while it had no leader or quorum, or did not see the write commit within
+        its write timeout. In the second case the write may still be applied
+        later, at most once. Sending the request again with the same commandId
+        returns its one outcome.
       content:
         application/json:
           schema:
