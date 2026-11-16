@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/danielclasen/faderz/compare/v0.1.0...v0.1.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **image:** grant the binary file capabilities for its RT thread ([#22](https://github.com/danielclasen/faderz/issues/22)) ([045c523](https://github.com/danielclasen/faderz/commit/045c523a65fc762bbc368a4dccbae78c6077bd27))
+
 ## 0.1.0 (2026-11-16)
 
 
