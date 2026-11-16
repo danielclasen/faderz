@@ -494,3 +494,25 @@ test('a client never resumes onto a restored cluster that has committed past its
   await expect(page.getByTestId('fader-value-ch19')).toHaveText(formatDb(-32));
   await expect.poll(async () => (await debug(page, 'revision')) === (await serverState(request)).revision).toBe(true);
 });
+
+test('connects on its first socket over a link whose upgrade takes 4 s, and never shows Offline', { tag: '@mock' }, async ({ page, request }) => {
+  expect((await request.post('/__mock/upgrade-delay?ms=4000')).ok()).toBe(true);
+  const sockets: string[] = [];
+  page.on('websocket', (ws) => {
+    if (ws.url().includes('/api/v1/ws')) sockets.push(ws.url());
+  });
+  await page.addInitScript(() => {
+    const seen: string[] = ((window as unknown as { __links: string[] }).__links = []);
+    const t = setInterval(() => {
+      const s = window.__faderz?.connection;
+      if (s !== undefined && seen.at(-1) !== s) seen.push(s);
+      if (s === 'Live') clearInterval(t);
+    }, 20);
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 15_000 });
+  const links = await page.evaluate(() => (window as unknown as { __links: string[] }).__links);
+  expect(links).not.toContain('Offline');
+  // The primary was the first socket; the standby the second, at most.
+  expect(sockets.length).toBeLessThanOrEqual(2);
+});

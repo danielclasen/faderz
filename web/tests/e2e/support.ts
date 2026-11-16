@@ -86,6 +86,7 @@ export async function resetMock(request: APIRequestContext): Promise<void> {
   expect((await request.post('/__mock/blocks/flush')).ok()).toBe(true);
   await request.post('/__mock/audit/reset');
   await request.post('/__mock/stats/reset');
+  expect((await request.post('/__mock/upgrade-delay?ms=0')).ok()).toBe(true);
 }
 
 export function formatDb(db: number): string {
