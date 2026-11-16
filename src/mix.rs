@@ -113,8 +113,8 @@ pub fn pan(from: usize, to: usize, i: usize, j: usize, pan: f64) -> f64 {
 
 /// Leg to leg by label when `to` is at least as wide as `from`; else 5.1
 /// and 7.1 onto stereo by the ITU-R BS.775 Lo/Ro equations (centre and
-/// surrounds at -3 dB, LFE dropped) and 7.1 onto 5.1 by summing each back
-/// surround into the side surround at -3 dB.
+/// surrounds at -3 dB, LFE dropped) and 7.1 onto 5.1 by summing each side
+/// and back surround pair at -3 dB (ETSI TS 103 190-1 Table 219).
 fn fold(from: usize, to: usize, i: usize, j: usize) -> f64 {
     const H: f64 = std::f64::consts::FRAC_1_SQRT_2;
     match (from, to) {
@@ -124,7 +124,7 @@ fn fold(from: usize, to: usize, i: usize, j: usize) -> f64 {
             _ => 0.0,
         },
         (8, 6) => match (i, j) {
-            (6, 4) | (7, 5) => H,
+            (4, 4) | (5, 5) | (6, 4) | (7, 5) => H,
             _ => f64::from(u8::from(i == j)),
         },
         _ => f64::from(u8::from(i == j)),
@@ -230,8 +230,8 @@ fn scale(g: &mut [Vec<f64>], state: &Value, polarity: bool) {
 }
 
 /// The monitor output: its source's legs onto the monitor's, folded down
-/// by `downmix` when the source is wider, then level, dim, cut, mono and
-/// the speaker mutes and solos.
+/// by `downmix` when the source is wider, then level, dim, cut, mono (the
+/// sum of the folded legs) and the speaker mutes and solos.
 fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
     let m = &state["monitor"];
     let source = m["source"].as_str().unwrap_or_default();
@@ -249,6 +249,17 @@ fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
     if mono {
         level *= gain(-num(&m["monoCompensation"]));
     }
+    // The source's legs onto monitor leg `j`, folded by the downmix: lr
+    // plays only the source's L and R legs.
+    let folded = |legs: &[f64], j: usize| -> f64 {
+        if lr && from > width {
+            legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
+        } else {
+            (0..from)
+                .map(|i| legs[i] * pan(from, width, i, j, 0.0))
+                .sum()
+        }
+    };
     let leg_gain = |j: usize| {
         let solo = m["speakerSolo"]
             .as_array()
@@ -261,14 +272,9 @@ fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
             (0..width)
                 .map(|j| {
                     let v: f64 = if mono {
-                        legs.iter().sum()
-                    } else if lr && from > width {
-                        // lr plays only the source's L and R legs.
-                        legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
+                        (0..width).map(|k| folded(legs, k)).sum()
                     } else {
-                        (0..from)
-                            .map(|i| legs[i] * pan(from, width, i, j, 0.0))
-                            .sum()
+                        folded(legs, j)
                     };
                     v * leg_gain(j)
                 })
@@ -460,6 +466,8 @@ mod tests {
         let ro: Vec<f64> = (0..8).map(|i| pan(8, 2, i, 1, 0.0)).collect();
         assert_eq!(ro, [0.0, 1.0, h, 0.0, 0.0, h, 0.0, h]);
         // Lrs into Ls, Rrs into Rs, the rest leg to leg.
+        assert_eq!(pan(8, 6, 4, 4, 0.0), h);
+        assert_eq!(pan(8, 6, 5, 5, 0.0), h);
         assert_eq!(pan(8, 6, 6, 4, 0.0), h);
         assert_eq!(pan(8, 6, 7, 5, 0.0), h);
         assert_eq!(pan(8, 6, 2, 2, 0.0), 1.0);
@@ -534,5 +542,12 @@ mod tests {
         let m = matrix(&shape, &s);
         assert!(close(m[0][0], 1.0) && close(m[1][1], 1.0));
         assert!(m[2..].iter().all(|r| r[0] == 0.0 && r[1] == 0.0));
+        // Mono sums the folded legs: LFE stays out, C is in both.
+        s["monitor"]["downmix"] = json!("loRo");
+        s["monitor"]["mono"] = json!(true);
+        s["monitor"]["monoCompensation"] = json!(0);
+        let m = matrix(&shape, &s);
+        assert_eq!(m[3][0], 0.0, "LFE");
+        assert!(close(m[2][0], 2.0 * h) && close(m[0][1], 1.0));
     }
 }

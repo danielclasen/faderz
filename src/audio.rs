@@ -7,7 +7,7 @@
 //! of one voter, so the order the replica applies deltas in is the order
 //! every change reaches the engine.
 
-use std::sync::atomic::AtomicU64;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 
@@ -30,6 +30,9 @@ pub const METER_PERIOD: Duration = Duration::from_millis(40);
 /// How long a change waits before it is offered again while the engine
 /// holds as many changes as it takes.
 const FULL_RETRY: Duration = Duration::from_millis(5);
+/// The least time between two resends: each sends the whole matrix, and
+/// [`Audio::follow`] waits for it.
+const RESEND_EVERY: Duration = Duration::from_secs(1);
 
 pub struct Audio {
     engine: Engine,
@@ -40,8 +43,9 @@ pub struct Audio {
     started_on: Vec<String>,
     block: u64,
     ops: Ops,
-    /// Resends asked for; [`Audio::follow`] notes the count it resent at.
-    resends_asked: AtomicU64,
+    /// Resends asked for or held back; [`Audio::follow`] notes the count
+    /// it resent at, and readiness changes only under this lock.
+    resends_asked: Mutex<u64>,
     resend: Notify,
     resends: Counter,
     resend_pending: Gauge,
@@ -101,7 +105,7 @@ impl Audio {
             flows,
             started_on,
             block,
-            resends_asked: AtomicU64::new(0),
+            resends_asked: Mutex::new(0),
             resend: Notify::new(),
             resends: metrics.counter(
                 "faderz_engine_resends_total",
@@ -132,11 +136,18 @@ impl Audio {
     /// targets, at the earliest index it takes. Until that is done
     /// `/readyz` fails: the output may not follow the state.
     pub fn resend(&self) {
-        self.resends_asked.fetch_add(1, Relaxed);
         self.resends.add(1);
+        self.hold();
+        self.resend.notify_one();
+    }
+
+    /// Marks a resend pending: `/readyz` fails until one sent after this
+    /// is done.
+    fn hold(&self) {
+        let mut asked = self.resends_asked.lock().expect("resend lock poisoned");
+        *asked += 1;
         self.resend_pending.set(1.0);
         self.ops.set_engine_started(false);
-        self.resend.notify_one();
     }
 
     /// Follows the deltas `replica` applies from `state` at `revision`,
@@ -153,7 +164,7 @@ impl Audio {
                 () = replica.applied(revision + 1) => None,
                 () = self.resend.notified() => {
                     sent.clear(&self.engine);
-                    Some(self.resends_asked.load(Relaxed))
+                    Some(*self.resends_asked.lock().expect("resend lock poisoned"))
                 }
             };
             let since = Position {
@@ -182,9 +193,12 @@ impl Audio {
                 None => (state, revision) = state_of(replica),
             }
             self.apply(&state, &mut sent, at).await;
-            if resent.is_some_and(|n| n == self.resends_asked.load(Relaxed)) {
-                self.resend_pending.set(0.0);
-                self.ops.set_engine_started(true);
+            if let Some(n) = resent {
+                let asked = self.resends_asked.lock().expect("resend lock poisoned");
+                if *asked == n {
+                    self.resend_pending.set(0.0);
+                    self.ops.set_engine_started(true);
+                }
             }
         }
     }
@@ -250,8 +264,11 @@ impl Audio {
         let mut ticks = tokio::time::interval_at(first, METER_PERIOD);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let counters = self.engine.counters();
-        let late = || counters.command_late.load(Relaxed) + counters.generation_late.load(Relaxed);
-        let (mut beats, mut lates, mut diverged) = (0, late(), self.engine.status().diverged);
+        let mut drops = Drops::new(
+            counters.command_late.load(Relaxed),
+            self.engine.status().diverged,
+        );
+        let mut beats = 0;
         loop {
             let tick = ticks.tick().await;
             let now = counters.heartbeat_blocks.load(Relaxed);
@@ -260,11 +277,16 @@ impl Audio {
                 self.ops.heartbeat().beat();
             }
             let status = self.engine.status();
-            let now = late();
-            if now != lates || status.diverged != diverged {
-                tracing::warn!(late = now, diverged = ?status.diverged, "engine entries dropped: resending");
-                (lates, diverged) = (now, status.diverged.clone());
-                self.resend();
+            let late = counters.command_late.load(Relaxed);
+            match drops.tick(late, &status.diverged, tick.into_std()) {
+                Act::None => {}
+                Act::Hold => self.hold(),
+                Act::Resend { log } => {
+                    if log {
+                        tracing::warn!(late, diverged = ?status.diverged, "engine entries dropped: resending");
+                    }
+                    self.resend();
+                }
             }
             let periods = (tick - first).as_nanos() / METER_PERIOD.as_nanos();
             // The sequence wraps at 2^32 periods.
@@ -272,6 +294,69 @@ impl Audio {
             let frame = layout.frame(replica, sequence, &status.outputs);
             hub.publish(Frame::Meters(frame.into()));
         }
+    }
+}
+
+/// What [`Drops::tick`] asks for.
+#[derive(Debug, PartialEq, Eq)]
+enum Act {
+    None,
+    /// Entries were dropped; the resend waits for [`RESEND_EVERY`].
+    Hold,
+    /// Resend now; `log` for the first resend of an episode.
+    Resend {
+        log: bool,
+    },
+}
+
+/// Whether the engine dropped entries: its `command_late` count rose or
+/// its divergence changed. A late route needs no resend: samplez holds
+/// the slot and swaps the generation in when it arrives.
+struct Drops {
+    late: u64,
+    diverged: Option<String>,
+    /// Drops seen and not resent yet.
+    pending: bool,
+    last: Option<std::time::Instant>,
+    /// Resends follow each other at most [`RESEND_EVERY`] apart.
+    episode: bool,
+}
+
+impl Drops {
+    fn new(late: u64, diverged: Option<String>) -> Drops {
+        Drops {
+            late,
+            diverged,
+            pending: false,
+            last: None,
+            episode: false,
+        }
+    }
+
+    /// The engine's `command_late` and `diverged` at `now`.
+    fn tick(&mut self, late: u64, diverged: &Option<String>, now: std::time::Instant) -> Act {
+        let quiet = self.last.is_none_or(|t| now - t >= RESEND_EVERY);
+        let seen = late != self.late || *diverged != self.diverged;
+        if seen {
+            self.late = late;
+            self.diverged.clone_from(diverged);
+        }
+        if !(seen || self.pending) {
+            if quiet {
+                self.episode = false;
+            }
+            return Act::None;
+        }
+        if !quiet {
+            let first = !self.pending;
+            self.pending = true;
+            return if first { Act::Hold } else { Act::None };
+        }
+        self.pending = false;
+        self.last = Some(now);
+        let log = !self.episode;
+        self.episode = true;
+        Act::Resend { log }
     }
 }
 
@@ -295,4 +380,31 @@ pub fn state_of(replica: &Replica<Mixer>) -> (Value, u64) {
     replica
         .store()
         .with_state(|sm| (sm.product.state().clone(), sm.revision))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rise of command_late or a new divergence resends, at most once
+    /// per RESEND_EVERY, logged once per episode; generation_late is not
+    /// read at all.
+    #[test]
+    fn dropped_entries_resend_with_a_backoff() {
+        let t0 = std::time::Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut d = Drops::new(0, None);
+        assert_eq!(d.tick(0, &None, at(0)), Act::None);
+        assert_eq!(d.tick(1, &None, at(40)), Act::Resend { log: true });
+        assert_eq!(d.tick(1, &None, at(80)), Act::None);
+        // Another drop within the second waits, and readiness fails meanwhile.
+        assert_eq!(d.tick(2, &None, at(120)), Act::Hold);
+        assert_eq!(d.tick(3, &None, at(160)), Act::None);
+        assert_eq!(d.tick(3, &None, at(1_040)), Act::Resend { log: false });
+        // Quiet for a second: the next drop starts a new episode.
+        assert_eq!(d.tick(3, &None, at(2_100)), Act::None);
+        let diverged = Some("entry 9 late".to_owned());
+        assert_eq!(d.tick(3, &diverged, at(2_140)), Act::Resend { log: true });
+        assert_eq!(d.tick(3, &diverged, at(3_200)), Act::None);
+    }
 }
