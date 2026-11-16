@@ -46,9 +46,16 @@ COPY --from=build /out/usr/local/bin/faderz /out/usr/share/licenses/faderz/LICEN
      /out/usr/share/licenses/faderz/THIRD-PARTY-WEB.txt /
 
 # The slim variant of the Debian release the builder and foldz use: the
-# binary needs glibc and libgcc_s alone.
+# binary needs glibc and libgcc_s, and the libmxl it loads libstdc++6,
+# which the image ships for apt.
 FROM debian:trixie-20261027-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+COPY --from=build /opt/mxl/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
+RUN ln -s libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1 \
+ && ln -s libmxl.so.1 /opt/mxl/lib/libmxl.so
+COPY --from=build /opt/mxl/share/licenses /opt/mxl/share/licenses
 COPY --from=build /out/ /
 # The replicated state's default data directory; a deployment mounts a
 # volume there.

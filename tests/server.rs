@@ -75,7 +75,7 @@ async fn start_with(dir: &std::path::Path, auth: Value) -> Server {
         "shape": shape(),
     });
     let (config, shape, name) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
-    Server::start(&config, shape, name).await.unwrap()
+    Server::start(&config, shape, name, None).await.unwrap()
 }
 
 /// A client on one WebSocket connection that answers pings and checks

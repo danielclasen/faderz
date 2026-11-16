@@ -28,11 +28,14 @@ struct Hello {
     /// Set by a hello until its answer has gone out, which the `replicas`
     /// message goes ahead of.
     greet: bool,
+    /// Credits granted while the connection is a standby, kept for its
+    /// promote: a standby gets no meter frames.
+    standby_credits: u64,
 }
 
 /// Serves one WebSocket client until it closes or fails.
 pub async fn serve(app: Arc<App>, socket: WebSocket, connect: Connect) {
-    let queue = app.hub.subscribe();
+    let queue = app.hub.subscribe(&connect.owner);
     let hello = Arc::new(Mutex::new(Hello::default()));
     let encoder = Encoder {
         app: app.clone(),
@@ -216,19 +219,18 @@ fn on_message<'a>(
         let mut h = hello.lock().expect("hello lock poisoned");
         h.kind = msg["kind"].as_str().map(str::to_owned);
         h.greet = true;
+        queue.set_primary(msg["mode"] == "primary");
         return Reply::CatchUp(CatchUp {
             since: position(&msg),
             full: false,
         });
     }
     let kind_of_client = hello.lock().expect("hello lock poisoned").kind.clone();
+    // Answered at once, a command too: samplez-service sends command
+    // answers only after the first catch-up, which is the hello's, and
+    // every message before the hello is refused alike, in the order sent.
     let Some(client_kind) = kind_of_client else {
-        let e = error(app, 400, "hello first", None);
-        return if command {
-            ready(e)
-        } else {
-            Reply::Now(Some(e))
-        };
+        return Reply::Now(Some(error(app, 400, "hello first", None)));
     };
     match kind {
         "ping" => {
@@ -236,15 +238,25 @@ fn on_message<'a>(
             Reply::Now(Some(text(pong.to_string())))
         }
         "pong" => msg["t"].as_u64().map_or(Reply::Now(None), Reply::Pong),
-        "promote" => Reply::Promote(position(&msg)),
+        "promote" => {
+            queue.set_primary(true);
+            let kept =
+                std::mem::take(&mut hello.lock().expect("hello lock poisoned").standby_credits);
+            grant(queue, kept);
+            Reply::Promote(position(&msg))
+        }
         "resync" => Reply::CatchUp(CatchUp {
             since: position(&msg),
             full: msg["full"] == true,
         }),
         "credit" => {
             let n = msg["n"].as_u64().unwrap_or(0);
-            let room = CREDIT_CAP.saturating_sub(queue.meter_credits());
-            queue.grant_meter_credits(n.min(room));
+            if queue.is_primary() {
+                grant(queue, n);
+            } else {
+                let mut h = hello.lock().expect("hello lock poisoned");
+                h.standby_credits = h.standby_credits.saturating_add(n).min(CREDIT_CAP);
+            }
             Reply::Now(None)
         }
         "set" | "touch" | "release" => control(app, connect, &client_kind, &msg, admission),
@@ -386,4 +398,10 @@ fn refusal(app: &App, id: &str, path: &str, answer: &state::Answer) -> Message {
         state::Answer::Invalid { message } => error(app, 400, message, Some((id, path))),
         state::Answer::Scene { .. } => error(app, 400, "not a control command", Some((id, path))),
     }
+}
+
+/// Grants `n` meter credits, within the cap the connection holds at most.
+fn grant(queue: &ClientQueue, n: u64) {
+    let room = CREDIT_CAP.saturating_sub(queue.meter_credits());
+    queue.grant_meter_credits(n.min(room));
 }

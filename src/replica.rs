@@ -126,6 +126,8 @@ pub async fn start(dir: &Path, shape: Shape, estimate: Estimate) -> Result<Repli
         block: BLOCK,
         write_timeout: WRITE_TIMEOUT,
         addr: ADDR.into(),
+        peers: Vec::new(),
+        voters: None,
     };
     let replica = Replica::start(
         settings,

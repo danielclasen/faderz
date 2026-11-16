@@ -873,7 +873,7 @@ fn escape(token: &str) -> String {
 }
 
 /// Sets the leaf at `path`, creating its last key in an object.
-fn set_at(root: &mut Value, path: &str, value: Value) {
+pub(crate) fn set_at(root: &mut Value, path: &str, value: Value) {
     let tokens = tokens(path);
     let Some((last, parents)) = tokens.split_last() else {
         *root = value;

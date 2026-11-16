@@ -6,7 +6,6 @@ use std::process::ExitCode;
 
 use faderz::config::Config;
 use faderz::server::Server;
-use tokio::signal::unix::{SignalKind, signal};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -33,6 +32,22 @@ fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .with_max_level(tracing::Level::WARN)
         .init();
+    // SIGINT and SIGTERM are blocked before any thread exists, so every
+    // thread inherits the mask, the RT thread too, and only sigwait below
+    // receives them.
+    // SAFETY: `set` is initialised by sigemptyset before use.
+    let set = unsafe {
+        let mut set = std::mem::zeroed::<libc::sigset_t>();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        set
+    };
+    let process = config
+        .audio
+        .as_ref()
+        .map(|engine| samplez::rt::setup_process(&engine.rt));
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -44,30 +59,33 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(run(config, shape, name)) {
-        Ok(()) => ExitCode::SUCCESS,
+    let server = match runtime.block_on(Server::start(&config, shape, name, process)) {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("faderz: {e}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
-    }
-}
-
-async fn run(config: Config, shape: faderz::shape::Shape, name: String) -> Result<(), String> {
-    let mut term = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
-    let mut int = signal(SignalKind::interrupt()).map_err(|e| e.to_string())?;
-    let mut server = Server::start(&config, shape, name).await?;
+    };
     eprintln!("faderz: api listener on {}", server.api);
     if let Some(machine) = server.machine {
         eprintln!("faderz: machine listener on {machine}");
     }
     eprintln!("faderz: ops listener on {}", server.ops);
     eprintln!("faderz: nmos listener on {}", server.nmos);
-    let result = tokio::select! {
-        e = server.failed() => Err(e),
-        _ = term.recv() => Ok(()),
-        _ = int.recv() => Ok(()),
-    };
-    server.stop().await;
-    result
+    match &server.audio {
+        Some(audio) => eprintln!("faderz: rt {:?}", audio.engine().status().rt),
+        None => eprintln!("faderz: no mxl section: no engine runs, nothing is mixed"),
+    }
+    let failure = server.failure();
+    let mut sig = 0;
+    // SAFETY: `set` is a valid signal set and `sig` is writable.
+    unsafe { libc::sigwait(&set, &mut sig) };
+    runtime.block_on(server.stop());
+    match failure.lock().expect("failure lock poisoned").take() {
+        Some(e) => {
+            eprintln!("faderz: {e}");
+            ExitCode::FAILURE
+        }
+        None => ExitCode::SUCCESS,
+    }
 }

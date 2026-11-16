@@ -1,11 +1,13 @@
 //! The configuration file: listeners, auth and API settings of
-//! samplez-service, where the replicated state lives, and the shape.
+//! samplez-service, where the replicated state lives, the shape, and the
+//! MXL flows the engine reads and writes.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use samplez_service::config::{ApiConfig, AuthConfig, AuthMode, Listeners};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::contract::{check, contract};
 use crate::shape::Shape;
@@ -27,7 +29,81 @@ pub struct Config {
     pub replica: ReplicaConfig,
     /// Model `Shape`.
     pub shape: Value,
+    /// The MXL flows of the audio. Absent, faderz runs no engine: the
+    /// state is served, nothing is mixed, and `/readyz` fails.
+    #[serde(default)]
+    pub mxl: Option<Mxl>,
+    /// samplez's engine timing: `sampleRate`, `blockSize`,
+    /// `readerMarginSamples`, `maxCatchupBlocks`, `pruneAfterBlocks`,
+    /// `rampSamples`. samplez checks the values and supplies defaults.
+    #[serde(default)]
+    pub engine: Map<String, Value>,
+    /// samplez's RT thread settings (`enabled`, `priority`, `rtCpu`).
+    #[serde(default)]
+    pub rt: Map<String, Value>,
+    /// The engine configuration [`Config::parse`] built from the above,
+    /// with a matrix of zeros: the matrix comes from the live state.
+    #[serde(skip)]
+    pub audio: Option<samplez::Config>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Mxl {
+    /// The libmxl shared library, loaded at start.
+    #[serde(default = "default_library_path")]
+    pub library_path: PathBuf,
+    pub domains: Vec<Domain>,
+    /// The flows each channel reads, by channel id; every channel has one.
+    pub inputs: BTreeMap<String, Input>,
+    /// The flow each output of the shape writes, by output id; every
+    /// output has one.
+    pub outputs: BTreeMap<String, Output>,
+}
+
+fn default_library_path() -> PathBuf {
+    PathBuf::from("/opt/mxl/lib/libmxl.so")
+}
+
+/// A mounted MXL domain.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Domain {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Input {
+    /// The flow of input a.
+    pub flow: String,
+    /// The flow of input b, for a channel with `altInput`.
+    #[serde(default)]
+    pub alt_flow: Option<String>,
+    /// Required with more than one domain.
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Output {
+    pub flow: String,
+    /// Required with more than one domain.
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+/// The `engine` keys faderz passes to samplez; the others it sets itself.
+const ENGINE_KEYS: [&str; 6] = [
+    "sampleRate",
+    "blockSize",
+    "readerMarginSamples",
+    "maxCatchupBlocks",
+    "pruneAfterBlocks",
+    "rampSamples",
+];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -74,11 +150,103 @@ impl Config {
             ));
         }
         let shape = Shape::parse(&config.shape).map_err(|e| format!("shape: {e}"))?;
+        let mut config = config;
+        config.audio = config.audio(&shape)?;
         let name = config.replica.name.clone().unwrap_or_else(host);
         check(&contract().id, &json!(name)).map_err(|e| {
             format!("replica.name {name:?}: {e}; name the replica in the configuration")
         })?;
         Ok((config, shape, name))
+    }
+}
+
+impl Config {
+    /// The engine configuration of the `mxl` section, with a matrix of
+    /// zeros: one input per channel reading its flow of input a, one
+    /// output per output of the shape.
+    fn audio(&self, shape: &Shape) -> Result<Option<samplez::Config>, String> {
+        let Some(mxl) = &self.mxl else {
+            return Ok(None);
+        };
+        if let Some(k) = self
+            .engine
+            .keys()
+            .find(|k| !ENGINE_KEYS.contains(&k.as_str()))
+        {
+            return Err(format!("engine.{k}: not a key faderz passes to samplez"));
+        }
+        let only = (mxl.domains.len() == 1).then(|| mxl.domains[0].name.clone());
+        let domain = |at: String, given: &Option<String>| {
+            given
+                .clone()
+                .or_else(|| only.clone())
+                .ok_or(format!("{at}.domain: required with more than one domain"))
+        };
+        let mut inputs = Vec::new();
+        for c in &shape.channels {
+            let at = format!("mxl.inputs.{}", c.id);
+            let input = mxl.inputs.get(&c.id).ok_or(format!("{at}: missing"))?;
+            if input.alt_flow.is_some() && !c.alt_input {
+                return Err(format!("{at}.altFlow: the channel has no altInput"));
+            }
+            inputs.push(json!({
+                "name": c.id,
+                "domain": domain(at, &input.domain)?,
+                "flowId": input.flow,
+                "channels": c.width,
+            }));
+        }
+        let mut outputs = Vec::new();
+        for o in &shape.outputs {
+            let at = format!("mxl.outputs.{}", o.id);
+            let output = mxl.outputs.get(&o.id).ok_or(format!("{at}: missing"))?;
+            outputs.push(json!({
+                "name": o.id,
+                "domain": domain(at, &output.domain)?,
+                "flowId": output.flow,
+                "label": o.name,
+                "group": o.id,
+                "role": "Audio",
+                "channels": o.width,
+            }));
+        }
+        if let Some(id) = mxl.inputs.keys().find(|id| !shape.is_channel(id)) {
+            return Err(format!("mxl.inputs.{id}: not a channel of the shape"));
+        }
+        if let Some(id) =
+            (mxl.outputs.keys()).find(|id| !shape.outputs.iter().any(|o| &o.id == *id))
+        {
+            return Err(format!("mxl.outputs.{id}: not an output of the shape"));
+        }
+        let rows: usize = shape.channels.iter().map(|c| c.width).sum();
+        let columns: usize = shape.outputs.iter().map(|o| o.width).sum();
+        let mut v = Value::Object(self.engine.clone());
+        v["libmxl"] = json!(mxl.library_path);
+        v["domains"] = mxl
+            .domains
+            .iter()
+            .map(|d| json!({ "name": d.name, "path": d.path }))
+            .collect();
+        v["inputs"] = json!(inputs);
+        v["outputs"] = json!(outputs);
+        v["matrix"] = json!(vec![vec![0.0f32; columns]; rows]);
+        v["rt"] = Value::Object(self.rt.clone());
+        let engine =
+            samplez::Config::parse(&v.to_string()).map_err(|e| format!("engine: {}", e.0))?;
+        if engine.sample_rate != shape.sample_rate {
+            return Err(format!(
+                "engine.sampleRate {} differs from the shape's {}",
+                engine.sample_rate, shape.sample_rate
+            ));
+        }
+        for (slot, c) in shape.channels.iter().enumerate() {
+            if let Some(b) = &mxl.inputs[&c.id].alt_flow {
+                engine
+                    .check_input_flow(slot, b)
+                    .map_err(|e| format!("mxl.inputs.{}.altFlow: {}", c.id, e.0))?;
+            }
+        }
+        Ok(Some(engine))
     }
 }
 

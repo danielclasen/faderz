@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use samplez_replica::Replica;
 use samplez_replica::entry::SessionKey;
+use samplez_service::metrics::Metrics;
 use samplez_service::replica::{Ack, Commands, Resolution};
 use samplez_service::ws::{Delta, Frame, Hub};
 use samplez_service::{Position, ReplicatedState};
@@ -29,12 +30,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(replica: Arc<Replica<Mixer>>, name: String) -> Arc<App> {
+    pub fn new(replica: Arc<Replica<Mixer>>, name: String, metrics: &Metrics) -> Arc<App> {
         Arc::new(App {
             commands: Commands::new(replica.clone(), COMMANDS_IN_FLIGHT),
             replica,
             name,
-            hub: Hub::new(CLIENT_DELTAS),
+            hub: Hub::new(CLIENT_DELTAS, metrics),
         })
     }
 
