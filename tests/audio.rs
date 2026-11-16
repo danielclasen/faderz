@@ -572,9 +572,11 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     // Every sample since the output began: silence, then the fade-in of
     // the processed signal, never the unprocessed one.
     let left = pgm.history();
+    let first = left.iter().position(|v| *v != 0.0);
+    // Silence before it: the history reaches back to the output's start.
     assert!(
-        left.iter().any(|v| *v != 0.0),
-        "the history holds the fade-in"
+        first.is_some_and(|i| i > 0),
+        "the history holds the silent start and the fade-in: first non-zero at {first:?}"
     );
     let wrong = left.iter().find(|v| **v > 0.0 || **v < trimmed - 1e-6);
     assert!(wrong.is_none(), "unprocessed after the restart: {wrong:?}");
