@@ -185,7 +185,7 @@ test('arms and confirms a scene store and delete from the keyboard alone, within
   await expect(page.getByText(name)).toBeHidden();
 });
 
-test('asks the holder of a refused control for it, and tells this screen when another asks for one it holds', { tag: '@mock' }, async ({ page, baseURL }) => {
+test('asks the holder of a refused control for it, and tells this screen when another asks for one it holds', async ({ page, baseURL }) => {
   await live(page);
   const path = '/channels/ch4/fader';
   const other = await RawClient.open(baseURL!);
@@ -226,7 +226,7 @@ test('asks the holder of a refused control for it, and tells this screen when an
   }
 });
 
-test('marks the strip of a channel another screen has selected with its initial', { tag: '@mock' }, async ({ page, baseURL }) => {
+test('marks the strip of a channel another screen has selected with its initial', async ({ page, baseURL }) => {
   await live(page);
   const other = await RawClient.open(baseURL!);
   try {
@@ -544,7 +544,7 @@ async function talkKey(page: Page, request: APIRequestContext) {
   };
 }
 
-test('ends a latched talk from the notice when another session asks for it', { tag: '@mock' }, async ({ page, request, baseURL }) => {
+test('ends a latched talk from the notice when another session asks for it', async ({ page, request, baseURL }) => {
   const { talk, active } = await talkKey(page, request);
   const path = '/mixMinus/mm1/interrupt/active';
   await talk.click();
