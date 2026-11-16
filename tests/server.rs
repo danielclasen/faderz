@@ -105,10 +105,11 @@ impl Client {
     }
 
     /// The next message other than a heartbeat, checked against the
-    /// contract.
+    /// contract, within 5 s: heartbeats do not extend the wait.
     async fn next(&mut self) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let message = tokio::time::timeout(Duration::from_secs(5), self.ws.next())
+            let message = tokio::time::timeout_at(deadline, self.ws.next())
                 .await
                 .expect("a message within 5 s")
                 .expect("open")
@@ -126,14 +127,19 @@ impl Client {
         }
     }
 
-    /// The next message of `kind`, skipping others.
+    /// The next message of `kind` within [`WAIT`], skipping others.
     async fn next_of(&mut self, kind: &str) -> Value {
-        loop {
-            let m = self.next().await;
-            if m["type"] == kind {
-                return m;
+        let wait = async {
+            loop {
+                let m = self.next().await;
+                if m["type"] == kind {
+                    return m;
+                }
             }
-        }
+        };
+        tokio::time::timeout(WAIT, wait)
+            .await
+            .unwrap_or_else(|_| panic!("no {kind} within {WAIT:?}"))
     }
 
     async fn hello(&mut self) -> Value {
@@ -163,15 +169,23 @@ impl Client {
     /// What answered command `id`: an ack, an error or the delta listing
     /// it among its origins.
     async fn answer(&mut self, id: &str) -> Value {
-        loop {
-            let m = self.next().await;
-            let origins = m["origins"].as_array().into_iter().flatten();
-            if m["commandId"] == id || origins.into_iter().any(|o| o["commandId"] == id) {
-                return m;
+        let wait = async {
+            loop {
+                let m = self.next().await;
+                let origins = m["origins"].as_array().into_iter().flatten();
+                if m["commandId"] == id || origins.into_iter().any(|o| o["commandId"] == id) {
+                    return m;
+                }
             }
-        }
+        };
+        tokio::time::timeout(WAIT, wait)
+            .await
+            .unwrap_or_else(|_| panic!("no answer to {id} within {WAIT:?}"))
     }
 }
+
+/// The longest a test waits for a message it skips others for.
+const WAIT: Duration = Duration::from_secs(10);
 
 const SESSION_A: &str = "session-a-0123456789abcdef";
 const SESSION_B: &str = "session-b-0123456789abcdef";
