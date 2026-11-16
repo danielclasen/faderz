@@ -1259,6 +1259,7 @@ test('says in the notice line that changes are not committing while the serving 
   await live(page);
   const banner = page.getByTestId('commit-banner');
   await expect(banner).toHaveCount(0);
+  const logBefore = await page.getByRole('log', { name: 'Notices' }).elementHandle();
   const strip = (await page.locator('[data-channel="ch1"]').boundingBox())!;
   const status = (await page.getByTestId('status').boundingBox())!;
   const primary = (await debug(page, 'primaryReplica'))!;
@@ -1267,7 +1268,11 @@ test('says in the notice line that changes are not committing while the serving 
   await expect(banner).toContainText('CHANGES NOT COMMITTING');
   // A status of its own, in no other live region: announced once.
   expect(await banner.evaluate((el) => el.parentElement!.closest('[aria-live], [role="log"], [role="status"], [role="alert"]') === null)).toBe(true);
-  await expect(page.getByRole('log', { name: 'Notices' })).toHaveCount(0);
+  // The notices' log stays mounted beside it, empty: the first notice
+  // after commits return is announced into a region already there.
+  const log = page.getByRole('log', { name: 'Notices' });
+  await expect(log).toHaveCount(1);
+  await expect(log).toBeEmpty();
   await expect(banner).toContainText('audio continues');
   await expect(page.getByTestId('commit-pending')).toHaveText('0 pending');
   // In the notice line of the status bar, whole and over no control:
@@ -1282,6 +1287,8 @@ test('says in the notice line that changes are not committing while the serving 
   await expect(page.getByTestId('quorum')).toBeVisible();
   for (const r of REPLICAS) await request.post(`/__mock/replicas/${r}/restore`);
   await expect(banner).toHaveCount(0);
+  // The same log element throughout, never torn down around the banner.
+  expect(await logBefore!.evaluate((el) => el.isConnected)).toBe(true);
 });
 
 test('moves a processing parameter by the drag distance and never jumps it to the touch point', async ({ page, request }) => {

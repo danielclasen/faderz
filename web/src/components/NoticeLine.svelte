@@ -17,17 +17,19 @@
   );
   /** The control a request notice asks for, while this session still holds it. */
   const releasable = $derived(latest?.kind === 'request' && latest.path !== undefined && mixer.isMine(mixer.ownerOf(latest.path)) ? latest.path : null);
+  /** While nothing commits that is what the line says; the notices wait. */
+  const banner = $derived(mixer.shape !== null && mixer.notCommitting);
 </script>
 
 <!-- The banner is a status of its own, outside the notices' live
      region, so a screen reader announces it once. -->
 <div class="notice-line">
   <!-- While nothing commits that is what the line says; the notices wait. -->
-  {#if mixer.shape && mixer.notCommitting}
-    <CommitBanner />
-  {:else}
+  {#if banner}<CommitBanner />{/if}
+  <!-- Mounted throughout, so the first notice after the banner goes is
+       announced; it shows nothing while the banner does. -->
   <div role="log" aria-live="polite" aria-label="Notices">
-  {#if latest}
+  {#if latest && !banner}
     <!-- A text cut off at the end is whole in the tooltip, which focus
          shows too. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -57,7 +59,6 @@
     </div>
   {/if}
   </div>
-  {/if}
 </div>
 
 <style>
