@@ -776,7 +776,7 @@ async fn oidc_mode_answers_the_session_route_and_wants_a_sign_in() {
     let auth = json!({ "mode": "oidc", "oidc": {
         "issuerUrl": "http://127.0.0.1:9/realms/r",
         "clientId": "faderz",
-        "publicUrl": "http://faderz.test",
+        "publicUrl": "https://faderz.test",
     } });
     let server = start_with(&dir, auth).await;
     let rest = Rest::new(&server);

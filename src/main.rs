@@ -69,6 +69,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A flag or variable can override the file's mode; say which applies.
+    eprintln!(
+        "faderz: auth mode {} (from {})",
+        format!("{:?}", config.auth.mode).to_ascii_lowercase(),
+        config::auth_mode_source(&flags, |k| std::env::var(k).ok())
+    );
     eprintln!("faderz: api listener on {}", server.api);
     if let Some(machine) = server.machine {
         eprintln!("faderz: machine listener on {machine}");

@@ -233,11 +233,24 @@ pub const SETTINGS: &[Setting] = &[
         &["auth", "oidc", "viewerRole"],
         "when set, required to sign in as viewer",
     ),
+    Setting {
+        flag: "--oidc-allowed-clients",
+        env: "FADERZ_OIDC_ALLOWED_CLIENTS",
+        path: &["auth", "oidc", "allowedClients"],
+        kind: Kind::List,
+        help: "clients a bearer access token's azp may name; default the client id",
+    },
     text(
         "--oidc-audience",
         "FADERZ_OIDC_AUDIENCE",
         &["auth", "oidc", "audience"],
-        "the audience of bearer access tokens; default the client id",
+        "the audience a bearer access token must name; default none, not checked",
+    ),
+    text(
+        "--oidc-session-ttl",
+        "FADERZ_OIDC_SESSION_TTL",
+        &["auth", "oidc", "sessionTtl"],
+        "how long a session lasts: seconds, or with s, m, h or d; default 8h",
     ),
     text(
         "--oidc-session-key-file",
@@ -314,22 +327,61 @@ pub fn usage() -> String {
     text
 }
 
+/// Where a setting's value came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Flag,
+    Env,
+    /// The configuration file, or the default when the file has none.
+    File,
+}
+
+/// The value of `setting` in `flags`, else in `env`.
+fn given(
+    setting: &Setting,
+    flags: &[(String, String)],
+    env: &impl Fn(&str) -> Option<String>,
+) -> Option<(String, Source)> {
+    flags
+        .iter()
+        .rev()
+        .find(|(f, _)| f == setting.flag)
+        .map(|(_, v)| (v.clone(), Source::Flag))
+        .or_else(|| {
+            env(setting.env)
+                .filter(|v| !v.is_empty())
+                .map(|v| (v, Source::Env))
+        })
+}
+
+/// Where `auth.mode` comes from, and how to name it in the log.
+pub fn auth_mode_source(
+    flags: &[(String, String)],
+    env: impl Fn(&str) -> Option<String>,
+) -> String {
+    let mode = SETTINGS
+        .iter()
+        .find(|s| s.path == ["auth", "mode"])
+        .expect("auth.mode is a setting");
+    match given(mode, flags, &env) {
+        Some((_, Source::Flag)) => mode.flag.to_owned(),
+        Some((_, Source::Env)) => mode.env.to_owned(),
+        _ => "the configuration file".to_owned(),
+    }
+}
+
 /// Sets each [`SETTINGS`] entry given in `flags`, else in `env`, at its
-/// path in `config`, then [`DEFAULT_OPERATOR_ROLE`] where an `auth.oidc`
-/// section has no operator role.
+/// path in `config`, then, in `oidc` mode, [`DEFAULT_OPERATOR_ROLE`] where
+/// `auth.oidc` has no operator role.
 pub fn apply(
     config: &mut Value,
     flags: &[(String, String)],
     env: impl Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
     for s in SETTINGS {
-        let given = flags
-            .iter()
-            .rev()
-            .find(|(f, _)| f == s.flag)
-            .map(|(_, v)| v.clone())
-            .or_else(|| env(s.env).filter(|v| !v.is_empty()));
-        let Some(given) = given else { continue };
+        let Some((given, _)) = given(s, flags, &env) else {
+            continue;
+        };
         let value = match s.kind {
             Kind::Text => json!(given),
             Kind::List => json!(
@@ -359,9 +411,11 @@ pub fn apply(
             None => return Err(format!("{}: not an object", s.path.join("."))),
         };
     }
+    let oidc_mode = config.pointer("/auth/mode").and_then(Value::as_str) == Some("oidc");
     if let Some(oidc) = config
         .pointer_mut("/auth/oidc")
         .and_then(Value::as_object_mut)
+        .filter(|_| oidc_mode)
     {
         oidc.entry("operatorRole")
             .or_insert_with(|| json!(DEFAULT_OPERATOR_ROLE));
@@ -623,6 +677,7 @@ mod tests {
         assert_eq!(o.operator_role, DEFAULT_OPERATOR_ROLE);
 
         let flags = [
+            ("--auth-mode", "oidc"),
             ("--oidc-client-secret-file", "/run/s"),
             ("--oidc-issuer-url", "https://idp.example"),
             ("--oidc-public-url", "https://faderz.example"),
@@ -643,6 +698,41 @@ mod tests {
         apply(&mut v, &all, |_| None).unwrap();
         v["auth"]["mode"] = json!("oidc");
         serde_json::from_value::<AuthConfig>(v["auth"].clone()).unwrap();
+    }
+
+    /// The operator role is defaulted for oidc mode only: a stray
+    /// `auth.oidc` section in another mode is not made valid by it.
+    #[test]
+    fn the_operator_role_defaults_in_oidc_mode_only() {
+        let config = |mode: &str| {
+            json!({
+                "replica": { "name": "r1" },
+                "shape": small(),
+                "auth": { "mode": mode, "token": { "file": "/run/t" }, "oidc": {
+                    "issuerUrl": "https://idp.example", "clientId": "c",
+                    "publicUrl": "https://faderz.example",
+                } },
+            })
+            .to_string()
+        };
+        let (c, _, _) = Config::parse(&config("oidc"), || unreachable!()).unwrap();
+        assert_eq!(c.auth.oidc.unwrap().operator_role, DEFAULT_OPERATOR_ROLE);
+        let e = Config::parse(&config("token"), || unreachable!()).unwrap_err();
+        assert!(e.contains("operatorRole"), "{e}");
+        let flags = [("--auth-mode".to_owned(), "oidc".to_owned())];
+        let parsed = Config::parse_with(&config("token"), &flags, |_| None, || unreachable!());
+        assert!(parsed.is_ok(), "the mode a flag sets counts");
+    }
+
+    #[test]
+    fn the_auth_mode_names_where_it_came_from() {
+        let flag = [("--auth-mode".to_owned(), "none".to_owned())];
+        let env = |k: &str| (k == "FADERZ_AUTH_MODE").then(|| "token".to_owned());
+        assert_eq!(auth_mode_source(&flag, env), "--auth-mode");
+        assert_eq!(auth_mode_source(&[], env), "FADERZ_AUTH_MODE");
+        assert_eq!(auth_mode_source(&[], |_| None), "the configuration file");
+        let empty = |_: &str| Some(String::new());
+        assert_eq!(auth_mode_source(&[], empty), "the configuration file");
     }
 
     #[test]

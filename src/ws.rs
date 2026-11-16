@@ -472,6 +472,7 @@ mod tests {
                             },
                             owner,
                             sessions,
+                            ends: samplez_service::SessionEnd::never(),
                         };
                         let _ = served.send(tokio::spawn(serve(app, socket, connect)));
                     })
