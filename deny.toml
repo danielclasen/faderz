@@ -37,4 +37,9 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = ["https://github.com/danielclasen/samplez"]
+# samplez-mxl takes libmxl's Rust bindings from the MXL repository at a
+# pinned rev.
+allow-git = [
+  "https://github.com/danielclasen/samplez",
+  "https://github.com/dmf-mxl/mxl",
+]
