@@ -978,6 +978,76 @@ mod tests {
         assert!(e.contains("bankOffset"), "{e}");
     }
 
+    /// A channel's 1-based flow channels reach the engine 0-based, one
+    /// per leg, and label the channel's source; a selection of the wrong
+    /// length or out of range is refused.
+    #[test]
+    fn a_channel_selects_its_legs_from_the_flow() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let config = |st1: Value, source: Option<&str>| {
+            let mut shape = small();
+            if let Some(s) = source {
+                shape["channels"][2]["source"] = json!(s);
+            }
+            json!({
+                "replica": { "name": "r1" },
+                "shape": shape,
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                    "inputs": {
+                        "ch1": { "flow": id(1), "altFlow": id(5), "channels": [16] },
+                        "ch2": { "flow": id(2) },
+                        "st1": st1,
+                    },
+                    "outputs": { "out-pgm": { "flow": id(4) } },
+                },
+            })
+            .to_string()
+        };
+        assert_eq!(MAX_FLOW_CHANNEL, samplez_mxl::input::MAX_FLOW_CHANNELS);
+        let parse = |st1: Value, source| Config::parse(&config(st1, source), || unreachable!());
+        let (c, shape, _) = parse(json!({ "flow": id(3), "channels": [7, 8] }), None).unwrap();
+        let e = c.audio.unwrap();
+        assert_eq!(e.inputs[0].flow_channels, Some(vec![15]));
+        assert_eq!(e.inputs[1].flow_channels, None);
+        assert_eq!(e.inputs[2].flow_channels, Some(vec![6, 7]));
+        assert_eq!(e.inputs[2].channels, 2);
+        let sources: Vec<_> = shape.channels.iter().map(|c| c.source.as_deref()).collect();
+        assert_eq!(sources, [Some("ch 16"), None, Some("ch 7-8")]);
+        check(&contract().shape, &serde_json::to_value(&shape).unwrap()).unwrap();
+
+        let (_, shape, _) = parse(
+            json!({ "flow": id(3), "channels": [2, 1] }),
+            Some("Stagebox"),
+        )
+        .unwrap();
+        assert_eq!(shape.channels[2].source.as_deref(), Some("Stagebox ch 2,1"));
+        let (_, shape, _) = parse(json!({ "flow": id(3), "channels": [3, 3] }), None).unwrap();
+        assert_eq!(shape.channels[2].source.as_deref(), Some("ch 3,3"));
+
+        for (bad, why) in [
+            (json!([7]), "names 1 flow channels, the channel is 2 wide"),
+            (json!([7, 8, 9]), "names 3 flow channels"),
+            (json!([0, 1]), "flow channel 0 is not in 1..=64"),
+            (json!([1, 65]), "flow channel 65 is not in 1..=64"),
+        ] {
+            let e = parse(json!({ "flow": id(3), "channels": bad }), None).unwrap_err();
+            assert!(
+                e.contains("mxl.inputs.st1.channels: ") && e.contains(why),
+                "{e}"
+            );
+        }
+        let long = "x".repeat(MAX_SOURCE - 6);
+        assert!(parse(json!({ "flow": id(3), "channels": [7, 8] }), Some(&long)).is_err());
+        assert!(
+            parse(
+                json!({ "flow": id(3), "channels": [7, 8] }),
+                Some(&long[1..])
+            )
+            .is_ok()
+        );
+    }
+
     /// More buses, auxes, mix-minus and monitor outputs without an output
     /// than the engine has meters for refuse the configuration, naming
     /// the limit; as many as it has are taken.
