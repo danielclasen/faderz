@@ -538,7 +538,16 @@ impl Config {
                 "loudnessChannels": loudness_channels(&o.layout),
             }));
         }
-        let meters: Vec<Value> = (shape.meter_columns().into_iter())
+        let columns = shape.meter_columns();
+        if columns.len() > samplez::config::MAX_METERS {
+            return Err(format!(
+                "shape: {} buses, auxes, mix-minus and monitor outputs have no output, \
+                 the engine meters at most {} of them; add outputs for the others",
+                columns.len(),
+                samplez::config::MAX_METERS
+            ));
+        }
+        let meters: Vec<Value> = (columns.into_iter())
             .map(|(id, width, layout)| {
                 json!({
                     "name": id,
@@ -836,5 +845,38 @@ mod tests {
         set["engine"] = json!({ "readerMarginSamples": 960 });
         let (c, ..) = Config::parse(&set.to_string(), || unreachable!()).unwrap();
         assert_eq!(c.audio.unwrap().reader_margin_samples, 960);
+    }
+
+    /// More buses, auxes, mix-minus and monitor outputs without an output
+    /// than the engine has meters for refuse the configuration, naming
+    /// the limit; as many as it has are taken.
+    #[test]
+    fn more_uncarried_elements_than_engine_meters_are_refused() {
+        let id = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let config = |auxes: usize| {
+            let mut shape = small();
+            // cf, mm1 and mon have no output: aux1 and the added auxes
+            // make up the rest.
+            let aux = |i: usize| json!({ "id": format!("aux{i}"), "name": "a", "width": 1, "layout": "mono" });
+            shape["auxes"] = (1..=auxes).map(aux).collect();
+            json!({
+                "replica": { "name": "r1" },
+                "shape": shape,
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                    "inputs": {
+                        "ch1": { "flow": id(1), "altFlow": id(5) },
+                        "ch2": { "flow": id(2) },
+                        "st1": { "flow": id(3) },
+                    },
+                    "outputs": { "out-pgm": { "flow": id(4) } },
+                },
+            })
+            .to_string()
+        };
+        let max = samplez::config::MAX_METERS;
+        Config::parse(&config(max - 3), || unreachable!()).unwrap();
+        let e = Config::parse(&config(max - 2), || unreachable!()).unwrap_err();
+        assert!(e.contains(&format!("at most {max}")), "{e}");
     }
 }
