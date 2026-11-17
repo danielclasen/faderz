@@ -1,0 +1,14 @@
+# BANK RIGHT (note 47) moves by the eight strips, CHANNEL LEFT (note 48)
+# by one; the scribble strip names follow (SysEx 12, device 0x14).
+
++ 25
+< f0 00 00 66 14 12 00 43 68 61 6e 20 31 20 f7
+> 90 2f 7f
+# A console's registration goes out at most every 100 ms.
++ 100
+! console xt 8
+< f0 00 00 66 14 12 00 43 68 61 6e 20 39 20 f7
+> 90 30 7f
++ 100
+! console xt 7
+< f0 00 00 66 14 12 00 43 68 61 6e 20 38 20 f7

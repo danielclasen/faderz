@@ -1,0 +1,37 @@
+# A fader ride on strip 1 of an X-Touch in MC mode, as the MCU reference
+# describes the messages: touch note 104, pitch bend on channel 0 while
+# touched, release.
+#
+#   > surface to bridge          < bridge to surface (since the last check)
+#   ! command the bridge sends   @ delta faderz sends
+#   + n                          n milliseconds pass
+#   several messages on one < line are separated by commas
+
+# A move before the touch is an echo: nothing is written.
+> e0 00 60
+! none
+# The first frame moves every motor to the state: strip 1 closed, the
+# master to the program bus at 0 dB.
+< e0 00 00, e8 7f 5f
+> 90 68 7f
+! touch /channels/ch1/fader
++ 25
+> e0 7f 5f
+! set /channels/ch1/fader 0
+# Two moves within 20 ms: only the later goes out, when the interval ends.
++ 5
+> e0 00 58
++ 5
+> e0 00 50
+! none
++ 20
+! set /channels/ch1/fader -5
+# No motor move while the fader is held, whatever faderz says.
+@ {"changes": [{"path": "/channels/ch1/fader", "value": -12}]}
+< none-of e0
+> 90 68 00
+! release /channels/ch1/fader
+# Let go: the motor goes to the value shown, the last one written
+# (-5 dB is 10239 of 16383).
++ 25
+< e0 7f 4f

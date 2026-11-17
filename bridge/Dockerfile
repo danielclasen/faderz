@@ -26,6 +26,11 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Caps cargo's parallel jobs when set.
 ARG CARGO_BUILD_JOBS
 
+# midir reads and writes the surfaces' USB-MIDI ports through ALSA.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libasound2-dev pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /src/bridge
 COPY LICENSE /src/LICENSE
 COPY bridge ./
@@ -53,10 +58,10 @@ FROM debian:trixie-20261027-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-# The OIDC provider and faderz are reached over https, verified against
-# the system's CA certificates.
+# faderz is reached over wss, verified against the system's CA
+# certificates; libasound2 opens the surfaces' MIDI ports.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates libasound2 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/ /

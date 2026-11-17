@@ -1,0 +1,20 @@
+# Strip keys of strip 2 in MC mode: REC 1, SOLO 9, MUTE 17, SELECT 25.
+# LEDs follow the state, not the key.
+
+> 90 11 7f
+> 90 11 00
+! set /channels/ch2/mute true
+< 90 11 7f
+@ {"changes": [{"path": "/channels/ch2/mute", "value": false}]}
++ 3001
+< 90 11 00
+> 90 09 7f
+! set /channels/ch2/solo "pfl"
+< 90 09 7f
+> 90 19 7f
+! select ch2
+< 90 19 7f
+# REC is mapped and does nothing.
+> 90 01 7f
+! none
+< none-of 90
