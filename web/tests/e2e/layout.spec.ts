@@ -256,6 +256,9 @@ test('every value field of a processing panel shows its whole value', async ({ p
         (fields as HTMLInputElement[]).filter((f) => f.scrollWidth > f.clientWidth).map((f) => `${f.getAttribute('aria-label')}: "${f.value}" ${f.scrollWidth} > ${f.clientWidth}`),
       )),
     );
+    // The wider fields fit the panel: it does not scroll sideways.
+    const panel = await page.locator('section.detail').evaluate((d) => ({ label: d.getAttribute('aria-label'), scroll: d.scrollWidth, client: d.clientWidth }));
+    if (panel.scroll > panel.client) cut.push(`${panel.label}: panel ${panel.scroll} > ${panel.client}`);
     await page.keyboard.press('Escape');
   }
   expect(cut).toEqual([]);
