@@ -475,28 +475,7 @@ impl Mixer {
     /// `custom` from a written target or tolerance, AFV stages from
     /// bindings and tally.
     fn write(&mut self, written: Vec<(String, Value)>) -> Vec<(String, Value)> {
-        let mut all = written.clone();
-        let preset_written = written
-            .iter()
-            .any(|(p, _)| p == "/metering/loudness/preset");
-        for (path, value) in &written {
-            match (path.as_str(), value.as_str()) {
-                ("/metering/loudness/preset", Some("ebu")) => {
-                    all.push(("/metering/loudness/target".into(), json!(-23)));
-                    all.push(("/metering/loudness/tolerance".into(), json!(1)));
-                }
-                ("/metering/loudness/preset", Some("atsc")) => {
-                    all.push(("/metering/loudness/target".into(), json!(-24)));
-                    all.push(("/metering/loudness/tolerance".into(), json!(2)));
-                }
-                ("/metering/loudness/target" | "/metering/loudness/tolerance", _)
-                    if !preset_written =>
-                {
-                    all.push(("/metering/loudness/preset".into(), json!("custom")));
-                }
-                _ => {}
-            }
-        }
+        let all = derived(written);
         let afv = all
             .iter()
             .any(|(p, _)| p.starts_with("/afv/") || p.starts_with("/tally/"));
@@ -542,7 +521,7 @@ impl Mixer {
     fn momentary_off(&self, paths: &[String]) -> Vec<(String, Value)> {
         paths
             .iter()
-            .filter(|p| p.starts_with("/mixMinus/") && p.ends_with("/interrupt/active"))
+            .filter(|p| momentary(p))
             .filter(|p| self.state.pointer(p) == Some(&json!(true)))
             .map(|p| (p.clone(), json!(false)))
             .collect()
@@ -744,6 +723,22 @@ impl Mixer {
             let message = format!("unknown scene {scene}");
             return self.refuse(session, id, Answer::NotFound { message });
         };
+        let mut written: Vec<(String, Value)> = self
+            .recalled(data)
+            .into_iter()
+            // A scene keeps the ids of the shape it was stored in.
+            .filter(|(path, v)| {
+                self.state.pointer(path).is_some_and(|current| current != v)
+                    && self.check_references(path, v).is_ok()
+            })
+            .collect();
+        written.push(("/sceneRecalled".into(), json!({ "id": scene, "at": at })));
+        changed(self.write(written))
+    }
+
+    /// The leaves of the scene `data` a recall writes: those of the groups
+    /// recall-safe does not keep.
+    fn recalled(&self, data: &Value) -> Vec<(String, Value)> {
         let mut written = Vec::new();
         for (group, elements) in data.as_object().into_iter().flatten() {
             for (element, value) in elements.as_object().into_iter().flatten() {
@@ -752,23 +747,81 @@ impl Mixer {
                     let Some(g) = recall_group(&path) else {
                         continue;
                     };
-                    if safe.as_array().is_some_and(|s| s.iter().any(|x| x == g)) {
-                        continue;
-                    }
-                    // A scene keeps the ids of the shape it was stored in.
-                    if self
-                        .state
-                        .pointer(&path)
-                        .is_some_and(|current| *current != v)
-                        && self.check_references(&path, &v).is_ok()
-                    {
+                    if !safe.as_array().is_some_and(|s| s.iter().any(|x| x == g)) {
                         written.push((path, v));
                     }
                 }
             }
         }
-        written.push(("/sceneRecalled".into(), json!({ "id": scene, "at": at })));
-        changed(self.write(written))
+        written
+    }
+
+    /// The leaves the mix plays that `command` can set, from the command
+    /// and the shape alone, so every replica names the same ones whatever
+    /// state it applied up to: each leaf a write names and those the write
+    /// derives from it (a loudness preset's, the AFV stage of a written
+    /// binding). A touch sets none, nor does a release but of a momentary
+    /// control. A recall names every leaf a recall can write in the shape,
+    /// a tally every AFV stage. The leaves the mix does not play
+    /// ([`unplayed`]: scenes, the recalled scene, tally, consoles) are
+    /// never named: a restamp moves only what the engine plays, and which
+    /// of them a command writes depends on the state.
+    pub fn paths_of(&self, command: &Command) -> Vec<String> {
+        let Some(shape) = self.shape.as_deref() else {
+            return Vec::new();
+        };
+        let afv_stages = || -> Vec<(String, Value)> {
+            (shape.channels.iter())
+                .map(|c| (format!("/afv/{}/open", escape(&c.id)), Value::Null))
+                .collect()
+        };
+        let writes = |path: &str, value: &Value| {
+            let mut leaves = leaves_or_self(value, path);
+            let t = tokens(path);
+            if t.first().is_some_and(|g| g == "afv") {
+                match t.get(1) {
+                    Some(channel) => {
+                        leaves.push((format!("/afv/{}/open", escape(channel)), Value::Null))
+                    }
+                    None => leaves.extend(afv_stages()),
+                }
+            }
+            leaves
+        };
+        let written = match command {
+            Command::Control(c) => match c.action {
+                Action::Set => writes(&c.path, c.value.as_ref().unwrap_or(&Value::Null)),
+                Action::Touch => Vec::new(),
+                Action::Release if momentary(&c.path) => vec![(c.path.clone(), json!(false))],
+                Action::Release => Vec::new(),
+            },
+            Command::Patch { changes, .. } => changes
+                .iter()
+                .flat_map(|w| writes(&w.path, &w.value))
+                .collect(),
+            Command::Recall { .. } => {
+                let mut leaves: Vec<(String, Value)> = leaves(&shape.initial_state(), "")
+                    .into_iter()
+                    .filter(|(path, _)| recall_group(path).is_some())
+                    .collect();
+                leaves.extend(afv_stages());
+                leaves
+            }
+            Command::Tally { .. } => afv_stages(),
+            Command::StoreScene { .. }
+            | Command::DeleteScene { .. }
+            | Command::Register { .. }
+            | Command::PutConsole { .. }
+            | Command::RemoveConsole { .. } => Vec::new(),
+        };
+        let mut paths: Vec<String> = derived(written)
+            .into_iter()
+            .map(|(p, _)| p)
+            .filter(|p| !unplayed(p))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
     fn tally(
@@ -1195,6 +1248,55 @@ impl Product for Mixer {
         }
         Ok(())
     }
+
+    /// [`Mixer::paths_of`]; none for a body that is not a command.
+    fn paths(&self, command: &[u8]) -> Vec<String> {
+        serde_json::from_slice::<Command>(command)
+            .map_or_else(|_| Vec::new(), |c| self.paths_of(&c))
+    }
+}
+
+/// `written` and the leaves a loudness preset or target written among
+/// them sets besides.
+fn derived(written: Vec<(String, Value)>) -> Vec<(String, Value)> {
+    let mut all = written.clone();
+    let preset_written = written
+        .iter()
+        .any(|(p, _)| p == "/metering/loudness/preset");
+    for (path, value) in &written {
+        match (path.as_str(), value.as_str()) {
+            ("/metering/loudness/preset", Some("ebu")) => {
+                all.push(("/metering/loudness/target".into(), json!(-23)));
+                all.push(("/metering/loudness/tolerance".into(), json!(1)));
+            }
+            ("/metering/loudness/preset", Some("atsc")) => {
+                all.push(("/metering/loudness/target".into(), json!(-24)));
+                all.push(("/metering/loudness/tolerance".into(), json!(2)));
+            }
+            ("/metering/loudness/target" | "/metering/loudness/tolerance", _)
+                if !preset_written =>
+            {
+                all.push(("/metering/loudness/preset".into(), json!("custom")));
+            }
+            _ => {}
+        }
+    }
+    all
+}
+
+/// A leaf the mix does not play: the scenes, the scene recalled, tally
+/// and consoles.
+pub fn unplayed(path: &str) -> bool {
+    let group = tokens(path).into_iter().next().unwrap_or_default();
+    matches!(
+        group.as_str(),
+        "scenes" | "sceneRecalled" | "tally" | "consoles"
+    )
+}
+
+/// An IFB interrupt, which goes back to off when released.
+fn momentary(path: &str) -> bool {
+    path.starts_with("/mixMinus/") && path.ends_with("/interrupt/active")
 }
 
 /// A command's effect from the leaves it changed, none of them owners.
@@ -1258,6 +1360,17 @@ fn leaves(value: &Value, base: &str) -> Vec<(String, Value)> {
     let mut out = Vec::new();
     collect(value, base, &mut out);
     out
+}
+
+/// The leaves under `value`, or `value` at `base` when it has none, as
+/// an empty object or array.
+fn leaves_or_self(value: &Value, base: &str) -> Vec<(String, Value)> {
+    let out = leaves(value, base);
+    if out.is_empty() {
+        vec![(base.to_owned(), value.clone())]
+    } else {
+        out
+    }
 }
 
 fn collect(value: &Value, base: &str, out: &mut Vec<(String, Value)>) {
@@ -1739,6 +1852,283 @@ mod tests {
             m.answer(&rest_key(), "r2"),
             Some(Answer::NotFound { .. })
         ));
+    }
+
+    fn paths(m: &Mixer, command: Command) -> Vec<String> {
+        m.paths(&serde_json::to_vec(&command).unwrap())
+    }
+
+    fn ctl(action: Action, path: &str, value: Option<Value>) -> Command {
+        Command::Control(Control {
+            id: "c".into(),
+            action,
+            kind: "ui".into(),
+            seq: 1,
+            path: path.into(),
+            value,
+        })
+    }
+
+    /// A later command on a leaf supersedes an earlier unresolved one on
+    /// it, and one on another leaf does not: each command names the leaves
+    /// it sets, whatever they hold.
+    #[test]
+    fn a_command_names_the_leaves_it_sets() {
+        let m = mixer();
+        let fader = paths(&m, ctl(Action::Set, "/channels/ch1/fader", Some(json!(-3))));
+        assert_eq!(fader, ["/channels/ch1/fader"]);
+        assert_eq!(
+            paths(
+                &m,
+                ctl(Action::Set, "/channels/ch1/fader", Some(json!(-90)))
+            ),
+            fader,
+            "the value it holds already"
+        );
+        for other in ["/channels/ch2/fader", "/channels/ch1/mute"] {
+            let p = paths(&m, ctl(Action::Set, other, Some(json!(true))));
+            assert_eq!(p, [other]);
+        }
+        assert_eq!(
+            paths(
+                &m,
+                ctl(Action::Set, "/channels/st1/legTrim", Some(json!([1, 2])))
+            ),
+            ["/channels/st1/legTrim/0", "/channels/st1/legTrim/1"],
+            "one leaf per leg"
+        );
+        let patch = Command::Patch {
+            id: "p".into(),
+            changes: vec![
+                Write {
+                    path: "/channels/ch2/mute".into(),
+                    value: json!(true),
+                },
+                Write {
+                    path: "/channels/ch1/fader".into(),
+                    value: json!(0),
+                },
+            ],
+        };
+        assert_eq!(
+            paths(&m, patch),
+            ["/channels/ch1/fader", "/channels/ch2/mute"]
+        );
+        assert_eq!(
+            paths(
+                &m,
+                ctl(Action::Set, "/metering/loudness/preset", Some(json!("ebu")))
+            ),
+            [
+                "/metering/loudness/preset",
+                "/metering/loudness/target",
+                "/metering/loudness/tolerance"
+            ]
+        );
+        assert!(paths(&m, ctl(Action::Touch, "/channels/ch1/fader", None)).is_empty());
+        assert!(paths(&m, ctl(Action::Release, "/channels/ch1/fader", None)).is_empty());
+        let talk = "/mixMinus/mm1/interrupt/active";
+        assert_eq!(paths(&m, ctl(Action::Release, talk, None)), [talk]);
+        assert!(m.paths(b"not a command").is_empty());
+    }
+
+    /// A tally names every AFV stage, a binding write its own: which a
+    /// tally opens depends on the bindings.
+    #[test]
+    fn a_tally_names_every_afv_stage_and_a_binding_its_own() {
+        let m = mixer();
+        let stages = ["/afv/ch1/open", "/afv/ch2/open", "/afv/st1/open"];
+        let tally = Command::Tally {
+            id: "t".into(),
+            sources: BTreeMap::from([("CAM1".to_owned(), "program".to_owned())]),
+            replace: true,
+        };
+        assert_eq!(paths(&m, tally), stages);
+        assert_eq!(
+            paths(&m, ctl(Action::Set, "/afv/ch1/enabled", Some(json!(true)))),
+            ["/afv/ch1/enabled", "/afv/ch1/open"]
+        );
+    }
+
+    /// A recall names every leaf a recall can write in the shape, and no
+    /// command names what the mix does not play.
+    #[test]
+    fn a_recall_names_every_recallable_leaf_and_scenes_name_none() {
+        let m = mixer();
+        let recall = Command::Recall {
+            id: "r".into(),
+            scene: "s1".into(),
+            at: "2026-11-15T12:01:00.000Z".into(),
+        };
+        let p = paths(&m, recall);
+        for leaf in [
+            "/channels/ch1/fader",
+            "/channels/st1/legTrim/1",
+            "/vcas/vca1/members",
+            "/afv/ch2/source",
+            "/afv/ch2/open",
+        ] {
+            assert!(p.contains(&leaf.to_owned()), "{leaf}: {p:?}");
+        }
+        for not in ["/channels/ch1/solo", "/sceneRecalled", "/monitor/level"] {
+            assert!(!p.contains(&not.to_owned()), "{not}");
+        }
+        let store = Command::StoreScene {
+            id: "s".into(),
+            scene: None,
+            name: None,
+            at: "2026-11-15T12:02:00.000Z".into(),
+        };
+        assert!(paths(&m, store).is_empty());
+        let delete = Command::DeleteScene {
+            id: "d".into(),
+            scene: "s1".into(),
+        };
+        assert!(paths(&m, delete).is_empty());
+    }
+
+    /// One command of each kind that changes the played state of
+    /// [`busy`].
+    fn commands_of_each_kind(scene: &str) -> Vec<Command> {
+        let tally = |source: &str, state: &str, replace| Command::Tally {
+            id: format!("t-{source}"),
+            sources: BTreeMap::from([(source.to_owned(), state.to_owned())]),
+            replace,
+        };
+        let patch = Command::Patch {
+            id: "p9".into(),
+            changes: vec![
+                Write {
+                    path: "/channels/ch2/mute".into(),
+                    value: json!(true),
+                },
+                Write {
+                    path: "/afv/ch2/source".into(),
+                    value: json!("CAM1"),
+                },
+            ],
+        };
+        let mut release = ctl(Action::Release, "/mixMinus/mm1/interrupt/active", None);
+        if let Command::Control(c) = &mut release {
+            c.seq = 3;
+        }
+        vec![
+            ctl(Action::Set, "/channels/ch1/fader", Some(json!(-3))),
+            ctl(Action::Set, "/afv/ch1/enabled", Some(json!(false))),
+            ctl(
+                Action::Set,
+                "/metering/loudness/preset",
+                Some(json!("atsc")),
+            ),
+            ctl(Action::Set, "/metering/loudness/target", Some(json!(-20))),
+            release,
+            patch,
+            // Closes both stages, bound to CAM2.
+            tally("CAM2", "preview", false),
+            tally("CAM9", "program", true),
+            Command::Recall {
+                id: "r9".into(),
+                scene: scene.into(),
+                at: "2026-11-15T12:05:00.000Z".into(),
+            },
+            Command::DeleteScene {
+                id: "d9".into(),
+                scene: scene.into(),
+            },
+        ]
+    }
+
+    /// A state far from the initial one: AFV bound, a tally, a scene
+    /// recalled and changed since, a talk held; and that scene.
+    fn busy() -> (Mixer, String) {
+        let mut m = mixer();
+        patch(
+            &mut m,
+            "p1",
+            &[
+                ("/afv/ch1/enabled", json!(true)),
+                ("/afv/ch1/source", json!("CAM1")),
+                ("/afv/ch2/enabled", json!(true)),
+                ("/afv/ch2/source", json!("CAM2")),
+            ],
+        );
+        let scene = store(&mut m, "s1", None, "Opening");
+        rest(
+            &mut m,
+            Command::Recall {
+                id: "r1".into(),
+                scene: scene.clone(),
+                at: "2026-11-15T12:01:00.000Z".into(),
+            },
+        );
+        patch(
+            &mut m,
+            "p2",
+            &[
+                ("/channels/ch1/fader", json!(-10)),
+                ("/channels/st1/legTrim/1", json!(3)),
+                ("/afv/ch1/source", json!("CAM2")),
+                ("/recallSafe/ch2", json!(["fader"])),
+            ],
+        );
+        rest(
+            &mut m,
+            Command::Tally {
+                id: "t1".into(),
+                sources: BTreeMap::from([("CAM1".to_owned(), "program".to_owned())]),
+                replace: false,
+            },
+        );
+        let talk = "/mixMinus/mm1/interrupt/active";
+        touch(&mut m, "rest", 1, talk);
+        set(&mut m, "rest", 2, talk, json!(true));
+        (m, scene)
+    }
+
+    fn copy(m: &Mixer) -> Mixer {
+        let mut copy = mixer();
+        copy.load(&m.save()).unwrap();
+        copy
+    }
+
+    /// Every played leaf a command changes is among its paths, so a
+    /// restamp that keeps only the paths no later entry sets never leaves
+    /// one of its changes behind.
+    #[test]
+    fn a_command_names_every_played_leaf_it_changes() {
+        let (m, scene) = busy();
+        for command in commands_of_each_kind(&scene) {
+            let named = paths(&m, command.clone());
+            let mut applied = copy(&m);
+            let bytes = serde_json::to_vec(&command).unwrap();
+            let effect = applied.apply(&origin("rest"), &bytes);
+            let Effect::Changed(edits) = effect else {
+                panic!("{command:?} changed nothing: {effect:?}");
+            };
+            for (path, value) in &edits.values {
+                for (leaf, _) in leaves_or_self(value, path) {
+                    assert!(
+                        unplayed(&leaf) || named.contains(&leaf),
+                        "{command:?} changed {leaf}, not among {named:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Paths come from the command and the shape alone: replicas that
+    /// applied the log up to different entries name the same ones.
+    #[test]
+    fn paths_do_not_depend_on_the_state() {
+        let (m, scene) = busy();
+        let fresh = mixer();
+        for command in commands_of_each_kind(&scene) {
+            assert_eq!(
+                paths(&m, command.clone()),
+                paths(&fresh, command.clone()),
+                "{command:?}"
+            );
+        }
     }
 
     #[test]
