@@ -85,6 +85,28 @@ test('switches the channel meter between post- and pre-fader on the strip, witho
   expect((await serverState(request)).state.channels['ch1']!.meterTap).toBe('postFader');
 });
 
+for (const vp of [{ width: 1600, height: 1000 }, { width: 390, height: 844 }]) {
+  test(`the masters scroll only as far as their controls reach at ${vp.width}x${vp.height}`, async ({ page }) => {
+    await page.setViewportSize(vp);
+    await live(page);
+    // Below 1400 px the masters are an overlay behind the MASTERS key.
+    if (vp.width < 1400) await page.getByRole('button', { name: 'MASTERS' }).click();
+    const masters = page.getByTestId('masters');
+    await expect(masters).toBeVisible();
+    // A closed fader moves its cap box down by the whole travel; that box
+    // must add no empty scroll room below or beside the controls.
+    const m = await masters.evaluate((el) => {
+      const row = el.querySelector<HTMLElement>('.row')!.getBoundingClientRect();
+      return { sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight, rw: Math.ceil(row.width), rh: Math.ceil(row.height) };
+    });
+    expect(m.sw).toBeLessThanOrEqual(Math.max(m.cw, m.rw));
+    expect(m.sh).toBeLessThanOrEqual(Math.max(m.ch, m.rh));
+    // Where the controls fit the pane, it does not scroll at all.
+    if (m.rw <= m.cw) expect(m.sw).toBeLessThanOrEqual(m.cw);
+    if (m.rh <= m.ch) expect(m.sh).toBeLessThanOrEqual(m.ch);
+  });
+}
+
 test("a meter's level for assistive technology ends where its bars do when the meters stop", { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
   await live(page);

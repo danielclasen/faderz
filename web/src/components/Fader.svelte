@@ -169,8 +169,10 @@
     {#each FADER_MARKS as mark (mark)}
       <i class="tick" class:unity={mark === 0} style:bottom="calc({dbToPosition(mark)} * (100% - 34px) + 17px)"></i>
     {/each}
-    <div class="travel" style:transform="translateY({(1 - position) * 100}%)">
-      <div class="cap" class:mine class:foreign><span></span></div>
+    <div class="range">
+      <div class="travel" style:transform="translateY({(1 - position) * 100}%)">
+        <div class="cap" class:mine class:foreign><span></span></div>
+      </div>
     </div>
   </div>
 </div>
@@ -264,7 +266,18 @@
     right: 0;
   }
   /* The cap moves by transform, which changes no layout. The travel box
-     spans the cap's range: its translation in percent is of that range. */
+     spans the cap's range: its translation in percent is of that range.
+     Moved down, the box reaches up to its own height below the track;
+     the range clips it there, so a scroll container holding the fader
+     gains no scrollable empty space from it. The margin keeps the cap's
+     shadow. */
+  .range {
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    overflow-clip-margin: 6px;
+    pointer-events: none;
+  }
   .travel {
     position: absolute;
     inset: 0 0 34px;

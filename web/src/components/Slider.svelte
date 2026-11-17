@@ -101,8 +101,9 @@
   <i class="fill" style:transform={`scaleX(${pos})`}></i>
   <!-- The thumb moves by transform, which changes no layout: the travel
        box spans the thumb's range, so its translation in percent is of
-       that range. -->
-  <span class="travel" style:transform={`translateX(${pos * 100}%)`}><i class="thumb"></i></span>
+       that range. The range clips the box where it moves past the
+       slider, so it adds no scrollable width to a scroll container. -->
+  <span class="range"><span class="travel" style:transform={`translateX(${pos * 100}%)`}><i class="thumb"></i></span></span>
 </div>
 
 <style>
@@ -129,6 +130,12 @@
   .fill {
     background: color-mix(in srgb, var(--afl) 55%, transparent);
     transform-origin: left;
+  }
+  .range {
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    pointer-events: none;
   }
   .travel {
     position: absolute;
