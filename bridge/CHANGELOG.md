@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.0...faderz-bridge-v0.1.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **bridge:** send PKCE with the device authorization grant ([#40](https://github.com/danielclasen/faderz/issues/40)) ([28d13ba](https://github.com/danielclasen/faderz/commit/28d13badd0960cc789dc8ff2b4810b39c75260af))
+
 ## 0.1.0 (2026-11-17)
 
 
