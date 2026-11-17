@@ -24,20 +24,21 @@ function strip(viewer = false) {
   const channel = shape.channels.find((c) => c.id === 'ch1')!;
   const c = mount(ChannelStrip, { target, props: { channel, index: 0, selected: false, onselect: () => {} }, context: mixerContext(s) });
   flushSync();
-  const key = () => target.querySelector<HTMLButtonElement>('[data-testid="tap-ch1"]')!;
+  const key = () => target.querySelector<HTMLButtonElement>('[data-testid="tap-key-ch1"]')!;
+  const shown = () => target.querySelector('[data-testid="tap-ch1"]')!.textContent;
   const sets = () => posted.filter((m) => m.type === 'set');
-  return { s, c, key, sets, target };
+  return { s, c, key, shown, sets, target };
 }
 
 describe('channel strip meter tap key', () => {
   it('shows the tap and switches a post-fader meter to pre-fader and back through the control path', () => {
-    const { c, key, sets, target } = strip();
-    expect(key().textContent).toBe('POST');
+    const { c, key, shown, sets, target } = strip();
+    expect(shown()).toBe('POST');
     expect(key().getAttribute('aria-label')).toBe('Pres 1 meter tap, post-fader: switch to pre-fader');
     key().click();
     flushSync();
     expect(sets()).toEqual([{ type: 'set', path: TAP, value: 'preFader' }]);
-    expect(key().textContent).toBe(' PRE');
+    expect(shown()).toBe(' PRE');
     expect(target.querySelector('[role="meter"]')!.getAttribute('aria-label')).toBe('Pres 1 meter, pre-fader');
     key().click();
     flushSync();
@@ -46,23 +47,23 @@ describe('channel strip meter tap key', () => {
   });
 
   it('takes an input tap, set in the processing panel, to post-fader', () => {
-    const { s, c, key, sets } = strip();
+    const { s, c, key, shown, sets } = strip();
     s.apply({ type: 'patch', input: 0, changes: [[TAP, 'input']], owners: [] });
     flushSync();
-    expect(key().textContent).toBe('  IN');
+    expect(shown()).toBe('  IN');
     key().click();
     expect(sets()).toEqual([{ type: 'set', path: TAP, value: 'postFader' }]);
     unmount(c);
   });
 
   it('shows a viewer the tap and sends nothing when pressed', () => {
-    const { c, key, sets } = strip(true);
-    expect(key().textContent).toBe('POST');
+    const { c, key, shown, sets } = strip(true);
+    expect(shown()).toBe('POST');
     expect(key().getAttribute('aria-disabled')).toBe('true');
     key().click();
     flushSync();
     expect(sets()).toEqual([]);
-    expect(key().textContent).toBe('POST');
+    expect(shown()).toBe('POST');
     unmount(c);
   });
 });

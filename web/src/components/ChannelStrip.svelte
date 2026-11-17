@@ -188,18 +188,20 @@
     <Fader path={levelPath} label={sendsTo ? `${channel.name} send to ${sendsTo.name}` : `${channel.name} fader`} />
     <div class="meter">
       <Meter group="channels" id={channel.id} legs={channel.width} scale="right" label={`${channel.name} meter, ${TAP_LABEL[meterTap]}`} />
-      <!-- The meter tap, in the meter's bottom padding: a key that flips
-           the meter between pre- and post-fader. Input is set in the
-           processing panel; from there a press goes to post-fader. -->
+      <!-- The meter tap, in the meter's bottom padding, and over it a key
+           that flips the meter between pre- and post-fader. Input is set
+           in the processing panel; from there a press goes to post-fader.
+           The key has no text of its own, so a tap change moves nothing. -->
+      <span class="tap fixed" aria-hidden="true" data-testid={`tap-${channel.id}`}>{fit(TAP_KEY[meterTap], 4)}</span>
       <button {@attach pendingWrite(mixer, tapPath)}
-        class="tap fixed"
+        class="tap-key"
         tabindex="-1"
         aria-disabled={mixer.locked}
         aria-label={`${channel.name} meter tap, ${TAP_LABEL[meterTap]}: switch to ${TAP_LABEL[nextTap]}`}
         title={`Meter ${TAP_LABEL[meterTap]}: switch to ${TAP_LABEL[nextTap]}`}
         onclick={() => mixer.set(tapPath, nextTap)}
         data-path={tapPath}
-        data-testid={`tap-${channel.id}`}>{fit(TAP_KEY[meterTap], 4)}</button
+        data-testid={`tap-key-${channel.id}`}></button
       >
     </div>
   </div>
@@ -499,7 +501,6 @@
     padding: 17px 0;
   }
   .tap {
-    all: unset;
     position: absolute;
     left: 0;
     right: 0;
@@ -509,17 +510,26 @@
     font-size: 10px;
     text-align: center;
     color: var(--text-faint);
-    cursor: pointer;
     contain: strict;
+  }
+  .tap-key {
+    all: unset;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 2px;
+    height: 12px;
+    cursor: pointer;
     touch-action: manipulation;
   }
-  .tap:hover {
-    color: var(--text);
+  .tap-key:hover {
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    border-radius: 2px;
   }
-  .tap:focus-visible {
+  .tap-key:focus-visible {
     outline: 2px solid var(--focus);
   }
-  .tap[aria-disabled='true'] {
+  .tap-key[aria-disabled='true'] {
     cursor: default;
   }
   .foot {
@@ -633,6 +643,17 @@
     }
     .pan {
       min-height: 28px;
+    }
+    /* The tap key keeps a finger-sized target below the meter. */
+    .meter {
+      padding-bottom: 26px;
+    }
+    .tap {
+      bottom: 7px;
+    }
+    .tap-key {
+      bottom: 1px;
+      height: 24px;
     }
   }
   /* Short screens (a phone in landscape): the processing, EQ and route
