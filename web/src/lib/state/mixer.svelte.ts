@@ -152,14 +152,17 @@ export class MixerStore {
     return o !== null && !this.isMine(o);
   }
 
-  /** Display name of an owner: "you", a console's name, or kind and handle tag. */
+  /**
+   * Display name of an owner: "you", a console's name with its principal,
+   * or kind and handle tag.
+   */
   ownerLabel(owner: Owner | null): string {
     if (!owner) return 'another session';
     if (this.isMine(owner)) return 'you';
     const principal = owner.principal === 'anonymous' ? '' : `${owner.principal} `;
     if (owner.kind === 'console') {
       const c = this.state?.consoles.find((x) => x.handle === owner.handle);
-      if (c) return c.name;
+      if (c) return owner.principal === 'anonymous' ? c.name : `${c.name} (${owner.principal})`;
     }
     const kind = owner.kind === 'ui' ? 'web client' : owner.kind;
     return `${principal}${kind} ${handleTag(owner.handle)}`;

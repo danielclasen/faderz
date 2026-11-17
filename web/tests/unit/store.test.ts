@@ -3,7 +3,7 @@ import { INITIAL_STATUS, MixerStore } from '../../src/lib/state/mixer.svelte';
 import type { Patch } from '../../src/lib/sync/messages';
 import type { ToWorker } from '../../src/lib/sync/messages';
 import type { Owner } from '../../src/lib/contract/types';
-import { ownerHandle } from '../../src/lib/net/handle';
+import { handleTag, ownerHandle } from '../../src/lib/net/handle';
 import { deriveMeterLayout } from '../../src/lib/contract/meterFrame';
 import { exampleShape, initialState } from '../../dev/mock/shape';
 
@@ -110,9 +110,19 @@ describe('mixer store: owners', () => {
     s.apply(patch(0, { status: { ...INITIAL_STATUS, session: SESSION, handle: ME.handle, you: ME } }));
     const surface = s.state!.consoles[0]!;
     expect(s.ownerLabel({ ...ME, connection: 'c7' })).toBe('you');
-    expect(s.ownerLabel({ principal: 'bridge', handle: surface.handle, kind: 'console', connection: 'x' })).toBe(surface.name);
+    expect(s.ownerLabel({ principal: 'anonymous', handle: surface.handle!, kind: 'console', connection: 'x' })).toBe(surface.name);
     expect(s.ownerLabel({ principal: 'anonymous', handle: 'abcdef12-3456789012345A', kind: 'ui', connection: 'x' })).toBe('web client abcdef');
     expect(s.ownedByOther(F1)).toBe(false);
+  });
+
+  it('names a console holder with its principal, and no console that no session registered', () => {
+    const { s } = store();
+    s.apply(patch(0, { status: { ...INITIAL_STATUS, session: SESSION, handle: ME.handle, you: ME } }));
+    const surface = s.state!.consoles[0]!;
+    const handle = surface.handle!;
+    expect(s.ownerLabel({ principal: 'alice', handle, kind: 'console', connection: 'x' })).toBe(`${surface.name} (alice)`);
+    surface.handle = null;
+    expect(s.ownerLabel({ principal: 'alice', handle, kind: 'console', connection: 'x' })).toBe(`alice console ${handleTag(handle)}`);
   });
 
   it('recognises its own ownership by the handle of its session before the server names it', () => {

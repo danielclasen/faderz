@@ -17,12 +17,12 @@
       mixer.presence,
       mixer.owners,
       mixer.selections,
-      consoles.map((c) => c.handle),
+      consoles.flatMap((c) => (c.handle === null ? [] : [c.handle])),
       mixer.status.you?.handle ?? mixer.status.handle,
     ),
   );
   /** What a console holds goes in its own row: each console is counted and listed once. */
-  const heldBy = (handle: string) =>
+  const heldBy = (handle: string | null) =>
     Object.entries(mixer.owners)
       .filter(([, o]) => o?.kind === 'console' && o.handle === handle)
       .map(([p]) => p);
