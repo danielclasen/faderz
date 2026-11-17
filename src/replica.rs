@@ -26,7 +26,7 @@ use samplez_replica::{Estimate, Replica, Settings, TypeConfig, raft_config};
 use serde::{Deserialize, Serialize};
 
 use crate::shape::Shape;
-use crate::state::Mixer;
+use crate::state::{Console, Mixer};
 
 /// Samples per second: model `Shape.sampleRate` allows 48000 alone.
 pub const RATE: u64 = 48_000;
@@ -110,14 +110,20 @@ pub fn tai_samples() -> u64 {
     ts.tv_sec as u64 * RATE + ts.tv_nsec as u64 * RATE / 1_000_000_000
 }
 
-/// Opens the state in `dir`, a set of one voter, and waits until it
-/// leads, which a lone voter does once its election timeout passed.
+/// Opens the state in `dir` with the declared `consoles`, a set of one
+/// voter, and waits until it leads, which a lone voter does once its
+/// election timeout passed.
 ///
 /// # Errors
 ///
 /// When the identity or the store cannot be read, or the voter does not
 /// lead within 10 s.
-pub async fn start(dir: &Path, shape: Shape, estimate: Estimate) -> Result<Replica<Mixer>, String> {
+pub async fn start(
+    dir: &Path,
+    shape: Shape,
+    consoles: Vec<Console>,
+    estimate: Estimate,
+) -> Result<Replica<Mixer>, String> {
     let identity = identity(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let settings = Settings {
         id: identity.node,
@@ -133,7 +139,7 @@ pub async fn start(dir: &Path, shape: Shape, estimate: Estimate) -> Result<Repli
         settings,
         raft_config("faderz"),
         &dir.join(STORE),
-        Mixer::new(shape),
+        Mixer::with_consoles(shape, consoles),
         Lone,
         Arc::new(Lone),
         estimate,

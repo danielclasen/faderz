@@ -45,7 +45,13 @@ impl Server {
     ) -> Result<Server, String> {
         let estimate: Estimate = Arc::new(replica::tai_samples);
         let state = Arc::new(
-            replica::start(&config.replica.data_dir, shape.clone(), estimate.clone()).await?,
+            replica::start(
+                &config.replica.data_dir,
+                shape.clone(),
+                config.consoles.clone(),
+                estimate.clone(),
+            )
+            .await?,
         );
         let ops_state = Ops::default();
         let app = App::new(

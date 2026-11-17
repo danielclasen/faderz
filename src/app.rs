@@ -569,7 +569,7 @@ pub(crate) mod tests {
             "outputs": [],
         }))
         .unwrap();
-        let replica = replica::start(&dir, shape, Arc::new(replica::tai_samples))
+        let replica = replica::start(&dir, shape, Vec::new(), Arc::new(replica::tai_samples))
             .await
             .unwrap();
         let app = App::new(

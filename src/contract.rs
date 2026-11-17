@@ -41,6 +41,7 @@ pub struct Contract {
     pub command_id: Validator,
     pub id: Validator,
     pub id_set: Validator,
+    pub console_status: Validator,
 }
 
 /// The compiled contract; built on first use.
@@ -75,6 +76,7 @@ pub fn contract() -> &'static Contract {
             command_id: def("CommandId"),
             id: def("Id"),
             id_set: def("IdSet"),
+            console_status: def("ConsoleStatus"),
         }
     })
 }
