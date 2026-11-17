@@ -30,6 +30,18 @@
   ]);
   const current = $derived(sources.find((s) => s.id === source));
   const output = $derived(shape.monitorOutputs[0]);
+  /**
+   * The console plays no audio itself: the monitor is a mix the shape
+   * sends out on its output flows. These are the outputs that carry it.
+   */
+  const carriers = $derived(shape.outputs.filter((o) => shape.monitorOutputs.some((m) => m.id === o.source)));
+  const dest = $derived(
+    !output
+      ? 'This shape has no monitor output'
+      : carriers.length === 0
+        ? 'No output flow carries the monitor'
+        : `Sent to ${carriers.map((o) => `${o.name} (${o.id})`).join(', ')}`,
+  );
   const legs = $derived(output ? LAYOUT_LABELS[output.layout] : []);
   const monitor = $derived(mixer.state!.monitor);
   const IMAGES: Array<{ id: StereoImage; key: string; label: string }> = [
@@ -40,8 +52,19 @@
   const flag = (key: 'dim' | 'cut' | 'mono' | 'talkbackDim') => mixer.value<boolean>(monitorPath(key));
 </script>
 
-<section class="monitor" id="monitor" tabindex="-1" aria-label="Monitor">
-  <div class="panel-title" title={shape.monitorOutputs.map((o) => `${o.name} (${o.layout})`).join(', ')}>Monitor</div>
+<section class="monitor" id="monitor" tabindex="-1" aria-label="Monitor output">
+  <div class="panel-title" title={shape.monitorOutputs.map((o) => `${o.name} (${o.layout})`).join(', ')}>Monitor out</div>
+  <!-- The browser plays nothing: this names the output flows the monitor
+       mix leaves on, or says there are none. -->
+  <div class="dest" class:none={carriers.length === 0} role="note" aria-label={dest} data-testid="monitor-dest" use:tip={dest}>
+    {#if !output}
+      No monitor output
+    {:else if carriers.length === 0}
+      Not on an output
+    {:else}
+      <span class="lbl">To</span> {carriers.map((o) => o.name).join(', ')}
+    {/if}
+  </div>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
     class="listen"
@@ -134,6 +157,20 @@
     background: var(--panel-2);
     border-left: 1px solid var(--line-strong);
     min-height: 0;
+  }
+  .dest {
+    font-size: 10px;
+    line-height: 14px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dest .lbl {
+    color: var(--text-faint);
+  }
+  .dest.none {
+    color: var(--mute);
   }
   .listen {
     min-height: 34px;
