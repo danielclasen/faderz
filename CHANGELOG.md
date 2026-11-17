@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.7](https://github.com/danielclasen/faderz/compare/v0.1.6...v0.1.7) (2026-11-17)
+
+
+### Features
+
+* **replica:** run as a set of several voters ([#47](https://github.com/danielclasen/faderz/issues/47)) ([cc4d3d8](https://github.com/danielclasen/faderz/commit/cc4d3d814f17e13487614b0f298d571543d36013))
+* **ws:** send the engine's counters and anchor their panel to the lamp ([#44](https://github.com/danielclasen/faderz/issues/44)) ([f39d264](https://github.com/danielclasen/faderz/commit/f39d2645c730b2397d7a73fa1b36e4b63c32b9bc))
+
+
+### Bug Fixes
+
+* **web:** show whole values in processing panels and tally chips ([#50](https://github.com/danielclasen/faderz/issues/50)) ([5c19821](https://github.com/danielclasen/faderz/commit/5c198217f070239af8a64e7161f5190451de86fe))
+
 ## [0.1.6](https://github.com/danielclasen/faderz/compare/v0.1.5...v0.1.6) (2026-11-17)
 
 
