@@ -237,6 +237,30 @@ test('every fader fits its box, VCA masters included', async ({ page }) => {
   expect(over).toEqual([]);
 });
 
+test('every value field of a processing panel shows its whole value', async ({ page, request }) => {
+  // The longest value a field takes: a limiter ceiling of "-0.5 dBTP".
+  await patch(request, '/buses/pgm51/limiter/ceiling', -0.5);
+  await live(page);
+  await page.evaluate(() => document.fonts.ready);
+  const cut: string[] = [];
+  // A mono microphone, a 5.1 channel (divergence, LFE) and a bus (limiter).
+  for (const open of ['[data-channel="ch1"] .head', '[data-channel="sur1"] .head', 'button.head:has-text("PGM 5.1")']) {
+    const masters = page.getByRole('button', { name: 'MASTERS' });
+    if (open.startsWith('button') && (await masters.isVisible()) && (await masters.getAttribute('aria-pressed')) !== 'true') await masters.click();
+    const head = page.locator(open).first();
+    await head.scrollIntoViewIfNeeded();
+    await head.click();
+    await expect(page.locator('.param .entry').first()).toBeVisible();
+    cut.push(
+      ...(await page.locator('.param .entry').evaluateAll((fields) =>
+        (fields as HTMLInputElement[]).filter((f) => f.scrollWidth > f.clientWidth).map((f) => `${f.getAttribute('aria-label')}: "${f.value}" ${f.scrollWidth} > ${f.clientWidth}`),
+      )),
+    );
+    await page.keyboard.press('Escape');
+  }
+  expect(cut).toEqual([]);
+});
+
 test('no visible label is cut off without its full text in a tooltip reachable by keyboard', async ({ page, request, baseURL }) => {
   // A long channel name (ch8), a long VCA name (vca2), a listen list
   // longer than the monitor's box and a fader another session holds.

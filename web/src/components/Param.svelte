@@ -83,7 +83,7 @@
 <style>
   .param {
     display: grid;
-    grid-template-columns: 52px 1fr 54px;
+    grid-template-columns: 52px 1fr auto;
     align-items: center;
     gap: 6px;
     min-height: 22px;
@@ -97,8 +97,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Nine characters of the value font, the longest value ("-0.5 dBTP"),
+     plus the padding and the border, so no value or unit is cut. */
   .entry {
-    width: 100%;
+    width: calc(9ch + 8px);
     box-sizing: border-box;
     height: 20px;
     padding: 0 3px;

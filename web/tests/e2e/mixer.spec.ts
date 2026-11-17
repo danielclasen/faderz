@@ -1317,6 +1317,15 @@ test('writes the tally on the strip in words: PGM, PVW, and CLOSED when the AFV 
   await expect.poll(async () => (await serverState(request)).state.afv['ch15']!.open).toBe(false);
   await expect(page.getByTestId('tally-ch15')).toHaveText(/^\s*CLOSED CAM3\s*$/);
   await expect(page.getByTestId('tally-ch15')).not.toHaveCSS('text-decoration-line', 'line-through');
+  // The words take the chip's colour in both themes: white on the PGM fill, the PVW colour on its tint.
+  for (const theme of ['dark', 'light']) {
+    if (theme === 'light') await page.getByRole('button', { name: 'Switch to light theme' }).click();
+    for (const ch of ['ch13', 'ch14']) {
+      const chip = page.getByTestId(`tally-${ch}`);
+      await expect(chip.locator('span')).toHaveCSS('color', await chip.evaluate((el) => getComputedStyle(el).color));
+    }
+    await expect(page.getByTestId('tally-ch13').locator('span')).toHaveCSS('color', 'rgb(255, 255, 255)');
+  }
 });
 
 test('says in the notice line that changes are not committing while the serving replica has no quorum', { tag: '@mock' }, async ({ page, request }) => {

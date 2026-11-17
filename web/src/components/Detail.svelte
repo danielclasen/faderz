@@ -393,7 +393,7 @@
     gap: 2px;
   }
   .band :global(.param) {
-    grid-template-columns: 30px 1fr 40px;
+    grid-template-columns: 30px 1fr auto;
   }
   .send {
     display: grid;
@@ -402,7 +402,7 @@
     align-items: center;
   }
   .send :global(.param) {
-    grid-template-columns: 22px 1fr 40px;
+    grid-template-columns: 22px 1fr auto;
   }
   .grid {
     display: grid;

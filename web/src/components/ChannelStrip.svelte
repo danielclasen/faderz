@@ -374,6 +374,8 @@
     height: 14px;
     line-height: 14px;
     contain: strict;
+    /* The chip's colour, not the strip's faint .fixed text. */
+    color: inherit;
   }
   .afv .none {
     opacity: 0.6;
