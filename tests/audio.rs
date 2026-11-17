@@ -470,6 +470,18 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     let mut pgm = Reader::new(&domain.0, &flows.pgm);
     let mut mm = Reader::new(&domain.0, &flows.mm);
     pgm.expect(0.0, 0.0, "every fader closed").await;
+    // ch2's input a has no flow: not attached, while ch1's is.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, metrics) = get(server.ops, "/metrics").await;
+        if metrics.contains("faderz_input_attached{channel=\"ch1\"} 1\n")
+            && metrics.contains("faderz_input_attached{channel=\"ch2\"} 0\n")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "input health: {metrics}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     // Hard left at 0 dB: cos 0 and sin 0 are exact.
     patch(
@@ -558,6 +570,23 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     let (_, metrics) = get(server.ops, "/metrics").await;
     assert!(
         metrics.contains("faderz_engine_resends_total 1"),
+        "{metrics}"
+    );
+    // Each channel's input health: ch1 read, ch2 on input b now and read
+    // too, st1 read; their copied blocks counted.
+    for ch in ["ch1", "ch2", "st1"] {
+        let attached = format!("faderz_input_attached{{channel=\"{ch}\"}} 1\n");
+        assert!(metrics.contains(&attached), "{ch}: {metrics}");
+        let copied = format!("faderz_input_copied_blocks_total{{channel=\"{ch}\"}} ");
+        let n: u64 = metrics
+            .lines()
+            .find_map(|l| l.strip_prefix(&copied))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{ch}: {metrics}"));
+        assert!(n > 0, "{ch}: {metrics}");
+    }
+    assert!(
+        metrics.contains("faderz_input_margin_needed_samples{channel=\"ch1\"} 0\n"),
         "{metrics}"
     );
     let deadline = Instant::now() + Duration::from_secs(5);

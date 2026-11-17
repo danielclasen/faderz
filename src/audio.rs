@@ -13,11 +13,11 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 
 use samplez::rt::ProcessStatus;
-use samplez::{Counters, Engine, EntryError, GainError};
+use samplez::{Counters, Engine, EntryError, GainError, InputState, InputStatus};
 use samplez_dsp::StripParam;
 use samplez_replica::Replica;
 use samplez_service::ws::{Frame, Hub};
-use samplez_service::{Counter, Gauge, Ops, Position, ReplicatedState};
+use samplez_service::{Counter, Gauge, Metrics, Ops, Position, ReplicatedState};
 use serde_json::Value;
 use tokio::sync::Notify;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -56,6 +56,7 @@ pub struct Audio {
     taps: Mutex<Vec<mix::MeterTap>>,
     resends: Counter,
     resend_pending: Gauge,
+    inputs: Mutex<InputHealth>,
 }
 
 /// What the engine was sent: every coefficient, and each input's flow.
@@ -133,6 +134,7 @@ impl Audio {
                 "1 while a resend to the engine is pending; /readyz fails then.",
                 &[],
             ),
+            inputs: Mutex::new(InputHealth::new(metrics, shape)),
             ops,
         })
     }
@@ -335,6 +337,10 @@ impl Audio {
                 self.ops.heartbeat().beat();
             }
             let status = self.engine.status();
+            self.inputs
+                .lock()
+                .expect("input health lock poisoned")
+                .update(&status.inputs);
             let late = dropped(counters);
             match drops.tick(late, &status.diverged, tick.into_std()) {
                 Act::None => {}
@@ -352,6 +358,76 @@ impl Audio {
             let taps = self.taps.lock().expect("taps lock poisoned").clone();
             let frame = layout.frame(replica, sequence, &Readings::of(&status, &taps));
             hub.publish(Frame::Meters(frame.into()));
+        }
+    }
+}
+
+/// Each channel's input as the engine reads it, on `/metrics`.
+struct InputHealth {
+    attached: Vec<Gauge>,
+    margin: Vec<Gauge>,
+    /// Copied, late and too-late block counts, and the counts last added.
+    blocks: Vec<[(Counter, u64); 3]>,
+}
+
+impl InputHealth {
+    fn new(metrics: &Metrics, shape: &Shape) -> InputHealth {
+        let mut h = InputHealth {
+            attached: Vec::new(),
+            margin: Vec::new(),
+            blocks: Vec::new(),
+        };
+        for c in &shape.channels {
+            let l = [("channel", c.id.as_str())];
+            h.attached.push(metrics.gauge(
+                "faderz_input_attached",
+                "1 while the engine reads the channel's input flow, 0 while it is \
+                 pruned and polled until its head advances again.",
+                &l,
+            ));
+            h.margin.push(metrics.gauge(
+                "faderz_input_margin_needed_samples",
+                "The readerMarginSamples the channel's input needs when the \
+                 configured one is below it, from its late blocks or its \
+                 producer's batch hint; 0 when it suffices.",
+                &l,
+            ));
+            let count = |name, help| (metrics.counter(name, help, &l), 0);
+            h.blocks.push([
+                count(
+                    "faderz_input_copied_blocks_total",
+                    "Blocks of the channel's input read on time.",
+                ),
+                count(
+                    "faderz_input_late_blocks_total",
+                    "Blocks of the channel's input not read because its head was \
+                     below them at their deadline: silenced.",
+                ),
+                count(
+                    "faderz_input_too_late_blocks_total",
+                    "Blocks of the channel's input not read because the flow no \
+                     longer held them: silenced.",
+                ),
+            ]);
+        }
+        h
+    }
+
+    /// Follows the engine's input statuses, one per channel in shape
+    /// order.
+    fn update(&mut self, inputs: &[InputStatus]) {
+        for (i, input) in inputs.iter().enumerate().take(self.attached.len()) {
+            self.attached[i].set(f64::from(u8::from(input.state == InputState::Attached)));
+            let needed = input.margin_warning.or(input.margin_short).unwrap_or(0);
+            self.margin[i].set(needed as f64);
+            let c = &input.counters;
+            for ((counter, last), now) in self.blocks[i]
+                .iter_mut()
+                .zip([c.copied, c.late, c.too_late])
+            {
+                counter.add(now.saturating_sub(*last));
+                *last = now;
+            }
         }
     }
 }
