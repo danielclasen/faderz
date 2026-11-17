@@ -42,6 +42,33 @@
   });
   const name = (n: string) => n.replace(/_total$/, '');
 
+  /** Least room between the counters and the viewport's edges, px. */
+  const EDGE = 8;
+  let button = $state<HTMLButtonElement>();
+  let panel = $state<HTMLDivElement>();
+  let place = $state({ left: EDGE, bottom: 28 });
+  /** Above the button, centred on it, moved in where that runs off the viewport. */
+  function anchor(): void {
+    if (!button || !panel) return;
+    const b = button.getBoundingClientRect();
+    const view = document.documentElement;
+    const centred = b.left + b.width / 2 - panel.offsetWidth / 2;
+    const left = Math.max(EDGE, Math.min(centred, view.clientWidth - EDGE - panel.offsetWidth));
+    place = { left, bottom: view.clientHeight - b.top + 4 };
+  }
+  $effect(() => {
+    if (!open || !panel) return;
+    anchor();
+    // Its width follows the counters' names and values.
+    const sized = new ResizeObserver(anchor);
+    sized.observe(panel);
+    window.addEventListener('resize', anchor);
+    return () => {
+      sized.disconnect();
+      window.removeEventListener('resize', anchor);
+    };
+  });
+
   // While the commit banner holds the notice line, notices wait unseen:
   // they are timed only from when the line shows them again.
   $effect(() => {
@@ -56,6 +83,7 @@
   <div class="notices">{#if !short.current}<NoticeLine />{/if}</div>
   <div class="engine-wrap">
     <button
+      bind:this={button}
       class="engine"
       class:warn={warnings.length > 0}
       aria-expanded={open}
@@ -67,7 +95,15 @@
       data-testid="engine"
     ><i></i><span class="fixed">{engineLamp(warnings.length)}</span></button>
     {#if open}
-      <div class="counters" id="engine-counters" role="region" aria-label="Engine counters">
+      <div
+        bind:this={panel}
+        class="counters"
+        id="engine-counters"
+        role="region"
+        aria-label="Engine counters"
+        style:left="{place.left}px"
+        style:bottom="{place.bottom}px"
+      >
         <div class="head">Counters from {mixer.countersReplica ?? '-'}, totals</div>
         {#each counters as [n, value] (n)}
           <div class="c" class:nz={warnings.includes(n)}><span>{name(n)}</span><b class="num">{value}</b></div>
@@ -163,13 +199,14 @@
   .engine.warn i {
     background: var(--warn);
   }
-  /* Opens upward over the view, outside the bar's clipping; it moves nothing. */
+  /* Opens upward over the view, outside the bar's clipping; it moves
+     nothing. Fixed, so placed over its button by anchor(). */
   .counters {
     position: fixed;
-    left: 10px;
-    bottom: 28px;
     z-index: 40;
-    min-width: 240px;
+    box-sizing: border-box;
+    min-width: min(240px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
     padding: 6px 8px;
     border: 1px solid var(--line-strong);
     border-radius: 3px;
@@ -188,6 +225,11 @@
     justify-content: space-between;
     gap: 12px;
     line-height: 16px;
+  }
+  .c span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .c b {
     color: var(--text);

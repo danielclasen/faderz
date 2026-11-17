@@ -1226,6 +1226,32 @@ test('shows the source under the channel name and colours the scribble strip fro
   await expect.poll(async () => (await serverState(request)).state.channels['ch3']!.color).toBe('none');
 });
 
+test('opens the engine counters above the lamp, inside the viewport, at desktop and phone widths', async ({ page }) => {
+  await live(page);
+  const lamp = page.getByTestId('engine');
+  const counters = page.getByRole('region', { name: 'Engine counters' });
+  for (const width of [1600, 390, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    await lamp.click();
+    await expect(counters).toBeVisible();
+    const b = (await lamp.boundingBox())!;
+    const p = (await counters.boundingBox())!;
+    // Fully on screen, and above the lamp rather than over it.
+    expect(p.x, `${width}: left edge`).toBeGreaterThanOrEqual(0);
+    expect(p.x + p.width, `${width}: right edge`).toBeLessThanOrEqual(width);
+    expect(p.y, `${width}: top edge`).toBeGreaterThanOrEqual(0);
+    expect(p.y + p.height, `${width}: above the lamp`).toBeLessThanOrEqual(b.y + 0.5);
+    // Centred on the lamp, or moved in against a viewport edge.
+    const centre = p.x + p.width / 2;
+    const clamped = p.x <= 8.5 || p.x + p.width >= width - 8.5;
+    expect(clamped || (centre >= b.x && centre <= b.x + b.width), `${width}: centre ${centre} over ${b.x}..${b.x + b.width}`).toBe(true);
+    expect(p.x, `${width}: spans the lamp`).toBeLessThanOrEqual(b.x + b.width);
+    expect(p.x + p.width, `${width}: spans the lamp`).toBeGreaterThanOrEqual(b.x);
+    await lamp.click();
+    await expect(counters).toHaveCount(0);
+  }
+});
+
 test('shows one engine lamp in the status bar and the counters only on request', { tag: '@meters' }, async ({ page }) => {
   await live(page);
   const lamp = page.getByTestId('engine');
