@@ -1,8 +1,8 @@
 //! The mixer's replicated state: the live state of model.schema.json over
 //! the configured shape, touch ownership, the last seq per session and
-//! control, and scenes. Every replica applies the same commands in log
-//! order through [`Product`], so all of it is decided here and nowhere
-//! else.
+//! control, scenes and consoles. Every replica applies the same commands
+//! in log order through [`Product`], so all of it is decided here and
+//! nowhere else.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -54,6 +54,100 @@ pub enum Command {
         sources: BTreeMap<String, String>,
         replace: bool,
     },
+    /// A WebSocket `console`: registers or updates `console` as the
+    /// origin session's.
+    Register {
+        id: String,
+        console: Console,
+        bank_offset: u64,
+    },
+    /// `PUT /consoles/{id}`: creates or updates the descriptor.
+    PutConsole {
+        id: String,
+        console: ConsolePut,
+    },
+    /// `DELETE /consoles/{id}`.
+    RemoveConsole {
+        id: String,
+        console: String,
+    },
+}
+
+/// A console's descriptor: model `ConsoleStatus` without what the server
+/// keeps (`handle`, `connected`, `bankOffset`). Also an entry of the
+/// configuration's `consoles`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Console {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_protocol")]
+    pub protocol: String,
+    #[serde(default = "default_transport")]
+    pub transport: String,
+    #[serde(default = "default_strips")]
+    pub strips: u64,
+}
+
+pub(crate) fn default_protocol() -> String {
+    "mcu".into()
+}
+
+pub(crate) fn default_transport() -> String {
+    "bridge".into()
+}
+
+pub(crate) fn default_strips() -> u64 {
+    8
+}
+
+impl Console {
+    /// Model `ConsoleStatus` of this descriptor.
+    pub fn status(&self, session: Option<&SessionKey>, connected: bool, bank_offset: u64) -> Value {
+        json!({
+            "id": self.id,
+            "name": self.name,
+            "handle": session.map(|s| OwnerHandle::of(&s.session).as_str().to_owned()),
+            "protocol": self.protocol,
+            "transport": self.transport,
+            "connected": connected,
+            "bankOffset": bank_offset,
+            "strips": self.strips,
+        })
+    }
+}
+
+/// What `PUT /consoles/{id}` sets: a field left out keeps its value, or
+/// takes its default on a new console.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsolePut {
+    pub id: String,
+    pub name: String,
+    pub protocol: Option<String>,
+    pub transport: Option<String>,
+    pub strips: Option<u64>,
+}
+
+/// A console the state holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Registered {
+    console: Console,
+    bank_offset: u64,
+    connected: bool,
+    /// From the configuration: never removed, named by it.
+    declared: bool,
+    /// The session that registered it last. Kept in the replicated state,
+    /// never published: the status carries its handle.
+    session: Option<SessionKey>,
+}
+
+impl Registered {
+    fn public(&self) -> Value {
+        self.console
+            .status(self.session.as_ref(), self.connected, self.bank_offset)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,6 +193,11 @@ pub enum Answer {
     Invalid { message: String },
     /// The scene a `StoreScene` stored.
     Scene { scene: String },
+    /// 409 with a message alone: a console connected to another session,
+    /// or a declared one to remove.
+    Refused { message: String },
+    /// The console a `PutConsole` created.
+    Created,
 }
 
 /// What one command or expiry changed, for [`Product::delta`].
@@ -146,9 +245,9 @@ fn answers_kept() -> usize {
     samplez_replica::dedup::Limits::defaults(crate::replica::RATE).max_session_commands
 }
 
-/// Tally sources the state holds at most: a source once named stays,
-/// `off` after a `PUT` that leaves it out.
-pub const MAX_TALLY_SOURCES: usize = 256;
+/// Consoles registered at runtime the state holds at most, besides the
+/// declared ones.
+pub const MAX_CONSOLES: usize = 64;
 
 #[derive(Default)]
 pub struct Mixer {
@@ -164,6 +263,11 @@ pub struct Mixer {
     /// Leaves of a loaded state that the configured shape has no place
     /// for, or whose value it does not take.
     dropped: Vec<String>,
+    /// Declared consoles first, in configuration order, then the others in
+    /// the order they were created; `/consoles` publishes them so.
+    consoles: Vec<Registered>,
+    /// The configuration's consoles, which a loaded state is merged with.
+    declared: Vec<Console>,
 }
 
 /// The state as snapshots carry it.
@@ -176,15 +280,51 @@ struct Saved {
     answers: Vec<(SessionKey, Vec<(String, Answer)>)>,
     scenes: Vec<(String, Value)>,
     scenes_created: u64,
+    /// Absent in snapshots taken before consoles were kept.
+    #[serde(default)]
+    consoles: Vec<Registered>,
 }
 
 impl Mixer {
     pub fn new(shape: Shape) -> Mixer {
-        Mixer {
+        Mixer::with_consoles(shape, Vec::new())
+    }
+
+    /// A state with the `declared` consoles of the configuration, not
+    /// connected yet.
+    pub fn with_consoles(shape: Shape, declared: Vec<Console>) -> Mixer {
+        let mut m = Mixer {
             state: shape.initial_state(),
             shape: Some(Arc::new(shape)),
+            consoles: declared.iter().map(Mixer::declared_entry).collect(),
+            declared,
             ..Mixer::default()
+        };
+        m.state["consoles"] = m.console_list();
+        m
+    }
+
+    fn declared_entry(console: &Console) -> Registered {
+        Registered {
+            console: console.clone(),
+            bank_offset: 0,
+            connected: false,
+            declared: true,
+            session: None,
         }
+    }
+
+    /// Model `ConsoleStatus` of every console, in published order.
+    fn console_list(&self) -> Value {
+        self.consoles.iter().map(Registered::public).collect()
+    }
+
+    /// Model `ConsoleStatus` of console `id`.
+    pub fn console(&self, id: &str) -> Option<Value> {
+        self.consoles
+            .iter()
+            .find(|r| r.console.id == id)
+            .map(Registered::public)
     }
 
     pub fn shape(&self) -> &Shape {
@@ -647,6 +787,166 @@ impl Mixer {
         changed(self.write(written))
     }
 
+    /// `/consoles` written from the consoles held.
+    fn publish_consoles(&mut self) -> Effect<Edits> {
+        let list = self.console_list();
+        changed(self.write(vec![("/consoles".into(), list)]))
+    }
+
+    fn position(&self, console: &str) -> Option<usize> {
+        self.consoles.iter().position(|r| r.console.id == console)
+    }
+
+    /// Refuses a console beyond [`MAX_CONSOLES`] not declared.
+    fn room_for_console(&self) -> Result<(), Answer> {
+        if self.consoles.iter().filter(|r| !r.declared).count() >= MAX_CONSOLES {
+            return Err(Answer::Invalid {
+                message: format!("at most {MAX_CONSOLES} consoles besides the declared ones"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Registers `console` as `origin`'s session's, connected, at
+    /// `bank_offset`. Refused while it is connected to another session. A
+    /// declared console keeps the name of the configuration.
+    fn register(
+        &mut self,
+        origin: &Origin,
+        id: &str,
+        console: &Console,
+        bank_offset: u64,
+    ) -> Effect<Edits> {
+        let session = origin.key();
+        match self.position(&console.id) {
+            Some(i) => {
+                let r = &self.consoles[i];
+                if r.connected && r.session.as_ref().is_some_and(|s| *s != session) {
+                    let message = format!("console {} is connected to another session", console.id);
+                    return self.refuse(&session, id, Answer::Refused { message });
+                }
+                let r = &mut self.consoles[i];
+                let name = if r.declared {
+                    r.console.name.clone()
+                } else {
+                    console.name.clone()
+                };
+                r.console = Console {
+                    name,
+                    ..console.clone()
+                };
+                r.bank_offset = bank_offset;
+                r.connected = true;
+                r.session = Some(session);
+            }
+            None => {
+                if let Err(answer) = self.room_for_console() {
+                    return self.refuse(&session, id, answer);
+                }
+                self.consoles.push(Registered {
+                    console: console.clone(),
+                    bank_offset,
+                    connected: true,
+                    declared: false,
+                    session: Some(session),
+                });
+            }
+        }
+        self.publish_consoles()
+    }
+
+    /// Creates or updates the descriptor of a console, keeping who it is
+    /// connected to and its bank. A declared console keeps the name of the
+    /// configuration.
+    fn put_console(&mut self, session: &SessionKey, id: &str, put: &ConsolePut) -> Effect<Edits> {
+        let i = match self.position(&put.id) {
+            Some(i) => i,
+            None => {
+                if let Err(answer) = self.room_for_console() {
+                    return self.refuse(session, id, answer);
+                }
+                self.consoles.push(Registered {
+                    console: Console {
+                        id: put.id.clone(),
+                        name: put.name.clone(),
+                        protocol: default_protocol(),
+                        transport: default_transport(),
+                        strips: default_strips(),
+                    },
+                    bank_offset: 0,
+                    connected: false,
+                    declared: false,
+                    session: None,
+                });
+                self.record(session, id, Answer::Created);
+                self.consoles.len() - 1
+            }
+        };
+        let c = &mut self.consoles[i];
+        if !c.declared {
+            c.console.name = put.name.clone();
+        }
+        if let Some(p) = &put.protocol {
+            c.console.protocol = p.clone();
+        }
+        if let Some(t) = &put.transport {
+            c.console.transport = t.clone();
+        }
+        if let Some(n) = put.strips {
+            c.console.strips = n;
+        }
+        self.publish_consoles()
+    }
+
+    fn remove_console(&mut self, session: &SessionKey, id: &str, console: &str) -> Effect<Edits> {
+        let Some(i) = self.position(console) else {
+            let message = format!("unknown console {console}");
+            return self.refuse(session, id, Answer::NotFound { message });
+        };
+        if self.consoles[i].declared {
+            let message = format!("console {console} is declared in the configuration");
+            return self.refuse(session, id, Answer::Refused { message });
+        }
+        self.consoles.remove(i);
+        self.publish_consoles()
+    }
+
+    /// The consoles of a loaded state merged with the declared ones: every
+    /// declared console, in configuration order and named by it, with the
+    /// session, connection and bank it had and, once registered, what the
+    /// registration said; then the saved consoles that were never
+    /// declared. One declared before and no longer is dropped.
+    fn merge_consoles(&mut self, saved: Vec<Registered>) {
+        let mut merged: Vec<Registered> = self
+            .declared
+            .iter()
+            .map(|d| match saved.iter().find(|s| s.console.id == d.id) {
+                Some(s) => {
+                    let console = if s.session.is_some() {
+                        Console {
+                            name: d.name.clone(),
+                            ..s.console.clone()
+                        }
+                    } else {
+                        d.clone()
+                    };
+                    Registered {
+                        console,
+                        declared: true,
+                        ..s.clone()
+                    }
+                }
+                None => Mixer::declared_entry(d),
+            })
+            .collect();
+        let runtime = saved
+            .into_iter()
+            .filter(|s| !s.declared && !self.declared.iter().any(|d| d.id == s.console.id));
+        merged.extend(runtime);
+        self.consoles = merged;
+        self.state["consoles"] = self.console_list();
+    }
+
     /// Loads `saved` into this state's configured shape: leaves the shape
     /// has no place for, or whose value it does not take, are dropped;
     /// tally, scenes and the scene recalled are kept as they are.
@@ -694,6 +994,7 @@ impl Mixer {
             .filter(|(p, _)| self.exists(p))
             .collect();
         self.dropped = dropped;
+        self.merge_consoles(saved.consoles);
     }
 }
 
@@ -721,10 +1022,18 @@ impl Product for Mixer {
                 sources,
                 replace,
             } => self.tally(&session, id, sources, *replace),
+            Command::Register {
+                id,
+                console,
+                bank_offset,
+            } => self.register(origin, id, console, *bank_offset),
+            Command::PutConsole { id, console } => self.put_console(&session, id, console),
+            Command::RemoveConsole { id, console } => self.remove_console(&session, id, console),
         }
     }
 
-    /// Releases every control `session` holds.
+    /// Releases every control `session` holds and disconnects its
+    /// consoles.
     fn expire(&mut self, session: &SessionKey) -> Effect<Edits> {
         let held: Vec<String> = self
             .owners
@@ -732,15 +1041,25 @@ impl Product for Mixer {
             .filter(|(_, h)| h.key() == *session)
             .map(|(p, _)| p.clone())
             .collect();
-        if held.is_empty() {
+        let mut consoles = false;
+        for r in &mut self.consoles {
+            if r.connected && r.session.as_ref() == Some(session) {
+                r.connected = false;
+                consoles = true;
+            }
+        }
+        if held.is_empty() && !consoles {
             return Effect::Unchanged;
         }
         for path in &held {
             self.owners.remove(path);
         }
-        let off = self.momentary_off(&held);
+        let mut written = self.momentary_off(&held);
+        if consoles {
+            written.push(("/consoles".into(), self.console_list()));
+        }
         Effect::Changed(Edits {
-            values: self.write(off),
+            values: self.write(written),
             owners: held.into_iter().map(|p| (p, Value::Null)).collect(),
             origin: None,
         })
@@ -821,6 +1140,7 @@ impl Product for Mixer {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             scenes_created: self.scenes_created,
+            consoles: self.consoles.clone(),
         };
         serde_json::to_vec(&saved).expect("the state serializes")
     }
@@ -848,6 +1168,7 @@ impl Product for Mixer {
             self.state = saved.state;
             self.owners = saved.owners.into_iter().collect();
             self.dropped = Vec::new();
+            self.consoles = saved.consoles;
         }
         Ok(())
     }
@@ -1702,5 +2023,276 @@ mod tests {
             m.answer(&rest_key(), "t3"),
             Some(Answer::Invalid { .. })
         ));
+    }
+
+    fn desk(id: &str, name: &str) -> Console {
+        Console {
+            id: id.into(),
+            name: name.into(),
+            protocol: "mcu".into(),
+            transport: "bridge".into(),
+            strips: 8,
+        }
+    }
+
+    fn register(m: &mut Mixer, session: &str, console: &Console, bank: u64) -> Effect<Edits> {
+        let command = Command::Register {
+            id: format!("{session}-c{bank}-{}", console.id),
+            console: console.clone(),
+            bank_offset: bank,
+        };
+        m.apply(&origin(session), &serde_json::to_vec(&command).unwrap())
+    }
+
+    fn put(
+        m: &mut Mixer,
+        id: &str,
+        console: &str,
+        name: &str,
+        strips: Option<u64>,
+    ) -> Effect<Edits> {
+        let put = ConsolePut {
+            id: console.into(),
+            name: name.into(),
+            protocol: None,
+            transport: None,
+            strips,
+        };
+        rest(
+            m,
+            Command::PutConsole {
+                id: id.into(),
+                console: put,
+            },
+        )
+    }
+
+    fn remove(m: &mut Mixer, id: &str, console: &str) -> Effect<Edits> {
+        rest(
+            m,
+            Command::RemoveConsole {
+                id: id.into(),
+                console: console.into(),
+            },
+        )
+    }
+
+    fn consoles(m: &Mixer) -> Vec<Value> {
+        at(m, "/consoles").as_array().unwrap().clone()
+    }
+
+    fn handle(session: &str) -> Value {
+        json!(OwnerHandle::of(session).as_str())
+    }
+
+    /// A registration publishes the whole list as one change; a bank
+    /// change is another; the same registration again changes nothing.
+    #[test]
+    fn a_registration_publishes_the_console_and_its_bank() {
+        let mut m = mixer();
+        let xt = desk("xt-1", "X-Touch");
+        let v = values(&register(&mut m, "a", &xt, 0));
+        let status = json!({
+            "id": "xt-1", "name": "X-Touch", "handle": handle("a"), "protocol": "mcu",
+            "transport": "bridge", "connected": true, "bankOffset": 0, "strips": 8,
+        });
+        assert_eq!(v, vec![("/consoles".to_owned(), json!([status.clone()]))]);
+        check(&contract().state, m.state()).unwrap();
+        let v = values(&register(&mut m, "a", &xt, 8));
+        assert_eq!(v[0].1[0]["bankOffset"], 8);
+        assert_eq!(register(&mut m, "a", &xt, 8), Effect::Unchanged);
+        // One session drives several units.
+        register(&mut m, "a", &desk("xt-2", "Extender"), 16);
+        let ids: Vec<Value> = consoles(&m).iter().map(|c| c["id"].clone()).collect();
+        assert_eq!(ids, [json!("xt-1"), json!("xt-2")], "in registration order");
+    }
+
+    /// A console connected to one session is refused to another until the
+    /// lease of the first expires, which disconnects it.
+    #[test]
+    fn a_console_is_claimed_only_once_its_session_is_gone() {
+        let mut m = mixer();
+        let xt = desk("xt-1", "X-Touch");
+        register(&mut m, "a", &xt, 0);
+        assert_eq!(register(&mut m, "b", &xt, 8), Effect::Unchanged);
+        assert!(matches!(
+            m.answer(&origin("b").key(), "b-c8-xt-1"),
+            Some(Answer::Refused { .. })
+        ));
+        let Effect::Changed(e) = m.expire(&origin("a").key()) else {
+            panic!("the console disconnects")
+        };
+        assert_eq!(e.values[0].0, "/consoles");
+        assert_eq!(e.values[0].1[0]["connected"], false);
+        assert_eq!(e.values[0].1[0]["handle"], handle("a"), "kept for display");
+        assert_eq!(m.expire(&origin("a").key()), Effect::Unchanged);
+        let v = values(&register(&mut m, "b", &xt, 8));
+        assert_eq!(
+            (&v[0].1[0]["handle"], &v[0].1[0]["connected"]),
+            (&handle("b"), &json!(true))
+        );
+    }
+
+    /// Declared consoles are there from the start, keep the configured
+    /// name and are never removed; registered ones follow them.
+    #[test]
+    fn declared_consoles_come_first_and_keep_their_name() {
+        let mut m = Mixer::with_consoles(
+            Shape::parse(&small()).unwrap(),
+            vec![desk("xt-1", "X-Touch"), desk("xt-2", "Extender")],
+        );
+        let list = consoles(&m);
+        assert_eq!(list[1]["handle"], Value::Null);
+        assert_eq!(
+            (&list[1]["connected"], &list[1]["bankOffset"]),
+            (&json!(false), &json!(0))
+        );
+        check(&contract().state, m.state()).unwrap();
+        register(&mut m, "a", &desk("osc-1", "Tablet"), 0);
+        let renamed = Console {
+            strips: 4,
+            ..desk("xt-2", "Bridge name")
+        };
+        register(&mut m, "a", &renamed, 8);
+        let list = consoles(&m);
+        assert_eq!(
+            list.iter().map(|c| c["id"].clone()).collect::<Vec<_>>(),
+            [json!("xt-1"), json!("xt-2"), json!("osc-1")]
+        );
+        assert_eq!(
+            (&list[1]["name"], &list[1]["strips"]),
+            (&json!("Extender"), &json!(4))
+        );
+        assert_eq!(remove(&mut m, "d1", "xt-2"), Effect::Unchanged);
+        let Some(Answer::Refused { message }) = m.answer(&rest_key(), "d1") else {
+            panic!()
+        };
+        assert!(
+            message.contains("declared in the configuration"),
+            "{message}"
+        );
+        values(&put(&mut m, "p1", "xt-1", "Renamed", Some(16)));
+        assert_eq!(consoles(&m)[0]["name"], "X-Touch");
+        assert_eq!(consoles(&m)[0]["strips"], 16);
+    }
+
+    /// REST creates a console no session registered, updates its
+    /// descriptor without touching its session or bank, and removes it.
+    #[test]
+    fn rest_puts_and_removes_consoles() {
+        let mut m = mixer();
+        values(&put(&mut m, "p1", "desk", "Desk", None));
+        assert_eq!(m.answer(&rest_key(), "p1"), Some(&Answer::Created));
+        assert_eq!(
+            m.console("desk").unwrap(),
+            json!({
+                "id": "desk", "name": "Desk", "handle": null, "protocol": "mcu",
+                "transport": "bridge", "connected": false, "bankOffset": 0, "strips": 8,
+            })
+        );
+        register(&mut m, "a", &desk("desk", "Desk"), 24);
+        values(&put(&mut m, "p2", "desk", "Desk 2", Some(16)));
+        assert_eq!(m.answer(&rest_key(), "p2"), None, "updated, not created");
+        let c = m.console("desk").unwrap();
+        assert_eq!(
+            (
+                &c["name"],
+                &c["strips"],
+                &c["bankOffset"],
+                &c["handle"],
+                &c["connected"]
+            ),
+            (
+                &json!("Desk 2"),
+                &json!(16),
+                &json!(24),
+                &handle("a"),
+                &json!(true)
+            )
+        );
+        assert_eq!(put(&mut m, "p3", "desk", "Desk 2", None), Effect::Unchanged);
+        values(&remove(&mut m, "d1", "desk"));
+        assert!(consoles(&m).is_empty());
+        assert_eq!(remove(&mut m, "d2", "desk"), Effect::Unchanged);
+        assert!(matches!(
+            m.answer(&rest_key(), "d2"),
+            Some(Answer::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn runtime_consoles_are_bounded_and_declared_ones_do_not_count() {
+        let mut m = Mixer::with_consoles(
+            Shape::parse(&small()).unwrap(),
+            vec![desk("xt-1", "X-Touch")],
+        );
+        for n in 0..MAX_CONSOLES {
+            values(&register(&mut m, "a", &desk(&format!("c{n}"), "C"), 0));
+        }
+        assert_eq!(
+            register(&mut m, "a", &desk("one-more", "C"), 0),
+            Effect::Unchanged
+        );
+        assert!(matches!(
+            m.answer(&origin("a").key(), "a-c0-one-more"),
+            Some(Answer::Invalid { .. })
+        ));
+        assert_eq!(put(&mut m, "p", "one-more", "C", None), Effect::Unchanged);
+        assert!(matches!(
+            m.answer(&rest_key(), "p"),
+            Some(Answer::Invalid { .. })
+        ));
+        values(&register(&mut m, "a", &desk("c0", "C"), 8));
+    }
+
+    /// Consoles and their sessions survive a snapshot; a snapshot taken
+    /// before consoles were kept loads with the declared ones alone.
+    #[test]
+    fn consoles_load_back_and_merge_with_the_declared_ones() {
+        let shape = || Shape::parse(&small()).unwrap();
+        let mut m =
+            Mixer::with_consoles(shape(), vec![desk("xt-1", "X-Touch"), desk("gone", "Gone")]);
+        register(&mut m, "a", &desk("xt-1", "X-Touch"), 8);
+        register(&mut m, "a", &desk("osc-1", "Tablet"), 0);
+        let saved = m.save();
+        let mut back =
+            Mixer::with_consoles(shape(), vec![desk("new-1", "New"), desk("xt-1", "Renamed")]);
+        back.load(&saved).unwrap();
+        let list = consoles(&back);
+        assert_eq!(
+            list.iter().map(|c| c["id"].clone()).collect::<Vec<_>>(),
+            [json!("new-1"), json!("xt-1"), json!("osc-1")],
+            "declared in configuration order, then runtime; one no longer declared is dropped"
+        );
+        assert_eq!(
+            (&list[1]["name"], &list[1]["bankOffset"], &list[1]["handle"]),
+            (&json!("Renamed"), &json!(8), &handle("a"))
+        );
+        assert!(matches!(
+            back.expire(&origin("a").key()),
+            Effect::Changed(_)
+        ));
+        assert!(consoles(&back).iter().all(|c| c["connected"] == false));
+        assert_eq!(
+            remove(&mut back, "d", "xt-1"),
+            Effect::Unchanged,
+            "declared"
+        );
+
+        let mut installed = Mixer::default();
+        installed.load(&saved).unwrap();
+        assert_eq!(installed.text(), m.text());
+        assert_eq!(
+            register(&mut installed, "b", &desk("osc-1", "Tablet"), 0),
+            Effect::Unchanged,
+            "the session is kept"
+        );
+
+        let mut old: Value = serde_json::from_slice(&mixer().save()).unwrap();
+        old.as_object_mut().unwrap().remove("consoles");
+        let mut back = Mixer::with_consoles(shape(), vec![desk("xt-1", "X-Touch")]);
+        back.load(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(consoles(&back).len(), 1);
+        assert_eq!(consoles(&back)[0]["name"], "X-Touch");
     }
 }
