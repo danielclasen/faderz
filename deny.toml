@@ -7,6 +7,12 @@ exclude-dev = true
 
 [advisories]
 yanked = "deny"
+ignore = [
+  # chrono is unmaintained, with no patched version. It comes in only
+  # through openraft 0.9, which samplez-replica is built on; nothing here
+  # calls it.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, no patched version; only via openraft" },
+]
 
 [licenses]
 allow = [
