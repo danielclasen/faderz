@@ -2854,7 +2854,7 @@
       }
     },
     "Counters": {
-      "description": "Engine counters by metric name, as exported on /metrics.",
+      "description": "Engine counters by name, each a total since the engine started and named with the suffix _total. Each counts an event an operator acts on, such as a missed deadline or a late input block; none counts normal work, such as blocks processed.",
       "type": "object",
       "propertyNames": {
         "pattern": "^[a-z][a-z0-9_]*_total$"

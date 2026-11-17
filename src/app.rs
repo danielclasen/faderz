@@ -15,8 +15,9 @@ use samplez_service::ws::{Delta, Frame, Hub, Slot, To};
 use samplez_service::{Identity, Position, ReplicatedState};
 use serde_json::{Value, json};
 use tokio::sync::watch;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 
+use crate::audio::Audio;
 use crate::state::{Answer, Mixer};
 
 /// Deltas waiting per client before it is caught up by snapshot instead.
@@ -42,6 +43,9 @@ pub struct App {
     /// When each asking session last had a control request for a path
     /// forwarded.
     requests: Mutex<BTreeMap<(SessionKey, String), Instant>>,
+    /// The engine's counters last read ([`App::count`]); none without an
+    /// engine.
+    counters: Mutex<Option<Value>>,
 }
 
 /// A connection counted by [`App::connected`]; dropping it counts it
@@ -97,6 +101,8 @@ pub const PRESENCE: Slot = Slot {
     name: "presence",
     every: Duration::from_millis(100),
 };
+/// How often [`App::count`] reads and sends the engine's counters.
+pub const COUNTERS_PERIOD: Duration = Duration::from_secs(1);
 /// How long a selection of a session that has not held a lease is kept:
 /// one lease.
 const SELECTION_GRACE: Duration = Duration::from_secs(crate::replica::LEASE / crate::replica::RATE);
@@ -125,6 +131,7 @@ impl App {
                 "anonymous"
             },
             requests: Mutex::default(),
+            counters: Mutex::default(),
         })
     }
 
@@ -192,6 +199,34 @@ impl App {
         let deltas = self.replica.deltas_since(since).await?;
         let delta = deltas.into_iter().find(|d| d.revision == revision)?;
         serde_json::from_str::<Value>(&delta.text).ok()?["atIndex"].as_u64()
+    }
+
+    /// The `counters` message of the engine's counters last read; none
+    /// before the first read or without an engine.
+    pub fn counters_message(&self) -> Option<String> {
+        let values = self
+            .counters
+            .lock()
+            .expect("counters lock poisoned")
+            .clone()?;
+        let m = json!({ "type": "counters", "replica": self.replica_ref(), "values": values });
+        Some(m.to_string())
+    }
+
+    /// Reads the engine's counters every [`COUNTERS_PERIOD`] and sends
+    /// them to every connection, standby ones included, so a promoted
+    /// standby has them at once; a connection not sent the last yet gets
+    /// only the newest. Never returns.
+    pub async fn count(&self, audio: &Audio) {
+        let mut ticks = tokio::time::interval(COUNTERS_PERIOD);
+        ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            *self.counters.lock().expect("counters lock poisoned") = Some(audio.counters());
+            if let Some(m) = self.counters_message() {
+                self.hub.publish(Frame::Counters(m.into()));
+            }
+        }
     }
 
     /// Publishes every delta to the clients once this replica applied

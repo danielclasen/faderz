@@ -305,7 +305,7 @@ describe('hello', () => {
     expect(snap.state.consoles.map((k) => k.handle)).toEqual(Object.values(CONSOLE_SESSIONS).map(ownerHandle));
   });
 
-  it('serves a standby deltas, replicas and pings, but no meter frames or counters', async () => {
+  it('serves a standby deltas, replicas, counters and pings, but no meter frames', async () => {
     const standby = await new Client().open(onReplica('r2'));
     await standby.hello('standby');
     standby.credit(METER_CREDIT_CAP);
@@ -316,7 +316,7 @@ describe('hello', () => {
     await sleep(1100);
     expect(standby.count('ping')).toBeGreaterThanOrEqual(3);
     expect(standby.count('replicas')).toBeGreaterThanOrEqual(1);
-    expect(standby.count('counters')).toBe(0);
+    expect(standby.count('counters')).toBeGreaterThanOrEqual(1);
     expect(standby.frames).toHaveLength(0);
     expect(primary.count('counters')).toBeGreaterThanOrEqual(1);
     expect((await statsOf(standby)).metersSkippedNoCredit).toBe(0);

@@ -9,6 +9,7 @@
 //! every change reaches the engine.
 
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use samplez_dsp::StripParam;
 use samplez_replica::Replica;
 use samplez_service::ws::{Frame, Hub};
 use samplez_service::{Counter, Gauge, Metrics, Ops, Position, ReplicatedState};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -55,6 +56,8 @@ pub struct Audio {
     /// ([`mix::meter_taps`]).
     taps: Mutex<Vec<mix::MeterTap>>,
     resends: Counter,
+    /// [`Audio::resends`] as a count the `counters` message reads.
+    resent: AtomicU64,
     resend_pending: Gauge,
     inputs: Mutex<InputHealth>,
 }
@@ -123,6 +126,7 @@ impl Audio {
             resends_asked: Mutex::new(0),
             resend: Notify::new(),
             taps: Mutex::new(mix::meter_taps(shape, state)),
+            resent: AtomicU64::new(0),
             resends: metrics.counter(
                 "faderz_engine_resends_total",
                 "Times every gain and input route was sent to the engine again \
@@ -154,6 +158,7 @@ impl Audio {
     /// `/readyz` fails: the output may not follow the state.
     pub fn resend(&self) {
         self.resends.add(1);
+        self.resent.fetch_add(1, Relaxed);
         self.hold();
         self.resend.notify_one();
     }
@@ -360,6 +365,49 @@ impl Audio {
             hub.publish(Frame::Meters(frame.into()));
         }
     }
+
+    /// The model `Counters` of the `counters` message: the engine's counts
+    /// of faults an operator acts on, the inputs' too-late blocks and the
+    /// resends, totals since the engine started. None grows while the
+    /// engine keeps up, so the UI's lamp lights on any growth; counts that
+    /// grow every block, such as the blocks processed, are left out.
+    pub fn counters(&self) -> Value {
+        let mut values: Map<String, Value> = engine_counters(self.engine.counters())
+            .into_iter()
+            .map(|(name, c)| (format!("{name}_total"), json!(c.load(Relaxed))))
+            .collect();
+        let too_late: u64 = (self.engine.status().inputs.iter())
+            .map(|i| i.counters.too_late)
+            .sum();
+        values.insert("input_too_late_blocks_total".into(), json!(too_late));
+        values.insert("resends_total".into(), json!(self.resent.load(Relaxed)));
+        Value::Object(values)
+    }
+}
+
+/// The engine counters [`Audio::counters`] carries, by field name.
+fn engine_counters(c: &Counters) -> [(&'static str, &AtomicU64); 19] {
+    [
+        ("deadline_miss", &c.deadline_miss),
+        ("overrun_skipped_samples", &c.overrun_skipped_samples),
+        ("clock_steps", &c.clock_steps),
+        ("clock_behind_wakes", &c.clock_behind_wakes),
+        ("input_wait_timeout", &c.input_wait_timeout),
+        ("input_late_blocks", &c.input_late_blocks),
+        ("input_silenced_blocks", &c.input_silenced_blocks),
+        ("output_held_blocks", &c.output_held_blocks),
+        ("output_failed_writes", &c.output_failed_writes),
+        ("command_late", &c.command_late),
+        ("generation_late", &c.generation_late),
+        ("strip_refused", &c.strip_refused),
+        ("late_routes_lost", &c.late_routes_lost),
+        ("blocks_withheld", &c.blocks_withheld),
+        ("hold_overflows", &c.hold_overflows),
+        ("blocks_without_core", &c.blocks_without_core),
+        ("meter_dropped", &c.meter_dropped),
+        ("telemetry_dropped", &c.telemetry_dropped),
+        ("status_changes_dropped", &c.status_changes_dropped),
+    ]
 }
 
 /// Each channel's input as the engine reads it, on `/metrics`.

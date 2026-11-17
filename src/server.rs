@@ -121,7 +121,8 @@ impl Server {
                 match audio {
                     Some((audio, live, revision)) => {
                         let meter = audio.meter(&tasks_app.hub, &name);
-                        tokio::join!(audio.follow(&tasks_state, live, revision), meter);
+                        let count = tasks_app.count(&audio);
+                        tokio::join!(audio.follow(&tasks_state, live, revision), meter, count);
                     }
                     None => std::future::pending::<()>().await,
                 }

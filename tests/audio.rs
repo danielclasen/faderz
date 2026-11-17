@@ -886,3 +886,93 @@ async fn the_strip_processes_each_channel() {
 
     server.stop().await;
 }
+
+type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+
+/// The next text message of `ws` of type `kind`, checked against the
+/// contract, and the types of the text messages before it; pings are
+/// answered meanwhile, as the server closes a connection that does not.
+async fn next_of(ws: &mut Ws, kind: &str) -> (Value, Vec<String>) {
+    let mut before = Vec::new();
+    loop {
+        let m = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap_or_else(|_| panic!("a {kind} message within 5 s, after {before:?}"))
+            .unwrap_or_else(|| panic!("open until a {kind} message, after {before:?}"))
+            .unwrap();
+        let t = match m {
+            Message::Text(t) => t,
+            Message::Close(c) => panic!("closed before a {kind} message, after {before:?}: {c:?}"),
+            _ => continue,
+        };
+        let v: Value = serde_json::from_str(&t).unwrap();
+        faderz::contract::check(&faderz::contract::contract().server_message, &v)
+            .unwrap_or_else(|e| panic!("{e}: {v}"));
+        if v["type"] == kind {
+            return (v, before);
+        }
+        if v["type"] == "ping" {
+            let pong = json!({ "type": "pong", "t": v["t"] });
+            ws.send(Message::text(pong.to_string())).await.unwrap();
+            continue;
+        }
+        before.push(v["type"].as_str().unwrap().to_owned());
+    }
+}
+
+/// The engine's counters reach a primary and a standby connection once
+/// the hello is answered, then once a second, under this replica's id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_engine_counters_reach_every_connection() {
+    let domain = domain("counters");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-counters");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    for (mode, session) in [
+        ("primary", "session-p-0123456789abcdef"),
+        ("standby", "session-s-0123456789abcdef"),
+    ] {
+        let url = format!("ws://{}/api/v1/ws?session={session}", server.api);
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        let hello = json!({ "type": "hello", "session": session, "kind": "ui", "mode": mode });
+        ws.send(Message::text(hello.to_string())).await.unwrap();
+        let (first, before) = next_of(&mut ws, "counters").await;
+        assert!(
+            before.iter().any(|t| t == "snapshot"),
+            "{mode}: after the hello's answer: {before:?}"
+        );
+        assert_eq!(first["replica"]["id"], "r1", "{mode}");
+        let values = first["values"].as_object().unwrap();
+        for name in [
+            "deadline_miss_total",
+            "overrun_skipped_samples_total",
+            "clock_steps_total",
+            "input_late_blocks_total",
+            "input_too_late_blocks_total",
+            "command_late_total",
+            "strip_refused_total",
+            "resends_total",
+        ] {
+            assert!(values[name].is_u64(), "{mode}: {name} in {values:?}");
+        }
+        // Then once a second: two more within 3 s, not in one burst.
+        let (_, _) = next_of(&mut ws, "counters").await;
+        let at = Instant::now();
+        let (_, _) = next_of(&mut ws, "counters").await;
+        let gap = at.elapsed();
+        assert!(
+            gap >= Duration::from_millis(500) && gap <= Duration::from_secs(3),
+            "{mode}: {gap:?} between two counters messages"
+        );
+    }
+    server.stop().await;
+}

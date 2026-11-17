@@ -660,7 +660,8 @@ export class Cluster {
         .map((e): DeltaMessage => ({ type: 'delta', replica, ...e }));
       this.emit(conn, { type: 'resume', you, replica, epoch: this.epoch, revision, deltas, ...stale });
       this.emitSelections(conn);
-      return this.emitPresence(conn);
+      this.emitPresence(conn);
+      return this.emitCounters(conn);
     }
     this.emit(conn, {
       type: 'snapshot',
@@ -675,6 +676,11 @@ export class Cluster {
     });
     this.emitSelections(conn);
     this.emitPresence(conn);
+    this.emitCounters(conn);
+  }
+
+  private emitCounters(conn: Conn): void {
+    this.emit(conn, { type: 'counters', replica: this.ref(conn.replica), values: { ...conn.replica.counters } });
   }
 
   /**
@@ -1266,7 +1272,8 @@ export class Cluster {
       if (Math.random() < 0.05) r.counters['input_late_blocks_total']! += 1;
       if (Math.random() < 0.02) r.counters['deadline_miss_total']! += 1;
       if (Math.random() < 0.03) r.counters['command_late_total']! += 1;
-      for (const c of this.primaries(r)) this.emit(c, { type: 'counters', replica: this.ref(r), values: { ...r.counters } });
+      // Standby connections too, so a promoted standby has them at once.
+      for (const c of r.conns) if (c.synced) this.emitCounters(c);
     }
   }
 

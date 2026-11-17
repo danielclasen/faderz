@@ -245,6 +245,9 @@ fn on_message<'a>(
         );
         app.hub
             .send(to, Frame::Status(PRESENCE, app.presence_message().into()));
+        if let Some(counters) = app.counters_message() {
+            app.hub.send(to, Frame::Counters(counters.into()));
+        }
         return Reply::CatchUp(CatchUp {
             since: position(&msg),
             full: false,
