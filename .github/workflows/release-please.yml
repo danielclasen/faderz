@@ -19,6 +19,11 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
+      # The bridge package's outputs carry its path as a prefix; the root
+      # package's above carry none.
+      bridge_release_created: ${{ steps.release.outputs['bridge--release_created'] }}
+      bridge_tag_name: ${{ steps.release.outputs['bridge--tag_name'] }}
+      bridge_version: ${{ steps.release.outputs['bridge--version'] }}
     steps:
       - name: Report a missing release token
         if: env.HAS_RELEASE_TOKEN != 'true'
@@ -147,3 +152,94 @@ jobs:
           sha256sum -c "faderz-$VERSION-SHA256SUMS"
           chmod +x "faderz-$VERSION-x86_64-linux"
           test "$("./faderz-$VERSION-x86_64-linux" --version)" = "faderz $VERSION"
+
+  bridge-image:
+    needs: release-please
+    if: needs.release-please.outputs.bridge_release_created == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.release-please.outputs.bridge_version }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/faderz-bridge
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.bridge_tag_name }}
+          persist-credentials: false
+      # The image is tagged with the version the binary reports.
+      - name: Check the package carries the release version
+        run: grep -qx "version = \"$VERSION\"" bridge/Cargo.toml
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: bridge/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=Apache-2.0
+          cache-from: type=gha,scope=bridge-image
+      # Workflow logs are no evidence the published artefact is right.
+      - name: Pull the published image and start it
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker pull "$IMAGE@$DIGEST"
+          docker pull "$IMAGE:$VERSION"
+          test "$(docker inspect -f '{{index .RepoDigests 0}}' "$IMAGE:$VERSION")" = "$IMAGE@$DIGEST"
+          docker run --rm "$IMAGE@$DIGEST" --version | grep -qx "faderz-bridge $VERSION"
+
+  # The binary for standalone use, taken from the published image, so the
+  # asset and the image carry one build.
+  bridge-binary:
+    needs: [release-please, bridge-image]
+    if: needs.release-please.outputs.bridge_release_created == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: read
+    env:
+      VERSION: ${{ needs.release-please.outputs.bridge_version }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/faderz-bridge
+      TAG: ${{ needs.release-please.outputs.bridge_tag_name }}
+    steps:
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Attach the binary, its licences and their SHA-256 sums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          cd dist
+          id=$(docker create "$IMAGE:$VERSION")
+          docker cp "$id:/usr/local/bin/faderz-bridge" "faderz-bridge-$VERSION-x86_64-linux"
+          docker cp "$id:/usr/share/licenses/faderz-bridge/LICENSE" "faderz-bridge-$VERSION-LICENSE"
+          docker cp "$id:/usr/share/licenses/faderz-bridge/THIRD-PARTY.txt" "faderz-bridge-$VERSION-THIRD-PARTY.txt"
+          docker rm "$id"
+          sha256sum "faderz-bridge-$VERSION-"* > "faderz-bridge-$VERSION-SHA256SUMS"
+          gh release upload --clobber "$TAG" "faderz-bridge-$VERSION-"* --repo "$GITHUB_REPOSITORY"
+      # Workflow logs are no evidence the published artefact is right.
+      - name: Download the attached files and check their sums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir published
+          cd published
+          gh release download "$TAG" --pattern "faderz-bridge-$VERSION-*" --repo "$GITHUB_REPOSITORY"
+          sha256sum -c "faderz-bridge-$VERSION-SHA256SUMS"
+          chmod +x "faderz-bridge-$VERSION-x86_64-linux"
+          test "$("./faderz-bridge-$VERSION-x86_64-linux" --version)" = "faderz-bridge $VERSION"
