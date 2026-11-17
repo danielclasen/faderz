@@ -101,7 +101,7 @@ fn start(path: &std::path::Path) -> Result<(), String> {
                 scopes,
             } => {
                 let http = auth::client()?;
-                let provider = auth::discover(&http, issuer).await?;
+                let provider = auth::discover_retrying(&http, issuer).await;
                 let scope = std::iter::once("openid")
                     .chain(scopes.iter().map(String::as_str))
                     .collect::<Vec<_>>()
@@ -112,6 +112,7 @@ fn start(path: &std::path::Path) -> Result<(), String> {
                     client_id: client_id.clone(),
                     scope,
                     file: config.tokens_file(),
+                    retry: auth::START_RETRY,
                 };
                 let lcd = ports
                     .first()

@@ -23,6 +23,7 @@ async fn session(idp: &Idp) -> (Session, std::path::PathBuf) {
         client_id: CLIENT.into(),
         scope: "openid offline_access".into(),
         file: dir.join("tokens.json"),
+        retry: Duration::from_millis(50),
     };
     (session, dir)
 }
@@ -96,5 +97,32 @@ async fn the_access_token_is_refreshed_before_it_expires_and_the_bridge_told() {
     );
     assert_ne!(signed.bearer(), Some(first.access_token));
     assert_eq!(auth::load(&s.file).unwrap(), signed.tokens());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_provider_failing_at_start_is_waited_for_not_signed_in_again() {
+    let idp = Idp::start(300).await;
+    idp.book().pending = Some(0);
+    let (s, dir) = session(&idp).await;
+    s.sign_in(&|_| {}).await.unwrap();
+    // The token endpoint answers 503 three times, then works.
+    idp.book().failing = 3;
+    let shown = Mutex::new(0);
+    let tokens = s.sign_in(&|_| *shown.lock().unwrap() += 1).await.unwrap();
+    assert_eq!(*shown.lock().unwrap(), 0, "no new sign-in");
+    assert_eq!(idp.book().failing, 0);
+    assert_eq!(idp.book().refreshes, 1);
+    assert_eq!(auth::load(&s.file).unwrap(), tokens);
+    // A 401 without an OAuth error body is a refusal, not an outage.
+    idp.book().unauthorized = true;
+    let r = auth::refresh(
+        &s.http,
+        &s.provider,
+        CLIENT,
+        tokens.refresh_token.as_deref().unwrap(),
+    )
+    .await;
+    assert_eq!(r.unwrap_err(), Failure::Refused("unauthorized".into()));
     std::fs::remove_dir_all(dir).unwrap();
 }

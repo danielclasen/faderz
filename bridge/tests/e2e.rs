@@ -507,6 +507,7 @@ async fn a_device_sign_in_holds_a_fader_across_token_expiries() {
         client_id: idp::CLIENT.into(),
         scope: "openid".into(),
         file: dir.join("tokens.json"),
+        retry: Duration::from_millis(50),
     };
     let signed = Signed::new(sign_in.sign_in(&|_| {}).await.unwrap());
     let recording = Arc::new(Recording {

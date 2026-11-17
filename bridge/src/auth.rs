@@ -24,6 +24,10 @@ pub const DEFAULT_INTERVAL: u64 = 5;
 pub const SLOW_DOWN: u64 = 5;
 /// A failed refresh is tried again after this long while the token lasts.
 pub const RETRY: Duration = Duration::from_secs(5);
+/// A provider that cannot be reached at start is tried again after this,
+/// doubled per failure up to [`START_RETRY_CAP`].
+pub const START_RETRY: Duration = Duration::from_secs(1);
+pub const START_RETRY_CAP: Duration = Duration::from_secs(30);
 
 pub fn unix_now() -> u64 {
     SystemTime::now()
@@ -99,6 +103,28 @@ pub fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// `delay` doubled `failures` times, at most `cap`.
+pub fn backoff(delay: Duration, failures: u32, cap: Duration) -> Duration {
+    delay.saturating_mul(1u32 << failures.min(16)).min(cap)
+}
+
+/// Reads the discovery document until the provider answers it, waiting
+/// [`START_RETRY`], doubled per failure, between tries.
+pub async fn discover_retrying(http: &reqwest::Client, issuer: &str) -> Provider {
+    let mut failures = 0;
+    loop {
+        match discover(http, issuer).await {
+            Ok(p) => return p,
+            Err(e) => {
+                let wait = backoff(START_RETRY, failures, START_RETRY_CAP);
+                tracing::warn!("reading the provider's configuration: {e}; again in {wait:?}");
+                tokio::time::sleep(wait).await;
+                failures += 1;
+            }
+        }
+    }
+}
+
 /// Reads the provider's discovery document.
 pub async fn discover(http: &reqwest::Client, issuer: &str) -> Result<Provider, String> {
     let url = format!(
@@ -156,6 +182,11 @@ async fn post_form(
     }
     match body["error"].as_str() {
         Some(code) if status.is_client_error() => Err(Failure::Refused(code.to_owned())),
+        // A client the provider does not authenticate, without an OAuth
+        // error body.
+        None if status == reqwest::StatusCode::UNAUTHORIZED => {
+            Err(Failure::Refused("unauthorized".into()))
+        }
         _ => Err(Failure::Transient(format!("{url}: {status}"))),
     }
 }
@@ -295,24 +326,39 @@ pub struct Session {
     pub client_id: String,
     pub scope: String,
     pub file: PathBuf,
+    /// The first wait before a start-up request the provider failed is
+    /// tried again; [`START_RETRY`] outside tests.
+    pub retry: Duration,
 }
 
 impl Session {
     /// Tokens to start with: the stored refresh token's, else a new
     /// sign-in, shown through `show`.
     pub async fn sign_in(&self, show: &(dyn Fn(&DeviceCode) + Sync)) -> Result<Tokens, String> {
-        if let Some(refresh_token) = load(&self.file).and_then(|t| t.refresh_token) {
+        let Some(refresh_token) = load(&self.file).and_then(|t| t.refresh_token) else {
+            return self.device(show).await;
+        };
+        // Only the provider refusing the stored token takes a new sign-in;
+        // a provider that is down or slow is waited for.
+        let mut failures = 0;
+        loop {
             match refresh(&self.http, &self.provider, &self.client_id, &refresh_token).await {
                 Ok(tokens) => {
                     self.keep(&tokens);
                     return Ok(tokens);
                 }
-                Err(e) => {
-                    tracing::info!("the stored sign-in is no longer valid ({e}); signing in again")
+                Err(Failure::Refused(e)) => {
+                    tracing::info!("the stored sign-in is no longer valid ({e}); signing in again");
+                    return self.device(show).await;
+                }
+                Err(Failure::Transient(e)) => {
+                    let wait = backoff(self.retry, failures, START_RETRY_CAP);
+                    tracing::warn!("refreshing the stored sign-in: {e}; again in {wait:?}");
+                    tokio::time::sleep(wait).await;
+                    failures += 1;
                 }
             }
         }
-        self.device(show).await
     }
 
     async fn device(&self, show: &(dyn Fn(&DeviceCode) + Sync)) -> Result<Tokens, String> {

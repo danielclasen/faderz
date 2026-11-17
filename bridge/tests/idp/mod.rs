@@ -42,6 +42,10 @@ pub struct Book {
     refresh: HashMap<String, ()>,
     issued: u64,
     pub refreshes: u32,
+    /// Token requests answered 503 before the next is served.
+    pub failing: u32,
+    /// Token requests answered 401 without a body.
+    pub unauthorized: bool,
     pub device_requests: Vec<Value>,
 }
 
@@ -151,6 +155,13 @@ async fn token(
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
     let mut book = book.lock().unwrap();
+    if book.unauthorized {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if book.failing > 0 {
+        book.failing -= 1;
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     if form.get("client_id").map(String::as_str) != Some(CLIENT) {
         return error("invalid_client");
     }
@@ -195,6 +206,8 @@ impl Idp {
             refresh: HashMap::new(),
             issued: 0,
             refreshes: 0,
+            failing: 0,
+            unauthorized: false,
             device_requests: Vec::new(),
         }));
         let router = Router::new()
