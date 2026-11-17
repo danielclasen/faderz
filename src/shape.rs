@@ -299,7 +299,11 @@ impl Shape {
                         "fader": -90,
                         "mute": false,
                         "solo": "off",
-                        "meterTap": "preFader",
+                        // The meter shows what the fader lets through,
+                        // as operators read a channel meter; the direct
+                        // out stays pre-fader, so a closed fader does not
+                        // silence an ISO record or IFB feed.
+                        "meterTap": "postFader",
                         "directOut": { "tap": "preFader" },
                         "sends": sends,
                         "routes": routes,
@@ -398,6 +402,13 @@ pub(crate) mod tests {
             json!(false)
         );
         assert_eq!(state["monitor"]["source"], json!("pgm"));
+        // A closed fader closes the channel meter; the direct out does not.
+        assert_eq!(state["channels"]["ch1"]["meterTap"], json!("postFader"));
+        assert_eq!(state["channels"]["st1"]["meterTap"], json!("postFader"));
+        assert_eq!(
+            state["channels"]["ch1"]["directOut"]["tap"],
+            json!("preFader")
+        );
         let measured: Vec<&String> = state["loudness"].as_object().unwrap().keys().collect();
         assert_eq!(
             measured,

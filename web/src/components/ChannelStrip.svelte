@@ -1,7 +1,7 @@
 <script lang="ts">
   import { pendingWrite } from '../lib/pending';
   import { centre, fit } from '../lib/format';
-  import type { ChannelShape, ChannelState, Solo } from '../lib/contract/types';
+  import type { ChannelShape, ChannelState, Solo, Tap } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { channelPath } from '../lib/state/paths';
   import { effectiveGainDb, formatDb } from '../lib/audio/db';
@@ -34,6 +34,9 @@
   const mute = $derived(mixer.value<boolean>(channelPath(channel.id, 'mute')));
   const solo = $derived(mixer.value<Solo>(channelPath(channel.id, 'solo')));
   const fader = $derived(mixer.value<number>(channelPath(channel.id, 'fader')));
+  const tapPath = $derived(channelPath(channel.id, 'meterTap'));
+  const meterTap = $derived(mixer.value<Tap>(tapPath));
+  const nextTap = $derived<Tap>(meterTap === 'postFader' ? 'preFader' : 'postFader');
   const level = $derived(mixer.value<number>(levelPath));
   const holder = $derived(mixer.ownerOf(levelPath));
   const holderMine = $derived(mixer.isMine(holder));
@@ -184,9 +187,20 @@
   <div class="fm">
     <Fader path={levelPath} label={sendsTo ? `${channel.name} send to ${sendsTo.name}` : `${channel.name} fader`} />
     <div class="meter">
-      <Meter group="channels" id={channel.id} legs={channel.width} scale="right" label={`${channel.name} meter, ${TAP_LABEL[st.meterTap]}`} />
-      <!-- The meter tap, in the meter's bottom padding. -->
-      <span class="tap fixed" aria-hidden="true" data-testid={`tap-${channel.id}`}>{fit(TAP_KEY[st.meterTap], 4)}</span>
+      <Meter group="channels" id={channel.id} legs={channel.width} scale="right" label={`${channel.name} meter, ${TAP_LABEL[meterTap]}`} />
+      <!-- The meter tap, in the meter's bottom padding: a key that flips
+           the meter between pre- and post-fader. Input is set in the
+           processing panel; from there a press goes to post-fader. -->
+      <button {@attach pendingWrite(mixer, tapPath)}
+        class="tap fixed"
+        tabindex="-1"
+        aria-disabled={mixer.locked}
+        aria-label={`${channel.name} meter tap, ${TAP_LABEL[meterTap]}: switch to ${TAP_LABEL[nextTap]}`}
+        title={`Meter ${TAP_LABEL[meterTap]}: switch to ${TAP_LABEL[nextTap]}`}
+        onclick={() => mixer.set(tapPath, nextTap)}
+        data-path={tapPath}
+        data-testid={`tap-${channel.id}`}>{fit(TAP_KEY[meterTap], 4)}</button
+      >
     </div>
   </div>
 
@@ -485,6 +499,7 @@
     padding: 17px 0;
   }
   .tap {
+    all: unset;
     position: absolute;
     left: 0;
     right: 0;
@@ -494,7 +509,18 @@
     font-size: 10px;
     text-align: center;
     color: var(--text-faint);
+    cursor: pointer;
     contain: strict;
+    touch-action: manipulation;
+  }
+  .tap:hover {
+    color: var(--text);
+  }
+  .tap:focus-visible {
+    outline: 2px solid var(--focus);
+  }
+  .tap[aria-disabled='true'] {
+    cursor: default;
   }
   .foot {
     display: flex;

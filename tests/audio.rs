@@ -513,6 +513,7 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
 
     patch(&server, &[("/channels/ch1/mute", json!(true))]).await;
     pgm.expect(-ST1[0], ST1[1], "ch1 muted").await;
+    patch(&server, &[("/channels/ch1/meterTap", json!("preFader"))]).await;
     // The meters cover a 100 ms window: the first frames are skipped.
     let v = meter_values(&server, 5).await;
     // -0.25: -12.04 dB FS.

@@ -150,7 +150,7 @@ export function initialState(shape: Shape): State {
       fader: FADERS[c.id] ?? -90,
       mute: c.id === 'ch23' || c.id === 'ch24',
       solo: 'off',
-      meterTap: 'preFader',
+      meterTap: 'postFader',
       // Pre-fader: a closed fader does not silence an ISO record or IFB feed.
       directOut: { tap: 'preFader' },
       sends: Object.fromEntries(

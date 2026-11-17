@@ -61,12 +61,28 @@ test('moves a fader and shows the value the server echoed', async ({ page, reque
 
 test('gives each meter a level for assistive technology and shows the channel meter tap', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
-  const meter = page.getByRole('meter', { name: /^Pres 1 meter, pre-fader/ });
+  // Post-fader by default: the meter moves with the fader.
+  const meter = page.getByRole('meter', { name: /^Pres 1 meter, post-fader/ });
   await expect(meter).toHaveAttribute('aria-valuetext', /^peak -?\d+ dBFS/, { timeout: 5000 });
-  await expect(page.getByTestId('tap-ch1')).toHaveText(' PRE');
-  await patch(request, '/channels/ch1/meterTap', 'postFader');
   await expect(page.getByTestId('tap-ch1')).toHaveText('POST');
   await patch(request, '/channels/ch1/meterTap', 'preFader');
+  await expect(page.getByTestId('tap-ch1')).toHaveText(' PRE');
+  await patch(request, '/channels/ch1/meterTap', 'postFader');
+});
+
+test('switches the channel meter between post- and pre-fader on the strip, without the processing panel', async ({ page, request }) => {
+  await live(page);
+  const key = page.getByRole('button', { name: /^Pres 1 meter tap, post-fader/ });
+  await expect(key).toBeVisible();
+  await key.click();
+  await settled(page);
+  expect((await serverState(request)).state.channels['ch1']!.meterTap).toBe('preFader');
+  await expect(page.getByTestId('tap-ch1')).toHaveText(' PRE');
+  await expect(page.getByRole('meter', { name: /^Pres 1 meter, pre-fader/ })).toBeAttached();
+  await expect(page.getByRole('region', { name: 'Pres 1 processing' })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Pres 1 meter tap, pre-fader/ }).click();
+  await settled(page);
+  expect((await serverState(request)).state.channels['ch1']!.meterTap).toBe('postFader');
 });
 
 test("a meter's level for assistive technology ends where its bars do when the meters stop", { tag: '@mock' }, async ({ page, request }) => {

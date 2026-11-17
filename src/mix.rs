@@ -401,6 +401,7 @@ mod tests {
         let shape = shape();
         let mut s = shape.initial_state();
         s["channels"]["ch1"]["fader"] = json!(-6);
+        s["channels"]["ch1"]["meterTap"] = json!("preFader");
         s["channels"]["ch2"]["fader"] = json!(-6);
         s["channels"]["ch2"]["meterTap"] = json!("postFader");
         s["channels"]["st1"]["meterTap"] = json!("postFader");

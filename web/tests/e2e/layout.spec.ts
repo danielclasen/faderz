@@ -119,7 +119,7 @@ test('nothing moves on load, live updates, failover and interaction', { tag: '@m
     ['/metering/scale', 'ebu9'],
     ['/metering/loudness/tolerance', 1],
     ['/channels/ch2/meterTap', 'input'],
-    ['/channels/ch2/meterTap', 'preFader'],
+    ['/channels/ch2/meterTap', 'postFader'],
   ] as const) await patch(request, path, value);
   await request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources: { CAM1: 'off', CAM2: 'program' } } });
   await page.waitForTimeout(1500);
