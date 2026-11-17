@@ -41,6 +41,9 @@ pub struct Options {
     pub credentials: Arc<dyn Credentials>,
     pub units: Vec<UnitSpec>,
     pub master: Option<String>,
+    /// A message here says the credentials changed: the session moves to
+    /// a connection opened with the new ones.
+    pub renewed: Option<UnboundedReceiver<()>>,
 }
 
 enum Net {
@@ -195,6 +198,7 @@ pub async fn run(options: Options, ports: Vec<Port>, shutdown: impl Future<Outpu
     engine.start(now());
     surface.register(&mut engine, now());
     tokio::pin!(shutdown);
+    let mut renewed = options.renewed;
     loop {
         // Events can issue commands, and commands are actions.
         loop {
@@ -239,6 +243,12 @@ pub async fn run(options: Options, ports: Vec<Port>, shutdown: impl Future<Outpu
                     engine.closed(id, now());
                 }
             },
+            Some(()) = async {
+                match renewed.as_mut() {
+                    Some(r) => r.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => engine.handover(now()),
             () = sleep => {}
             () = &mut shutdown => break,
         }

@@ -48,12 +48,65 @@ info by default).
 |---|---|
 | `endpoints` | One WebSocket endpoint per faderz replica. With more than one, the bridge keeps a standby connection on another replica and fails over to it. |
 | `stateDir` | Holds the session id (`session`, mode 0600), kept across restarts so a restarted bridge is the same session. Default `/var/lib/faderz-bridge`. |
-| `auth` | `{"mode": "none"}` (default) for a faderz without authentication; `{"mode": "token", "token": ...}` or `{"mode": "token", "tokenFile": ...}` for a bearer token: faderz's static `auth.token`, or an access token of the OIDC provider. |
+| `auth` | `{"mode": "none"}` (default) for a faderz without authentication; `{"mode": "token", "token": ...}` or `{"mode": "token", "tokenFile": ...}` for a bearer token: faderz's static `auth.token`, or an access token of the OIDC provider; `{"mode": "device", ...}` to sign in at the OIDC provider (below). |
 | `units` | Left to right. `id` is the console id on the server (`^[a-z][a-z0-9-]{0,31}$`), `name` its display name, `model` `x-touch` (default) or `x-touch-extender`, `midiIn` and `midiOut` parts of the port names (`midiOut` defaults to `midiIn`). |
 | `master` | The control the X-Touch master fader drives. Default: the fader of the shape's program bus. |
 
 The surfaces run in MC mode over USB (hold CH1 SELECT at power-on to
 choose it).
+
+## Signing in
+
+In `oidc` mode faderz takes an access token of its OIDC provider as a
+bearer, and the bridge gets one by the OAuth 2.0 device authorization
+grant (RFC 8628):
+
+```json
+"auth": {
+  "mode": "device",
+  "issuer": "https://idp.example/realms/media",
+  "clientId": "faderz-bridge",
+  "scopes": ["offline_access"]
+}
+```
+
+On start the bridge prints a verification URL and a user code, and shows
+them on the first unit's scribble strip; the user opens the URL in any
+browser, enters the code and signs in. The bridge polls the token
+endpoint until then, and keeps the access and refresh tokens in
+`<stateDir>/tokens.json`, mode 0600. A restart signs in with the stored
+refresh token, without a code, while the provider still accepts it.
+
+faderz closes a connection when its access token expires. The bridge
+refreshes the token a quarter of its lifetime before that, opens a new
+connection with it on the same session, makes it the primary and closes
+the old one, so the session's controls and lease are kept. A refresh the
+provider refuses starts a new sign-in, shown on stderr.
+
+`issuer` is `https`, or `http` on a loopback address. `scopes` are
+requested in addition to `openid`.
+
+### What the OIDC provider needs
+
+- A public client (no client secret) for the bridge, `faderz-bridge`
+  above, with the OAuth 2.0 device authorization grant enabled. It needs
+  no redirect URI and no other flow. The provider's discovery document
+  has to list `device_authorization_endpoint`.
+- Refresh tokens for that client. With `offline_access` among the scopes
+  a provider that offers offline tokens issues one that outlives the
+  user's browser session; without it the refresh token ends with that
+  session, and the bridge asks for a new sign-in then.
+- The access token carries what faderz checks on a bearer: `azp` naming
+  the client, the claim `auth.oidc.roleClaim` with the operator role
+  (`auth.oidc.operatorRole`; a viewer can watch but not write), the
+  user in `preferred_username`, `email` or `sub` (the first one set),
+  and, when faderz sets `auth.oidc.audience`, that audience in `aud`. The role and audience usually need mappers on the client so
+  they appear in the access token and not only in the ID token.
+- faderz lists the client in `auth.oidc.allowedClients`, next to its own
+  client id: `"allowedClients": ["faderz", "faderz-bridge"]`.
+
+The surface's holder then shows as the user who signed in, and the web
+UI shows the bridge's controls as `<console> (<user>)`.
 
 ## Mapping
 
@@ -90,7 +143,7 @@ consoles again.
 ## Tests
 
 ```sh
-cargo test                                            # unit tests and the MIDI fixtures
+cargo test                                            # unit tests, MIDI fixtures, sign-in
 FADERZ_BIN=../target/debug/faderz cargo test --features e2e --test e2e
 ```
 
@@ -99,7 +152,10 @@ I/O. `tests/fixtures/*.mcu` replay MIDI sequences in the published MCU
 message formats through the mapping and check what goes to faderz and
 back to the surface. The end-to-end tests drive a faderz process with
 two emulated units (`src/emulator.rs`), a software surface on an
-in-process MIDI transport, and watch the state as a second client.
+in-process MIDI transport, and watch the state as a second client. A
+stand-in OIDC provider (`tests/idp`) serves the device grant and short
+access tokens, against which one of them holds a fader on an `oidc`
+faderz across several token expiries.
 
 ## Not verified on hardware
 

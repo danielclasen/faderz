@@ -45,6 +45,16 @@ pub enum Auth {
         #[serde(default)]
         token_file: Option<PathBuf>,
     },
+    /// Sign-in at the OIDC provider by the device authorization grant
+    /// (RFC 8628), as a public client.
+    Device {
+        /// The provider's issuer, e.g. `https://idp.example/realms/media`.
+        issuer: String,
+        client_id: String,
+        /// Requested in addition to `openid`.
+        #[serde(default)]
+        scopes: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -121,6 +131,22 @@ impl Config {
         {
             return Err("auth mode token needs token or tokenFile".into());
         }
+        if let Auth::Device {
+            issuer, client_id, ..
+        } = &config.auth
+        {
+            let local = ["http://127.0.0.1", "http://[::1]", "http://localhost"]
+                .iter()
+                .any(|p| issuer.starts_with(p));
+            if !(issuer.starts_with("https://") || local) {
+                return Err(format!(
+                    "auth.issuer {issuer:?}: https, or http on loopback"
+                ));
+            }
+            if client_id.is_empty() {
+                return Err("auth.clientId is empty".into());
+            }
+        }
         Ok(config)
     }
 
@@ -141,6 +167,11 @@ impl Config {
 
     pub fn session_file(&self) -> PathBuf {
         self.state_dir.join("session")
+    }
+
+    /// Where a device sign-in keeps its tokens.
+    pub fn tokens_file(&self) -> PathBuf {
+        self.state_dir.join("tokens.json")
     }
 }
 
@@ -172,6 +203,29 @@ mod tests {
     }
 
     #[test]
+    fn a_device_sign_in_names_the_provider_and_the_client() {
+        let c = Config::parse(
+            r#"{ "endpoints": ["wss://f.example/api/v1/ws"], "stateDir": "/s",
+                 "auth": { "mode": "device", "issuer": "https://idp.example/realms/m",
+                           "clientId": "faderz-bridge", "scopes": ["offline_access"] },
+                 "units": [{ "id": "xt", "name": "X", "midiIn": "X" }] }"#,
+        )
+        .unwrap();
+        let Auth::Device {
+            issuer,
+            client_id,
+            scopes,
+        } = &c.auth
+        else {
+            panic!("{:?}", c.auth);
+        };
+        assert_eq!(issuer, "https://idp.example/realms/m");
+        assert_eq!(client_id, "faderz-bridge");
+        assert_eq!(scopes, &["offline_access"]);
+        assert_eq!(c.tokens_file(), PathBuf::from("/s/tokens.json"));
+    }
+
+    #[test]
     fn mistakes_are_refused() {
         let unit = r#"{ "id": "xt", "name": "X", "midiIn": "X" }"#;
         for (text, why) in [
@@ -182,6 +236,8 @@ mod tests {
             (r#"{ "endpoints": ["ws://x"], "units": [{ "id": "X", "name": "X", "midiIn": "X" }] }"#.into(), "faderz id"),
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "auth": {{ "mode": "token" }} }}"#), "tokenFile"),
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "extra": 1 }}"#), "unknown field"),
+            (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "auth": {{ "mode": "device", "issuer": "http://idp.example", "clientId": "b" }} }}"#), "loopback"),
+            (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "auth": {{ "mode": "device", "issuer": "https://idp.example", "clientId": "" }} }}"#), "clientId"),
         ] {
             let e = Config::parse(&text).unwrap_err();
             assert!(e.contains(why), "{e}");

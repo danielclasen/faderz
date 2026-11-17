@@ -10,7 +10,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use faderz_bridge::bridge::{self, Options, Static};
+use faderz_bridge::auth::{self, Signed};
+use faderz_bridge::bridge::{self, Credentials, Options, Static};
 use faderz_bridge::emulator::Emulator;
 use faderz_bridge::mcu::{Device, Key, Led};
 use faderz_bridge::mirror::Mirror;
@@ -22,6 +23,9 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+mod idp;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -51,6 +55,8 @@ fn shape() -> Value {
 
 struct Faderz {
     child: Option<Child>,
+    /// The `auth` section of its configuration.
+    auth: Value,
     port: u16,
     ops: u16,
     nmos: u16,
@@ -59,12 +65,17 @@ struct Faderz {
 
 impl Faderz {
     async fn start() -> Faderz {
+        Faderz::start_with(json!({ "mode": "none" })).await
+    }
+
+    async fn start_with(auth: Value) -> Faderz {
         let dir =
             std::env::temp_dir().join(format!("bridge-e2e-{}", session::random_id().unwrap()));
         std::fs::create_dir_all(&dir).unwrap();
         let (port, ops, nmos) = (free_port(), free_port(), free_port());
         let mut f = Faderz {
             child: None,
+            auth,
             port,
             ops,
             nmos,
@@ -81,6 +92,7 @@ impl Faderz {
         let config = json!({
             "listeners": { "api": listener(self.port), "ops": listener(self.ops), "nmos": listener(self.nmos) },
             "replica": { "name": "r1", "dataDir": self.dir.join("data") },
+            "auth": self.auth,
             "shape": shape(),
         });
         let path = self.dir.join("config.json");
@@ -96,7 +108,7 @@ impl Faderz {
             if self
                 .get("/api/v1/replicas")
                 .await
-                .is_some_and(|r| r.starts_with("HTTP/1.1 200"))
+                .is_some_and(|r| r.starts_with("HTTP/1.1 "))
             {
                 return;
             }
@@ -146,9 +158,19 @@ struct Screen {
 
 impl Screen {
     async fn connect(f: &Faderz) -> Screen {
+        Screen::connect_with(f, None).await
+    }
+
+    async fn connect_with(f: &Faderz, bearer: Option<&str>) -> Screen {
         let session = session::random_id().unwrap();
         let url = bridge::with_session(&f.endpoint(), &session);
-        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        let mut request = url.into_client_request().unwrap();
+        if let Some(b) = bearer {
+            request
+                .headers_mut()
+                .insert("authorization", format!("Bearer {b}").parse().unwrap());
+        }
+        let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
         let hello = json!({ "type": "hello", "session": session, "kind": "ui", "mode": "primary" });
         ws.send(Message::text(hello.to_string())).await.unwrap();
         let mut s = Screen {
@@ -168,13 +190,32 @@ impl Screen {
                 .await
                 .unwrap_or_else(|_| {
                     panic!(
-                        "timed out; state {}, owners {:?}",
-                        self.mirror.state, self.mirror.owners
+                        "timed out; consoles {}, owners {:?}",
+                        self.mirror.state["consoles"], self.mirror.owners
                     )
                 });
             let Some(Ok(Message::Text(t))) = next else {
                 continue;
             };
+            let m: Value = serde_json::from_str(t.as_str()).unwrap();
+            match m["type"].as_str() {
+                Some("snapshot") => self.mirror.snapshot(&m),
+                Some("delta") => self.mirror.apply(&m),
+                Some("ping") => {
+                    let pong = json!({ "type": "pong", "t": m["t"] });
+                    self.ws.send(Message::text(pong.to_string())).await.unwrap();
+                }
+                _ => {}
+            }
+        }
+        &self.mirror
+    }
+
+    /// Takes in messages for `d`, answering pings.
+    async fn take(&mut self, d: Duration) -> &Mirror {
+        let deadline = tokio::time::Instant::now() + d;
+        while let Ok(Some(Ok(message))) = tokio::time::timeout_at(deadline, self.ws.next()).await {
+            let Message::Text(t) = message else { continue };
             let m: Value = serde_json::from_str(t.as_str()).unwrap();
             match m["type"].as_str() {
                 Some("snapshot") => self.mirror.snapshot(&m),
@@ -208,6 +249,14 @@ struct Bridge {
 
 impl Bridge {
     fn start(f: &Faderz) -> Bridge {
+        Bridge::start_with(f, Arc::new(Static(None)), None)
+    }
+
+    fn start_with(
+        f: &Faderz,
+        credentials: Arc<dyn Credentials>,
+        renewed: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
+    ) -> Bridge {
         let session = session::random_id().unwrap();
         let handle = session::handle(&session);
         let (main, main_port) = Emulator::new(Device::Main);
@@ -227,9 +276,10 @@ impl Bridge {
         let options = Options {
             endpoints: vec![f.endpoint()],
             session,
-            credentials: Arc::new(Static(None)),
+            credentials,
             units,
             master: None,
+            renewed,
         };
         let (stop, stopped) = oneshot::channel::<()>();
         tokio::spawn(bridge::run(
@@ -372,8 +422,7 @@ async fn a_fader_held_on_a_screen_is_refused_and_shown() {
                 && e.led(Key::Select(0)) == Led::Blink)
             .await
     );
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    screen.until(|_| true).await;
+    screen.take(Duration::from_millis(300)).await;
     assert_eq!(screen.mirror.get("/channels/ch1/fader"), Some(&json!(-90)));
     // Let go, the motor goes back to the state.
     b.main.untouch(0);
@@ -411,4 +460,115 @@ async fn the_bridge_reconnects_after_faderz_restarts() {
         .until(|m| m.get("/channels/ch3/fader") == Some(&json!(0.0)))
         .await;
     b.main.untouch(2);
+}
+
+/// Hands out the signed-in token and records, per connection opened, when
+/// and until when the token it got lasts.
+struct Recording {
+    signed: Arc<Signed>,
+    calls: std::sync::Mutex<Vec<(u64, u64)>>,
+}
+
+impl Credentials for Recording {
+    fn bearer(&self) -> Option<String> {
+        let t = self.signed.tokens();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        self.calls.lock().unwrap().push((now, t.expires_at * 1000));
+        Some(t.access_token)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_sign_in_holds_a_fader_across_token_expiries() {
+    // Access tokens of 8 s, refreshed 2 s before they end; faderz closes a
+    // connection when its token ends.
+    let idp = idp::Idp::start(8).await;
+    idp.book().pending = Some(0);
+    let f = Faderz::start_with(json!({
+        "mode": "oidc",
+        "oidc": {
+            "issuerUrl": idp.issuer, "clientId": "faderz",
+            "publicUrl": "http://127.0.0.1:1", "roleClaim": "groups",
+            "operatorRole": "faderz-operator", "allowedClients": ["faderz", idp::CLIENT],
+        },
+    }))
+    .await;
+    let dir = std::env::temp_dir().join(format!(
+        "bridge-e2e-tokens-{}",
+        session::random_id().unwrap()
+    ));
+    let http = auth::client().unwrap();
+    let sign_in = auth::Session {
+        provider: auth::discover(&http, &idp.issuer).await.unwrap(),
+        http,
+        client_id: idp::CLIENT.into(),
+        scope: "openid".into(),
+        file: dir.join("tokens.json"),
+    };
+    let signed = Signed::new(sign_in.sign_in(&|_| {}).await.unwrap());
+    let recording = Arc::new(Recording {
+        signed: signed.clone(),
+        calls: Default::default(),
+    });
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let keeper = signed.clone();
+    tokio::spawn(async move { sign_in.keep_fresh(keeper, tx, &|_| {}).await });
+    let mut b = Bridge::start_with(&f, recording.clone(), Some(rx));
+    let watcher = idp.book().access_token_for(&idp.issuer, 120);
+    let mut screen = Screen::connect_with(&f, Some(&watcher)).await;
+    let handle = b.handle.clone();
+    assert!(b.main.until(WAIT, |e| e.cell(0, 0) == "Chan 1 ").await);
+
+    b.main.touch(0);
+    screen
+        .until(|m| {
+            m.owners
+                .get("/channels/ch1/fader")
+                .is_some_and(|o| o["principal"] == "alice" && o["handle"] == handle.as_str())
+        })
+        .await;
+    // Held across two expiries of the first token's successors, the fader
+    // stays the bridge's and its console connected.
+    let end = tokio::time::Instant::now() + Duration::from_secs(17);
+    while tokio::time::Instant::now() < end {
+        let m = screen.take(Duration::from_millis(100)).await;
+        assert!(
+            m.owners
+                .get("/channels/ch1/fader")
+                .is_some_and(|o| o["handle"] == handle.as_str()),
+            "owner {:?}",
+            m.owners
+        );
+        assert!(console(m, "xt").is_some_and(|c| c["connected"] == true));
+    }
+    b.main.move_fader(0, taper::db_to_fader(-6.0));
+    screen
+        .until(|m| m.get("/channels/ch1/fader") == Some(&json!(-6.0)))
+        .await;
+    b.main.untouch(0);
+    screen
+        .until(|m| !m.owners.contains_key("/channels/ch1/fader"))
+        .await;
+
+    assert!(
+        idp.book().refreshes >= 2,
+        "refreshed {} times",
+        idp.book().refreshes
+    );
+    // Every connection after the first opened while the token of the one
+    // before still lasted: the session moved over, faderz never cut it.
+    let calls = recording.calls.lock().unwrap().clone();
+    assert!(calls.len() >= 3, "{calls:?}");
+    for pair in calls.windows(2) {
+        assert!(
+            pair[1].0 < pair[0].1,
+            "connection at {} after the token before ended at {}",
+            pair[1].0,
+            pair[0].1
+        );
+    }
+    let _ = std::fs::remove_dir_all(dir);
 }

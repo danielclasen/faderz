@@ -1,5 +1,6 @@
 //! faderz-bridge: a faderz client that drives Mackie Control surfaces.
 
+pub mod auth;
 pub mod bridge;
 pub mod config;
 pub mod emulator;
