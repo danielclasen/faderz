@@ -6,6 +6,9 @@
 # cargo-about in a stage of its own, so that it builds while the bridge
 # does.
 FROM ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba AS about
+# crates.io downloads over HTTP/2 fail with "Error in the HTTP2 framing
+# layer" on the CI runners now and then; HTTP/1.1 with more retries does not.
+ENV CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -20,6 +23,9 @@ RUN --mount=type=cache,id=cargo-about-registry,target=/usr/local/cargo/registry 
  && /opt/cargo-about/bin/cargo-about --version
 
 FROM ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba AS build
+# crates.io downloads over HTTP/2 fail with "Error in the HTTP2 framing
+# layer" on the CI runners now and then; HTTP/1.1 with more retries does not.
+ENV CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
