@@ -5,7 +5,11 @@ import type { Owner, Owners, OwnerHandle, PresentSession, Selection } from './co
 
 export interface UserRow {
   handle: OwnerHandle;
-  /** Display name of who it is signed in as; a holder connected elsewhere shows its principal. */
+  /**
+   * Display name of who it is signed in as. A holder connected to another
+   * replica shows OTHER_REPLICA: its owner record carries only the
+   * principal, which in oidc mode can be an email address or subject id.
+   */
   user: string;
   kind: string;
   /** None for a holder connected elsewhere: its owner record does not carry it. */
@@ -26,6 +30,9 @@ export interface UserRow {
  * is matched to what it holds and selects by its handle: presence carries
  * no principal.
  */
+/** Shown for a holder connected to another replica, whose name this replica does not have. */
+export const OTHER_REPLICA = 'on another replica';
+
 export function userRows(
   presence: PresentSession[],
   owners: Owners,
@@ -56,7 +63,7 @@ export function userRows(
   const present = new Set(presence.map((p) => p.handle));
   for (const [handle, { owner, paths }] of holders) {
     if (present.has(handle) || (owner.kind === 'console' && consoles.includes(handle))) continue;
-    rows.push({ handle, user: owner.principal, kind: owner.kind, role: null, you: handle === you, holds: paths, selected: selected(handle), elsewhere: true });
+    rows.push({ handle, user: OTHER_REPLICA, kind: owner.kind, role: null, you: handle === you, holds: paths, selected: selected(handle), elsewhere: true });
   }
   return rows.sort((a, b) => Number(b.you) - Number(a.you));
 }

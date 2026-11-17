@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { userRows } from '../../src/lib/presence';
+import { OTHER_REPLICA, userRows } from '../../src/lib/presence';
 import type { Owner, PresentSession } from '../../src/lib/contract/types';
 import { ownerHandle } from '../../src/lib/net/handle';
 
@@ -56,5 +56,8 @@ describe('users panel rows', () => {
     ]);
     expect(rows[1]!.holds).toEqual(['/channels/ch4/fader', '/channels/ch5/fader']);
     expect(rows[1]!.role).toBeNull();
+    // The owner record's principal can be an email address or subject id in
+    // oidc mode; a holder on another replica never shows it.
+    expect(rows[1]!.user).toBe(OTHER_REPLICA);
   });
 });
