@@ -245,6 +245,14 @@ fn answers_kept() -> usize {
     samplez_replica::dedup::Limits::defaults(crate::replica::RATE).max_session_commands
 }
 
+/// The principal of every client while no authentication names one: not
+/// an identity two sessions can be told apart by.
+const ANONYMOUS: &str = "anonymous";
+
+/// Tally sources the state holds at most: a source once named stays,
+/// `off` after a `PUT` that leaves it out.
+pub const MAX_TALLY_SOURCES: usize = 256;
+
 /// Consoles registered at runtime the state holds at most, besides the
 /// declared ones.
 pub const MAX_CONSOLES: usize = 64;
@@ -551,8 +559,17 @@ impl Mixer {
         let value = c.value.as_ref();
         let session = origin.key();
         let holder = self.owners.get(path).cloned();
+        let other = holder.as_ref().filter(|h| h.key() != session);
+        // A console takes a control its own principal holds on a screen.
+        let takeover = other.is_some_and(|h| {
+            kind == "console"
+                && h.kind != "console"
+                && h.principal == origin.principal
+                && origin.principal != ANONYMOUS
+        });
         if action != Action::Release
-            && let Some(h) = holder.as_ref().filter(|h| h.key() != session)
+            && !takeover
+            && let Some(h) = other
         {
             let conflicts = vec![self.conflict(path, h)];
             return self.refuse(&session, id, Answer::Conflict { conflicts });
@@ -575,7 +592,7 @@ impl Mixer {
         let edits = match action {
             Action::Touch => {
                 self.seen(&session, path, seq);
-                if holder.is_some() {
+                if holder.is_some() && !takeover {
                     return Effect::Unchanged;
                 }
                 let owners = vec![(path.to_owned(), me.public())];
@@ -2025,6 +2042,36 @@ mod tests {
         ));
     }
 
+    fn origin_of(principal: &str, session: &str) -> Origin {
+        Origin {
+            principal: principal.into(),
+            ..origin(session)
+        }
+    }
+
+    /// A control command of `kind` from `principal`'s `session`.
+    fn act(
+        m: &mut Mixer,
+        (principal, session, kind): (&str, &str, &str),
+        action: Action,
+        seq: u64,
+        path: &str,
+        value: Option<Value>,
+    ) -> Effect<Edits> {
+        let command = Command::Control(Control {
+            id: format!("{session}-{seq}"),
+            action,
+            kind: kind.into(),
+            seq,
+            path: path.into(),
+            value,
+        });
+        m.apply(
+            &origin_of(principal, session),
+            &serde_json::to_vec(&command).unwrap(),
+        )
+    }
+
     fn desk(id: &str, name: &str) -> Console {
         Console {
             id: id.into(),
@@ -2294,5 +2341,73 @@ mod tests {
         back.load(&serde_json::to_vec(&old).unwrap()).unwrap();
         assert_eq!(consoles(&back).len(), 1);
         assert_eq!(consoles(&back)[0]["name"], "X-Touch");
+    }
+
+    /// A console takes a control its principal holds on a screen: a touch
+    /// moves the ownership, a set writes and leaves it.
+    #[test]
+    fn a_console_takes_over_a_control_its_principal_holds_on_a_screen() {
+        let mut m = mixer();
+        let path = "/channels/ch1/fader";
+        let screen = ("alice", "screen", "ui");
+        let surface = ("alice", "surface", "console");
+        act(&mut m, screen, Action::Touch, 1, path, None);
+        let Effect::Changed(e) = act(&mut m, surface, Action::Set, 1, path, Some(json!(-6))) else {
+            panic!("the set is written")
+        };
+        assert_eq!(e.values, vec![(path.to_owned(), json!(-6))]);
+        assert!(e.owners.is_empty());
+        assert_eq!(m.owners()[path]["handle"], handle("screen"));
+        let Effect::Changed(e) = act(&mut m, surface, Action::Touch, 2, path, None) else {
+            panic!("the touch takes it")
+        };
+        assert_eq!(e.owners[0].1["handle"], handle("surface"));
+        assert_eq!(e.owners[0].1["kind"], "console");
+        // The screen does not take it back.
+        assert_eq!(
+            act(&mut m, screen, Action::Touch, 2, path, None),
+            Effect::Unchanged
+        );
+        assert!(matches!(
+            m.answer(&origin_of("alice", "screen").key(), "screen-2"),
+            Some(Answer::Conflict { .. })
+        ));
+    }
+
+    /// Another principal's console, and every anonymous console, still
+    /// gets 409; a console does not take from another console.
+    #[test]
+    fn no_takeover_across_principals_consoles_or_anonymous_clients() {
+        let refused = |holder: (&str, &str, &str), taker: (&str, &str, &str)| {
+            let mut m = mixer();
+            let path = "/channels/ch1/fader";
+            act(&mut m, holder, Action::Touch, 1, path, None);
+            for (seq, action) in [(1, Action::Set), (2, Action::Touch)] {
+                let value = (action == Action::Set).then(|| json!(-6));
+                assert_eq!(
+                    act(&mut m, taker, action, seq, path, value),
+                    Effect::Unchanged
+                );
+                let key = origin_of(taker.0, taker.1).key();
+                assert!(
+                    matches!(
+                        m.answer(&key, &format!("{}-{seq}", taker.1)),
+                        Some(Answer::Conflict { .. })
+                    ),
+                    "{holder:?} {taker:?} {action:?}"
+                );
+            }
+            assert_eq!(m.owners()[path]["handle"], handle(holder.1));
+        };
+        refused(("alice", "screen", "ui"), ("bob", "surface", "console"));
+        refused(
+            ("anonymous", "screen", "ui"),
+            ("anonymous", "surface", "console"),
+        );
+        refused(
+            ("alice", "desk", "console"),
+            ("alice", "surface", "console"),
+        );
+        refused(("alice", "screen", "ui"), ("alice", "other", "ui"));
     }
 }
