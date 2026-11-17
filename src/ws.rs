@@ -468,6 +468,7 @@ mod tests {
                         let connect = Connect {
                             identity: Identity {
                                 user: None,
+                                name: None,
                                 role: Role::Operator,
                             },
                             owner,

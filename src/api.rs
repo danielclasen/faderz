@@ -80,6 +80,7 @@ fn valid(
 fn owner(identity: Option<Identity>) -> Owner {
     let identity = identity.unwrap_or(Identity {
         user: None,
+        name: None,
         role: Role::Operator,
     });
     Owner {
