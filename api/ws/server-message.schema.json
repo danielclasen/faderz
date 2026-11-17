@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/danielclasen/faderz/raw/main/api/ws/server-message.schema.json",
   "title": "faderz WebSocket server message",
-  "description": "Messages a replica sends on /api/v1/ws. replica names the sending replica. Every message is a JSON text message defined here, except meter frames, which are binary messages laid out as in $defs/MeterFrame. hello is answered with replicas, then snapshot or resume; deltas follow in revision order. A client that sees a revision other than its own plus one sends resync. The replica sends ping every 250 ms and answers every client ping with pong (heartbeat rules: client-message.schema.json#/$defs/Ping). Meter frames, counters and control requests go to primary connections only. Meter frames are paced by the client's credits and dropped, never queued, while the connection holds none; deltas are never dropped: a client whose queue fills with deltas gets a snapshot instead.",
+  "description": "Messages a replica sends on /api/v1/ws. replica names the sending replica. Every message is a JSON text message defined here, except meter frames, which are binary messages laid out as in $defs/MeterFrame. hello is answered with replicas, then snapshot or resume; deltas follow in revision order. A client that sees a revision other than its own plus one sends resync. The replica sends ping every 250 ms and answers every client ping with pong (heartbeat rules: client-message.schema.json#/$defs/Ping). Meter frames, counters and control requests go to primary connections only. Selections and presence go to every connection; presence lists the sessions connected to the sending replica only. Meter frames are paced by the client's credits and dropped, never queued, while the connection holds none; deltas are never dropped: a client whose queue fills with deltas gets a snapshot instead.",
   "oneOf": [
     {
       "$ref": "#/$defs/Snapshot"
@@ -24,6 +24,9 @@
     },
     {
       "$ref": "#/$defs/Selections"
+    },
+    {
+      "$ref": "#/$defs/Presence"
     },
     {
       "$ref": "#/$defs/ControlRequest"
@@ -355,6 +358,76 @@
               },
               "element": {
                 "$ref": "model.schema.json#/$defs/Id"
+              }
+            }
+          }
+        }
+      }
+    },
+    "Presence": {
+      "description": "The sessions connected to this replica: every session with a WebSocket connection open on the replica that sent this message and that has sent a hello, its primary and standby connections counted once, the receiving one included, in the order they connected. Sent on every connection, standby ones included: after the snapshot or resume that answers its hello, and whenever a session connects, closes its last connection to this replica, sends another kind in a hello, or is active in another second. At most one such message per connection every 100 ms; changes within that time go out together in the next one. Presence is not part of the replicated state and is not shared between replicas: each replica lists only the sessions connected to it, so a client takes it from its primary connection only.",
+      "type": "object",
+      "required": [
+        "type",
+        "replica",
+        "sessions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "presence"
+        },
+        "replica": {
+          "$ref": "model.schema.json#/$defs/ReplicaRef"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "handle",
+              "kind",
+              "user",
+              "role",
+              "since",
+              "active"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "handle": {
+                "description": "The session's handle, as in its owner records (model.schema.json#/$defs/Owner).",
+                "$ref": "model.schema.json#/$defs/OwnerHandle"
+              },
+              "kind": {
+                "description": "The kind its latest hello named.",
+                "type": "string",
+                "enum": [
+                  "ui",
+                  "console"
+                ]
+              },
+              "user": {
+                "description": "Who the session is signed in as, for display: the display name the authentication gives (in oidc mode the provider's preferred_username, else its name claim; in proxy mode the user the proxy names), else token in token mode and anonymous otherwise. Never an email address or a subject id.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "viewer"
+                ]
+              },
+              "since": {
+                "description": "When the session's first connection open on this replica opened.",
+                "type": "string",
+                "format": "date-time"
+              },
+              "active": {
+                "description": "When the session last sent a command, a selection or a control request, to the second; since until then.",
+                "type": "string",
+                "format": "date-time"
               }
             }
           }

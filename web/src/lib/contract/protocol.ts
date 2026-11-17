@@ -31,7 +31,7 @@ export const COMMAND_EXPIRY_MS = 3000;
  * control in this time; it drops the others. A client sends no more often.
  */
 export const REQUEST_INTERVAL_MS = 3000;
-/** The cluster sends at most one selections message per connection in this time. */
+/** The cluster sends at most one selections and one presence message per connection in this time. */
 export const SELECTIONS_INTERVAL_MS = 100;
 
 /** First byte of a binary meter frame, ASCII 'M'. */

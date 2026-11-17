@@ -104,19 +104,19 @@ impl Client {
             .unwrap();
     }
 
-    /// The next message other than a heartbeat or `selections`, checked
-    /// against the contract.
+    /// The next message other than a heartbeat, `selections` or
+    /// `presence`, checked against the contract.
     async fn next(&mut self) -> Value {
         loop {
             let value = self.recv().await;
-            if value["type"] != "selections" {
+            if value["type"] != "selections" && value["type"] != "presence" {
                 return value;
             }
         }
     }
 
-    /// The next message other than a heartbeat, `selections` included,
-    /// within 5 s: heartbeats do not extend the wait.
+    /// The next message other than a heartbeat, `selections` and
+    /// `presence` included, within 5 s: heartbeats do not extend the wait.
     async fn recv(&mut self) -> Value {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -153,7 +153,7 @@ impl Client {
     async fn next_of(&mut self, kind: &str) -> Value {
         let wait = async {
             loop {
-                let m = if kind == "selections" {
+                let m = if kind == "selections" || kind == "presence" {
                     self.recv().await
                 } else {
                     self.next().await
@@ -756,6 +756,15 @@ async fn a_viewer_cannot_write() {
         seq: 0,
     };
     assert_eq!(v.hello().await["you"]["principal"], "vera");
+    let presence = v.next_of("presence").await;
+    assert_eq!(
+        (
+            &presence["sessions"][0]["user"],
+            &presence["sessions"][0]["role"]
+        ),
+        (&json!("vera"), &json!("viewer")),
+        "the proxy's user by name, as a viewer"
+    );
     let id = v
         .command("set", "/channels/ch1/fader", Some(json!(-3)))
         .await;
@@ -993,5 +1002,159 @@ async fn a_selection_made_right_after_the_hello_stays() {
     elements.sort_unstable();
     assert_eq!(elements, ["ch1", "ch2", "mm1", "pgm"], "{seen}");
     clients.iter().for_each(|c| c.abort());
+    server.stop().await;
+}
+
+/// The sessions of `presence`, as (handle, kind, user, role).
+fn sessions(presence: &Value) -> Vec<(String, String, String, String)> {
+    presence["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let f = |k: &str| s[k].as_str().unwrap().to_owned();
+            (f("handle"), f("kind"), f("user"), f("role"))
+        })
+        .collect()
+}
+
+/// Every session connected to the replica is in `presence` once, the
+/// receiving one included, however many connections it holds; it leaves
+/// with its last connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn presence_lists_each_connected_session_once() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let handle = |s: &str| samplez_service::OwnerHandle::of(s).as_str().to_owned();
+    let a_entry = (
+        handle(SESSION_A),
+        "ui".into(),
+        "anonymous".into(),
+        "operator".into(),
+    );
+    let b_entry = (
+        handle(SESSION_B),
+        "ui".into(),
+        "anonymous".into(),
+        "operator".into(),
+    );
+
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    let first = a.next_of("presence").await;
+    assert_eq!(
+        sessions(&first),
+        vec![a_entry.clone()],
+        "the receiver itself"
+    );
+    assert_eq!(
+        first["sessions"][0]["since"],
+        first["sessions"][0]["active"]
+    );
+
+    let mut b = Client::connect(&server, SESSION_B).await;
+    b.hello().await;
+    let mut b2 = Client::connect(&server, SESSION_B).await;
+    b2.hello_as("standby").await;
+    let with_b = loop {
+        let p = a.next_of("presence").await;
+        if p["sessions"].as_array().unwrap().len() == 2 {
+            break p;
+        }
+    };
+    assert_eq!(
+        sessions(&with_b),
+        vec![a_entry.clone(), b_entry],
+        "b once, in order of connecting"
+    );
+    let on_standby = b2.next_of("presence").await;
+    assert_eq!(
+        on_standby["sessions"].as_array().unwrap().len(),
+        2,
+        "a standby gets it too"
+    );
+
+    drop(b);
+    let quiet = a.during(Duration::from_millis(500)).await;
+    let still: Vec<_> = quiet.iter().filter(|m| m["type"] == "presence").collect();
+    assert!(
+        still
+            .iter()
+            .all(|p| p["sessions"].as_array().unwrap().len() == 2),
+        "b keeps its standby connection: {still:?}"
+    );
+    drop(b2);
+    let gone = loop {
+        let p = a.next_of("presence").await;
+        if p["sessions"].as_array().unwrap().len() == 1 {
+            break p;
+        }
+    };
+    assert_eq!(sessions(&gone), vec![a_entry]);
+    server.stop().await;
+}
+
+/// A command makes its session active in `presence`; a heartbeat does
+/// not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_marks_its_session_active() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    let first = a.next_of("presence").await;
+    let since = first["sessions"][0]["since"].clone();
+    // Activity goes out to the second: a second passes first.
+    let quiet = a.during(Duration::from_millis(1100)).await;
+    assert!(
+        quiet.iter().all(|m| m["type"] != "presence"),
+        "heartbeats are no activity: {quiet:?}"
+    );
+    a.command("set", "/channels/ch1/fader", Some(json!(-3)))
+        .await;
+    // The presence may go out ahead of the delta, so nothing is skipped.
+    let got = a.during(Duration::from_millis(1000)).await;
+    let p = got
+        .iter()
+        .find(|m| m["type"] == "presence")
+        .unwrap_or_else(|| panic!("no presence after the command: {got:?}"));
+    assert_eq!(p["sessions"][0]["since"], since);
+    assert!(
+        p["sessions"][0]["active"].as_str().unwrap() > since.as_str().unwrap(),
+        "{p}"
+    );
+    server.stop().await;
+}
+
+/// In token mode a session without a name is listed as token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn presence_names_a_token_session_token() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let dir = data_dir();
+    let token = dir.0.with_extension("token");
+    std::fs::write(&token, "a-token-of-at-least-thirty-two-bytes-0123").unwrap();
+    let auth = json!({ "mode": "token", "token": { "file": token } });
+    let server = start_with(&dir, auth).await;
+    let url = format!("ws://{}/api/v1/ws?session={SESSION_A}", server.api);
+    let mut request = url.into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Authorization",
+        "Bearer a-token-of-at-least-thirty-two-bytes-0123"
+            .parse()
+            .unwrap(),
+    );
+    request
+        .headers_mut()
+        .insert("Origin", "http://faderz.test".parse().unwrap());
+    let (ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let mut a = Client {
+        ws,
+        session: SESSION_A.into(),
+        seq: 0,
+    };
+    a.hello().await;
+    let p = a.next_of("presence").await;
+    assert_eq!(p["sessions"][0]["user"], "token");
+    let _ = std::fs::remove_file(token);
     server.stop().await;
 }

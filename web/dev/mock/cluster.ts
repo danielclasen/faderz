@@ -20,6 +20,7 @@ import type {
   Origin,
   Owner,
   OwnershipChange,
+  PresentSession,
   RecallGroup,
   ReplicaRef,
   ReplicaRole,
@@ -267,6 +268,11 @@ export class Cluster {
   /** When the latest selections went out, and the timer of the coalesced next one. */
   private selectionsSentAt = -Infinity;
   private selectionsTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When each session last sent a command, a selection or a control request, by session key. */
+  private activity = new Map<string, number>();
+  /** When the latest presence went out, and the timer of the coalesced next one. */
+  private presenceSentAt = -Infinity;
+  private presenceTimer: ReturnType<typeof setTimeout> | null = null;
   /** When a request was last forwarded, by asking session and control. */
   private forwarded = new Map<string, number>();
   private scenes = new Map<string, StoredScene>();
@@ -337,6 +343,7 @@ export class Cluster {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     if (this.selectionsTimer) clearTimeout(this.selectionsTimer);
+    if (this.presenceTimer) clearTimeout(this.presenceTimer);
     if (this.batchTimer) clearTimeout(this.batchTimer);
     for (const t of this.lagTimers) clearTimeout(t);
     for (const r of this.replicas) for (const c of r.conns) c.close();
@@ -478,6 +485,7 @@ export class Cluster {
   /** The session's lease runs on; nothing is released when one connection goes. */
   disconnect(conn: Conn): void {
     conn.replica.conns.delete(conn);
+    if (conn.owner) this.broadcastPresence();
   }
 
   emit(conn: Conn, msg: ServerMessage): void {
@@ -546,6 +554,7 @@ export class Cluster {
       }
       conn.owner = { principal: 'anonymous', handle: handleOf(msg.session), kind: msg.kind, connection: conn.id };
       conn.mode = msg.mode;
+      this.broadcastPresence();
       this.renew(conn.owner, r);
       this.emit(conn, { type: 'replicas', replica: this.ref(r), replicas: this.replicaStatus() });
       return this.sync(conn, this.ownEpoch(msg.epoch, msg.lastRevision));
@@ -554,6 +563,7 @@ export class Cluster {
       return this.emit(conn, { type: 'error', replica: this.ref(r), code: 400, message: 'hello first' });
     }
     this.renew(conn.owner, r);
+    if (msg.type === 'select' || msg.type === 'request' || msg.type === 'set' || msg.type === 'touch' || msg.type === 'release') this.active(conn.owner);
     switch (msg.type) {
       case 'ping':
         return this.emit(conn, { type: 'pong', replica: this.ref(r), t: msg.t });
@@ -644,7 +654,8 @@ export class Cluster {
         .filter((e) => e.revision > lastRevision && e.revision <= revision)
         .map((e): DeltaMessage => ({ type: 'delta', replica, ...e }));
       this.emit(conn, { type: 'resume', you, replica, epoch: this.epoch, revision, deltas, ...stale });
-      return this.emitSelections(conn);
+      this.emitSelections(conn);
+      return this.emitPresence(conn);
     }
     this.emit(conn, {
       type: 'snapshot',
@@ -658,6 +669,65 @@ export class Cluster {
       ...stale,
     });
     this.emitSelections(conn);
+    this.emitPresence(conn);
+  }
+
+  /**
+   * The sessions connected to replica `r` that have sent a hello, each
+   * once however many connections it has there, in the order they
+   * connected. The mock has no sign-in: every session is anonymous.
+   */
+  presence(r: Replica): PresentSession[] {
+    const by = new Map<string, { owner: Owner; since: number }>();
+    for (const c of r.conns) {
+      if (!c.owner) continue;
+      const key = sessionKey(c.owner);
+      const seen = by.get(key);
+      if (!seen) by.set(key, { owner: c.owner, since: c.openedAt });
+      else seen.since = Math.min(seen.since, c.openedAt);
+    }
+    return [...by.entries()]
+      .sort((a, b) => a[1].since - b[1].since)
+      .map(([key, { owner, since }]) => ({
+        handle: owner.handle,
+        kind: owner.kind === 'console' ? 'console' : 'ui',
+        user: 'anonymous',
+        role: 'operator',
+        since: new Date(since).toISOString(),
+        active: new Date(Math.max(since, this.activity.get(key) ?? 0)).toISOString(),
+      }));
+  }
+
+  private emitPresence(conn: Conn): void {
+    this.emit(conn, { type: 'presence', replica: this.ref(conn.replica), sessions: this.presence(conn.replica) });
+  }
+
+  /**
+   * Sends every connection the presence of its replica, at most once per
+   * SELECTIONS_INTERVAL_MS: changes within that time go out together in
+   * the next message.
+   */
+  private broadcastPresence(): void {
+    if (this.presenceTimer) return;
+    const wait = this.presenceSentAt + SELECTIONS_INTERVAL_MS - Date.now();
+    if (wait > 0) {
+      this.presenceTimer = setTimeout(() => {
+        this.presenceTimer = null;
+        this.broadcastPresence();
+      }, wait);
+      return;
+    }
+    this.presenceSentAt = Date.now();
+    for (const r of this.replicas) for (const c of r.conns) if (c.synced) this.emitPresence(c);
+  }
+
+  /** Activity of a session: presence carries it to the second. */
+  private active(owner: Owner): void {
+    const key = sessionKey(owner);
+    const now = Date.now();
+    const before = this.activity.get(key) ?? 0;
+    this.activity.set(key, now);
+    if (Math.floor(now / 1000) !== Math.floor(before / 1000)) this.broadcastPresence();
   }
 
   private emitSelections(conn: Conn): void {
@@ -1203,7 +1273,11 @@ export class Cluster {
     }
     const gone = (session: string) => now - (this.leases.get(session) ?? 0) > LEASE_MS + SEQ_RETENTION_MS;
     for (const key of this.lastSeq.keys()) if (gone(key.slice(0, key.lastIndexOf('\n')))) this.lastSeq.delete(key);
-    for (const session of this.leases.keys()) if (gone(session)) this.leases.delete(session);
+    for (const session of this.leases.keys()) {
+      if (!gone(session)) continue;
+      this.leases.delete(session);
+      this.activity.delete(session);
+    }
   }
 
   /** Release every control and drop the selection of a session whose lease ran out. */

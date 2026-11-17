@@ -23,6 +23,7 @@ import type {
   Owner,
   ReplicasMessage,
   SelectionsMessage,
+  PresenceMessage,
   ControlRequestMessage,
   ServerMessage,
   SnapshotMessage,
@@ -598,6 +599,36 @@ describe('leases', () => {
     await sleep(LEASE_MS + 600);
     expect((await owners())[path]).toBeUndefined();
   }, 10_000);
+});
+
+describe('presence', () => {
+  it('lists each session connected to the sending replica once, the receiver included, until its last connection there closes', async () => {
+    const observer = await new Client().open(onReplica('r1'));
+    await observer.hello();
+    const first = await observer.next<PresenceMessage>((m) => m.type === 'presence');
+    expect(first.sessions.map((s) => s.handle)).toEqual([observer.you!.handle]);
+    let from = observer.messages.length;
+    const a = await new Client().open(onReplica('r1'));
+    await a.hello();
+    const a2 = await new Client(a.session).open(onReplica('r1'));
+    await a2.hello('standby');
+    // A session on another replica is not this replica's to list.
+    const elsewhere = await new Client().open(onReplica('r2'));
+    await elsewhere.hello();
+    await sleep(SELECTIONS_INTERVAL_MS * 3);
+    const presence = (since: number) => observer.messages.slice(since).filter((m): m is PresenceMessage => m.type === 'presence');
+    const both = presence(from).at(-1)!;
+    expect(both.sessions.map((s) => s.handle)).toEqual([observer.you!.handle, a.you!.handle]);
+    expect(both.sessions[1]).toMatchObject({ kind: 'ui', user: 'anonymous', role: 'operator' });
+    from = observer.messages.length;
+    await a.close();
+    await sleep(SELECTIONS_INTERVAL_MS * 3);
+    expect(presence(from).every((m) => m.sessions.length === 2)).toBe(true);
+    await a2.close();
+    const gone = await observer.next<PresenceMessage>((m) => m.type === 'presence' && m.sessions.length === 1, from);
+    expect(gone.sessions[0]!.handle).toBe(observer.you!.handle);
+    await Promise.all([observer.close(), elsewhere.close()]);
+  });
 });
 
 describe('selections and control requests', () => {

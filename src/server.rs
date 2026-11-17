@@ -48,7 +48,12 @@ impl Server {
             replica::start(&config.replica.data_dir, shape.clone(), estimate.clone()).await?,
         );
         let ops_state = Ops::default();
-        let app = App::new(state.clone(), name.clone(), ops_state.metrics());
+        let app = App::new(
+            state.clone(),
+            name.clone(),
+            config.auth.mode,
+            ops_state.metrics(),
+        );
         let audio = match (&config.audio, &config.mxl) {
             (Some(engine), Some(mxl)) => {
                 let process = process.unwrap_or_else(|| samplez::rt::setup_process(&engine.rt));

@@ -14,7 +14,7 @@ use samplez_service::ws::{
 use samplez_service::{Connect, Owner, OwnerHandle, Position};
 use serde_json::{Value, json};
 
-use crate::app::{App, SELECTIONS, splice};
+use crate::app::{App, PRESENCE, SELECTIONS, splice};
 use crate::contract::{check, contract};
 use crate::state::{self, Action, Command, Control};
 
@@ -223,6 +223,8 @@ fn on_message<'a>(
         h.kind = msg["kind"].as_str().map(str::to_owned);
         h.greet = true;
         drop(h);
+        let owner = owner_record(&connect.owner, msg["kind"].as_str().unwrap_or("ui"));
+        app.greeted(&SessionKey::from(&connect.owner), &owner, &connect.identity);
         // Meter frames and control requests go to primary connections only.
         queue.set_primary(msg["mode"] == "primary");
         // Queued now, sent once the answer to the hello has gone out.
@@ -234,6 +236,8 @@ fn on_message<'a>(
             to,
             Frame::Status(SELECTIONS, app.selections_message().into()),
         );
+        app.hub
+            .send(to, Frame::Status(PRESENCE, app.presence_message().into()));
         return Reply::CatchUp(CatchUp {
             since: position(&msg),
             full: false,
@@ -246,6 +250,9 @@ fn on_message<'a>(
     let Some(client_kind) = kind_of_client else {
         return Reply::Now(Some(error(app, 400, "hello first", None)));
     };
+    if matches!(kind, "select" | "request" | "set" | "touch" | "release") {
+        app.active(&SessionKey::from(&connect.owner));
+    }
     match kind {
         "ping" => {
             let pong = json!({ "type": "pong", "replica": app.replica_ref(), "t": msg["t"] });

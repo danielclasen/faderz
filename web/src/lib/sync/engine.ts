@@ -17,6 +17,7 @@ import type {
   Owners,
   ReplicaRef,
   ReplicaStatus,
+  PresentSession,
   Selection,
   AheadMessage,
   ResumeMessage,
@@ -134,6 +135,8 @@ class Link {
   replicas: ReplicaStatus[] | null = null;
   /** The latest selections this connection reported (Selections); only the primary's are shown. */
   selections: Selection[] | null = null;
+  /** The sessions connected to this connection's replica (Presence); only the primary's are shown. */
+  presence: PresentSession[] | null = null;
   opened = false;
   suspect = false;
   lastRx: number;
@@ -174,6 +177,7 @@ export class SyncEngine {
   /** The element selected on this screen, sent again on every new primary. */
   private selection: string | null = null;
   private selectionsDirty = false;
+  private presenceDirty = false;
 
   private readonly clock: Clock;
   private readonly random: () => number;
@@ -657,6 +661,7 @@ export class SyncEngine {
       sb.role = 'primary';
       this.primary = sb;
       this.selectionsDirty = true;
+      this.presenceDirty = true;
       this.primaryIndex = sb.endpoint;
       this.primaryAttempts = 0;
       this.failoverInfo = { n, from, to: sb.replica?.id ?? null, reason };
@@ -831,6 +836,11 @@ export class SyncEngine {
         // Every connection keeps its copy; a promoted standby's is shown at once.
         link.selections = msg.selections;
         if (link === this.primary) this.selectionsDirty = true;
+        return;
+      case 'presence':
+        // Each replica lists its own connections; the primary's are shown.
+        link.presence = msg.sessions;
+        if (link === this.primary) this.presenceDirty = true;
         return;
       case 'controlRequest':
         if (link === this.primary) this.notice({ kind: 'request', path: msg.path, from: msg.from });
@@ -1124,6 +1134,11 @@ export class SyncEngine {
     if (this.selectionsDirty) {
       this.selectionsDirty = false;
       patch.selections = this.primary?.selections ?? [];
+      any = true;
+    }
+    if (this.presenceDirty) {
+      this.presenceDirty = false;
+      patch.presence = this.primary?.presence ?? [];
       any = true;
     }
     if (this.notices.length > 0) {

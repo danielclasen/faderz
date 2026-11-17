@@ -252,6 +252,7 @@ describe('WebSocket messages', () => {
   };
   const replica = { id: 'r1', role: 'leader' };
   const owner = { principal: 'anonymous', handle: 'q3Jx0fZL1kWm7d2Y-0b_Aw', kind: 'ui', connection: 'c1' };
+  const present = { handle: owner.handle, kind: 'ui', user: 'alice', role: 'operator', since: '2026-11-17T09:00:00.000Z', active: '2026-11-17T09:05:12.000Z' };
   const cmd = '0b6e3a4c-5d1f-4c2a-9e8b-7f6a5d4c3b2a';
   const cmd2 = '1c7f4b5d-6e2a-4d3b-8f9c-8a7b6e5d4c3b';
   /** The largest uint64. */
@@ -360,6 +361,8 @@ describe('WebSocket messages', () => {
     ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
     ['selections', { type: 'selections', replica, selections: [{ session: owner, element: 'ch3' }, { session: { ...owner, handle: 'Rk9vYmFyLWJhei1xdXV4LT' }, element: 'pgm20' }] }],
     ['no selections', { type: 'selections', replica, selections: [] }],
+    ['presence', { type: 'presence', replica, sessions: [present, { ...present, handle: 'Rk9vYmFyLWJhei1xdXV4LT', kind: 'console', user: 'token', role: 'viewer' }] }],
+    ['no presence', { type: 'presence', replica, sessions: [] }],
     ['control request', { type: 'controlRequest', replica, path: '/mixMinus/mm1/interrupt/active', from: owner }],
   ])('server accepts %s', (_, msg) => {
     expect(server(msg)).toBeNull();
@@ -391,6 +394,14 @@ describe('WebSocket messages', () => {
     ['error with a code outside the contract', { type: 'error', replica, code: 500, message: 'oops', commandId: cmd }],
     ['selection of nothing', { type: 'selections', replica, selections: [{ session: owner, element: null }] }],
     ['selection by a session id', { type: 'selections', replica, selections: [{ session: 'dGFiLTEtc2Vzc2lvbi1pZA', element: 'ch1' }] }],
+    ['presence with a principal', { type: 'presence', replica, sessions: [{ ...present, principal: 'alice@example.org' }] }],
+    // The session id is a credential and never leaves its client.
+    ['presence with a session id', { type: 'presence', replica, sessions: [{ ...present, session: 'dGFiLTEtc2Vzc2lvbi1pZA' }] }],
+    ['presence with a connection id', { type: 'presence', replica, sessions: [{ ...present, connection: 'c1' }] }],
+    ['presence without a user', { type: 'presence', replica, sessions: [{ ...present, user: undefined }] }],
+    ['presence with an empty user', { type: 'presence', replica, sessions: [{ ...present, user: '' }] }],
+    ['presence of a script', { type: 'presence', replica, sessions: [{ ...present, kind: 'script' }] }],
+    ['presence without since', { type: 'presence', replica, sessions: [{ ...present, since: undefined }] }],
     ['control request without asker', { type: 'controlRequest', replica, path: '/channels/ch1/fader' }],
     ['control request for a meter', { type: 'controlRequest', replica, path: '/channels/ch1/peak', from: owner }],
   ])('server refuses %s', (_, msg) => {

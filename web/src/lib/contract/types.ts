@@ -512,6 +512,23 @@ export interface SelectionsMessage {
   replica: ReplicaRef;
   selections: Selection[];
 }
+/** A session connected to the replica that sent the presence message. */
+export interface PresentSession {
+  handle: OwnerHandle;
+  kind: 'ui' | 'console';
+  /** Display name of who it is signed in as, or token or anonymous. */
+  user: string;
+  role: 'operator' | 'viewer';
+  /** RFC 3339: when its first connection to this replica opened. */
+  since: string;
+  /** RFC 3339, to the second: its last command, selection or control request. */
+  active: string;
+}
+export interface PresenceMessage {
+  type: 'presence';
+  replica: ReplicaRef;
+  sessions: PresentSession[];
+}
 export interface ControlRequestMessage {
   type: 'controlRequest';
   replica: ReplicaRef;
@@ -533,6 +550,7 @@ export type ServerMessage =
   | ErrorMessage
   | AheadMessage
   | SelectionsMessage
+  | PresenceMessage
   | ControlRequestMessage
   | ServerPing;
 

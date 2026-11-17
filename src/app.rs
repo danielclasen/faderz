@@ -8,10 +8,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use samplez_replica::Replica;
 use samplez_replica::entry::SessionKey;
+use samplez_service::config::AuthMode;
 use samplez_service::metrics::Metrics;
 use samplez_service::replica::{Ack, Commands, Resolution};
 use samplez_service::ws::{Delta, Frame, Hub, Slot, To};
-use samplez_service::{Position, ReplicatedState};
+use samplez_service::{Identity, Position, ReplicatedState};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -34,8 +35,10 @@ pub struct App {
     published: watch::Sender<u64>,
     /// Each session's selection. Not replicated.
     selections: Mutex<BTreeMap<SessionKey, Selection>>,
-    /// The connections each session has open on this replica.
-    connections: Mutex<BTreeMap<SessionKey, usize>>,
+    /// The sessions with a connection open on this replica.
+    sessions: Mutex<BTreeMap<SessionKey, Present>>,
+    /// What `presence` names a session without a display name.
+    unnamed: &'static str,
     /// When each asking session last had a control request for a path
     /// forwarded.
     requests: Mutex<BTreeMap<(SessionKey, String), Instant>>,
@@ -52,6 +55,20 @@ impl Drop for Connected<'_> {
     fn drop(&mut self) {
         self.app.disconnected(&self.session);
     }
+}
+
+/// A session with a connection open on this replica.
+struct Present {
+    /// Its connections open on this replica.
+    open: usize,
+    /// Its presence record without the times, from the latest hello; none
+    /// before the first.
+    record: Option<Value>,
+    /// When its first open connection opened.
+    since: SystemTime,
+    /// When it last sent a command, a selection or a control request, or
+    /// opened its first connection.
+    active: SystemTime,
 }
 
 /// A session's selection.
@@ -75,6 +92,11 @@ pub const SELECTIONS: Slot = Slot {
     name: "selections",
     every: Duration::from_millis(100),
 };
+/// The `presence` message: at most one per connection every 100 ms.
+pub const PRESENCE: Slot = Slot {
+    name: "presence",
+    every: Duration::from_millis(100),
+};
 /// How long a selection of a session that has not held a lease is kept:
 /// one lease.
 const SELECTION_GRACE: Duration = Duration::from_secs(crate::replica::LEASE / crate::replica::RATE);
@@ -82,7 +104,12 @@ const SELECTION_GRACE: Duration = Duration::from_secs(crate::replica::LEASE / cr
 pub const REQUEST_INTERVAL: Duration = Duration::from_secs(3);
 
 impl App {
-    pub fn new(replica: Arc<Replica<Mixer>>, name: String, metrics: &Metrics) -> Arc<App> {
+    pub fn new(
+        replica: Arc<Replica<Mixer>>,
+        name: String,
+        auth: AuthMode,
+        metrics: &Metrics,
+    ) -> Arc<App> {
         let published = watch::Sender::new(replica.revision());
         Arc::new(App {
             commands: Commands::new(replica.clone(), COMMANDS_IN_FLIGHT),
@@ -91,7 +118,12 @@ impl App {
             hub: Hub::new(CLIENT_DELTAS, metrics),
             published,
             selections: Mutex::default(),
-            connections: Mutex::default(),
+            sessions: Mutex::default(),
+            unnamed: if auth == AuthMode::Token {
+                "token"
+            } else {
+                "anonymous"
+            },
             requests: Mutex::default(),
         })
     }
@@ -260,23 +292,110 @@ impl App {
     /// guard returned is dropped, as it also is by a panic or a cancelled
     /// serve.
     pub fn connected(&self, session: SessionKey) -> Connected<'_> {
-        let mut connections = self.connections.lock().expect("connections lock poisoned");
-        *connections.entry(session.clone()).or_default() += 1;
+        let mut sessions = self.sessions.lock().expect("sessions lock poisoned");
+        let now = SystemTime::now();
+        sessions
+            .entry(session.clone())
+            .or_insert(Present {
+                open: 0,
+                record: None,
+                since: now,
+                active: now,
+            })
+            .open += 1;
         Connected { app: self, session }
     }
 
     /// Counts a connection of `session` closed, and drops the session's
-    /// selection with its last one.
+    /// selection and presence with its last one.
     fn disconnected(&self, session: &SessionKey) {
-        let last = {
-            let mut connections = self.connections.lock().expect("connections lock poisoned");
-            let open = connections.get_mut(session).expect("counted when opened");
-            *open -= 1;
-            *open == 0 && connections.remove(session).is_some()
+        let gone = {
+            let mut sessions = self.sessions.lock().expect("sessions lock poisoned");
+            let present = sessions.get_mut(session).expect("counted when opened");
+            present.open -= 1;
+            if present.open == 0 {
+                sessions.remove(session)
+            } else {
+                None
+            }
         };
-        if last {
+        if let Some(gone) = gone {
             self.select(session.clone(), Value::Null, None);
+            if gone.record.is_some() {
+                self.publish_presence();
+            }
         }
+    }
+
+    /// Records what the hello of a connection of `session` said: its
+    /// owner record `owner` and `identity`. The session is listed in
+    /// `presence` from its first hello on.
+    pub fn greeted(&self, session: &SessionKey, owner: &Value, identity: &Identity) {
+        let record = json!({
+            "handle": owner["handle"],
+            "kind": owner["kind"],
+            "user": identity.name.as_deref().unwrap_or(self.unnamed),
+            "role": identity.role,
+        });
+        let changed = {
+            let mut sessions = self.sessions.lock().expect("sessions lock poisoned");
+            let Some(present) = sessions.get_mut(session) else {
+                return;
+            };
+            present.record.as_ref() != Some(&record) && {
+                present.record = Some(record);
+                true
+            }
+        };
+        if changed {
+            self.publish_presence();
+        }
+    }
+
+    /// Records activity of `session`: a command, a selection or a control
+    /// request. `presence` carries it to the second, so it goes out again
+    /// at most once a second per session.
+    pub fn active(&self, session: &SessionKey) {
+        let changed = {
+            let mut sessions = self.sessions.lock().expect("sessions lock poisoned");
+            let Some(present) = sessions.get_mut(session) else {
+                return;
+            };
+            let now = SystemTime::now();
+            let second = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            let changed = second(now) != second(present.active);
+            present.active = now;
+            changed && present.record.is_some()
+        };
+        if changed {
+            self.publish_presence();
+        }
+    }
+
+    /// The `presence` message: the sessions connected to this replica that
+    /// have sent a hello, in the order they connected.
+    pub fn presence_message(&self) -> String {
+        let mut list: Vec<(SystemTime, Value)> = self
+            .sessions
+            .lock()
+            .expect("sessions lock poisoned")
+            .values()
+            .filter_map(|p| {
+                let mut record = p.record.clone()?;
+                record["since"] = json!(rfc3339(p.since));
+                record["active"] = json!(rfc3339(p.active));
+                Some((p.since, record))
+            })
+            .collect();
+        list.sort_by_key(|(since, _)| *since);
+        let sessions: Vec<Value> = list.into_iter().map(|(_, r)| r).collect();
+        json!({ "type": "presence", "replica": self.replica_ref(), "sessions": sessions })
+            .to_string()
+    }
+
+    fn publish_presence(&self) {
+        self.hub
+            .publish(Frame::Status(PRESENCE, self.presence_message().into()));
     }
 
     /// Drops the selections of sessions whose lease has ended. A session
@@ -359,9 +478,12 @@ pub fn splice(prefix: &str, object: &str) -> String {
 
 /// The current time as RFC 3339 UTC with milliseconds.
 pub fn now_rfc3339() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+    rfc3339(SystemTime::now())
+}
+
+/// `at` as RFC 3339 UTC with milliseconds.
+pub fn rfc3339(at: SystemTime) -> String {
+    let now = at.duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = now.as_secs();
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
@@ -450,7 +572,12 @@ pub(crate) mod tests {
         let replica = replica::start(&dir, shape, Arc::new(replica::tai_samples))
             .await
             .unwrap();
-        let app = App::new(Arc::new(replica), "r1".into(), &Metrics::default());
+        let app = App::new(
+            Arc::new(replica),
+            "r1".into(),
+            AuthMode::None,
+            &Metrics::default(),
+        );
         (app, dir)
     }
 
@@ -602,6 +729,51 @@ pub(crate) mod tests {
             text.as_str().contains(r#""type":"controlRequest""#),
             "{text}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A session is listed once from its first hello, whatever number of
+    /// connections it holds, with the display name of its identity only,
+    /// and leaves with its last connection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn presence_lists_a_session_once_by_its_display_name() {
+        let (app, dir) = app().await;
+        let o = owner("s-a");
+        let s = SessionKey::from(&o);
+        let listed = |app: &App| -> Vec<Value> {
+            let m: Value = serde_json::from_str(&app.presence_message()).unwrap();
+            check(&contract().server_message, &m).unwrap();
+            m["sessions"].as_array().unwrap().clone()
+        };
+        let first = app.connected(s.clone());
+        let second = app.connected(s.clone());
+        assert!(listed(&app).is_empty(), "nothing before a hello");
+        let alice = Identity {
+            user: Some("alice@example.org".into()),
+            name: Some("alice".into()),
+            role: Role::Viewer,
+        };
+        let record = crate::ws::owner_record(&o, "ui");
+        app.greeted(&s, &record, &alice);
+        app.greeted(&s, &record, &alice);
+        let sessions = listed(&app);
+        assert_eq!(sessions.len(), 1, "{sessions:?}");
+        assert_eq!(sessions[0]["user"], "alice");
+        assert_eq!(sessions[0]["role"], "viewer");
+        assert_eq!(sessions[0]["handle"], record["handle"]);
+        assert!(!sessions[0].to_string().contains("example.org"));
+        drop(first);
+        assert_eq!(listed(&app).len(), 1, "kept by its other connection");
+        drop(second);
+        assert!(listed(&app).is_empty(), "gone with its last connection");
+        let anonymous = Identity {
+            user: None,
+            name: None,
+            role: Role::Operator,
+        };
+        let _again = app.connected(s.clone());
+        app.greeted(&s, &record, &anonymous);
+        assert_eq!(listed(&app)[0]["user"], "anonymous");
         let _ = std::fs::remove_dir_all(dir);
     }
 

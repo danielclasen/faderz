@@ -1137,6 +1137,20 @@ describe('sync engine: selections and control requests', () => {
     primary.drop();
     expect(tick()!.selections).toEqual(onStandby);
   });
+
+  it("shows the presence of its primary's replica only, and its standby's once promoted", () => {
+    const { primary, standby, tick } = live();
+    const at = '2026-11-17T09:00:00.000Z';
+    const onPrimary = [{ handle: OTHER.handle, kind: 'ui' as const, user: 'alice', role: 'operator' as const, since: at, active: at }];
+    const onStandby = [{ ...onPrimary[0]!, user: 'bob' }];
+    primary.deliver({ type: 'presence', replica: R1, sessions: onPrimary });
+    standby.deliver({ type: 'presence', replica: R2, sessions: onStandby });
+    expect(tick()!.presence).toEqual(onPrimary);
+    standby.deliver({ type: 'presence', replica: R2, sessions: onStandby });
+    expect(tick()?.presence).toBeUndefined();
+    primary.drop();
+    expect(tick()!.presence).toEqual(onStandby);
+  });
 });
 
 describe('sync engine: patches', () => {
