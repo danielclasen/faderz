@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/danielclasen/faderz/compare/v0.1.5...v0.1.6) (2026-11-17)
+
+
+### Bug Fixes
+
+* **web:** post-fader channel meters, monitor output label, masters scroll ([#42](https://github.com/danielclasen/faderz/issues/42)) ([7eba59a](https://github.com/danielclasen/faderz/commit/7eba59af3206895942cdca1d84194c55a585758f))
+
 ## [0.1.5](https://github.com/danielclasen/faderz/compare/v0.1.4...v0.1.5) (2026-11-17)
 
 
