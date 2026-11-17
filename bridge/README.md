@@ -13,6 +13,9 @@ faderz-bridge --list-ports           # the MIDI ports ALSA sees
 faderz-bridge --config bridge.json
 ```
 
+The release binary (`faderz-bridge-<version>-x86_64-linux`) is linked
+against glibc and ALSA: a host running it needs `libasound2`.
+
 The image (`ghcr.io/danielclasen/faderz-bridge`) runs as uid 65532 and
 needs the sound devices and a writable state directory:
 

@@ -42,6 +42,12 @@ pub const OUTBOX_CAPACITY: usize = 1024;
 pub const WRITE_INTERVAL_MS: u64 = 20;
 /// A console's registration goes out at most 10 times per second.
 pub const CONSOLE_INTERVAL_MS: u64 = 100;
+/// A console registration refused because another session holds the
+/// console goes out again after this, doubled per refusal in a row up to
+/// the cap: a restarted bridge has a new session, and the old one's
+/// consoles free up once its lease lapses, up to 9 s after it went.
+pub const CONSOLE_RETRY_MS: u64 = 500;
+pub const CONSOLE_RETRY_CAP_MS: u64 = 4000;
 /// A replica that cannot commit is left only when that holds this long.
 pub const COMMIT_SETTLE_MS: u64 = HEARTBEAT_MS;
 
@@ -254,6 +260,9 @@ pub struct Engine {
     local: BTreeMap<String, Value>,
     selection: Option<String>,
     consoles: BTreeMap<String, Console>,
+    /// Registrations refused with 409 in a row, and when they go out again.
+    console_refusals: u32,
+    console_retry_at: Option<u64>,
     actions: Vec<Action>,
     events: Vec<Event>,
     ids: Box<dyn FnMut() -> String + Send>,
@@ -302,6 +311,8 @@ impl Engine {
             local: BTreeMap::new(),
             selection: None,
             consoles: BTreeMap::new(),
+            console_refusals: 0,
+            console_retry_at: None,
             actions: Vec::new(),
             events: Vec::new(),
             ids,
@@ -438,6 +449,7 @@ impl Engine {
         for c in self.consoles.values() {
             if c.sent.as_ref() != Some(&c.msg) {
                 min(c.last.map(|l| l + CONSOLE_INTERVAL_MS));
+                min(self.console_retry_at);
             }
         }
         at
@@ -905,6 +917,10 @@ impl Engine {
 
     fn apply(&mut self, d: &Value, now: u64) {
         self.mirror.apply(d);
+        if self.console_refusals > 0 && self.consoles_registered() {
+            self.console_refusals = 0;
+            self.console_retry_at = None;
+        }
         let mine: Vec<String> = d["origins"]
             .as_array()
             .into_iter()
@@ -932,10 +948,19 @@ impl Engine {
         }
         // Console registrations carry no id: one dropped (429) or not
         // applied (503) goes out again at the next flush.
-        if id.is_none() && matches!(code, 429 | 503) {
+        if id.is_none() && matches!(code, 409 | 429 | 503) {
             for c in self.consoles.values_mut() {
                 c.sent = None;
             }
+        }
+        if id.is_none() && code == 409 {
+            let delay = backoff(
+                CONSOLE_RETRY_MS,
+                self.console_refusals,
+                CONSOLE_RETRY_CAP_MS,
+            );
+            self.console_refusals += 1;
+            self.console_retry_at = Some(now + delay);
         }
         match (code, msg["path"].as_str()) {
             (409, Some(path)) if id.is_some() => self.events.push(Event::Refused {
@@ -1106,6 +1131,19 @@ impl Engine {
         self.flush_consoles(now);
     }
 
+    /// Whether the state shows every console of this engine connected to
+    /// this session.
+    fn consoles_registered(&self) -> bool {
+        let list = self.mirror.state["consoles"].as_array();
+        self.consoles.keys().all(|id| {
+            list.into_iter().flatten().any(|c| {
+                c["id"] == id.as_str()
+                    && c["handle"] == self.handle.as_str()
+                    && c["connected"] == true
+            })
+        })
+    }
+
     fn flush_consoles(&mut self, now: u64) {
         let Some(p) = self
             .primary()
@@ -1114,6 +1152,9 @@ impl Engine {
         else {
             return;
         };
+        if self.console_retry_at.is_some_and(|t| now < t) {
+            return;
+        }
         let due: Vec<String> = self
             .consoles
             .iter()
@@ -1686,6 +1727,53 @@ pub(crate) mod tests {
             .filter(|m| m["type"] == "console")
             .collect();
         assert_eq!(out, vec![console]);
+    }
+
+    /// A bridge restarted with a new session finds its consoles still held
+    /// by the old one until that lease lapses: the registration goes out
+    /// again, backing off, until it is taken.
+    #[test]
+    fn a_console_held_by_another_session_is_registered_again_until_taken() {
+        let mut e = live(1);
+        let console = json!({ "type": "console", "id": "xt", "name": "X-Touch",
+            "protocol": "mcu", "transport": "bridge", "strips": 8, "bankOffset": 0 });
+        e.console(console.clone(), 0);
+        e.take_actions();
+        let refused =
+            json!({ "type": "error", "replica": { "id": "r1", "role": "leader" }, "code": 409,
+            "message": "console xt is connected to another session" })
+            .to_string();
+        // faderz keeps beating, so the link stays up.
+        let tick = |e: &mut Engine, t: u64| {
+            let ping =
+                json!({ "type": "ping", "replica": { "id": "r1", "role": "leader" }, "t": t });
+            e.received(1, &ping.to_string(), t);
+            e.tick(t);
+        };
+        let consoles_out = |e: &mut Engine| -> usize {
+            sent(&e.take_actions(), 1)
+                .iter()
+                .filter(|m| m["type"] == "console")
+                .count()
+        };
+        e.received(1, &refused, 10);
+        tick(&mut e, 10 + CONSOLE_RETRY_MS - 1);
+        assert_eq!(consoles_out(&mut e), 0);
+        tick(&mut e, 10 + CONSOLE_RETRY_MS);
+        assert_eq!(consoles_out(&mut e), 1);
+        // Refused again: the delay doubles.
+        let t = 10 + CONSOLE_RETRY_MS;
+        e.received(1, &refused, t);
+        tick(&mut e, t + 2 * CONSOLE_RETRY_MS - 1);
+        assert_eq!(consoles_out(&mut e), 0);
+        tick(&mut e, t + 2 * CONSOLE_RETRY_MS);
+        assert_eq!(consoles_out(&mut e), 1);
+        // Taken: the next refusal starts from the first delay again.
+        let ours = json!({ "type": "delta", "replica": { "id": "r1", "role": "leader" }, "revision": 6,
+            "changes": [{ "path": "/consoles", "value": [{ "id": "xt", "name": "X-Touch", "handle": e.handle(),
+                "protocol": "mcu", "transport": "bridge", "connected": true, "bankOffset": 0, "strips": 8 }] }] });
+        e.received(1, &ours.to_string(), 5000);
+        assert_eq!(e.console_refusals, 0);
     }
 
     #[test]
