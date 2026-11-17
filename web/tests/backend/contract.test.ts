@@ -140,9 +140,10 @@ describe('REST', () => {
     const registered = () =>
       seen.some((m) => JSON.stringify(m['changes'] ?? []).includes('"bankOffset":8') && JSON.stringify(m['changes']).includes('"connected":true'));
     await expect.poll(registered).toBe(true);
+    // Connected, it is not removed; once the session's lease has expired it is.
+    expect(await call('DELETE', path, '/consoles/{consoleId}')).toMatchObject({ status: 409, body: { message: 'console desk-1 is connected' } });
     ws.close();
-
-    expect((await call('DELETE', path, '/consoles/{consoleId}')).status).toBe(204);
+    await expect.poll(async () => (await call('DELETE', path, '/consoles/{consoleId}')).status, { timeout: 15000, interval: 500 }).toBe(204);
     expect((await call('DELETE', path, '/consoles/{consoleId}')).status).toBe(404);
   });
 

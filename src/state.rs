@@ -194,7 +194,7 @@ pub enum Answer {
     /// The scene a `StoreScene` stored.
     Scene { scene: String },
     /// 409 with a message alone: a console connected to another session,
-    /// or a declared one to remove.
+    /// or a declared or connected one to remove.
     Refused { message: String },
     /// The console a `PutConsole` created.
     Created,
@@ -922,6 +922,12 @@ impl Mixer {
         };
         if self.consoles[i].declared {
             let message = format!("console {console} is declared in the configuration");
+            return self.refuse(session, id, Answer::Refused { message });
+        }
+        // Removed now, it would come back at its session's next
+        // registration.
+        if self.consoles[i].connected {
+            let message = format!("console {console} is connected");
             return self.refuse(session, id, Answer::Refused { message });
         }
         self.consoles.remove(i);
@@ -2258,6 +2264,14 @@ mod tests {
             )
         );
         assert_eq!(put(&mut m, "p3", "desk", "Desk 2", None), Effect::Unchanged);
+        // Connected, it would come back at the next registration.
+        assert_eq!(remove(&mut m, "d0", "desk"), Effect::Unchanged);
+        let Some(Answer::Refused { message }) = m.answer(&rest_key(), "d0") else {
+            panic!("{:?}", m.answer(&rest_key(), "d0"))
+        };
+        assert_eq!(message, "console desk is connected");
+        assert_eq!(consoles(&m).len(), 1);
+        m.expire(&origin("a").key());
         values(&remove(&mut m, "d1", "desk"));
         assert!(consoles(&m).is_empty());
         assert_eq!(remove(&mut m, "d2", "desk"), Effect::Unchanged);

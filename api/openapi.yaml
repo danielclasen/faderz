@@ -399,9 +399,20 @@ paths:
           $ref: "#/components/responses/Console"
         "400":
           $ref: "#/components/responses/Error"
+        "404":
+          description: The console was removed between the update and the answer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       operationId: deleteConsole
       summary: Remove a console that is not declared in the configuration.
+      description: |
+        Refused with 409 for a declared console, and for one connected to a
+        session (ConsoleStatus.connected), which its next registration
+        would bring back; it can be removed once that session's lease has
+        expired.
       parameters:
         - $ref: "#/components/parameters/RequestHeader"
       responses:
@@ -414,7 +425,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
         "409":
-          description: The console is declared in the configuration.
+          description: The console is declared in the configuration, or connected.
           content:
             application/json:
               schema:

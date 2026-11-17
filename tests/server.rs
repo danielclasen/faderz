@@ -1341,5 +1341,45 @@ async fn rest_puts_and_deletes_consoles() {
             .contains("declared in the configuration"),
         "{e}"
     );
+    // A console connected to a session is not removed: its next
+    // registration would bring it back.
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    a.send(console("live", 0)).await;
+    let delta = a.next_of("delta").await;
+    assert_eq!(delta["changes"][0]["path"], "/consoles", "{delta}");
+    let (s, e) = rest
+        .call("DELETE", "/consoles/live", None, Some(ERROR))
+        .await;
+    assert_eq!(
+        (s, e["message"].as_str()),
+        (409, Some("console live is connected"))
+    );
+    let (_, all) = rest.call("GET", "/consoles", None, Some(list)).await;
+    assert!(
+        all.as_array().unwrap().iter().any(|c| c["id"] == "live"),
+        "{all}"
+    );
     server.stop().await;
+}
+
+/// Every status the console routes answer with is declared for them.
+#[test]
+fn the_console_routes_declare_their_statuses() {
+    let openapi: Value = serde_yaml::from_str(include_str!("../api/openapi.yaml")).unwrap();
+    let declared = |method: &str| -> Vec<String> {
+        let op = &openapi["paths"]["/consoles/{consoleId}"][method]["responses"];
+        op.as_object().unwrap().keys().cloned().collect()
+    };
+    let put = declared("put");
+    for status in ["200", "201", "400", "403", "404", "503"] {
+        assert!(put.contains(&status.to_owned()), "PUT {status}: {put:?}");
+    }
+    let delete = declared("delete");
+    for status in ["204", "403", "404", "409", "503"] {
+        assert!(
+            delete.contains(&status.to_owned()),
+            "DELETE {status}: {delete:?}"
+        );
+    }
 }
