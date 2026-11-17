@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/danielclasen/faderz/compare/v0.1.2...v0.1.3) (2026-11-17)
+
+
+### Bug Fixes
+
+* **sync:** size connection deadlines from the measured round trip ([#27](https://github.com/danielclasen/faderz/issues/27)) ([23c354d](https://github.com/danielclasen/faderz/commit/23c354d45eefc5562ce0b14cbe6020005bcb7ea3))
+
 ## [0.1.2](https://github.com/danielclasen/faderz/compare/v0.1.1...v0.1.2) (2026-11-16)
 
 
