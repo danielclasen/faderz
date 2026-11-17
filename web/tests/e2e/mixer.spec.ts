@@ -3,6 +3,7 @@ import { handleTag, ownerHandle } from '../../src/lib/net/handle';
 import { engineLamp } from '../../src/lib/counters';
 import { CONSOLE_SESSIONS } from '../../dev/mock/shape';
 import {
+  BACKEND,
   REPLICAS,
   RawClient,
   audit,
@@ -1432,12 +1433,12 @@ test('lists the consoles and every other session with what it holds, each once',
     await other.command({ type: 'touch', path: '/channels/ch4/fader' });
     await surface.command({ type: 'touch', path: '/channels/ch5/fader' });
     const key = page.getByRole('button', { name: /^Users \d+$/ });
-    // Two connected surfaces and one web client.
-    await expect(key).toHaveText('USERS  3');
+    // Two connected surfaces, this screen and one web client.
+    await expect(key).toHaveText('USERS  4');
     await key.click();
     const panel = page.getByRole('region', { name: 'Users' });
     await expect(panel).toBeVisible();
-    await expect(panel).toContainText('This screen');
+    await expect(panel.getByTestId('you')).toContainText('(you)');
     // Named by the tag of its handle, never by its session id.
     await expect(panel.getByTestId('user')).toHaveCount(1);
     await expect(panel.getByTestId('user')).toContainText(`web client ${handleTag(ownerHandle(other.session))}`);
@@ -1450,6 +1451,31 @@ test('lists the consoles and every other session with what it holds, each once',
     other.close();
     surface.close();
   }
+});
+
+test('lists every session connected to the replica in USERS, until it closes', async ({ page, browser, baseURL }) => {
+  // Presence is per replica: both pages on the same primary.
+  const ws = baseURL!.replace(/^http/, 'ws');
+  const path = BACKEND ? '/' : `/?endpoints=${ws}/__mock/replicas/r1/api/v1/ws,${ws}/__mock/replicas/r2/api/v1/ws`;
+  await live(page, path);
+  const key = page.getByRole('button', { name: /^Users \d+$/ });
+  await key.click();
+  const panel = page.getByRole('region', { name: 'Users' });
+  await expect(panel.getByTestId('you')).toContainText(handleTag(ownerHandle(await debug(page, 'session'))));
+  const count = Number((await key.getAttribute('aria-label'))!.split(' ')[1]);
+  const context = await browser.newContext();
+  const second = await context.newPage();
+  await live(second, path);
+  const tag = handleTag(ownerHandle(await debug(second, 'session')));
+  const row = panel.getByTestId('user').filter({ hasText: tag });
+  // Holding nothing, it is listed for being connected.
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('anonymous');
+  await expect(row).toContainText(`operator, web client ${tag}`);
+  await expect(key).toHaveAttribute('aria-label', `Users ${count + 1}`);
+  await context.close();
+  await expect(row).toHaveCount(0);
+  await expect(key).toHaveAttribute('aria-label', `Users ${count}`);
 });
 
 test('steps banks with [ and ], jumps to a channel by name or number, and spills a VCA', async ({ page, request }) => {

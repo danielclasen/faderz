@@ -324,6 +324,13 @@ handle tag, and the head's tooltip names every screen that has it
 selected. The cluster sends selections at most every 100 ms, and the
 client shows those of its primary connection.
 
+USERS counts the sessions connected to the primary connection's
+replica, this screen included, the connected control surfaces, and
+the sessions on other replicas that hold a control. Its panel lists
+each with who is signed in (the display name, or token or anonymous),
+the role, the handle tag, what it holds and what it has selected;
+every role sees it. Each replica knows only its own connections.
+
 A label cut off for lack of room, such as a long channel name, shows
 its full text in a tooltip: after a short hover, on keyboard focus (Tab
 to it) and on a touch held for 0.5 s; Escape closes it.

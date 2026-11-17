@@ -8,7 +8,7 @@
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getContext } from 'svelte';
-import type { Owner, Owners, Selection, Shape, State } from '../contract/types';
+import type { Owner, Owners, PresentSession, Selection, Shape, State } from '../contract/types';
 import { MeterStore } from '../meters/store';
 import type { Patch, SyncStatus, ToWorker } from '../sync/messages';
 import { handleTag } from '../net/handle';
@@ -73,6 +73,8 @@ export class MixerStore {
   notices = $state<Notice[]>([]);
   /** What every session has selected, this one included. */
   selections = $state.raw<Selection[]>([]);
+  /** The sessions connected to the primary's replica, this one included. */
+  presence = $state.raw<PresentSession[]>([]);
   /** Page time (Date.now()) when the worker last reported a failover. */
   failoverAt = $state<number | null>(null);
   /** Controls under the pointer or a keyboard adjust. */
@@ -306,6 +308,7 @@ export class MixerStore {
       this.countersReplica = p.counters.replica;
     }
     if (p.selections) this.selections = p.selections;
+    if (p.presence) this.presence = p.presence;
     for (const n of p.notices ?? []) {
       if (n.kind === 'request') {
         this.notify('request', `${this.ownerLabel(n.from)} asks for ${describePath(n.path, this.shape)}`, `asked:${n.path}`, n.path);

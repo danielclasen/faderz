@@ -1,35 +1,46 @@
 <script lang="ts">
-  // Who works on this mixer: this screen, the control surfaces and every
-  // other session that holds a control, with what it holds. The contract
-  // carries holders (owners), consoles and selections, not a list of
-  // connected screens: a session that holds nothing shows only as the
-  // initial on the strip it has selected.
+  // Who works on this mixer: every session connected to the primary's
+  // replica (presence), this screen first, the control surfaces, and the
+  // sessions on other replicas that hold a control. Each row says who is
+  // signed in, the role, and what the session holds and has selected.
   import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { describePath } from '../lib/state/paths';
   import { handleTag } from '../lib/net/handle';
-  import type { Owner } from '../lib/contract/types';
+  import { userRows, type UserRow } from '../lib/presence';
 
   const mixer = getMixer();
   let open = $state(false);
-  const holders = $derived.by(() => {
-    const by = new Map<string, { owner: Owner; paths: string[] }>();
-    for (const [path, owner] of Object.entries(mixer.owners)) {
-      if (!owner) continue;
-      const k = `${owner.principal}/${owner.handle}`;
-      const e = by.get(k) ?? { owner, paths: [] };
-      e.paths.push(path);
-      by.set(k, e);
-    }
-    return [...by.values()];
-  });
   const consoles = $derived(mixer.state?.consoles ?? []);
+  const rows = $derived(
+    userRows(
+      mixer.presence,
+      mixer.owners,
+      mixer.selections,
+      consoles.map((c) => c.handle),
+      mixer.status.you?.handle ?? mixer.status.handle,
+    ),
+  );
   /** What a console holds goes in its own row: each console is counted and listed once. */
-  const heldBy = (handle: string) => holders.find((h) => h.owner.kind === 'console' && h.owner.handle === handle);
-  const others = $derived(holders.filter((h) => !mixer.isMine(h.owner) && !(h.owner.kind === 'console' && consoles.some((c) => c.handle === h.owner.handle))));
+  const heldBy = (handle: string) =>
+    Object.entries(mixer.owners)
+      .filter(([, o]) => o?.kind === 'console' && o.handle === handle)
+      .map(([p]) => p);
   /** A short screen (App.svelte): USR, so the notice line keeps room. */
   const short = new MediaQuery('max-height: 500px');
-  const count = $derived(others.length + consoles.filter((c) => c.connected).length);
+  const count = $derived(rows.length + consoles.filter((c) => c.connected).length);
+  const kindLabel = (kind: string) => (kind === 'ui' ? 'web client' : kind);
+  function elementName(id: string): string {
+    const s = mixer.shape;
+    return [...(s?.channels ?? []), ...(s?.buses ?? []), ...(s?.auxes ?? []), ...(s?.mixMinus ?? [])].find((e) => e.id === id)?.name ?? id;
+  }
+  function detail(r: UserRow): string {
+    const parts = [...(r.role ? [r.role] : []), `${kindLabel(r.kind)} ${handleTag(r.handle)}`];
+    if (r.holds.length > 0) parts.push(`holds ${r.holds.map((p) => describePath(p, mixer.shape)).join(', ')}`);
+    if (r.selected) parts.push(`selected ${elementName(r.selected)}`);
+    if (r.elsewhere) parts.push('on another replica');
+    return parts.join(', ');
+  }
 </script>
 
 <div class="users">
@@ -37,26 +48,25 @@
     ><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(count).padStart(2)}</span></button
   >
   <div class="panel" class:open id="users-panel" role="region" aria-label="Users">
-    <div class="row you"><b>This screen</b><span class="num">{handleTag(mixer.status.handle)}</span></div>
+    {#each rows as r (r.handle)}
+      <div class="row" data-testid={r.you ? 'you' : 'user'}>
+        <b>{r.user}{r.you ? ' (you)' : ''}</b>
+        <span>{detail(r)}</span>
+      </div>
+    {/each}
     {#each consoles as c (c.id)}
       {@const held = heldBy(c.handle)}
       <div class="row" data-testid="console">
         <b>{c.name}</b>
         <span
-          >{c.protocol.toUpperCase()}, {c.connected ? `strips ${c.bankOffset + 1}-${c.bankOffset + c.strips}` : 'disconnected'}{held
-            ? `, holds ${held.paths.map((p) => describePath(p, mixer.shape)).join(', ')}`
+          >{c.protocol.toUpperCase()}, {c.connected ? `strips ${c.bankOffset + 1}-${c.bankOffset + c.strips}` : 'disconnected'}{held.length > 0
+            ? `, holds ${held.map((p) => describePath(p, mixer.shape)).join(', ')}`
             : ''}</span
         >
       </div>
     {/each}
-    {#each others as h (h.owner.handle)}
-      <div class="row" data-testid="user">
-        <b>{mixer.ownerLabel(h.owner)}</b>
-        <span>holds {h.paths.map((p) => describePath(p, mixer.shape)).join(', ')}</span>
-      </div>
-    {/each}
-    {#if others.length === 0}
-      <div class="row none">No other session holds a control.</div>
+    {#if rows.length === 0}
+      <div class="row none">Not connected.</div>
     {/if}
   </div>
 </div>
