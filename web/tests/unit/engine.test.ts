@@ -1361,40 +1361,148 @@ describe('sync engine: slow and lossy links', () => {
 
   it('raises and lowers its deadlines with the measured round trip, within their floors and caps', () => {
     const t = setup();
-    expect(t.engine.connectTimeout()).toBe(FIRST_CONNECT_TIMEOUT_MS);
+    expect(t.engine.connectTimeout('primary')).toBe(FIRST_CONNECT_TIMEOUT_MS);
     const feed = (ms: number, n: number) => {
       for (let i = 0; i < n; i++) t.engine.input({ type: 'rtt', ms });
     };
     feed(1, 50);
-    expect(t.engine.connectTimeout()).toBe(CONNECT_TIMEOUT_MS);
+    expect(t.engine.connectTimeout('primary')).toBe(CONNECT_TIMEOUT_MS);
     expect(t.engine.syncTimeout()).toBe(SYNC_TIMEOUT_MS);
     expect(t.engine.deadMs()).toBeLessThan(DEAD_MS + 5);
     expect(t.engine.suspectMs()).toBeLessThan(SUSPECT_MS + 5);
 
     feed(1500, 50);
-    expect(t.engine.connectTimeout()).toBeGreaterThanOrEqual(4 * 1500);
-    expect(t.engine.connectTimeout()).toBeLessThan(4 * 1550);
+    expect(t.engine.connectTimeout('primary')).toBeGreaterThanOrEqual(4 * 1500);
+    expect(t.engine.connectTimeout('primary')).toBeLessThan(4 * 1550);
     expect(t.engine.syncTimeout()).toBeGreaterThanOrEqual(2000 + 2 * 1500);
     expect(t.engine.syncTimeout()).toBeLessThan(2000 + 2 * 1550);
     expect(t.engine.deadMs()).toBeGreaterThanOrEqual(DEAD_MS + 1500);
     expect(t.engine.deadMs()).toBeLessThan(DEAD_MS + 1550);
 
     feed(50_000, 50);
-    expect(t.engine.connectTimeout()).toBe(CONNECT_TIMEOUT_CAP_MS);
+    expect(t.engine.connectTimeout('primary')).toBe(CONNECT_TIMEOUT_CAP_MS);
     expect(t.engine.syncTimeout()).toBe(SYNC_TIMEOUT_CAP_MS);
     expect(t.engine.deadMs()).toBe(DEAD_MS + SLACK_CAP_MS);
 
     feed(1, 100);
-    expect(t.engine.connectTimeout()).toBe(CONNECT_TIMEOUT_MS);
+    expect(t.engine.connectTimeout('primary')).toBe(CONNECT_TIMEOUT_MS);
     expect(t.engine.syncTimeout()).toBe(SYNC_TIMEOUT_MS);
     expect(t.engine.deadMs()).toBeLessThan(DEAD_MS + 5);
   });
 
-  it('measures the round trip from the pongs that answer its pings', () => {
-    const { clock, engine, primary } = live();
-    beats(clock, 2000, [primary, R1]);
-    primary.deliver({ type: 'pong', replica: R1, t: clock.now() - 1500 });
+  it('measures the round trip only from pongs that answer a ping it sent on that connection, once each', () => {
+    const { clock, engine, primary, standby } = live();
+    beats(clock, 2000, [primary, R1], [standby, R2]);
+    const sent = primary.ofType('ping').map((p) => p.t);
+    const t = clock.now() - 1500;
+    expect(sent).toContain(t);
+    // No ping of this client carries this t.
+    primary.deliver({ type: 'pong', replica: R1, t: t + 1 });
+    expect(engine.rtt.srtt).toBeNull();
+    primary.deliver({ type: 'pong', replica: R1, t });
     expect(engine.rtt.srtt).toBe(1500);
+    // The same answer again, and an answer to an earlier ping it passed over.
+    primary.deliver({ type: 'pong', replica: R1, t });
+    primary.deliver({ type: 'pong', replica: R1, t: t - HEARTBEAT_MS });
+    expect(engine.rtt.srtt).toBe(1500);
+  });
+
+  it('keeps a primary deadline at its floor while a silent standby endpoint is abandoned again and again', () => {
+    const t = setup(['ws://a/ws', 'ws://b/ws']);
+    t.engine.input({ type: 'rtt', ms: 5 });
+    const a = t.sockets[0]!;
+    a.open();
+    a.deliver(replicas(R1));
+    a.deliver(snapshot(R1, 1));
+    // The standby endpoint never answers: each attempt there is abandoned.
+    for (let i = 0; i < 6; i++) {
+      const sb = t.sockets.at(-1)!;
+      expect(sb.url).toBe(`ws://b/ws?session=${SESSION}`);
+      beats(t.clock, t.engine.connectTimeout('standby') + 30_000, [a, R1]);
+      expect(sb.closed).toBe(true);
+    }
+    expect(t.engine.connectTimeout('standby')).toBe(CONNECT_TIMEOUT_CAP_MS);
+    expect(t.engine.connectTimeout('primary')).toBe(CONNECT_TIMEOUT_MS);
+    a.drop();
+    t.clock.advance(PRIMARY_RETRY_MS[1]!);
+    const b = t.sockets.find((s) => s.url === `ws://b/ws?session=${SESSION}` && !s.closed)!;
+    t.clock.advance(CONNECT_TIMEOUT_MS - 1);
+    expect(b.closed).toBe(false);
+    t.clock.advance(1);
+    expect(b.closed).toBe(true);
+  });
+
+  it('shortens the deadline of a first socket still opening once a round trip is measured, never below the floor', () => {
+    const t = setup();
+    const first = t.sockets[0]!;
+    t.clock.advance(500);
+    t.engine.input({ type: 'rtt', ms: 5 });
+    t.clock.advance(CONNECT_TIMEOUT_MS - 500 - 1);
+    expect(first.closed).toBe(false);
+    t.clock.advance(1);
+    expect(first.closed).toBe(true);
+
+    // A slow measurement lengthens nothing past the first-connect deadline.
+    const s = setup();
+    s.engine.input({ type: 'rtt', ms: 5000 });
+    s.clock.advance(FIRST_CONNECT_TIMEOUT_MS - 1);
+    expect(s.sockets[0]!.closed).toBe(false);
+    s.clock.advance(1);
+    expect(s.sockets[0]!.closed).toBe(true);
+  });
+
+  it('doubles the sync timeout per primary in a row left without an answer, and resets it once one syncs', () => {
+    const t = setup(['ws://a/ws', 'ws://b/ws']);
+    t.engine.input({ type: 'rtt', ms: 5 });
+    const silent = (n: number) => {
+      const s = t.sockets.filter((x) => !x.closed).at(-1)!;
+      s.open();
+      const deadline = n === 0 ? SYNC_TIMEOUT_MS : 2 ** n * SYNC_TIMEOUT_MS;
+      beats(t.clock, deadline - HEARTBEAT_MS, [s, R1]);
+      expect(s.closed).toBe(false);
+      beats(t.clock, 2 * HEARTBEAT_MS, [s, R1]);
+      expect(s.closed).toBe(true);
+      t.clock.advance(1000);
+    };
+    silent(0);
+    silent(1);
+    expect(t.engine.syncTimeout()).toBe(4 * SYNC_TIMEOUT_MS);
+    const s = t.sockets.filter((x) => !x.closed).at(-1)!;
+    s.open();
+    s.deliver(replicas(R1));
+    s.deliver(snapshot(R1, 1));
+    expect(t.engine.link).toBe('Live');
+    expect(t.engine.syncTimeout()).toBe(SYNC_TIMEOUT_MS);
+  });
+
+  it('starts its Offline backoff over once a primary syncs', () => {
+    const t = setup(['ws://a/ws'], SEQ_BASE, () => 0);
+    let seen = 0;
+    const refuseUntilOffline = () => {
+      for (let i = 0; i < 1000 && t.engine.link !== 'Offline'; i++) {
+        for (; seen < t.sockets.length; seen++) t.sockets[seen]!.drop();
+        t.clock.advance(10);
+      }
+      expect(t.engine.link).toBe('Offline');
+    };
+    const retryAfter = () => {
+      const from = t.clock.now();
+      while (t.engine.link === 'Offline') t.clock.advance(10);
+      return t.clock.now() - from;
+    };
+    refuseUntilOffline();
+    expect(retryAfter()).toBeLessThanOrEqual(OFFLINE_RETRY_MS);
+    refuseUntilOffline();
+    expect(retryAfter()).toBeGreaterThan(OFFLINE_RETRY_MS);
+    const s = t.sockets.at(-1)!;
+    seen = t.sockets.length;
+    s.open();
+    s.deliver(replicas(R1));
+    s.deliver(snapshot(R1, 1));
+    expect(t.engine.link).toBe('Live');
+    s.drop();
+    refuseUntilOffline();
+    expect(retryAfter()).toBeLessThanOrEqual(OFFLINE_RETRY_MS);
   });
 
   it('keeps a live link over a 1.5 s round trip whose traffic stalls behind a retransmission', () => {

@@ -139,6 +139,10 @@ class Link {
   lastRx: number;
   readonly createdAt: number;
   cancelWatch: (() => void) | null = null;
+  /** Until it opens: the time it is abandoned at if still opening. */
+  connectBy = Infinity;
+  /** t of the pings sent and not answered yet, oldest first. */
+  readonly pings: number[] = [];
 
   constructor(
     public role: Role,
@@ -196,8 +200,11 @@ export class SyncEngine {
   private standbyAttempts = 0;
   /** Offline periods in a row, since the last sync. */
   private offlineRounds = 0;
-  /** Sockets in a row, primary or standby, abandoned before they opened. */
-  private connectTimeouts = 0;
+  /**
+   * Sockets in a row abandoned before they opened, per role: a standby
+   * endpoint that never answers lengthens no primary deadline.
+   */
+  private readonly connectTimeouts: Record<Role, number> = { primary: 0, standby: 0 };
   /** Primaries in a row left for giving no state in time. */
   private syncTimeouts = 0;
   /** Round trips of pings, and the page's own request to the server. */
@@ -242,16 +249,16 @@ export class SyncEngine {
    * How long a new socket may take to open: FIRST_CONNECT_TIMEOUT_MS while
    * nothing is known about the link, else the larger of the floor,
    * CONNECT_ROUND_TRIPS round trips and the open estimate; doubled per
-   * socket in a row abandoned unopened, up to the cap.
+   * socket of `role` in a row abandoned unopened, up to the cap.
    */
-  connectTimeout(): number {
+  connectTimeout(role: Role): number {
     const rt = this.rtt.rto;
     const open = this.opening.rto;
     const base =
       rt === null && open === null
         ? FIRST_CONNECT_TIMEOUT_MS
         : Math.max(CONNECT_TIMEOUT_MS, CONNECT_ROUND_TRIPS * (rt ?? 0), open ?? 0);
-    return backoff(base, this.connectTimeouts, CONNECT_TIMEOUT_CAP_MS);
+    return backoff(base, this.connectTimeouts[role], CONNECT_TIMEOUT_CAP_MS);
   }
 
   /**
@@ -290,7 +297,13 @@ export class SyncEngine {
     this.openPrimary();
     const beat = () => {
       const t = Math.max(0, Math.floor(this.clock.now()));
-      for (const l of [this.primary, this.standby]) if (l?.opened) this.send(l, { type: 'ping', t });
+      for (const l of [this.primary, this.standby]) {
+        if (!l?.opened) continue;
+        this.send(l, { type: 'ping', t });
+        l.pings.push(t);
+        // Pings a dead peer never answers: the watch closes it long before.
+        if (l.pings.length > 64) l.pings.shift();
+      }
       this.sweep();
       this.deadline(beat, HEARTBEAT_MS);
     };
@@ -315,7 +328,13 @@ export class SyncEngine {
 
   input(msg: ToWorker): void {
     // A round trip the page measured is not a page input a patch answers.
-    if (msg.type === 'rtt') return this.rtt.sample(msg.ms);
+    if (msg.type === 'rtt') {
+      this.rtt.sample(msg.ms);
+      // A socket opened before anything was measured waits no longer
+      // than the measurement allows.
+      for (const l of [this.primary, this.standby]) if (l && !l.opened) this.armConnect(l);
+      return;
+    }
     this.inputs++;
     switch (msg.type) {
       case 'set':
@@ -471,13 +490,7 @@ export class SyncEngine {
     const socket = this.deps.socket(withSession(this.deps.endpoints[index]!, this.deps.session));
     socket.binaryType = 'arraybuffer';
     const link = new Link(role, index, socket, this.clock.now());
-    // Only a socket still opening at its deadline is abandoned here; one
-    // the peer refuses or closes fails through onclose at once.
-    link.cancelWatch = this.deadline(() => {
-      if (link !== this.primary && link !== this.standby) return;
-      this.connectTimeouts++;
-      this.closed(link, 'lost');
-    }, this.connectTimeout());
+    this.armConnect(link);
     socket.onopen = () => this.opened(link);
     socket.onmessage = (ev) => this.message(link, ev.data);
     socket.onclose = () => this.closed(link, 'lost');
@@ -485,6 +498,24 @@ export class SyncEngine {
       // onclose follows and handles the failure.
     };
     return link;
+  }
+
+  /**
+   * Arms the connect deadline of a link still opening, or moves it
+   * earlier when connectTimeout() has shrunk since; never later. Only a
+   * socket still opening at its deadline is abandoned here; one the peer
+   * refuses or closes fails through onclose at once.
+   */
+  private armConnect(link: Link): void {
+    const by = link.createdAt + this.connectTimeout(link.role);
+    if (by >= link.connectBy) return;
+    link.connectBy = by;
+    link.cancelWatch?.();
+    link.cancelWatch = this.deadline(() => {
+      if (link !== this.primary && link !== this.standby) return;
+      this.connectTimeouts[link.role]++;
+      this.closed(link, 'lost');
+    }, by - this.clock.now());
   }
 
   private detach(link: Link): void {
@@ -506,7 +537,7 @@ export class SyncEngine {
     link.opened = true;
     link.lastRx = this.clock.now();
     this.opening.sample(link.lastRx - link.createdAt);
-    this.connectTimeouts = 0;
+    this.connectTimeouts[link.role] = 0;
     this.watch(link);
     if (link.role === 'primary') {
       this.credits = 0;
@@ -763,9 +794,15 @@ export class SyncEngine {
     switch (msg.type) {
       case 'ping':
         return this.send(link, { type: 'pong', t: msg.t });
-      case 'pong':
-        // t is this clock's time the ping was sent, floored.
+      case 'pong': {
+        // A sample only for a ping this client sent on this link, whose t
+        // is this clock's time it was sent, floored; earlier pings still
+        // unanswered will not be.
+        const i = link.pings.indexOf(msg.t);
+        if (i < 0) return;
+        link.pings.splice(0, i + 1);
         return this.rtt.sample(this.clock.now() - msg.t);
+      }
       case 'replicas':
         link.replicas = msg.replicas;
         if (link === this.standby && this.standbyState !== 'Connecting' && !this.standbySuitable(link)) {
