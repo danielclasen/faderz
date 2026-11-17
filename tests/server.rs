@@ -65,6 +65,10 @@ async fn start(dir: &std::path::Path) -> Server {
 }
 
 async fn start_with(dir: &std::path::Path, auth: Value) -> Server {
+    start_configured(dir, auth, json!([])).await
+}
+
+async fn start_configured(dir: &std::path::Path, auth: Value, consoles: Value) -> Server {
     let listener = json!({ "bind": "127.0.0.1", "port": 0 });
     let config = json!({
         "listeners": { "api": listener, "ops": listener, "nmos": listener },
@@ -73,6 +77,7 @@ async fn start_with(dir: &std::path::Path, auth: Value) -> Server {
         "api": { "allowedOrigins": ["http://faderz.test"] },
         "replica": { "name": "r1", "dataDir": dir },
         "shape": shape(),
+        "consoles": consoles,
     });
     let (config, shape, name) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
     Server::start(&config, shape, name, None).await.unwrap()
@@ -773,6 +778,13 @@ async fn a_viewer_cannot_write() {
         (e["code"].as_u64(), e["message"].as_str()),
         (Some(400), Some("operator role required"))
     );
+    v.send(console("xt-1", 0)).await;
+    let e = v.next_of("error").await;
+    assert_eq!(
+        (e["code"].as_u64(), e["message"].as_str()),
+        (Some(400), Some("operator role required"))
+    );
+    assert!(e.get("commandId").is_none(), "{e}");
     server.stop().await;
 }
 
@@ -1156,5 +1168,178 @@ async fn presence_names_a_token_session_token() {
     let p = a.next_of("presence").await;
     assert_eq!(p["sessions"][0]["user"], "token");
     let _ = std::fs::remove_file(token);
+    server.stop().await;
+}
+
+/// A `console` message for console `id` at bank `bank`.
+fn console(id: &str, bank: u64) -> Value {
+    json!({
+        "type": "console", "id": id, "name": "Bridge name", "protocol": "mcu",
+        "transport": "bridge", "strips": 8, "bankOffset": bank,
+    })
+}
+
+/// A registration reaches every client as one change of /consoles, with
+/// the registering session's handle; another session is refused while it
+/// is connected; the same registration again changes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_console_message_registers_a_console_of_its_session() {
+    let dir = data_dir();
+    let declared = json!([{ "id": "xt-1", "name": "X-Touch" }]);
+    let server = start_configured(&dir, json!({ "mode": "none" }), declared).await;
+    let mut a = Client::connect(&server, SESSION_A).await;
+    let snapshot = a.hello().await;
+    let status = |handle: Value, connected: bool, bank: u64| {
+        json!([{
+            "id": "xt-1", "name": "X-Touch", "handle": handle, "protocol": "mcu",
+            "transport": "bridge", "connected": connected, "bankOffset": bank, "strips": 8,
+        }])
+    };
+    assert_eq!(snapshot["state"]["consoles"], status(Value::Null, false, 0));
+    let mut b = Client::connect(&server, SESSION_B).await;
+    b.hello().await;
+    a.send(console("xt-1", 8)).await;
+    let registered = status(snapshot["you"]["handle"].clone(), true, 8);
+    for c in [&mut a, &mut b] {
+        let delta = c.next_of("delta").await;
+        assert_eq!(
+            delta["changes"],
+            json!([{ "path": "/consoles", "value": registered }])
+        );
+        assert!(delta.get("origins").is_none(), "{delta}");
+    }
+    b.send(console("xt-1", 0)).await;
+    let e = b.next_of("error").await;
+    assert_eq!(e["code"], 409, "{e}");
+    assert!(e.get("commandId").is_none(), "{e}");
+    // Unchanged: the next message is the answer to the set after it.
+    a.send(console("xt-1", 8)).await;
+    let id = a
+        .command("set", "/channels/ch1/fader", Some(json!(-3)))
+        .await;
+    let next = a.next().await;
+    assert_eq!(next["origins"][0]["commandId"], id, "{next}");
+    let (_, state) = Rest::new(&server)
+        .call(
+            "GET",
+            "/state",
+            None,
+            Some("/paths/~1state/get/responses/200/content/application~1json/schema"),
+        )
+        .await;
+    assert_eq!(state["state"]["consoles"], registered);
+    server.stop().await;
+}
+
+/// More than 20 console messages within a second on one connection are
+/// refused with 429.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn console_messages_are_rate_limited() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    for _ in 0..25 {
+        a.send(console("xt-1", 0)).await;
+    }
+    let errors: Vec<Value> = a
+        .during(Duration::from_millis(500))
+        .await
+        .into_iter()
+        .filter(|m| m["type"] == "error")
+        .collect();
+    assert!(!errors.is_empty());
+    assert!(errors.iter().all(|e| e["code"] == 429), "{errors:?}");
+    server.stop().await;
+}
+
+/// REST creates, updates and removes consoles; a declared one is not
+/// removed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rest_puts_and_deletes_consoles() {
+    let dir = data_dir();
+    let declared = json!([{ "id": "xt-1", "name": "X-Touch" }]);
+    let server = start_configured(&dir, json!({ "mode": "none" }), declared).await;
+    let rest = Rest::new(&server);
+    let status = "/components/responses/Console/content/application~1json/schema";
+    let (s, created) = rest
+        .call(
+            "PUT",
+            "/consoles/desk",
+            Some(json!({ "name": "Desk" })),
+            Some(status),
+        )
+        .await;
+    assert_eq!(s, 201);
+    assert_eq!(
+        created,
+        json!({
+            "id": "desk", "name": "Desk", "handle": null, "protocol": "mcu",
+            "transport": "bridge", "connected": false, "bankOffset": 0, "strips": 8,
+        })
+    );
+    let (s, updated) = rest
+        .call(
+            "PUT",
+            "/consoles/desk",
+            Some(json!({ "name": "Desk 2", "protocol": "osc", "strips": 16 })),
+            Some(status),
+        )
+        .await;
+    assert_eq!(s, 200);
+    assert_eq!(
+        (
+            &updated["name"],
+            &updated["protocol"],
+            &updated["transport"],
+            &updated["strips"]
+        ),
+        (
+            &json!("Desk 2"),
+            &json!("osc"),
+            &json!("bridge"),
+            &json!(16)
+        )
+    );
+    let list = "/paths/~1consoles/get/responses/200/content/application~1json/schema";
+    let (_, all) = rest.call("GET", "/consoles", None, Some(list)).await;
+    assert_eq!(all[0]["id"], "xt-1");
+    assert_eq!(all[1], updated);
+    let bad = Some(json!({ "name": "" }));
+    assert_eq!(
+        rest.call("PUT", "/consoles/desk", bad, Some(ERROR)).await.0,
+        400
+    );
+    let bad = Some(json!({ "name": "A", "strips": 0 }));
+    assert_eq!(
+        rest.call("PUT", "/consoles/desk", bad, Some(ERROR)).await.0,
+        400
+    );
+    let bad = Some(json!({ "name": "A" }));
+    assert_eq!(
+        rest.call("PUT", "/consoles/Desk", bad, Some(ERROR)).await.0,
+        400
+    );
+    assert_eq!(
+        rest.call("DELETE", "/consoles/desk", None, None).await.0,
+        204
+    );
+    assert_eq!(
+        rest.call("DELETE", "/consoles/desk", None, Some(ERROR))
+            .await
+            .0,
+        404
+    );
+    let (s, e) = rest
+        .call("DELETE", "/consoles/xt-1", None, Some(ERROR))
+        .await;
+    assert_eq!(s, 409);
+    assert!(
+        e["message"]
+            .as_str()
+            .unwrap()
+            .contains("declared in the configuration"),
+        "{e}"
+    );
     server.stop().await;
 }

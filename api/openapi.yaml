@@ -337,6 +337,88 @@ paths:
           description: Reset.
         "404":
           $ref: "#/components/responses/Error"
+  /consoles:
+    get:
+      operationId: getConsoles
+      summary: Read the consoles, as the state's /consoles carries them.
+      responses:
+        "200":
+          description: Consoles.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "./ws/model.schema.json#/$defs/ConsoleStatus"
+  /consoles/{consoleId}:
+    parameters:
+      - $ref: "#/components/parameters/ConsoleId"
+    put:
+      operationId: putConsole
+      summary: Create a console or update its descriptor.
+      description: |
+        Keeps the console's handle, connected and bankOffset, which its
+        registering session sets (ws/client-message.schema.json Console).
+        A field left out keeps its value, or takes its default on a new
+        console: protocol mcu, transport bridge, strips 8. A declared
+        console keeps the name of the configuration. Answered with the
+        console's status, 201 when it was created. At most 64 consoles
+        besides the declared ones.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                protocol:
+                  type: string
+                  enum: [mcu, hui, osc]
+                transport:
+                  type: string
+                  enum: [alsa-midi, bridge, osc-udp]
+                strips:
+                  type: integer
+                  minimum: 1
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
+        "200":
+          $ref: "#/components/responses/Console"
+        "201":
+          $ref: "#/components/responses/Console"
+        "400":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteConsole
+      summary: Remove a console that is not declared in the configuration.
+      parameters:
+        - $ref: "#/components/parameters/RequestHeader"
+      responses:
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/NotApplied"
+        "204":
+          description: Removed.
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: The console is declared in the configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /ws:
     get:
       operationId: openWebSocket
@@ -511,6 +593,12 @@ components:
       required: true
       schema:
         $ref: "./ws/model.schema.json#/$defs/Id"
+    ConsoleId:
+      name: consoleId
+      in: path
+      required: true
+      schema:
+        $ref: "./ws/model.schema.json#/$defs/Id"
   schemas:
     Session:
       type: object
@@ -588,6 +676,12 @@ components:
                 $ref: "./ws/model.schema.json#/$defs/Scene"
               result:
                 $ref: "#/components/schemas/CommandResult"
+    Console:
+      description: The console's status.
+      content:
+        application/json:
+          schema:
+            $ref: "./ws/model.schema.json#/$defs/ConsoleStatus"
     Error:
       description: The request was refused.
       content:

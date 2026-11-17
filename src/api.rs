@@ -23,7 +23,10 @@ use serde_json::{Value, json};
 
 use crate::app::{App, now_rfc3339, uuid};
 use crate::contract::{Contract, check, contract};
-use crate::state::{Answer, Command, Write};
+use crate::state::{
+    Answer, Command, Console, ConsolePut, Write, default_protocol, default_strips,
+    default_transport,
+};
 
 /// The session REST writes are ordered and deduplicated under, one per
 /// principal; shorter than any client session id, so no client shares it.
@@ -38,6 +41,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/scenes/{scene}/recall", post(recall_scene))
         .route("/afv/tally", post(post_tally).put(put_tally))
         .route("/loudness/reset", post(reset_loudness))
+        .route("/consoles", get(get_consoles))
+        .route(
+            "/consoles/{console}",
+            put(put_console).delete(delete_console),
+        )
         .with_state(app)
 }
 
@@ -119,7 +127,8 @@ async fn run(app: &App, owner: &Owner, id: &str, command: Command) -> Result<Ack
         }
         Some(Answer::NotFound { message }) => Err(error(StatusCode::NOT_FOUND, message)),
         Some(Answer::Invalid { message }) => Err(error(StatusCode::BAD_REQUEST, message)),
-        Some(Answer::Scene { .. }) | None => Ok(ack),
+        Some(Answer::Refused { message }) => Err(error(StatusCode::CONFLICT, message)),
+        Some(Answer::Scene { .. } | Answer::Created) | None => Ok(ack),
     }
 }
 
@@ -460,6 +469,104 @@ async fn reset_loudness(State(app): State<Arc<App>>, bytes: Bytes) -> Response {
         if let Some(id) = unknown {
             return Err(error(StatusCode::NOT_FOUND, format!("unknown bus {id}")));
         }
+        Ok(StatusCode::NO_CONTENT.into_response())
+    };
+    run.await.unwrap_or_else(|e| e)
+}
+
+async fn get_consoles(State(app): State<Arc<App>>) -> Response {
+    let consoles = app
+        .replica
+        .store()
+        .with_state(|sm| sm.product.state()["consoles"].clone());
+    Json(consoles).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConsoleBody {
+    name: String,
+    protocol: Option<String>,
+    transport: Option<String>,
+    strips: Option<u64>,
+}
+
+/// Creates console `console` (201) or updates its descriptor (200), and
+/// answers with its status. A field left out keeps its value, or takes its
+/// default on a new console; a declared console keeps the name of the
+/// configuration.
+async fn put_console(
+    State(app): State<Arc<App>>,
+    identity: Option<Extension<Identity>>,
+    Path(console): Path<String>,
+    bytes: Bytes,
+) -> Response {
+    let run = async {
+        let b: ConsoleBody = body(&bytes)?;
+        let checked = Console {
+            id: console.clone(),
+            name: b.name.clone(),
+            protocol: b.protocol.clone().unwrap_or_else(default_protocol),
+            transport: b.transport.clone().unwrap_or_else(default_transport),
+            strips: b.strips.unwrap_or_else(default_strips),
+        };
+        valid(
+            |c| &c.console_status,
+            "console",
+            &checked.status(None, false, 0),
+        )?;
+        let owner = owner(identity.map(|Extension(i)| i));
+        let id = uuid()
+            .map_err(|e| error(StatusCode::SERVICE_UNAVAILABLE, format!("not applied: {e}")))?;
+        let command = Command::PutConsole {
+            id: id.clone(),
+            console: ConsolePut {
+                id: console.clone(),
+                name: b.name,
+                protocol: b.protocol,
+                transport: b.transport,
+                strips: b.strips,
+            },
+        };
+        let ack = run(&app, &owner, &id, command).await?;
+        let created = matches!(
+            app.answer(&SessionKey::from(&owner), &ack),
+            Some(Answer::Created)
+        );
+        let status = app
+            .replica
+            .store()
+            .with_state(|sm| sm.product.console(&console));
+        let Some(status) = status else {
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                "the console was removed since",
+            ));
+        };
+        let code = if created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        };
+        Ok((code, Json(status)).into_response())
+    };
+    run.await.unwrap_or_else(|e| e)
+}
+
+async fn delete_console(
+    State(app): State<Arc<App>>,
+    identity: Option<Extension<Identity>>,
+    Path(console): Path<String>,
+) -> Response {
+    let run = async {
+        let owner = owner(identity.map(|Extension(i)| i));
+        let id = uuid()
+            .map_err(|e| error(StatusCode::SERVICE_UNAVAILABLE, format!("not applied: {e}")))?;
+        let command = Command::RemoveConsole {
+            id: id.clone(),
+            console,
+        };
+        run(&app, &owner, &id, command).await?;
         Ok(StatusCode::NO_CONTENT.into_response())
     };
     run.await.unwrap_or_else(|e| e)

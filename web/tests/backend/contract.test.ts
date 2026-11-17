@@ -113,6 +113,39 @@ describe('REST', () => {
     expect((await call('POST', '/loudness/reset', '/loudness/reset', { ids: ['ch1'] })).status).toBe(404);
   });
 
+  it('creates, lists and removes consoles, and takes a registration over the WebSocket', async () => {
+    const path = '/consoles/desk-1';
+    const created = await call('PUT', path, '/consoles/{consoleId}', { name: 'Desk' });
+    expect(created).toMatchObject({ status: 201, body: { id: 'desk-1', handle: null, connected: false, strips: 8 } });
+    const updated = await call('PUT', path, '/consoles/{consoleId}', { name: 'Desk', strips: 16 });
+    expect(updated).toMatchObject({ status: 200, body: { strips: 16 } });
+    expect((await call('GET', '/consoles', '/consoles')).body).toContainEqual(updated.body);
+
+    const session = `contract-${id()}`;
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/api/v1/ws?session=${session}`);
+    const seen: Array<Record<string, unknown>> = [];
+    ws.on('message', (data, binary) => {
+      if (binary) return;
+      const m = JSON.parse(String(data)) as Record<string, unknown>;
+      contract.assertServerMessage(m);
+      seen.push(m);
+      if (m['type'] === 'ping') ws.send(JSON.stringify({ type: 'pong', t: m['t'] }));
+    });
+    await new Promise((r) => ws.once('open', r));
+    ws.send(JSON.stringify({ type: 'hello', session, kind: 'console', mode: 'primary' }));
+    await expect.poll(() => seen.some((m) => m['type'] === 'snapshot')).toBe(true);
+    const registration = { type: 'console', id: 'desk-1', name: 'Desk', protocol: 'mcu', transport: 'bridge', strips: 16, bankOffset: 8 };
+    expect(contract.checkClientMessage(registration)).toBeNull();
+    ws.send(JSON.stringify(registration));
+    const registered = () =>
+      seen.some((m) => JSON.stringify(m['changes'] ?? []).includes('"bankOffset":8') && JSON.stringify(m['changes']).includes('"connected":true'));
+    await expect.poll(registered).toBe(true);
+    ws.close();
+
+    expect((await call('DELETE', path, '/consoles/{consoleId}')).status).toBe(204);
+    expect((await call('DELETE', path, '/consoles/{consoleId}')).status).toBe(404);
+  });
+
   it('refuses a state-changing request without X-Samplez-Request', async () => {
     const res = await fetch(`${BASE}/state`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     // samplez-service answers 403 before faderz sees the request, with no
