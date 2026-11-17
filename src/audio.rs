@@ -53,7 +53,7 @@ pub struct Audio {
     resend: Notify,
     /// Each channel's meter gain in the state last applied
     /// ([`mix::meter_taps`]).
-    taps: Mutex<Vec<f64>>,
+    taps: Mutex<Vec<mix::MeterTap>>,
     resends: Counter,
     resend_pending: Gauge,
 }

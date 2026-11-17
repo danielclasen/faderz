@@ -152,19 +152,32 @@ pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
     m
 }
 
-/// The gain of each channel's meter, the same on every leg: the
-/// engine meters the channel after its strip, which is the input and
-/// pre-fader tap; a post-fader `meterTap` adds the fader, mute and VCAs.
-pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<f64> {
+/// A channel's gains after its strip, the same on every leg.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeterTap {
+    /// At its `meterTap`.
+    pub meter: f64,
+    /// At its direct out's tap.
+    pub direct: f64,
+}
+
+/// Each channel's [`MeterTap`]: the engine meters the channel after its
+/// strip, which is the input and pre-fader tap; a post-fader tap adds
+/// the fader, mute and VCAs.
+pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
+    let tap = |v: &Value| match v.as_str() {
+        Some("postFader") => Tap::PostFader,
+        _ => Tap::PreFader,
+    };
     shape
         .channels
         .iter()
         .map(|c| {
-            let tap = match state["channels"][&c.id]["meterTap"].as_str() {
-                Some("postFader") => Tap::PostFader,
-                _ => Tap::PreFader,
-            };
-            channel(state, &c.id, tap)
+            let s = &state["channels"][&c.id];
+            MeterTap {
+                meter: channel(state, &c.id, tap(&s["meterTap"])),
+                direct: channel(state, &c.id, tap(&s["directOut"]["tap"])),
+            }
         })
         .collect()
 }
@@ -391,13 +404,12 @@ mod tests {
         s["channels"]["ch2"]["fader"] = json!(-6);
         s["channels"]["ch2"]["meterTap"] = json!("postFader");
         s["channels"]["st1"]["meterTap"] = json!("postFader");
+        s["channels"]["st1"]["directOut"]["tap"] = json!("postFader");
         s["channels"]["st1"]["fader"] = json!(0);
         s["channels"]["st1"]["mute"] = json!(true);
         let t = meter_taps(&shape, &s);
-        assert_eq!(t.len(), 3);
-        assert!((t[0] - 1.0).abs() < 1e-12);
-        assert!((t[1] - gain(-6.0)).abs() < 1e-12);
-        assert_eq!(t[2], 0.0);
+        let tap = |meter, direct| MeterTap { meter, direct };
+        assert_eq!(t, [tap(1.0, 1.0), tap(gain(-6.0), 1.0), tap(0.0, 0.0)]);
     }
 
     #[test]

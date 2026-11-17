@@ -6,8 +6,13 @@
 //! input after the strip, which is both the input and the pre-fader tap
 //! (the engine has no tap before the strip), times the channel's fader,
 //! mute and VCA gain when its `meterTap` is postFader. Its true peak is
-//! that of its direct out, the first output it is the source of, and
-//! null without one. A bus, aux, mix-minus or monitor output reads the
+//! that of its direct out, the first output it is the source of, taken
+//! to the same tap: scaled by the meter tap's gain over the direct out
+//! tap's. It is null without a direct out, and while the direct out's
+//! gain is 0 and the meter tap's is not, as nothing measures it then.
+//! The tap gains are those of the state last applied, while the engine
+//! ramps a change from its index and meters in 100 ms windows, so for a
+//! window or so after a fader move the levels lead the audio. A bus, aux, mix-minus or monitor output reads the
 //! meters of the first output it is the source of, or the engine meter
 //! on matrix columns of its own when no output carries it. So a monitor
 //! output is metered after its level, dim, cut, mono and speaker mutes
@@ -16,6 +21,7 @@
 
 use samplez::{InputMeters, OutputMeters, Status};
 
+use crate::mix::MeterTap;
 use crate::shape::Shape;
 
 const MAGIC: u8 = 0x4d;
@@ -50,12 +56,12 @@ pub struct Readings<'a> {
     pub outputs: Vec<&'a OutputMeters>,
     pub meters: Vec<&'a OutputMeters>,
     pub inputs: Vec<&'a InputMeters>,
-    /// Each channel's meter gain ([`crate::mix::meter_taps`]).
-    pub taps: &'a [f64],
+    /// Each channel's tap gains ([`crate::mix::meter_taps`]).
+    pub taps: &'a [MeterTap],
 }
 
 impl<'a> Readings<'a> {
-    pub fn of(status: &'a Status, taps: &'a [f64]) -> Readings<'a> {
+    pub fn of(status: &'a Status, taps: &'a [MeterTap]) -> Readings<'a> {
         Readings {
             outputs: status.outputs.iter().map(|o| &o.meters).collect(),
             meters: status.meters.iter().map(|m| &m.meters).collect(),
@@ -139,13 +145,21 @@ impl Layout {
         for &(kind, n, source) in &self.elements {
             if let Source::Channel { slot, direct } = source {
                 let input = r.inputs.get(slot);
-                let g = r.taps.get(slot).copied().unwrap_or(1.0);
+                let tap = r.taps.get(slot).copied().unwrap_or(MeterTap {
+                    meter: 1.0,
+                    direct: 1.0,
+                });
+                let g = tap.meter;
                 let tp = direct.and_then(|o| r.outputs.get(o)).map(|m| &m.true_peak);
                 for i in 0..n {
                     put(legs(input.map(|m| &m.peak), i, g));
                 }
                 for i in 0..n {
-                    put(legs(tp, i, 1.0));
+                    put(match (tap.direct > 0.0, g > 0.0) {
+                        (true, _) => legs(tp, i, g / tap.direct),
+                        (false, false) if tp.is_some() => FLOOR,
+                        (false, _) => NULL,
+                    });
                 }
                 // Loudness scales with the power, g squared.
                 let gain_db = 20.0 * g.log10();
@@ -253,6 +267,15 @@ mod tests {
         }
     }
 
+    const TAP: MeterTap = MeterTap {
+        meter: 1.0,
+        direct: 1.0,
+    };
+
+    fn tap(meter: f64, direct: f64) -> MeterTap {
+        MeterTap { meter, direct }
+    }
+
     fn lin(db: f64) -> f32 {
         10f64.powf(db / 20.0) as f32
     }
@@ -288,7 +311,7 @@ mod tests {
             outputs: vec![&pgm],
             meters: vec![&cf, &none, &none, &mon],
             inputs: vec![&ch1, &ch2, &st1],
-            taps: &[1.0, 1.0, 1.0],
+            taps: &[TAP; 3],
         };
         let f = layout.frame("r1", 7, &r);
         // Channels 2*legs+1, buses 3*legs+8, monitor legs.
@@ -328,13 +351,51 @@ mod tests {
             outputs: vec![&none],
             meters: vec![&none; 4],
             inputs: vec![&ch1, &ch1, &st1],
-            taps: &[0.5, 0.0, 1.0],
+            taps: &[tap(0.5, 1.0), tap(0.0, 1.0), TAP],
         };
         let f = layout.frame("r1", 0, &r);
         let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
         assert_eq!([v(0), v(2)], [-1204, -2602]);
         assert_eq!([v(3), v(5)], [FLOOR, NULL]);
         assert_eq!([v(6), v(7), v(10)], [-602, -1204, -2000]);
+    }
+
+    /// A channel's true peak is its direct out's taken to the meter tap:
+    /// scaled by the meter tap's gain over the direct out's, the floor
+    /// when both are closed, null when only the direct out is.
+    #[test]
+    fn a_channel_true_peak_follows_its_meter_tap() {
+        let mut v = crate::shape::tests::small();
+        v["outputs"] = serde_json::json!([
+            { "id": "do", "name": "d", "source": "ch1", "width": 1, "layout": "mono" },
+            { "id": "out", "name": "o", "source": "pgm", "width": 2, "layout": "stereo" },
+        ]);
+        let layout = Layout::of(&Shape::parse(&v).unwrap());
+        let ch1 = input(vec![0.5], Some(-20.0));
+        let direct = OutputMeters {
+            true_peak: vec![0.5],
+            ..Default::default()
+        };
+        let none = OutputMeters::default();
+        let frame = |t: MeterTap| {
+            let r = Readings {
+                outputs: vec![&direct, &none],
+                meters: vec![&none; 4],
+                inputs: vec![&ch1, &ch1, &ch1],
+                taps: &[t, TAP, TAP],
+            };
+            let f = layout.frame("r1", 0, &r);
+            let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
+            [v(0), v(1)]
+        };
+        // Post-fader meter at -6 dB, pre-fader direct out.
+        assert_eq!(frame(tap(0.5, 1.0)), [-1204, -1204]);
+        // Pre-fader meter, direct out post-fader at -6 dB.
+        assert_eq!(frame(tap(1.0, 0.5)), [-602, 0]);
+        // Both post-fader on a closed fader.
+        assert_eq!(frame(tap(0.0, 0.0)), [FLOOR, FLOOR]);
+        // A pre-fader meter, the direct out closed: nothing measures it.
+        assert_eq!(frame(tap(1.0, 0.0)), [-602, NULL]);
     }
 
     /// The example frame of server-message.schema.json `MeterFrame`,
@@ -389,7 +450,7 @@ mod tests {
             outputs: vec![&direct, &pgm],
             meters: Vec::new(),
             inputs: vec![&ch1],
-            taps: &[1.0],
+            taps: &[TAP],
         };
         let got = Layout::of(&shape).frame("rep", 258, &r);
         assert_eq!(got, want);
