@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/danielclasen/faderz/compare/v0.1.4...v0.1.5) (2026-11-17)
+
+
+### Features
+
+* **bridge:** drive MCU surfaces as faderz consoles ([#36](https://github.com/danielclasen/faderz/issues/36)) ([64809ca](https://github.com/danielclasen/faderz/commit/64809cac9c0fbaa3272d7c3d3ab25ce4140e9cd1))
+* **ws:** register control surfaces as consoles ([#35](https://github.com/danielclasen/faderz/issues/35)) ([8424324](https://github.com/danielclasen/faderz/commit/842432485e3a6ecc08836c83d022ada97d7e0e1f))
+
 ## [0.1.4](https://github.com/danielclasen/faderz/compare/v0.1.3...v0.1.4) (2026-11-17)
 
 
