@@ -105,7 +105,7 @@ pub const PRESENCE: Slot = Slot {
 pub const COUNTERS_PERIOD: Duration = Duration::from_secs(1);
 /// How long a selection of a session that has not held a lease is kept:
 /// one lease.
-const SELECTION_GRACE: Duration = Duration::from_secs(crate::replica::LEASE / crate::replica::RATE);
+const SELECTION_GRACE: Duration = samplez_replica::session::LEASE;
 /// A session's requests for one control forwarded at most this often.
 pub const REQUEST_INTERVAL: Duration = Duration::from_secs(3);
 

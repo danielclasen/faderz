@@ -1,15 +1,11 @@
 //! The mixer state on one replica: samplez-replica's log and snapshots in
-//! the data directory, a set of one voter, and what the set's leader does
-//! besides ordering commands.
+//! the data directory, in a set of one voter.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-
-use tokio::time::Instant;
 
 use futures_util::future::BoxFuture;
 use openraft::error::{InstallSnapshotError, RPCError, RaftError, Unreachable};
@@ -20,7 +16,7 @@ use openraft::raft::{
 };
 use openraft::{BasicNode, ServerState};
 use samplez_replica::dedup::Limits;
-use samplez_replica::entry::{Body, NodeId, SessionKey, stamping_index};
+use samplez_replica::entry::NodeId;
 use samplez_replica::peer::{PeerClient, PeerReply, PeerRequest};
 use samplez_replica::{Estimate, Replica, Settings, TypeConfig, raft_config};
 use serde::{Deserialize, Serialize};
@@ -32,8 +28,6 @@ use crate::state::{Console, Mixer};
 pub const RATE: u64 = 48_000;
 /// The block size the stamping index rounds to: samplez's default B.
 pub const BLOCK: u64 = 48;
-/// A session's lease: the contract's 2 s after its last renewal.
-pub const LEASE: u64 = 2 * RATE;
 /// How long a write waits to be ordered and applied before it is
 /// answered not applied, within the client's 3 s failover bound.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -173,66 +167,6 @@ pub async fn start(
     Ok(replica)
 }
 
-/// Ends the lease of every session not renewed for [`LEASE`], as the
-/// leader decides it; the expiry is a no-op when a renewal was applied
-/// after the one it was decided on. Never returns.
-///
-/// Stop-gap: samplez-replica does not decide lease expiries yet. Remove
-/// this, and its task in [`crate::server::Server::start`], once it does.
-pub async fn expire_leases(replica: &Replica<Mixer>, estimate: Estimate) {
-    let mut expiries = Expiries::default();
-    let mut ticks = tokio::time::interval(Duration::from_millis(250));
-    loop {
-        ticks.tick().await;
-        if replica.raft().metrics().borrow().state != ServerState::Leader {
-            continue;
-        }
-        let now = stamping_index(estimate(), BLOCK);
-        let leases = replica.store().with_state(|sm| sm.leases.clone());
-        for (session, renewed) in expiries.due(&leases, now, Instant::now()) {
-            replica.append(Body::LeaseExpiry { session, renewed });
-        }
-    }
-}
-
-/// The expiries decided and when. An append the replica could not order
-/// in time is dropped without a word, so one whose lease is still there
-/// after twice the write timeout is decided again; applying it twice is a
-/// no-op once the lease is gone or renewed.
-#[derive(Default)]
-struct Expiries(BTreeMap<(SessionKey, u64), Instant>);
-
-impl Expiries {
-    /// The leases to expire now: not renewed for [`LEASE`] at `stamp` and
-    /// not decided within twice the write timeout before `now`.
-    fn due(
-        &mut self,
-        leases: &BTreeMap<SessionKey, u64>,
-        stamp: u64,
-        now: Instant,
-    ) -> Vec<(SessionKey, u64)> {
-        self.0
-            .retain(|(s, renewed), _| leases.get(s) == Some(renewed));
-        let mut due = Vec::new();
-        for (session, &renewed) in leases {
-            if renewed + LEASE > stamp {
-                continue;
-            }
-            let key = (session.clone(), renewed);
-            if self
-                .0
-                .get(&key)
-                .is_some_and(|at| now < *at + 2 * WRITE_TIMEOUT)
-            {
-                continue;
-            }
-            self.0.insert(key, now);
-            due.push((session.clone(), renewed));
-        }
-        due
-    }
-}
-
 /// The network of a set of one: there is no peer to reach.
 struct Lone;
 
@@ -288,33 +222,5 @@ impl PeerClient for Lone {
         _within: Duration,
     ) -> BoxFuture<'a, Result<PeerReply, String>> {
         Box::pin(async { Err("a set of one has no peers".into()) })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_expiry_is_decided_again_when_its_lease_outlives_the_write() {
-        let mut e = Expiries::default();
-        let s = SessionKey::from_parts("anonymous", "s");
-        let leases = BTreeMap::from([(s.clone(), 1000)]);
-        let t0 = Instant::now();
-        assert!(
-            e.due(&leases, 1000 + LEASE - 1, t0).is_empty(),
-            "within the lease"
-        );
-        assert_eq!(e.due(&leases, 1000 + LEASE, t0), [(s.clone(), 1000)]);
-        assert!(
-            e.due(&leases, 1000 + LEASE, t0 + WRITE_TIMEOUT).is_empty(),
-            "in flight"
-        );
-        assert_eq!(
-            e.due(&leases, 1000 + LEASE, t0 + 2 * WRITE_TIMEOUT),
-            [(s.clone(), 1000)]
-        );
-        assert!(e.due(&BTreeMap::new(), 1000 + LEASE, t0).is_empty());
-        assert!(e.0.is_empty(), "forgotten once the lease is gone");
     }
 }

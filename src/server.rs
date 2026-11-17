@@ -49,7 +49,7 @@ impl Server {
                 &config.replica.data_dir,
                 shape.clone(),
                 config.consoles.clone(),
-                estimate.clone(),
+                estimate,
             )
             .await?,
         );
@@ -133,8 +133,6 @@ impl Server {
                     Err(e) => format!("serving: {e}"),
                 },
                 () = tasks_app.publish() => unreachable!("publishing never returns"),
-                // Stop-gap until samplez-replica decides lease expiries.
-                () = replica::expire_leases(&tasks_state, estimate) => unreachable!("expiring never returns"),
                 () = follow => unreachable!("following the state never returns"),
             }
         });
