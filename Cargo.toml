@@ -30,6 +30,7 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 samplez-mxl = { git = "https://github.com/danielclasen/samplez", tag = "v0.5.0", version = "=0.5.0" }
 futures-util = { version = "=0.3.34", default-features = false, features = ["alloc", "sink"] }
 tokio = { version = "=1.54.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+rcgen = { version = "=0.14.10", default-features = false, features = ["pem", "crypto", "ring"] }
 serde_yaml = "=0.9.34"
 tokio-tungstenite = "=0.29.0"
 tower = { version = "=0.5.3", features = ["util"] }

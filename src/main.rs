@@ -30,6 +30,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    for note in &config.notes {
+        eprintln!("faderz: config: {note}");
+    }
     // openraft reports every election and membership step at INFO.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -78,6 +81,9 @@ fn main() -> ExitCode {
     eprintln!("faderz: api listener on {}", server.api);
     if let Some(machine) = server.machine {
         eprintln!("faderz: machine listener on {machine}");
+    }
+    if let Some(peer) = server.peer {
+        eprintln!("faderz: peer listener on {peer}");
     }
     eprintln!("faderz: ops listener on {}", server.ops);
     eprintln!("faderz: nmos listener on {}", server.nmos);

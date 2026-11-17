@@ -1,5 +1,7 @@
 //! The mixer state on one replica: samplez-replica's log and snapshots in
-//! the data directory, in a set of one voter.
+//! the data directory, in a set of one voter ([`start`]) or of several,
+//! one per pod of a StatefulSet, reaching each other on the peer
+//! listener ([`start_set`]).
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -15,12 +17,18 @@ use openraft::raft::{
     VoteRequest, VoteResponse,
 };
 use openraft::{BasicNode, ServerState};
+use samplez_replica::bootstrap::{self, Bootstrap, Markers, Volume};
 use samplez_replica::dedup::Limits;
 use samplez_replica::entry::NodeId;
+use samplez_replica::log_store::Store;
+use samplez_replica::membership::Slot;
+use samplez_replica::net::{Network, Pool};
 use samplez_replica::peer::{PeerClient, PeerReply, PeerRequest};
 use samplez_replica::{Estimate, Replica, Settings, TypeConfig, raft_config};
+use samplez_service::PeerTls;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Set;
 use crate::shape::Shape;
 use crate::state::{Console, Mixer};
 
@@ -30,7 +38,7 @@ pub const RATE: u64 = 48_000;
 pub const BLOCK: u64 = 48;
 /// How long a write waits to be ordered and applied before it is
 /// answered not applied, within the client's 3 s failover bound.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// The address the single voter registers under; nothing dials it.
 const ADDR: &str = "local";
 
@@ -155,6 +163,11 @@ pub async fn start(
         .state(ServerState::Leader, "the single voter leads")
         .await
         .map_err(|e| e.to_string())?;
+    warn_dropped(&replica);
+    Ok(replica)
+}
+
+fn warn_dropped(replica: &Replica<Mixer>) {
     let dropped = replica
         .store()
         .with_state(|sm| sm.product.dropped().to_vec());
@@ -164,6 +177,61 @@ pub async fn start(
             "the configured shape has no place for these saved leaves"
         );
     }
+}
+
+/// Opens the state in `dir`, `mixer` while it is empty, as replica
+/// `set.ordinal` of `set`: a volume holding a log goes on from it, an
+/// empty one starts or joins the set `markers` names, and the leader
+/// reconciles the voters with `set.voters`. Returns at once; the replica
+/// is ready once it has joined and applied the log
+/// ([`samplez_service::ReplicaInfo::ready`]). The peer listener serves
+/// the replica ([`samplez_replica::peer::serve`]) with `tls`. A write
+/// waits up to `write_timeout` to be ordered and applied.
+///
+/// # Errors
+///
+/// When the volume or the store cannot be read, or the volume holds a
+/// log but no cluster id.
+pub async fn start_set(
+    dir: &Path,
+    mixer: Mixer,
+    estimate: Estimate,
+    set: &Set,
+    tls: Arc<PeerTls>,
+    markers: Arc<dyn Markers>,
+    write_timeout: Duration,
+) -> Result<Replica<Mixer>, String> {
+    let at = |e: io::Error| format!("{}: {e}", dir.display());
+    let volume = Volume::open(dir).map_err(at)?;
+    let store = Store::open(&dir.join(STORE), mixer, Limits::defaults(RATE)).map_err(at)?;
+    let slot = Slot::Audio(set.ordinal);
+    let prepared = bootstrap::prepare(&volume, slot, store.pristine()).map_err(at)?;
+    let settings = Settings {
+        id: prepared.id,
+        epoch: prepared.epoch,
+        limits: Limits::defaults(RATE),
+        block: BLOCK,
+        write_timeout,
+        addr: set.addr().to_owned(),
+        peers: set.peers.clone(),
+        voters: Some(set.voters),
+    };
+    let pool = Pool::new(tls);
+    let replica = Replica::with_store(
+        settings,
+        raft_config("faderz"),
+        store,
+        Network { pool: pool.clone() },
+        pool,
+        estimate,
+    )
+    .await?;
+    replica.begin(Bootstrap {
+        markers,
+        volume,
+        slot,
+    });
+    warn_dropped(&replica);
     Ok(replica)
 }
 

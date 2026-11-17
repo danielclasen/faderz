@@ -2,8 +2,8 @@
 //!
 //! [`config`] reads the configuration and [`shape`] the mixer's shape;
 //! [`state`] is the replicated mixer state, applied in log order on every
-//! replica, and [`replica`] keeps it on the data directory as a set of one
-//! voter. [`api`] serves the REST routes and [`ws`] the WebSocket of the
+//! replica, and [`replica`] keeps it on the data directory, in a set of
+//! one voter or of several. [`api`] serves the REST routes and [`ws`] the WebSocket of the
 //! contract in `api/`, which [`contract`] compiles in; [`app`] holds what
 //! they share, and [`ui`] serves the web UI built into the binary.
 //! [`audio`] runs the samplez engine under the state: [`mix`] turns the

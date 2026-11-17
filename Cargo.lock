@@ -693,6 +693,7 @@ dependencies = [
  "jsonschema",
  "libc",
  "openraft",
+ "rcgen",
  "rust-embed",
  "samplez",
  "samplez-dsp",

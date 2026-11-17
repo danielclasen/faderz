@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use samplez_service::config::{ApiConfig, AuthConfig, AuthMode, Listeners};
+use samplez_replica::membership::Voters;
+use samplez_service::config::{ApiConfig, AuthConfig, AuthMode, Listener, Listeners, TlsMode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -58,7 +59,17 @@ pub struct Config {
     /// with a matrix of zeros: the matrix comes from the live state.
     #[serde(skip)]
     pub audio: Option<samplez::Config>,
+    /// The replica set [`Config::parse`] read from `replica`; none for a
+    /// set of one.
+    #[serde(skip)]
+    pub set: Option<Set>,
+    /// What [`Config::parse`] passed over, for the log.
+    #[serde(skip)]
+    pub notes: Vec<String>,
 }
+
+/// The variable naming the marker ConfigMap (`replica.marker`).
+pub const MARKER_ENV: &str = "FADERZ_REPLICA_MARKER";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -160,11 +171,43 @@ const ENGINE_KEYS: [&str; 6] = [
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReplicaConfig {
     /// The replica's id towards clients (model `ReplicaRef.id`); the host
-    /// name when absent.
+    /// name when absent. In a set it is left out, so that each pod takes
+    /// its pod name and the ordinal that name ends in; one given there
+    /// needs `ordinal` too.
     pub name: Option<String>,
     /// Where the replicated log and snapshots live.
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
+    /// The voters of the replica set, an odd count; 1, the default, is a
+    /// set of one, which takes none of the keys below. A set starts on
+    /// empty volumes: the data directory of a set of one cannot join a
+    /// set, nor one of a set run alone, so changing between the two needs
+    /// a new volume and leaves the state behind.
+    #[serde(default = "one")]
+    pub replicas: u16,
+    /// This replica's StatefulSet ordinal; absent, the number after the
+    /// last `-` of the replica name, as in a StatefulSet pod's name.
+    pub ordinal: Option<u16>,
+    /// Every replica's peer address, `host:port`, by ordinal: as many as
+    /// `replicas`, each once. The StatefulSet's pods reach each other by
+    /// their stable names, `<pod>.<headless service>:<port>`.
+    #[serde(default)]
+    pub peers: Vec<String>,
+    /// The peer listener the other replicas reach this one on, on a port
+    /// other than 0: TLS in `files` mode with a `clientCaFile`, whose
+    /// certificates every replica's certificate is issued by. Each
+    /// replica's certificate names the host of its `peers` address, which
+    /// the others check.
+    pub peer: Option<Listener>,
+    /// The ConfigMap the set starts from, in the pod's namespace: ordinal
+    /// 0 creates it, the others read it to join, so the pods' service
+    /// account may get and create ConfigMaps there. `FADERZ_REPLICA_MARKER`
+    /// sets it when the file does not; a set of one ignores the variable.
+    /// Ordinal 0 starts a set only while a majority of the voters answer,
+    /// so the StatefulSet starts its pods in parallel
+    /// (`podManagementPolicy: Parallel`): one at a time, each waiting to be
+    /// ready, the first would wait for the others forever.
+    pub marker: Option<String>,
 }
 
 impl Default for ReplicaConfig {
@@ -172,7 +215,120 @@ impl Default for ReplicaConfig {
         ReplicaConfig {
             name: None,
             data_dir: default_data_dir(),
+            replicas: 1,
+            ordinal: None,
+            peers: Vec::new(),
+            peer: None,
+            marker: None,
         }
+    }
+}
+
+fn one() -> u16 {
+    1
+}
+
+/// A replica set of more than one voter, as [`Config::parse`] checked it.
+#[derive(Debug, Clone)]
+pub struct Set {
+    pub voters: Voters,
+    pub ordinal: u16,
+    /// By ordinal.
+    pub peers: Vec<String>,
+    pub peer: Listener,
+    pub marker: String,
+}
+
+impl Set {
+    /// This replica's own peer address.
+    pub fn addr(&self) -> &str {
+        &self.peers[usize::from(self.ordinal)]
+    }
+}
+
+impl ReplicaConfig {
+    /// The set these keys describe for the replica named `name`; none for
+    /// a set of one, which takes none of the set's keys.
+    fn set(&self, name: &str, env_marker: Option<String>) -> Result<Option<Set>, String> {
+        if self.replicas == 1 {
+            let given = [
+                ("ordinal", self.ordinal.is_some()),
+                ("peers", !self.peers.is_empty()),
+                ("peer", self.peer.is_some()),
+                ("marker", self.marker.is_some()),
+            ];
+            return match given.iter().find(|(_, set)| *set) {
+                Some((key, _)) => Err(format!(
+                    "replica.{key}: a set of one replica takes none; set replica.replicas"
+                )),
+                None => Ok(None),
+            };
+        }
+        let voters =
+            Voters::new(self.replicas, false).map_err(|e| format!("replica.replicas: {e}"))?;
+        let ordinal = match self.ordinal {
+            Some(o) => o,
+            // Every pod would read the same name, and take the same slot.
+            None if self.name.is_some() => {
+                return Err(
+                    "replica.ordinal: required with replica.name in a set of more than one \
+                     replica; leave both out to take them from the pod name"
+                        .into(),
+                );
+            }
+            None => name
+                .rsplit_once('-')
+                .and_then(|(_, n)| n.parse().ok())
+                .ok_or(format!(
+                    "replica.ordinal: absent, and the replica name {name:?} ends in no -<ordinal>"
+                ))?,
+        };
+        if ordinal >= self.replicas {
+            return Err(format!(
+                "replica.ordinal {ordinal}: the set has ordinals 0 to {}",
+                self.replicas - 1
+            ));
+        }
+        if self.peers.len() != usize::from(self.replicas) {
+            return Err(format!(
+                "replica.peers: names {} addresses, the set has {} replicas",
+                self.peers.len(),
+                self.replicas
+            ));
+        }
+        for (i, addr) in self.peers.iter().enumerate() {
+            let port = addr
+                .rsplit_once(':')
+                .map(|(host, port)| (host, port.parse::<u16>()));
+            if !matches!(port, Some((host, Ok(port))) if !host.is_empty() && port != 0) {
+                return Err(format!("replica.peers[{i}] {addr:?}: not host:port"));
+            }
+            if self.peers[..i].contains(addr) {
+                return Err(format!("replica.peers[{i}] {addr:?}: named twice"));
+            }
+        }
+        let peer = self
+            .peer
+            .clone()
+            .ok_or("replica.peer: required for a set of more than one replica")?;
+        if peer.tls.mode != TlsMode::Files || peer.tls.client_ca_file.is_none() {
+            return Err("replica.peer.tls: needs files mode and a clientCaFile".into());
+        }
+        if peer.port == 0 {
+            return Err("replica.peer.port: 0 is no address the others can reach".into());
+        }
+        let marker = self
+            .marker
+            .clone()
+            .or(env_marker)
+            .ok_or("replica.marker: required for a set of more than one replica")?;
+        Ok(Some(Set {
+            voters,
+            ordinal,
+            peers: self.peers.clone(),
+            peer,
+            marker,
+        }))
     }
 }
 
@@ -492,7 +648,7 @@ impl Config {
         host: fn() -> String,
     ) -> Result<(Config, Shape, String), String> {
         let mut value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        apply(&mut value, flags, env)?;
+        apply(&mut value, flags, &env)?;
         let config: Config = serde_json::from_value(value).map_err(|e| e.to_string())?;
         // In proxy mode the API takes who the identity headers name, so
         // only the proxy may reach it: the proxy runs beside faderz, as a
@@ -519,6 +675,20 @@ impl Config {
         check(&contract().id, &json!(name)).map_err(|e| {
             format!("replica.name {name:?}: {e}; name the replica in the configuration")
         })?;
+        let env_marker = env(MARKER_ENV).filter(|m| !m.is_empty());
+        if config.replica.replicas == 1 && env_marker.is_some() {
+            config
+                .notes
+                .push(format!("{MARKER_ENV} ignored: replica.replicas is 1"));
+        }
+        config.set = config.replica.set(&name, env_marker)?;
+        // samplez 0.5.0's replicated engine takes one engine entry per log
+        // entry, and one mixer command sets many gains.
+        if config.set.is_some() && config.mxl.is_some() {
+            return Err("mxl: a set of more than one replica runs no engine; \
+                        samplez's replicated engine takes one gain per log entry"
+                .into());
+        }
         Ok((config, shape, name))
     }
 }
@@ -718,6 +888,130 @@ mod tests {
         assert_eq!(name, "faderz-0");
         let (_, _, name) = Config::parse(&with(json!({ "name": "r1" })), || "x".into()).unwrap();
         assert_eq!(name, "r1");
+    }
+
+    fn set_of(replica: Value, host: fn() -> String) -> Result<Option<Set>, String> {
+        Config::parse(&with(replica), host).map(|(c, _, _)| c.set)
+    }
+
+    fn three(extra: Value) -> Value {
+        let mut v = json!({
+            "replicas": 3,
+            "peers": ["f-0.f:7443", "f-1.f:7443", "f-2.f:7443"],
+            "peer": { "bind": "0.0.0.0", "port": 7443, "tls": {
+                "mode": "files", "certFile": "/t/tls.crt", "keyFile": "/t/tls.key",
+                "clientCaFile": "/t/ca.crt" } },
+            "marker": "faderz-replica-cluster",
+        });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    }
+
+    /// A StatefulSet pod named `<set>-<ordinal>` is that ordinal, and
+    /// reaches the others at the peer addresses listed by ordinal.
+    #[test]
+    fn a_set_takes_its_ordinal_from_the_pod_name() {
+        let set = set_of(three(json!({})), || "faderz-2".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!((set.ordinal, set.voters.replicas), (2, 3));
+        assert_eq!(set.addr(), "f-2.f:7443");
+        let set = set_of(three(json!({ "ordinal": 1 })), || "faderz-2".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(set.ordinal, 1, "an explicit ordinal wins");
+    }
+
+    /// One replica is a set of one, as before; it takes none of a set's
+    /// keys, so a half-configured set does not start as one alone.
+    #[test]
+    fn one_replica_is_a_set_of_one_and_takes_no_set_keys() {
+        assert!(set_of(json!({}), || "faderz-0".into()).unwrap().is_none());
+        let e = set_of(json!({ "marker": "m" }), || "x".into()).unwrap_err();
+        assert!(e.contains("replica.marker"), "{e}");
+    }
+
+    #[test]
+    fn a_set_that_cannot_work_is_refused() {
+        let host = || "faderz-0".to_owned();
+        let refused = |v: Value, key: &str| {
+            let e = set_of(v, host).unwrap_err();
+            assert!(e.contains(key), "{key}: {e}");
+        };
+        let mut even = three(json!({ "replicas": 2 }));
+        even["peers"] = json!(["a:1", "b:1"]);
+        refused(even, "replica.replicas");
+        refused(three(json!({ "peers": ["a:1", "b:1"] })), "replica.peers");
+        refused(three(json!({ "ordinal": 3 })), "replica.ordinal");
+        let e = set_of(three(json!({})), || "faderz".into()).unwrap_err();
+        assert!(e.contains("replica.ordinal"), "{e}");
+        // A name every pod would read alike: the ordinal is not taken
+        // from it.
+        refused(three(json!({ "name": "faderz-1" })), "replica.ordinal");
+        let named = set_of(three(json!({ "name": "faderz-1", "ordinal": 1 })), host);
+        assert_eq!(named.unwrap().unwrap().ordinal, 1);
+        for (i, bad) in [
+            (1, "f-1.f"),
+            (1, ":7443"),
+            (1, "f-1.f:0"),
+            (2, "f-0.f:7443"),
+        ] {
+            let mut peers = three(json!({}));
+            peers["peers"][i] = json!(bad);
+            refused(peers, &format!("replica.peers[{i}]"));
+        }
+        let mut port0 = three(json!({}));
+        port0["peer"]["port"] = json!(0);
+        refused(port0, "replica.peer.port");
+        let mut plain = three(json!({}));
+        plain["peer"]["tls"] = json!({ "mode": "none" });
+        refused(plain, "replica.peer.tls");
+        let mut no_ca = three(json!({}));
+        no_ca["peer"]["tls"]["clientCaFile"] = Value::Null;
+        refused(no_ca, "replica.peer.tls");
+        let mut no_marker = three(json!({}));
+        no_marker.as_object_mut().unwrap().remove("marker");
+        refused(no_marker, "replica.marker");
+        let mut no_peer = three(json!({}));
+        no_peer.as_object_mut().unwrap().remove("peer");
+        refused(no_peer, "replica.peer");
+    }
+
+    /// A set serves the state alone: no replica of it runs an engine.
+    #[test]
+    fn a_set_runs_no_engine() {
+        let mut v: Value = serde_json::from_str(&with(three(json!({})))).unwrap();
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        v["mxl"] = json!({
+            "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+            "inputs": { "ch1": { "flow": id(1), "altFlow": id(5) }, "ch2": { "flow": id(2) },
+                        "st1": { "flow": id(3) } },
+            "outputs": { "out-pgm": { "flow": id(4) } },
+        });
+        let e = Config::parse(&v.to_string(), || "faderz-0".into()).unwrap_err();
+        assert!(e.starts_with("mxl:"), "{e}");
+    }
+
+    /// The marker's name can come from the environment.
+    #[test]
+    fn the_marker_comes_from_the_environment() {
+        let env =
+            |k: &str| (k == "FADERZ_REPLICA_MARKER").then(|| "faderz-replica-cluster".to_owned());
+        let mut v = three(json!({}));
+        v.as_object_mut().unwrap().remove("marker");
+        let text = with(v);
+        let (config, _, _) = Config::parse_with(&text, &[], env, || "faderz-0".into()).unwrap();
+        assert_eq!(config.set.unwrap().marker, "faderz-replica-cluster");
+        // A set of one passes over it, and says so.
+        let text = with(json!({}));
+        let (config, _, _) = Config::parse_with(&text, &[], env, || "faderz-0".into()).unwrap();
+        assert!(config.set.is_none());
+        assert_eq!(
+            config.notes,
+            ["FADERZ_REPLICA_MARKER ignored: replica.replicas is 1"]
+        );
     }
 
     /// Proxy mode serves the API to the proxy beside it alone.
