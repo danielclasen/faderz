@@ -56,7 +56,7 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `GET /__mock/commands` | every command outcome, REST included |
 | `POST /__mock/audit/reset` | clears both command logs |
 | `POST /__mock/drop-clients` | closes every socket |
-| `POST /__mock/upgrade-delay?ms=<n>` | answers every later WebSocket upgrade `n` ms late, as over a slow link; `ms=0` ends it |
+| `POST /__mock/slow-link?ms=<n>` | answers every later REST request and WebSocket upgrade `n` ms late, as over a slow link; `ms=0` ends it |
 | `POST /__mock/consoles/<id>/bank?offset=<n>` | moves that console's bank to start at channel index `n` |
 | `POST /__mock/skip-revision` | advances the revision without a delta |
 | `POST /__mock/write` | body `{"changes": [{path, value}]}`: commits the changes in one revision whether or not a replica can commit, as a restore writing state does; answers like `PATCH /state` |

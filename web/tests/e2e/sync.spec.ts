@@ -495,8 +495,10 @@ test('a client never resumes onto a restored cluster that has committed past its
   await expect.poll(async () => (await debug(page, 'revision')) === (await serverState(request)).revision).toBe(true);
 });
 
-test('connects on its first socket over a link whose upgrade takes 4 s, and never shows Offline', { tag: '@mock' }, async ({ page, request }) => {
-  expect((await request.post('/__mock/upgrade-delay?ms=4000')).ok()).toBe(true);
+test('connects on its first socket over a link whose requests and upgrade take 4 s, and never shows Offline', { tag: '@mock' }, async ({ page, request }) => {
+  // The page's session request is as slow as the upgrade, so the deadline
+  // it measures for the first socket leaves room for a 4 s open.
+  expect((await request.post('/__mock/slow-link?ms=4000')).ok()).toBe(true);
   const sockets: string[] = [];
   page.on('websocket', (ws) => {
     if (ws.url().includes('/api/v1/ws')) sockets.push(ws.url());
@@ -510,7 +512,7 @@ test('connects on its first socket over a link whose upgrade takes 4 s, and neve
     }, 20);
   });
   await page.goto('/');
-  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 15_000 });
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 20_000 });
   const links = await page.evaluate(() => (window as unknown as { __links: string[] }).__links);
   expect(links).not.toContain('Offline');
   // The primary was the first socket; the standby the second, at most.

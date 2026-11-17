@@ -82,11 +82,11 @@ export async function resetMock(request: APIRequestContext): Promise<void> {
     await expect.poll(async () => Object.keys((await serverState(request)).owners), { timeout: 15_000 }).toEqual([]);
     return;
   }
+  expect((await request.post('/__mock/slow-link?ms=0')).ok()).toBe(true);
   for (const id of REPLICAS) expect((await request.post(`/__mock/replicas/${id}/restore`)).ok()).toBe(true);
   expect((await request.post('/__mock/blocks/flush')).ok()).toBe(true);
   await request.post('/__mock/audit/reset');
   await request.post('/__mock/stats/reset');
-  expect((await request.post('/__mock/upgrade-delay?ms=0')).ok()).toBe(true);
 }
 
 export function formatDb(db: number): string {
