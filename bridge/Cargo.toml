@@ -7,3 +7,7 @@ license = "Apache-2.0"
 repository = "https://github.com/danielclasen/faderz"
 description = "Connects Mackie Control surfaces to faderz"
 publish = false
+
+# The end-to-end tests against a faderz binary (FADERZ_BIN).
+[features]
+e2e = []

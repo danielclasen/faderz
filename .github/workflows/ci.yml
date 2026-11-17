@@ -94,15 +94,21 @@ jobs:
           restore-keys: |
             cargo-bridge-${{ hashFiles('bridge/Cargo.lock') }}-${{ env.BUILDER }}-
             cargo-bridge-
+      # midir builds against ALSA, which the builder image lacks: the
+      # container installs its headers as root and hands what it wrote
+      # back to the runner's user.
       - name: Format, lint and test the bridge in the builder image
         run: |
           mkdir -p .cargo-registry .cargo-git
-          docker run --rm --user "$(id -u):$(id -g)" -e CARGO_INCREMENTAL=0 \
+          docker run --rm -e CARGO_INCREMENTAL=0 -e OWNER="$(id -u):$(id -g)" \
             -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
             -v "$PWD/.cargo-git:/usr/local/cargo/git" \
             -w /w/bridge "$BUILDER" bash -euo pipefail -c '
+              trap "chown -R \$OWNER /w/bridge /usr/local/cargo/registry /usr/local/cargo/git" EXIT
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends libasound2-dev pkg-config >/dev/null
               cargo fmt --check
-              cargo clippy --all-targets --locked -- -D warnings
+              cargo clippy --all-targets --all-features --locked -- -D warnings
               cargo test --locked
             '
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -121,6 +127,43 @@ jobs:
             .cargo-registry
             .cargo-git
           key: cargo-bridge-${{ hashFiles('bridge/Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
+
+  # The bridge with two emulated units against the faderz debug binary
+  # the build job checked against the contract.
+  bridge-e2e:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: faderz-debug
+          path: target/debug
+      - run: chmod +x target/debug/faderz
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            bridge/target
+            .cargo-registry
+            .cargo-git
+          key: cargo-bridge-${{ hashFiles('bridge/Cargo.lock') }}-${{ env.BUILDER }}-${{ github.sha }}
+          restore-keys: |
+            cargo-bridge-${{ hashFiles('bridge/Cargo.lock') }}-${{ env.BUILDER }}-
+            cargo-bridge-
+      - name: Run the bridge against faderz in the builder image
+        run: |
+          mkdir -p .cargo-registry .cargo-git
+          docker run --rm -e CARGO_INCREMENTAL=0 -e FADERZ_BIN=/w/target/debug/faderz \
+            -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
+            -v "$PWD/.cargo-git:/usr/local/cargo/git" \
+            -w /w/bridge "$BUILDER" bash -euo pipefail -c '
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends libasound2-dev pkg-config >/dev/null
+              cargo test --locked --features e2e
+            '
 
   bridge-deny:
     runs-on: ubuntu-24.04
