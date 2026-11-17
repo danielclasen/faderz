@@ -275,6 +275,8 @@ describe('WebSocket messages', () => {
     { type: 'request', path: '/mixMinus/mm1/interrupt/active' },
     { type: 'select', element: 'ch3' },
     { type: 'select', element: null },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0 },
+    { type: 'console', id: 'osc-1', name: 'Tablet', protocol: 'osc', transport: 'osc-udp', strips: 16, bankOffset: 24 },
   ])('client accepts %j', (msg) => {
     expect(contract.checkClientMessage(msg)).toBeNull();
   });
@@ -324,6 +326,20 @@ describe('WebSocket messages', () => {
     { type: 'select', element: 'Ch 3' },
     { type: 'select', element: ['ch1', 'ch2'] },
     { type: 'select', id: cmd, seq: 1, element: 'ch1' },
+    // A registration is not a command either, and carries every field.
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8 },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', bankOffset: 0 },
+    { type: 'console', id: 'xt-1', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0 },
+    { type: 'console', id: 'XT 1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0 },
+    { type: 'console', id: 'xt-1', name: '', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0 },
+    { type: 'console', id: 'xt-1', name: 'x'.repeat(65), protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0 },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'midi', transport: 'bridge', strips: 8, bankOffset: 0 },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'usb', strips: 8, bankOffset: 0 },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 0, bankOffset: 0 },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: -1 },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0, connected: true },
+    { type: 'console', id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0, handle: owner.handle },
+    { type: 'console', seq: 1, id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0 },
   ])('client refuses %j', (msg) => {
     expect(contract.checkClientMessage(msg)).not.toBeNull();
   });
@@ -364,6 +380,26 @@ describe('WebSocket messages', () => {
     ['presence', { type: 'presence', replica, sessions: [present, { ...present, handle: 'Rk9vYmFyLWJhei1xdXV4LT', kind: 'console', user: 'token', role: 'viewer' }] }],
     ['no presence', { type: 'presence', replica, sessions: [] }],
     ['control request', { type: 'controlRequest', replica, path: '/mixMinus/mm1/interrupt/active', from: owner }],
+    ['console refused without a command', { type: 'error', replica, code: 409, message: 'console xt-1 is connected to another session' }],
+    ['console beyond the rate limit', { type: 'error', replica, code: 429, message: 'at most 20 console messages per second' }],
+    [
+      'consoles, one no session registered',
+      {
+        type: 'delta',
+        replica,
+        revision: 10,
+        atIndex: 480000,
+        changes: [
+          {
+            path: '/consoles',
+            value: [
+              { id: 'xt-1', name: 'X-Touch', handle: owner.handle, protocol: 'mcu', transport: 'bridge', connected: true, bankOffset: 8, strips: 8 },
+              { id: 'xt-2', name: 'Extender', handle: null, protocol: 'mcu', transport: 'bridge', connected: false, bankOffset: 0, strips: 8 },
+            ],
+          },
+        ],
+      },
+    ],
   ])('server accepts %s', (_, msg) => {
     expect(server(msg)).toBeNull();
   });
@@ -404,6 +440,16 @@ describe('WebSocket messages', () => {
     ['presence without since', { type: 'presence', replica, sessions: [{ ...present, since: undefined }] }],
     ['control request without asker', { type: 'controlRequest', replica, path: '/channels/ch1/fader' }],
     ['control request for a meter', { type: 'controlRequest', replica, path: '/channels/ch1/peak', from: owner }],
+    [
+      'console without a handle',
+      {
+        type: 'delta',
+        replica,
+        revision: 10,
+        atIndex: 480000,
+        changes: [{ path: '/consoles', value: [{ id: 'xt-1', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', connected: false, bankOffset: 0, strips: 8 }] }],
+      },
+    ],
   ])('server refuses %s', (_, msg) => {
     expect(server(msg)).not.toBeNull();
   });

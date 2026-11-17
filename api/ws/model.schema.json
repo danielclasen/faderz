@@ -1252,7 +1252,7 @@
       ]
     },
     "ConsoleStatus": {
-      "description": "Hardware control surface attached to the mixer.",
+      "description": "Hardware control surface attached to the mixer, one per physical unit. A console is declared in the configuration or created at runtime by a registration (client-message.schema.json#/$defs/Console) or PUT /consoles/{consoleId}. /consoles lists the declared consoles first, in configuration order, then the others in the order they were created; only the server changes it, and a delta carries it whole. A declared console cannot be removed.",
       "type": "object",
       "required": [
         "id",
@@ -1270,13 +1270,21 @@
           "$ref": "#/$defs/Id"
         },
         "name": {
+          "description": "Display name. A declared console's is the configuration's, whatever a registration names.",
           "type": "string",
           "minLength": 1,
           "maxLength": 64
         },
         "handle": {
-          "description": "Handle of the session the surface uses as a client, so its ownership can be shown by name.",
-          "$ref": "#/$defs/OwnerHandle"
+          "description": "Handle of the session that registered the console last, so its ownership can be shown by name; null until a session registers it.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OwnerHandle"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "protocol": {
           "type": "string",
@@ -1295,10 +1303,11 @@
           ]
         },
         "connected": {
+          "description": "True from a registration until the lease of the registering session expires (#/$defs/Owners); while true, no other session can register the console.",
           "type": "boolean"
         },
         "bankOffset": {
-          "description": "Index of the first channel on the surface.",
+          "description": "Index of the first channel on the surface, as the registering session last sent it; 0 until a session registers it.",
           "type": "integer",
           "minimum": 0
         },
@@ -1447,7 +1456,7 @@
       }
     },
     "Owners": {
-      "description": "Owned controls: control path to the owner. Part of the replicated state, so ownership survives a replica switch. Ownership belongs to the session (principal and session of the owner) and lapses when the session lease expires. Every message of the session that reaches a replica not partitioned from the quorum renews the lease, through any connection; the lease expires 2 s after the last renewal. A server also renews the lease of every session it holds an open connection of, and may take up to 7 s to close a connection whose client has gone silent (client-message.schema.json#/$defs/Ping), so ownership of a session whose client is gone lapses up to 9 s after the client's last message: up to 7 s until its connections are closed plus the 2 s lease. A replica failure or a page reload therefore keeps a held control while the session reconnects within the lease. After a snapshot or resume on a new connection of its session, a client releases every control its session owns that it is not touching, so ownership does not outlast a reload.",
+      "description": "Owned controls: control path to the owner. Part of the replicated state, so ownership survives a replica switch. Ownership belongs to the session (principal and session of the owner) and lapses when the session lease expires. Every message of the session that reaches a replica not partitioned from the quorum renews the lease, through any connection; the lease expires 2 s after the last renewal. A server also renews the lease of every session it holds an open connection of, and may take up to 7 s to close a connection whose client has gone silent (client-message.schema.json#/$defs/Ping), so ownership of a session whose client is gone lapses up to 9 s after the client's last message: up to 7 s until its connections are closed plus the 2 s lease. A replica failure or a page reload therefore keeps a held control while the session reconnects within the lease. After a snapshot or resume on a new connection of its session, a client releases every control its session owns that it is not touching, so ownership does not outlast a reload. A touch or set from a console session (hello kind console) on a control held by another session of the same principal whose kind is not console is not refused: a touch moves the ownership to the console session, a set writes and leaves the owner. The principal anonymous never qualifies, as every client has it while no authentication names one.",
       "type": "object",
       "propertyNames": {
         "$ref": "#/$defs/ControlPath"

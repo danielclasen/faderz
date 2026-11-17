@@ -11,6 +11,7 @@ import type {
   Change,
   ClientMessage,
   CommandMessage,
+  ConsoleMessage,
   CommandResult,
   Conflict,
   Epoch,
@@ -263,6 +264,8 @@ export class Cluster {
   private applied = new Map<string, { revision: number; at: number }>();
   private lastSeq = new Map<string, number>();
   private leases = new Map<string, number>();
+  /** The session key of each console a console message registered. */
+  private registered = new Map<string, string>();
   /** What each session has selected, by session key (client-message.schema.json Select). */
   private selections = new Map<string, { session: Owner; element: string }>();
   /** When the latest selections went out, and the timer of the coalesced next one. */
@@ -582,6 +585,8 @@ export class Cluster {
         return this.requestControl(conn.owner, msg.path);
       case 'select':
         return this.select(conn, msg.element);
+      case 'console':
+        return this.registerConsole(conn, r, msg);
     }
     // A replica cut off from the quorum, partitioned or left without one,
     // answers every command not applied. A hung one that still applies
@@ -762,6 +767,26 @@ export class Cluster {
     if (element === null) this.selections.delete(key);
     else this.selections.set(key, { session: conn.owner!, element });
     this.broadcastSelections();
+  }
+
+  /**
+   * Registers a console as the connection's session's, or updates it,
+   * refused while it is connected to another session. The consoles the
+   * mock starts with keep their names, as declared ones do.
+   */
+  private registerConsole(conn: Conn, r: Replica, msg: ConsoleMessage): void {
+    const handle = conn.owner!.handle;
+    const consoles = structuredClone(this.state.consoles);
+    const known = consoles.find((c) => c.id === msg.id);
+    if (known?.connected && known.handle !== handle) {
+      return this.emit(conn, { type: 'error', replica: this.ref(r), code: 409, message: `console ${msg.id} is connected to another session` });
+    }
+    const { protocol, transport, strips, bankOffset } = msg;
+    const next = { id: msg.id, name: known?.name ?? msg.name, handle, protocol, transport, connected: true, bankOffset, strips };
+    if (known) Object.assign(known, next);
+    else consoles.push(next);
+    this.registered.set(msg.id, sessionKey(conn.owner!));
+    if (JSON.stringify(consoles) !== JSON.stringify(this.state.consoles)) this.stage({ changes: [{ path: '/consoles', value: consoles }] });
   }
 
   /**
@@ -1287,6 +1312,13 @@ export class Cluster {
       .filter(([, o]) => lapsed(sessionKey(o)))
       .map(([path]) => ({ path, owner: null }));
     if (released.length > 0) this.stage({ changes: this.momentaryOff(released.map((r) => r.path)), owners: released });
+    const consoles = structuredClone(this.state.consoles);
+    const dropped = consoles.filter((c) => {
+      const key = this.registered.get(c.id);
+      return c.connected && key !== undefined && lapsed(key);
+    });
+    for (const c of dropped) c.connected = false;
+    if (dropped.length > 0) this.stage({ changes: [{ path: '/consoles', value: consoles }] });
     const gone = [...this.selections.keys()].filter(lapsed);
     for (const key of gone) this.selections.delete(key);
     if (gone.length > 0) this.broadcastSelections();

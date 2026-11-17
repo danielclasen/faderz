@@ -226,7 +226,8 @@ export interface Scene {
 export interface ConsoleStatus {
   id: Id;
   name: string;
-  handle: OwnerHandle;
+  /** The session that registered it last; null until one does. */
+  handle: OwnerHandle | null;
   protocol: 'mcu' | 'hui' | 'osc';
   transport: 'alsa-midi' | 'bridge' | 'osc-udp';
   connected: boolean;
@@ -422,6 +423,16 @@ export interface SelectMessage {
   type: 'select';
   element: Id | null;
 }
+/** Registers a console as this session's, or updates it; not a command, answered only when refused. */
+export interface ConsoleMessage {
+  type: 'console';
+  id: Id;
+  name: string;
+  protocol: ConsoleStatus['protocol'];
+  transport: ConsoleStatus['transport'];
+  strips: number;
+  bankOffset: number;
+}
 export type CommandMessage = SetMessage | TouchMessage | ReleaseMessage;
 export type ClientMessage =
   | HelloMessage
@@ -429,6 +440,7 @@ export type ClientMessage =
   | CommandMessage
   | RequestMessage
   | SelectMessage
+  | ConsoleMessage
   | ResyncMessage
   | CreditMessage
   | PingMessage
@@ -496,7 +508,7 @@ export interface ErrorMessage {
   type: 'error';
   replica: ReplicaRef;
   /** 503: not applied; the client sends the command again with its id. */
-  code: 400 | 404 | 409 | 503;
+  code: 400 | 404 | 409 | 429 | 503;
   message: string;
   commandId?: CommandId;
   path?: string;

@@ -17,6 +17,7 @@ import { decodeMeterFrame, deriveMeterLayout, type MeterFrame, type MeterLayout 
 import { DEAD_MS, HEARTBEAT_MS, LEASE_MS, METER_CREDIT_CAP, METER_PERIOD_MS, SELECTIONS_INTERVAL_MS } from '../../src/lib/contract/protocol';
 import type {
   AckMessage,
+  ConsoleStatus,
   DeltaMessage,
   ErrorMessage,
   LinkMode,
@@ -345,6 +346,29 @@ describe('hello', () => {
     const delta = await c.answer<DeltaMessage>(id);
     expect(delta.owners).toEqual([{ path: '/channels/ch24/fader', owner: snap.you }]);
     await c.answer(c.command('release', '/channels/ch24/fader'));
+  });
+
+  it('registers a console as the session that sends console, and refuses one connected to another session', async () => {
+    const c = await new Client(randomSession(), 'console').open();
+    await c.hello();
+    const from = c.messages.length;
+    c.send({ type: 'console', id: 'xt-9', name: 'X-Touch', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 16 });
+    const delta = await c.next<DeltaMessage>((m) => m.type === 'delta' && (m.changes ?? []).some((x) => x.path === '/consoles'), from);
+    const consoles = delta.changes!.find((x) => x.path === '/consoles')!.value as ConsoleStatus[];
+    expect(consoles.find((k) => k.id === 'xt-9')).toEqual({
+      id: 'xt-9',
+      name: 'X-Touch',
+      handle: c.you!.handle,
+      protocol: 'mcu',
+      transport: 'bridge',
+      connected: true,
+      bankOffset: 16,
+      strips: 8,
+    });
+    c.send({ type: 'console', id: 'mcu-1', name: 'Mine', protocol: 'mcu', transport: 'bridge', strips: 8, bankOffset: 0 });
+    const refused = await c.next<ErrorMessage>((m) => m.type === 'error', from);
+    expect(refused).toMatchObject({ code: 409 });
+    expect(refused.commandId).toBeUndefined();
   });
 });
 

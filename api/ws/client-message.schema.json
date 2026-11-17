@@ -26,6 +26,9 @@
       "$ref": "#/$defs/Select"
     },
     {
+      "$ref": "#/$defs/Console"
+    },
+    {
       "$ref": "#/$defs/Resync"
     },
     {
@@ -89,7 +92,7 @@
       }
     },
     "Set": {
-      "description": "Write one control. seq orders the commands of a session on one control: set, touch and release of a control share one counter, which increases per session and control, also across reloads: a web client starts the seq of every control at the Unix time in milliseconds when it loads and adds one per command to that control, and at most 50 writes per second keep it below the clock. A set, touch or release whose seq is not above the last one applied from this session for the same path is answered with ack result stale and has no effect, so a copy of a command, or a command resent after a later one of the same control was applied, cannot undo the later one. The server keeps the last seq applied per session and path for at least 13 s past the end of the session's lifetime: the deduplication retention of 10 s (model.schema.json#/$defs/CommandId) plus the 3 s failover bound within which a client still sends a command; a session's lifetime ends when its lease expires, after the lease period without a command or renewal of it (model.schema.json#/$defs/Owners). Refused with error 409 while another session owns the control.",
+      "description": "Write one control. seq orders the commands of a session on one control: set, touch and release of a control share one counter, which increases per session and control, also across reloads: a web client starts the seq of every control at the Unix time in milliseconds when it loads and adds one per command to that control, and at most 50 writes per second keep it below the clock. A set, touch or release whose seq is not above the last one applied from this session for the same path is answered with ack result stale and has no effect, so a copy of a command, or a command resent after a later one of the same control was applied, cannot undo the later one. The server keeps the last seq applied per session and path for at least 13 s past the end of the session's lifetime: the deduplication retention of 10 s (model.schema.json#/$defs/CommandId) plus the 3 s failover bound within which a client still sends a command; a session's lifetime ends when its lease expires, after the lease period without a command or renewal of it (model.schema.json#/$defs/Owners). Refused with error 409 while another session owns the control. A console session writes a control its own principal holds on a screen (model.schema.json#/$defs/Owners): the owner stays.",
       "type": "object",
       "required": [
         "type",
@@ -118,7 +121,7 @@
       "$ref": "model.schema.json#/$defs/ValueByPath"
     },
     "Touch": {
-      "description": "Take ownership of a control for this session, as on pointer-down or a touched console fader. Held until release or until the session lease expires. Refused with error 409 while another session owns it, and answered with ack result stale when its seq is not above the last applied from this session for the control (#/$defs/Set).",
+      "description": "Take ownership of a control for this session, as on pointer-down or a touched console fader. Held until release or until the session lease expires. Refused with error 409 while another session owns it, and answered with ack result stale when its seq is not above the last applied from this session for the control (#/$defs/Set). A console session takes a control its own principal holds on a screen (model.schema.json#/$defs/Owners): the ownership moves to it.",
       "type": "object",
       "required": [
         "type",
@@ -209,6 +212,59 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "Console": {
+      "description": "Registers console id as this session's, or updates it: descriptor and bank. Not a command: it carries no id and is answered only when refused, with an error without commandId (server-message.schema.json#/$defs/Error): 400 without the operator role or beyond the consoles the server holds, 409 while the console is connected to another session (model.schema.json#/$defs/ConsoleStatus), 429 above 20 console messages per second on the connection, which are dropped, and 503 when not applied. Another session may register a console once its registering session's lease has expired. One session may register several consoles, one per physical unit. The server orders it in the replicated log like a command, so a registration that changes nothing changes nothing in the state either. A declared console keeps the name of the configuration. A client sends console for each of its consoles after every snapshot or resume on a new primary connection and on every bank change, coalesced to at most 10 per second per console.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "name",
+        "protocol",
+        "transport",
+        "strips",
+        "bankOffset"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "console"
+        },
+        "id": {
+          "$ref": "model.schema.json#/$defs/Id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "mcu",
+            "hui",
+            "osc"
+          ]
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "alsa-midi",
+            "bridge",
+            "osc-udp"
+          ]
+        },
+        "strips": {
+          "description": "Fader strips on the surface.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "bankOffset": {
+          "description": "Index of the first channel on the surface.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

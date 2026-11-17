@@ -461,7 +461,7 @@
       }
     },
     "Error": {
-      "description": "A client message was refused. commandId names the refused command. For code 409 (control owned by another session) current and owner carry the control's current value and owner. Code 503 means not applied when answered: the replica could not commit the command, for example while it had no leader or quorum, or did not see it commit within its write timeout, in which case it may still be applied later, at most once. The client sends the command again with the same id and seq until it is answered otherwise or expires; a command applied late reaches every client as a delta like any other (client-message.schema.json).",
+      "description": "A client message was refused. commandId names the refused command. For code 409 (control owned by another session) current and owner carry the control's current value and owner. Code 503 means not applied when answered: the replica could not commit the command, for example while it had no leader or quorum, or did not see it commit within its write timeout, in which case it may still be applied later, at most once. The client sends the command again with the same id and seq until it is answered otherwise or expires; a command applied late reaches every client as a delta like any other (client-message.schema.json). An error without commandId refuses a message that is not a command, such as a console registration (client-message.schema.json#/$defs/Console); code 429 refuses one beyond its rate limit.",
       "type": "object",
       "required": [
         "type",
@@ -483,6 +483,7 @@
             400,
             404,
             409,
+            429,
             503
           ]
         },

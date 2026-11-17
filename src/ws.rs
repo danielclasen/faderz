@@ -2,7 +2,9 @@
 //! `samplez_service::ws::serve_client`, which keeps the heartbeats, the
 //! read-index hold, the promote floor and the order of answers.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::future::BoxFuture;
@@ -14,12 +16,15 @@ use samplez_service::ws::{
 use samplez_service::{Connect, Owner, OwnerHandle, Position};
 use serde_json::{Value, json};
 
-use crate::app::{App, PRESENCE, SELECTIONS, splice};
+use crate::app::{App, PRESENCE, SELECTIONS, splice, uuid};
 use crate::contract::{check, contract};
-use crate::state::{self, Action, Command, Control};
+use crate::state::{self, Action, Command, Console, Control};
 
 /// Meter credits a connection holds at most.
 const CREDIT_CAP: u64 = 8;
+/// `console` messages a connection sends per second at most; the others
+/// are refused with 429 and dropped.
+const CONSOLE_RATE: usize = 20;
 
 type Answered<'a> = BoxFuture<'a, Option<Message>>;
 
@@ -33,6 +38,8 @@ struct Hello {
     /// Credits granted while the connection is a standby, kept for its
     /// promote: a standby gets no meter frames.
     standby_credits: u64,
+    /// When the `console` messages of the last second were taken.
+    consoles: VecDeque<Instant>,
 }
 
 /// Serves one WebSocket client until it closes or fails.
@@ -299,6 +306,7 @@ fn on_message<'a>(
             Reply::Now(None)
         }
         "set" | "touch" | "release" => control(app, connect, &client_kind, &msg, admission),
+        "console" => console(app, connect, hello, &msg, admission),
         // A type the contract has but this server does not handle: refused,
         // never taken for a command.
         _ => Reply::Now(Some(error(
@@ -371,6 +379,83 @@ fn control<'a>(
     }
 }
 
+/// A `console`: ordered like a command under an id of its own, answered
+/// only when refused, with no command id.
+fn console<'a>(
+    app: &'a Arc<App>,
+    connect: &'a Connect,
+    hello: &Mutex<Hello>,
+    msg: &Value,
+    admission: Admission,
+) -> Reply<Answered<'a>> {
+    let refuse = |code, message: &str| Reply::Now(Some(error(app, code, message, None)));
+    if connect.require_operator().is_err() {
+        return refuse(400, "operator role required");
+    }
+    {
+        let mut h = hello.lock().expect("hello lock poisoned");
+        let now = Instant::now();
+        while h
+            .consoles
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(1))
+        {
+            h.consoles.pop_front();
+        }
+        if h.consoles.len() >= CONSOLE_RATE {
+            drop(h);
+            return refuse(
+                429,
+                &format!("at most {CONSOLE_RATE} console messages per second"),
+            );
+        }
+        h.consoles.push_back(now);
+    }
+    if admission == Admission::NotApplied {
+        return refuse(
+            503,
+            "not applied: this client holds state the replica set never committed",
+        );
+    }
+    let id = match uuid() {
+        Ok(id) => id,
+        Err(e) => return refuse(503, &format!("not applied: {e}")),
+    };
+    let text = |key: &str| msg[key].as_str().unwrap_or_default().to_owned();
+    let body = Command::Register {
+        id: id.clone(),
+        console: Console {
+            id: text("id"),
+            name: text("name"),
+            protocol: text("protocol"),
+            transport: text("transport"),
+            strips: msg["strips"].as_u64().unwrap_or_default(),
+        },
+        bank_offset: msg["bankOffset"].as_u64().unwrap_or_default(),
+    };
+    let body = serde_json::to_vec(&body).expect("a command serializes");
+    let session = SessionKey::from(&connect.owner);
+    match app.commands.begin(&connect.owner, &id) {
+        Begin::New(pending) => {
+            let submitted = pending.submit(body.into());
+            Reply::Command(Box::pin(async move {
+                let ack = match submitted.await {
+                    Ok(ack) => ack,
+                    Err(e) => return Some(error(app, 503, &e.to_string(), None)),
+                };
+                match app.answer(&session, &ack)? {
+                    state::Answer::Refused { message } => Some(error(app, 409, &message, None)),
+                    state::Answer::Invalid { message } => Some(error(app, 400, &message, None)),
+                    _ => None,
+                }
+            }))
+        }
+        Begin::Busy => refuse(503, "not applied: too many commands in flight"),
+        // A fresh id is never a duplicate.
+        Begin::Duplicate(_) => Reply::Now(None),
+    }
+}
+
 /// The answer to command `id` once it resolved; none when the delta
 /// listing it answers it.
 fn answer(
@@ -430,7 +515,10 @@ fn refusal(app: &App, id: &str, path: &str, answer: &state::Answer) -> Message {
         }
         state::Answer::NotFound { message } => error(app, 404, message, Some((id, path))),
         state::Answer::Invalid { message } => error(app, 400, message, Some((id, path))),
-        state::Answer::Scene { .. } => error(app, 400, "not a control command", Some((id, path))),
+        state::Answer::Refused { message } => error(app, 409, message, Some((id, path))),
+        state::Answer::Scene { .. } | state::Answer::Created => {
+            error(app, 400, "not a control command", Some((id, path)))
+        }
     }
 }
 
