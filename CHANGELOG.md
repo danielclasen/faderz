@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.4](https://github.com/danielclasen/faderz/compare/v0.1.3...v0.1.4) (2026-11-17)
+
+
+### Features
+
+* **audio:** export each channel's input health on /metrics ([#30](https://github.com/danielclasen/faderz/issues/30)) ([0e536fb](https://github.com/danielclasen/faderz/commit/0e536fb8f7c2eb7a0930547d7842eaabbe62eb57))
+* **config:** default readerMarginSamples to 1536 ([21f77f2](https://github.com/danielclasen/faderz/commit/21f77f29873bd6561fa9a791f1bad2da6bf7baef))
+* **config:** select a channel's legs from the channels of a wider flow ([#32](https://github.com/danielclasen/faderz/issues/32)) ([2f51317](https://github.com/danielclasen/faderz/commit/2f513177d93aed19027ddbe68bf940e5ed230583))
+* **meters:** meter every channel and bus whether an output carries it ([21f77f2](https://github.com/danielclasen/faderz/commit/21f77f29873bd6561fa9a791f1bad2da6bf7baef))
+* **ws:** list the sessions connected to a replica in USERS ([#33](https://github.com/danielclasen/faderz/issues/33)) ([abc31c0](https://github.com/danielclasen/faderz/commit/abc31c0da1f4302eea01d3bab256e615e095fb00))
+
 ## [0.1.3](https://github.com/danielclasen/faderz/compare/v0.1.2...v0.1.3) (2026-11-17)
 
 
