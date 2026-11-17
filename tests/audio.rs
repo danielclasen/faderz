@@ -298,6 +298,7 @@ impl Reader {
         let cfg = InputConfig {
             flow_id: flow,
             channels: 2,
+            flow_channels: None,
             offset: 0,
         };
         let timing = Timing {
@@ -634,6 +635,49 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     );
     let wrong = left.iter().find(|v| **v > 0.0 || **v < trimmed - 1e-6);
     assert!(wrong.is_none(), "unprocessed after the restart: {wrong:?}");
+    server.stop().await;
+}
+
+/// Each channel reads the legs its `channels` select out of a wider
+/// flow, each channel of which carries its own value: ch1 flow channel
+/// 16 and st1 flow channels 7 and 8 of one 16-channel flow, and ch2 flow
+/// channel 3 of its input a and, once switched, of its input b.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_read_the_legs_they_select_from_a_wide_flow() {
+    let domain = domain("select");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-select");
+    let (a, b, pgm_id, mm_id) = (new_id(), new_id(), new_id(), new_id());
+    let va = |ch: usize| (ch + 1) as f32 / 64.0;
+    let vb = |ch: usize| -((ch + 1) as f32) / 128.0;
+    let _a = Source::start(&domain.0, &a, (0..16).map(va).collect());
+    let _b = Source::start(&domain.0, &b, (0..16).map(vb).collect());
+    let inputs = json!({
+        "ch1": { "flow": a, "channels": [16] },
+        "ch2": { "flow": a, "altFlow": b, "channels": [3] },
+        "st1": { "flow": a, "channels": [7, 8] },
+    });
+    let outputs = json!({ "out-pgm": { "flow": pgm_id }, "out-mm": { "flow": mm_id } });
+    let server = start_with(&data.0, &domain.0, shape(), inputs, outputs).await;
+    appears(&domain.0, &pgm_id).await;
+    let mut pgm = Reader::new(&domain.0, &pgm_id);
+    patch(&server, &[("/channels/st1/fader", json!(0))]).await;
+    pgm.expect(va(6), va(7), "st1 on flow channels 7 and 8")
+        .await;
+    patch(
+        &server,
+        &[
+            ("/channels/ch1/fader", json!(0)),
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/channels/ch2/fader", json!(0)),
+            ("/channels/ch2/pan/lr", json!(1)),
+        ],
+    )
+    .await;
+    pgm.expect(va(6) + va(15), va(7) + va(2), "ch1 on 16, ch2 on 3")
+        .await;
+    patch(&server, &[("/channels/ch2/input", json!("b"))]).await;
+    pgm.expect(va(6) + va(15), va(7) + vb(2), "ch2 on 3 of input b")
+        .await;
     server.stop().await;
 }
 
