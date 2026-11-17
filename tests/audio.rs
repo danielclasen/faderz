@@ -401,15 +401,15 @@ impl Reader {
     }
 }
 
-/// The program bus's left peak in the next meter frame, centi-dB.
-async fn pgm_peak(server: &Server) -> i16 {
+/// The values of a meter frame after `skip` frames, centi-dB.
+async fn meter_values(server: &Server, skip: usize) -> Vec<i16> {
     let session = "session-m-0123456789abcdef";
     let url = format!("ws://{}/api/v1/ws?session={session}", server.api);
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
     let hello = json!({ "type": "hello", "session": session, "kind": "ui", "mode": "primary" });
     ws.send(Message::text(hello.to_string())).await.unwrap();
     ws.send(Message::text(
-        json!({ "type": "credit", "n": 8 }).to_string(),
+        json!({ "type": "credit", "n": 16 }).to_string(),
     ))
     .await
     .unwrap();
@@ -422,21 +422,32 @@ async fn pgm_peak(server: &Server) -> i16 {
             .unwrap();
         if let Message::Binary(f) = m {
             frames += 1;
-            // The meters cover a 100 ms window: skip the first frames.
-            if frames < 6 {
+            if frames <= skip {
                 continue;
             }
             assert_eq!(&f[..3], &[0x4d, 3, 2], "magic, version, replica id length");
-            // After the 12-byte header and "r1": ch1 3 values, ch2 3, st1 5.
-            let at = 14 + 2 * 11;
-            return i16::from_le_bytes([f[at], f[at + 1]]);
+            // After the 12-byte header and "r1".
+            return f[14..]
+                .chunks_exact(2)
+                .map(|v| i16::from_le_bytes([v[0], v[1]]))
+                .collect();
         }
     }
 }
 
+/// Values of the meter frame: ch1 3, ch2 3, st1 5, then pgm 14, mm1 14
+/// and the monitor 2.
+const CH1_PEAK: usize = 0;
+const CH2_PEAK: usize = 3;
+const ST1_PEAK: usize = 6;
+const PGM_PEAK: usize = 11;
+const MON_PEAK: usize = 39;
+/// A level of digital silence, -120 dB.
+const FLOOR: i16 = -12_000;
+
 /// Faders, pan, polarity, mute, routes and mix-minus exclusions reach the
 /// output flows as gains of the input flows' samples, and the meters
-/// follow the output.
+/// follow the output, every channel at its meter tap.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_mix_reaches_the_output_flows_and_the_meters() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
@@ -489,12 +500,25 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
 
     patch(&server, &[("/channels/ch1/mute", json!(true))]).await;
     pgm.expect(-ST1[0], ST1[1], "ch1 muted").await;
+    // The meters cover a 100 ms window: the first frames are skipped.
+    let v = meter_values(&server, 5).await;
     // -0.25: -12.04 dB FS.
-    let peak = pgm_peak(&server).await;
+    let near = |v: i16, want: i16| (v - want).abs() <= 2;
+    assert!(near(v[PGM_PEAK], -1204), "pgm left peak in {v:?}");
+    // Every channel is metered, no direct out needed: ch1 muted but at
+    // its pre-fader tap, st1 at 0.25 on both legs, and ch2 on its silent
+    // input reads silence, not nothing. The monitor has no output.
+    assert!(near(v[CH1_PEAK], -602), "ch1 peak in {v:?}");
     assert!(
-        (-1206..=-1202).contains(&peak),
-        "pgm left peak {peak} centi-dB"
+        near(v[ST1_PEAK], -1204) && near(v[ST1_PEAK + 1], -1204),
+        "{v:?}"
     );
+    assert_eq!(v[CH2_PEAK], FLOOR, "{v:?}");
+    assert!(v[MON_PEAK] != i16::MIN, "{v:?}");
+    // At a post-fader tap the muted channel reads silence.
+    patch(&server, &[("/channels/ch1/meterTap", json!("postFader"))]).await;
+    let v = meter_values(&server, 5).await;
+    assert_eq!(v[CH1_PEAK], FLOOR, "ch1 peak post-fader in {v:?}");
 
     patch(&server, &[("/channels/st1/routes/pgm", json!(false))]).await;
     pgm.expect(0.0, 0.0, "st1 off the program bus").await;

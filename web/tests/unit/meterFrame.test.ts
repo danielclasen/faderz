@@ -11,7 +11,7 @@ import {
   type MeterLayout,
   type MeterValues,
 } from '../../src/lib/contract/meterFrame';
-import { METER_FRAME_MAGIC, METER_FRAME_VERSION, METER_NULL } from '../../src/lib/contract/protocol';
+import { METER_FRAME_MAGIC, METER_FRAME_VERSION, METER_NULL, METER_SILENCE } from '../../src/lib/contract/protocol';
 import type { BusMeter, ChannelMeter, Layout, Shape, Width } from '../../src/lib/contract/types';
 import { API_DIR, Contract } from '../../dev/mock/contract';
 
@@ -122,7 +122,7 @@ const TINY_BYTES = [
   0xb2, 0xfd, // ch1 truePeak -5.9 -> -590
   0x30, 0xf8, // ch1 momentary -20.004 -> -2000
   0x00, 0x00, 0x41, 0x01, // pgm peak 0, 3.21 -> 0, 321
-  0x32, 0x00, 0x00, 0x80, // pgm truePeak 0.5, -Infinity -> 50, -32768
+  0x32, 0x00, 0x20, 0xd1, // pgm truePeak 0.5, -Infinity -> 50, -12000
   0xf8, 0xf8, 0xc6, 0xf8, // pgm rms -18, -18.5 -> -1800, -1850
   0x04, 0xf7, // momentary -23 -> -2300
   0x00, 0x80, // shortTerm null -> -32768
@@ -281,9 +281,9 @@ describe('meter values', () => {
     expect(decodeMeterFrame(one, encodeMeterFrame(one, { sequence: 0, replica: 'r1' }, busWith(-12.3456, {}))).buses[0]!.peak).toEqual([-12.35]);
   });
 
-  it('writes the null sentinel for null, NaN and -Infinity', () => {
+  it('writes the floor for a silent leg, the null sentinel for null and NaN', () => {
     const bytes = encodeMeterFrame(one, { sequence: 0, replica: 'r1' }, busWith(-Infinity, { lra: Number.NaN }));
-    expect(wire(bytes)).toEqual([...Array<number>(10).fill(METER_NULL), 0]);
+    expect(wire(bytes)).toEqual([...Array<number>(3).fill(METER_SILENCE), ...Array<number>(7).fill(METER_NULL), 0]);
     const bus = decodeMeterFrame(one, bytes).buses[0]!;
     expect(bus.peak).toEqual([-120]);
     expect(bus.loudness).toEqual({

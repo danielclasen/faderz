@@ -38,8 +38,10 @@ export const SELECTIONS_INTERVAL_MS = 100;
 export const METER_FRAME_MAGIC = 0x4d;
 /** Format version in the second byte of a binary meter frame. */
 export const METER_FRAME_VERSION = 3;
-/** Int16 meter value meaning null, -Infinity or no measurement. */
+/** Int16 meter value meaning null, a loudness or correlation of -Infinity, or no measurement. */
 export const METER_NULL = -32768;
+/** Int16 meter value of a leg of digital silence, -Infinity: -120 dB, the floor of a leg. */
+export const METER_SILENCE = -12000;
 /** Largest and smallest Int16 meter values other than METER_NULL. */
 export const METER_MAX = 32767;
 export const METER_MIN = -32767;

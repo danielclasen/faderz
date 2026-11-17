@@ -1,8 +1,8 @@
 //! The samplez engine under the replicated state: started with the gain
 //! matrix of the state it opens with, it is sent every channel's strip,
 //! then follows every applied delta with strip and gain changes and input
-//! routes at the delta's `atIndex`, and its output meters go to the
-//! primary connections as meter frames.
+//! routes at the delta's `atIndex`, and its meters go to the primary
+//! connections as meter frames.
 //!
 //! The engine keeps its own log ([`Engine::start`]): the state is a set
 //! of one voter, so the order the replica applies deltas in is the order
@@ -22,7 +22,7 @@ use serde_json::Value;
 use tokio::sync::Notify;
 use tokio::time::{Instant, MissedTickBehavior};
 
-use crate::meters::Layout;
+use crate::meters::{Layout, Readings};
 use crate::shape::Shape;
 use crate::state::{Mixer, set_at};
 use crate::{mix, strip};
@@ -51,6 +51,9 @@ pub struct Audio {
     /// it resent at, and readiness changes only under this lock.
     resends_asked: Mutex<u64>,
     resend: Notify,
+    /// Each channel's meter gain in the state last applied
+    /// ([`mix::meter_taps`]).
+    taps: Mutex<Vec<f64>>,
     resends: Counter,
     resend_pending: Gauge,
 }
@@ -118,6 +121,7 @@ impl Audio {
             ramp,
             resends_asked: Mutex::new(0),
             resend: Notify::new(),
+            taps: Mutex::new(mix::meter_taps(shape, state)),
             resends: metrics.counter(
                 "faderz_engine_resends_total",
                 "Times every gain and input route was sent to the engine again \
@@ -259,6 +263,7 @@ impl Audio {
         if settle {
             at = (at + self.ramp).next_multiple_of(self.block);
         }
+        *self.taps.lock().expect("taps lock poisoned") = mix::meter_taps(&self.shape, state);
         let next = mix::matrix(&self.shape, state);
         for (input, (row, new)) in sent.matrix.iter_mut().zip(next).enumerate() {
             for (output, (g, n)) in row.iter_mut().zip(new).enumerate() {
@@ -309,9 +314,9 @@ impl Audio {
         }
     }
 
-    /// Publishes a meter frame of the engine's output meters every meter
-    /// period, numbered by the periods since the first; beats the ops
-    /// heartbeat while the RT thread's advances; and asks for a resend
+    /// Publishes a meter frame of the engine's meters every meter period,
+    /// numbered by the periods since the first; beats the ops heartbeat
+    /// while the RT thread's advances; and asks for a resend
     /// when the engine drops entries as late or reports another
     /// divergence. Never returns.
     pub async fn meter(&self, hub: &Hub, replica: &str) {
@@ -344,7 +349,8 @@ impl Audio {
             let periods = (tick - first).as_nanos() / METER_PERIOD.as_nanos();
             // The sequence wraps at 2^32 periods.
             let sequence = periods as u32;
-            let frame = layout.frame(replica, sequence, &status.outputs);
+            let taps = self.taps.lock().expect("taps lock poisoned").clone();
+            let frame = layout.frame(replica, sequence, &Readings::of(&status, &taps));
             hub.publish(Frame::Meters(frame.into()));
         }
     }

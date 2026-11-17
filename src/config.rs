@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::contract::{check, contract};
-use crate::shape::Shape;
+use crate::shape::{Shape, loudness_channels};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -474,7 +474,8 @@ impl Config {
 impl Config {
     /// The engine configuration of the `mxl` section, with a matrix of
     /// zeros: one input per channel reading its flow of input a, one
-    /// output per output of the shape.
+    /// output per output of the shape, and one meter per bus, aux,
+    /// mix-minus and monitor output no output carries.
     fn audio(&self, shape: &Shape) -> Result<Option<samplez::Config>, String> {
         let Some(mxl) = &self.mxl else {
             return Ok(None);
@@ -512,6 +513,7 @@ impl Config {
                 "domain": domain(at, &input.domain)?,
                 "flowId": input.flow,
                 "channels": c.width,
+                "loudnessChannels": loudness_channels(&c.layout),
             }));
         }
         let mut outputs = Vec::new();
@@ -526,8 +528,18 @@ impl Config {
                 "group": o.id,
                 "role": "Audio",
                 "channels": o.width,
+                "loudnessChannels": loudness_channels(&o.layout),
             }));
         }
+        let meters: Vec<Value> = (shape.meter_columns().into_iter())
+            .map(|(id, width, layout)| {
+                json!({
+                    "name": id,
+                    "channels": width,
+                    "loudnessChannels": loudness_channels(layout),
+                })
+            })
+            .collect();
         if let Some(id) = mxl.inputs.keys().find(|id| !shape.is_channel(id)) {
             return Err(format!("mxl.inputs.{id}: not a channel of the shape"));
         }
@@ -537,7 +549,9 @@ impl Config {
             return Err(format!("mxl.outputs.{id}: not an output of the shape"));
         }
         let rows: usize = shape.channels.iter().map(|c| c.width).sum();
-        let columns: usize = shape.outputs.iter().map(|o| o.width).sum();
+        let columns: usize = (shape.outputs.iter().map(|o| o.width))
+            .chain(shape.meter_columns().iter().map(|m| m.1))
+            .sum();
         let mut v = Value::Object(self.engine.clone());
         v["libmxl"] = json!(mxl.library_path);
         v["domains"] = mxl
@@ -547,6 +561,7 @@ impl Config {
             .collect();
         v["inputs"] = json!(inputs);
         v["outputs"] = json!(outputs);
+        v["meters"] = json!(meters);
         v["matrix"] = json!(vec![vec![0.0f32; columns]; rows]);
         v["rt"] = Value::Object(self.rt.clone());
         let engine =
@@ -788,5 +803,21 @@ mod tests {
         assert!(e.contains("mxl.inputs.ch1.altFlow: required"), "{e}");
         let ok = config(json!({ "flow": id(1), "altFlow": id(5) }));
         Config::parse(&ok, || unreachable!()).unwrap();
+
+        // Each bus, aux, mix-minus and monitor output no output carries
+        // is an engine meter on matrix columns after the outputs', and
+        // each leg is weighted for loudness by its layout.
+        let (c, ..) = Config::parse(&ok, || unreachable!()).unwrap();
+        let e = c.audio.unwrap();
+        let meters: Vec<_> = e
+            .meters
+            .iter()
+            .map(|m| (m.name.as_str(), m.channels))
+            .collect();
+        assert_eq!(meters, [("cf", 2), ("aux1", 1), ("mm1", 2), ("mon", 2)]);
+        assert_eq!((e.columns(), e.matrix[0].len()), (9, 9));
+        let stereo = Some(vec!["L".to_owned(), "R".to_owned()]);
+        assert_eq!(e.inputs[2].loudness_channels, stereo);
+        assert_eq!(e.meters[0].loudness_channels, stereo);
     }
 }

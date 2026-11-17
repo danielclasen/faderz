@@ -1,6 +1,8 @@
 //! The live state as the engine's gain matrix: one row per input channel
 //! (the legs of each channel in shape order) and one column per output
-//! channel (the legs of each shape output in shape order).
+//! channel (the legs of each shape output in shape order), then per leg
+//! of each element the engine meters on columns of its own
+//! ([`Shape::meter_columns`]).
 //!
 //! What a matrix coefficient can carry is applied: fader, mute, VCA
 //! offsets and mutes, AFV open or closed, pan of a mono leg and the
@@ -131,13 +133,16 @@ fn fold(from: usize, to: usize, i: usize, j: usize) -> f64 {
     }
 }
 
-/// The output channels' gains for each input channel: `[input][output]`.
+/// The output and meter channels' gains for each input channel:
+/// `[input][column]`.
 pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
     let rows: usize = shape.channels.iter().map(|c| c.width).sum();
     let mut m = vec![Vec::new(); rows];
-    for o in &shape.outputs {
-        let element = element(shape, state, &o.source);
-        for leg in 0..o.width {
+    let outputs = shape.outputs.iter().map(|o| (o.source.as_str(), o.width));
+    let meters = shape.meter_columns().into_iter().map(|(id, w, _)| (id, w));
+    for (source, width) in outputs.chain(meters) {
+        let element = element(shape, state, source);
+        for leg in 0..width {
             for (row, r) in m.iter_mut().enumerate() {
                 let g = element.get(row).and_then(|g| g.get(leg)).copied();
                 r.push(g.unwrap_or(0.0) as f32);
@@ -145,6 +150,23 @@ pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
         }
     }
     m
+}
+
+/// The gain of each channel's meter, the same on every leg: the
+/// engine meters the channel after its strip, which is the input and
+/// pre-fader tap; a post-fader `meterTap` adds the fader, mute and VCAs.
+pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<f64> {
+    shape
+        .channels
+        .iter()
+        .map(|c| {
+            let tap = match state["channels"][&c.id]["meterTap"].as_str() {
+                Some("postFader") => Tap::PostFader,
+                _ => Tap::PreFader,
+            };
+            channel(state, &c.id, tap)
+        })
+        .collect()
 }
 
 /// The gains of element `id` from every input channel: `[input][leg]`.
@@ -328,13 +350,54 @@ mod tests {
         let shape = shape();
         let m = matrix(&shape, &shape.initial_state());
         assert_eq!(m.len(), 4);
-        assert!(m.iter().all(|r| r.len() == 8));
+        // The outputs' 8 columns, then cf's 2, which no output carries.
+        assert!(m.iter().all(|r| r.len() == 10));
         for (row, r) in m.iter().enumerate() {
             for (col, g) in r.iter().enumerate() {
                 let want = if row == 0 && col == 7 { 1.0 } else { 0.0 };
                 assert!(close(*g, want), "[{row}][{col}] = {g}");
             }
         }
+    }
+
+    /// A bus no output carries gets the columns an output of it would:
+    /// cf, after the outputs, carries what an output of cf would.
+    #[test]
+    fn a_bus_no_output_carries_has_its_own_columns() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(0);
+        s["channels"]["ch1"]["routes"]["cf"] = json!(true);
+        s["buses"]["cf"]["fader"] = json!(-6);
+        let m = matrix(&shape, &s);
+        let mut with_output = crate::shape::tests::small();
+        with_output["outputs"] = json!([
+            { "id": "o-cf", "name": "CF", "source": "cf", "width": 2, "layout": "stereo" },
+        ]);
+        let cf = matrix(&Shape::parse(&with_output).unwrap(), &s);
+        for (row, r) in m.iter().enumerate() {
+            assert_eq!(r[8..], cf[row][..2], "row {row}");
+        }
+        assert!(m[0][8] > 0.3);
+    }
+
+    /// The engine meters a channel after its strip: a pre-fader meter tap
+    /// reads it as it is, a post-fader one adds fader, mute and VCAs.
+    #[test]
+    fn a_post_fader_meter_tap_follows_the_fader() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(-6);
+        s["channels"]["ch2"]["fader"] = json!(-6);
+        s["channels"]["ch2"]["meterTap"] = json!("postFader");
+        s["channels"]["st1"]["meterTap"] = json!("postFader");
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["channels"]["st1"]["mute"] = json!(true);
+        let t = meter_taps(&shape, &s);
+        assert_eq!(t.len(), 3);
+        assert!((t[0] - 1.0).abs() < 1e-12);
+        assert!((t[1] - gain(-6.0)).abs() < 1e-12);
+        assert_eq!(t[2], 0.0);
     }
 
     #[test]

@@ -153,7 +153,8 @@ export function encodeMeterFrame(layout: MeterLayout, header: MeterFrameHeader, 
   };
   const legs = (what: string, list: readonly number[], n: number) => {
     if (list.length !== n) throw new RangeError(`${what}: ${list.length} legs, layout has ${n}`);
-    for (const v of list) put(v);
+    // A silent leg is the floor, not null: it was measured.
+    for (const v of list) put(v === -Infinity ? SILENCE_DB : v);
   };
   const section = <T>(name: string, elements: readonly MeterElement[], list: readonly T[], write: (m: T, e: MeterElement) => void) => {
     if (list.length !== elements.length) {

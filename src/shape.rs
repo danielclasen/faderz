@@ -87,6 +87,18 @@ pub struct OutputShape {
     pub layout: String,
 }
 
+/// The loudness role of each leg of `layout` as samplez names them
+/// (BS.1770-5 Table 3 weights); `None` for 7.1, whose rear legs samplez
+/// has no names for, so every leg weighs 1.
+pub fn loudness_channels(layout: &str) -> Option<&'static [&'static str]> {
+    match layout {
+        "mono" => Some(&["C"]),
+        "stereo" => Some(&["L", "R"]),
+        "5.1" => Some(&["L", "R", "C", "LFE", "Ls", "Rs"]),
+        _ => None,
+    }
+}
+
 fn layout_width(layout: &str) -> usize {
     match layout {
         "mono" => 1,
@@ -175,6 +187,25 @@ impl Shape {
             .map(|e| (e.id.as_str(), e.width, Some(e.layout.as_str())));
         let v = self.vcas.iter().map(|e| (e.id.as_str(), 0, None));
         c.chain(b).chain(a).chain(m).chain(v)
+    }
+
+    /// Id, width and layout of each bus, aux, mix-minus and monitor
+    /// output no output carries, in meter frame order: the engine's meters,
+    /// computed on matrix columns of their own.
+    pub fn meter_columns(&self) -> Vec<(&str, usize, &str)> {
+        let b = self.buses.iter().map(|e| (&e.id, e.width, &e.layout));
+        let a = self.auxes.iter().map(|e| (&e.id, e.width, &e.layout));
+        let m = self.mix_minus.iter().map(|e| (&e.id, e.width, &e.layout));
+        let o = self
+            .monitor_outputs
+            .iter()
+            .map(|e| (&e.id, e.width, &e.layout));
+        b.chain(a)
+            .chain(m)
+            .chain(o)
+            .filter(|(id, ..)| !self.outputs.iter().any(|o| &o.source == *id))
+            .map(|(id, w, l)| (id.as_str(), w, l.as_str()))
+            .collect()
     }
 
     /// Whether `id` names an element that may carry recall-safe groups.

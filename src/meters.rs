@@ -1,20 +1,29 @@
 //! Meter frames (api/ws/server-message.schema.json `MeterFrame`, format
 //! 3): a 12-byte header, the replica id, then Int16 centi-dB values in
-//! shape order. An element's meters are those of the first output of the
-//! shape it is the source of; an element no output carries reads null.
-//! So a channel is metered at its direct out's tap, not at `meterTap`,
-//! and a monitor output after its level, dim, cut, mono and speaker
-//! mutes rather than before them as `MonitorMeter` says: the engine
-//! meters what an output flow carries.
+//! shape order.
+//!
+//! A channel's peak and momentary loudness are the engine's meter of its
+//! input after the strip, which is both the input and the pre-fader tap
+//! (the engine has no tap before the strip), times the channel's fader,
+//! mute and VCA gain when its `meterTap` is postFader. Its true peak is
+//! that of its direct out, the first output it is the source of, and
+//! null without one. A bus, aux, mix-minus or monitor output reads the
+//! meters of the first output it is the source of, or the engine meter
+//! on matrix columns of its own when no output carries it. So a monitor
+//! output is metered after its level, dim, cut, mono and speaker mutes
+//! rather than before them as `MonitorMeter` says. A level of digital
+//! silence reads the floor, -120 dB; null is a value not measured.
 
-use samplez::OutputStatus;
+use samplez::{InputMeters, OutputMeters, Status};
 
 use crate::shape::Shape;
 
 const MAGIC: u8 = 0x4d;
 const VERSION: u8 = 3;
-/// No value: silence for a level, absent for a loudness.
+/// No value: not measured.
 const NULL: i16 = i16::MIN;
+/// Digital silence: -120 dB, the floor of a level.
+const FLOOR: i16 = -12_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -23,10 +32,43 @@ enum Kind {
     Monitor,
 }
 
+/// Where an element's meters come from.
+#[derive(Clone, Copy)]
+enum Source {
+    /// Input slot `slot`, and the output carrying the channel.
+    Channel {
+        slot: usize,
+        direct: Option<usize>,
+    },
+    Output(usize),
+    /// An engine meter, numbered as the engine's `meters`.
+    Meter(usize),
+}
+
+/// The meters a frame is made of.
+pub struct Readings<'a> {
+    pub outputs: Vec<&'a OutputMeters>,
+    pub meters: Vec<&'a OutputMeters>,
+    pub inputs: Vec<&'a InputMeters>,
+    /// Each channel's meter gain ([`crate::mix::meter_taps`]).
+    pub taps: &'a [f64],
+}
+
+impl<'a> Readings<'a> {
+    pub fn of(status: &'a Status, taps: &'a [f64]) -> Readings<'a> {
+        Readings {
+            outputs: status.outputs.iter().map(|o| &o.meters).collect(),
+            meters: status.meters.iter().map(|m| &m.meters).collect(),
+            inputs: status.inputs.iter().map(|i| &i.meters).collect(),
+            taps,
+        }
+    }
+}
+
 /// The order and size of a frame's values for one shape.
 pub struct Layout {
-    /// Kind, legs and the index of the output carrying each element.
-    elements: Vec<(Kind, usize, Option<usize>)>,
+    /// Kind, legs and source of each element.
+    elements: Vec<(Kind, usize, Source)>,
     /// FNV-1a 32-bit of the layout text.
     pub fingerprint: u32,
 }
@@ -34,26 +76,43 @@ pub struct Layout {
 impl Layout {
     pub fn of(shape: &Shape) -> Layout {
         let output = |id: &str| shape.outputs.iter().position(|o| o.source == id);
+        let meters = shape.meter_columns();
+        let source = |id: &str| match output(id) {
+            Some(o) => Source::Output(o),
+            None => Source::Meter(
+                meters
+                    .iter()
+                    .position(|m| m.0 == id)
+                    .expect("an element no output carries has a meter"),
+            ),
+        };
         let mut text = String::new();
         let mut elements = Vec::new();
-        let mut add = |kind, section: &str, id: &str, legs: usize| {
+        let mut add = |kind, section: &str, id: &str, legs: usize, source| {
             text.push_str(&format!("{section}/{id}/{legs};"));
-            elements.push((kind, legs, output(id)));
+            elements.push((kind, legs, source));
         };
-        for c in &shape.channels {
-            add(Kind::Channel, "c", &c.id, c.width);
+        for (slot, c) in shape.channels.iter().enumerate() {
+            let direct = output(&c.id);
+            add(
+                Kind::Channel,
+                "c",
+                &c.id,
+                c.width,
+                Source::Channel { slot, direct },
+            );
         }
         for b in &shape.buses {
-            add(Kind::Bus, "b", &b.id, b.width);
+            add(Kind::Bus, "b", &b.id, b.width, source(&b.id));
         }
         for a in &shape.auxes {
-            add(Kind::Bus, "a", &a.id, a.width);
+            add(Kind::Bus, "a", &a.id, a.width, source(&a.id));
         }
         for m in &shape.mix_minus {
-            add(Kind::Bus, "m", &m.id, m.width);
+            add(Kind::Bus, "m", &m.id, m.width, source(&m.id));
         }
         for m in &shape.monitor_outputs {
-            add(Kind::Monitor, "o", &m.id, m.width);
+            add(Kind::Monitor, "o", &m.id, m.width, source(&m.id));
         }
         Layout {
             elements,
@@ -62,8 +121,8 @@ impl Layout {
     }
 
     /// The frame numbered `sequence` of `replica` from the engine's
-    /// `outputs`.
-    pub fn frame(&self, replica: &str, sequence: u32, outputs: &[OutputStatus]) -> Vec<u8> {
+    /// readings.
+    pub fn frame(&self, replica: &str, sequence: u32, r: &Readings<'_>) -> Vec<u8> {
         let len = replica.len().min(32);
         let mut b = vec![MAGIC, VERSION, len as u8, 0];
         b.extend_from_slice(&sequence.to_le_bytes());
@@ -73,36 +132,53 @@ impl Layout {
             b.push(0);
         }
         let mut put = |v: i16| b.extend_from_slice(&v.to_le_bytes());
-        for &(kind, legs, output) in &self.elements {
-            let m = output.and_then(|o| outputs.get(o)).map(|o| &o.meters);
-            let leg = |of: fn(&samplez::OutputMeters) -> &Vec<f32>, i: usize| {
-                m.and_then(|m| of(m).get(i))
-                    .map_or(NULL, |v| level(f64::from(*v)))
-            };
-            let loudness =
-                |of: fn(&samplez::OutputMeters) -> Option<f64>| m.and_then(of).map_or(NULL, centi);
-            for i in 0..legs {
-                put(leg(|m| &m.peak, i));
+        let legs = |v: Option<&Vec<f32>>, i: usize, g: f64| {
+            v.and_then(|v| v.get(i))
+                .map_or(NULL, |v| level(f64::from(*v) * g))
+        };
+        for &(kind, n, source) in &self.elements {
+            if let Source::Channel { slot, direct } = source {
+                let input = r.inputs.get(slot);
+                let g = r.taps.get(slot).copied().unwrap_or(1.0);
+                let tp = direct.and_then(|o| r.outputs.get(o)).map(|m| &m.true_peak);
+                for i in 0..n {
+                    put(legs(input.map(|m| &m.peak), i, g));
+                }
+                for i in 0..n {
+                    put(legs(tp, i, 1.0));
+                }
+                // Loudness scales with the power, g squared.
+                let gain_db = 20.0 * g.log10();
+                put(input
+                    .and_then(|m| m.momentary)
+                    .map_or(NULL, |l| centi(l + gain_db)));
+                continue;
+            }
+            let m = match source {
+                Source::Output(o) => r.outputs.get(o),
+                Source::Meter(m) => r.meters.get(m),
+                Source::Channel { .. } => unreachable!("handled above"),
+            }
+            .copied();
+            for i in 0..n {
+                put(legs(m.map(|m| &m.peak), i, 1.0));
             }
             if kind == Kind::Monitor {
                 continue;
             }
-            for i in 0..legs {
-                put(leg(|m| &m.true_peak, i));
+            for i in 0..n {
+                put(legs(m.map(|m| &m.true_peak), i, 1.0));
             }
-            if kind == Kind::Channel {
-                put(loudness(|m| m.momentary));
-                continue;
+            for i in 0..n {
+                put(legs(m.map(|m| &m.rms), i, 1.0));
             }
-            for i in 0..legs {
-                put(leg(|m| &m.rms, i));
-            }
-            put(loudness(|m| m.momentary));
-            put(loudness(|m| m.short_term));
-            put(loudness(|m| m.integrated));
-            put(loudness(|m| m.range));
-            put(loudness(|m| m.max_momentary));
-            put(loudness(|m| m.max_short_term));
+            let l = |of: fn(&OutputMeters) -> Option<f64>| m.and_then(of).map_or(NULL, centi);
+            put(l(|m| m.momentary));
+            put(l(|m| m.short_term));
+            put(l(|m| m.integrated));
+            put(l(|m| m.range));
+            put(l(|m| m.max_momentary));
+            put(l(|m| m.max_short_term));
             // The engine measures no correlation.
             put(NULL);
             put(m.map_or(0, flags));
@@ -119,7 +195,7 @@ const WINDOW: u64 = 4_800;
 
 /// Bit 0 `integratedValid`: nothing dropped since the measurement
 /// started. Bit 1 `lraStable`: that, and 60 s measured since.
-fn flags(m: &samplez::OutputMeters) -> i16 {
+fn flags(m: &OutputMeters) -> i16 {
     let measured = match (m.window, m.since) {
         (Some(w), Some(since)) => ((w + 1) * WINDOW).saturating_sub(since),
         _ => 0,
@@ -127,17 +203,21 @@ fn flags(m: &samplez::OutputMeters) -> i16 {
     i16::from(m.valid) | i16::from(m.valid && measured >= LRA_SETTLED) << 1
 }
 
-/// A full-scale-1.0 level in centi-dB; silence is null.
+/// A full-scale-1.0 level in centi-dB; silence is the floor, NaN null.
 fn level(v: f64) -> i16 {
     if v > 0.0 {
         centi(20.0 * v.log10())
+    } else if v == 0.0 {
+        FLOOR
     } else {
         NULL
     }
 }
 
+/// Centi-units of a level, loudness or loudness range; NaN and
+/// -Infinity, a loudness of silence, are null.
 fn centi(db: f64) -> i16 {
-    if db.is_nan() {
+    if db.is_nan() || db == f64::NEG_INFINITY {
         return NULL;
     }
     (db * 100.0 + 0.5).floor().clamp(-32767.0, 32767.0) as i16
@@ -164,57 +244,97 @@ mod tests {
         assert_eq!(fnv1a("a"), 0xe40c_292c);
     }
 
-    /// Header, padding and value count as the client decodes them; the
-    /// elements no output carries read null, the one that does its levels.
+    fn input(peak: Vec<f32>, momentary: Option<f64>) -> InputMeters {
+        InputMeters {
+            window: Some(10),
+            peak,
+            rms: Vec::new(),
+            momentary,
+        }
+    }
+
+    fn lin(db: f64) -> f32 {
+        10f64.powf(db / 20.0) as f32
+    }
+
+    /// Header, padding and value count as the client decodes them. Every
+    /// element is metered whether an output carries it or not: channels
+    /// by their input meters, pgm by its output, the other buses, the
+    /// aux, the mix-minus and the monitor by engine meters of their own.
+    /// Silence reads the floor, a value not measured null.
     #[test]
     fn a_frame_has_the_clients_length_and_values() {
         let shape = Shape::parse(&small()).unwrap();
         let layout = Layout::of(&shape);
-        let mut out: OutputStatus = OutputStatus {
-            name: "out-pgm".into(),
-            realised: true,
-            reason: None,
-            attempts: 1,
-            races: 0,
-            create_failures: 0,
-            buffer_length: None,
-            hints: None,
-            meters: samplez::OutputMeters::default(),
+        let pgm = OutputMeters {
+            peak: vec![0.5, 0.0],
+            true_peak: vec![0.5, 0.0],
+            rms: vec![0.5, 0.0],
+            momentary: Some(-23.0),
+            ..Default::default()
         };
-        out.meters.peak = vec![0.5, 0.0];
-        out.meters.true_peak = vec![0.5, 0.0];
-        out.meters.rms = vec![0.5, 0.0];
-        out.meters.momentary = Some(-23.0);
-        let f = layout.frame("r1", 7, &[out]);
+        let cf = OutputMeters {
+            peak: vec![0.25, 0.25],
+            ..Default::default()
+        };
+        let mon = OutputMeters {
+            peak: vec![0.5, 0.5],
+            ..Default::default()
+        };
+        let none = OutputMeters::default();
+        let (ch1, ch2) = (input(vec![0.25], Some(-20.0)), InputMeters::default());
+        let st1 = input(vec![0.0, 0.0], None);
+        let r = Readings {
+            outputs: vec![&pgm],
+            meters: vec![&cf, &none, &none, &mon],
+            inputs: vec![&ch1, &ch2, &st1],
+            taps: &[1.0, 1.0, 1.0],
+        };
+        let f = layout.frame("r1", 7, &r);
         // Channels 2*legs+1, buses 3*legs+8, monitor legs.
         let values = 3 + 3 + 5 + (6 + 8) * 2 + (3 + 8) + (6 + 8) + 2;
         assert_eq!(f.len(), 12 + 2 + 2 * values);
         assert_eq!(&f[..4], &[MAGIC, VERSION, 2, 0]);
         assert_eq!(u32::from_le_bytes(f[4..8].try_into().unwrap()), 7);
         let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
-        assert_eq!(v(0), NULL);
-        // pgm, after the 11 channel values: peak L -6.02 dB, R silent.
-        assert_eq!(v(11), -602);
-        assert_eq!(v(12), NULL);
-        assert_eq!(v(17), -2300);
+        // ch1 at its input meter; no direct out, so no true peak.
+        assert_eq!([v(0), v(1), v(2)], [-1204, NULL, -2000]);
+        // ch2 not measured yet.
+        assert_eq!([v(3), v(4), v(5)], [NULL, NULL, NULL]);
+        // st1 silent.
+        assert_eq!(
+            [v(6), v(7), v(8), v(9), v(10)],
+            [FLOOR, FLOOR, NULL, NULL, NULL]
+        );
+        // pgm, from its output: peak L -6.02 dB, R silent.
+        assert_eq!([v(11), v(12), v(17)], [-602, FLOOR, -2300]);
+        // cf, from its engine meter.
+        assert_eq!([v(25), v(26)], [-1204, -1204]);
+        // The monitor, the last two values.
+        assert_eq!([v(values - 2), v(values - 1)], [-602, -602]);
     }
 
-    fn output(meters: samplez::OutputMeters) -> OutputStatus {
-        OutputStatus {
-            name: "o".into(),
-            realised: true,
-            reason: None,
-            attempts: 1,
-            races: 0,
-            create_failures: 0,
-            buffer_length: None,
-            hints: None,
-            meters,
-        }
-    }
-
-    fn lin(db: f64) -> f32 {
-        10f64.powf(db / 20.0) as f32
+    /// A channel's meter follows its meterTap: the gain of a post-fader
+    /// tap scales the levels and the momentary loudness by the power; a
+    /// closed fader reads silence and no loudness.
+    #[test]
+    fn a_channel_meter_takes_its_tap_gain() {
+        let shape = Shape::parse(&small()).unwrap();
+        let layout = Layout::of(&shape);
+        let none = OutputMeters::default();
+        let ch1 = input(vec![0.5], Some(-20.0));
+        let st1 = input(vec![0.5, 0.25], Some(-20.0));
+        let r = Readings {
+            outputs: vec![&none],
+            meters: vec![&none; 4],
+            inputs: vec![&ch1, &ch1, &st1],
+            taps: &[0.5, 0.0, 1.0],
+        };
+        let f = layout.frame("r1", 0, &r);
+        let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
+        assert_eq!([v(0), v(2)], [-1204, -2602]);
+        assert_eq!([v(3), v(5)], [FLOOR, NULL]);
+        assert_eq!([v(6), v(7), v(10)], [-602, -1204, -2000]);
     }
 
     /// The example frame of server-message.schema.json `MeterFrame`,
@@ -247,13 +367,12 @@ mod tests {
             ],
         }))
         .unwrap();
-        let ch1 = samplez::OutputMeters {
-            peak: vec![lin(-6.5)],
+        let ch1 = input(vec![lin(-6.5)], Some(-20.0));
+        let direct = OutputMeters {
             true_peak: vec![lin(-5.9)],
-            momentary: Some(-20.0),
             ..Default::default()
         };
-        let pgm = samplez::OutputMeters {
+        let pgm = OutputMeters {
             window: Some(10),
             since: Some(0),
             valid: true,
@@ -266,7 +385,13 @@ mod tests {
             max_momentary: Some(-21.5),
             ..Default::default()
         };
-        let got = Layout::of(&shape).frame("rep", 258, &[output(ch1), output(pgm)]);
+        let r = Readings {
+            outputs: vec![&direct, &pgm],
+            meters: Vec::new(),
+            inputs: vec![&ch1],
+            taps: &[1.0],
+        };
+        let got = Layout::of(&shape).frame("rep", 258, &r);
         assert_eq!(got, want);
     }
 
@@ -274,7 +399,7 @@ mod tests {
     /// 60 s of measurement on.
     #[test]
     fn the_loudness_flags_follow_validity_and_measured_time() {
-        let m = |valid, window| samplez::OutputMeters {
+        let m = |valid, window| OutputMeters {
             valid,
             window: Some(window),
             since: Some(4_800),
@@ -286,6 +411,6 @@ mod tests {
         assert_eq!(flags(&m(true, 599)), 1);
         assert_eq!(flags(&m(true, 600)), 3);
         assert_eq!(flags(&m(false, 600)), 0);
-        assert_eq!(flags(&samplez::OutputMeters::default()), 0);
+        assert_eq!(flags(&OutputMeters::default()), 0);
     }
 }
