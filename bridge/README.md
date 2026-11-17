@@ -92,6 +92,11 @@ requested in addition to `openid`.
   above, with the OAuth 2.0 device authorization grant enabled. It needs
   no redirect URI and no other flow. The provider's discovery document
   has to list `device_authorization_endpoint`.
+- PKCE is optional for the provider: the bridge always sends an S256
+  challenge (RFC 7636) with the device authorization request and the
+  matching `code_verifier` with every token poll of that sign-in, so a
+  provider that enforces PKCE on public clients works. Refresh requests
+  carry no verifier.
 - Refresh tokens for that client. With `offline_access` among the scopes
   a provider that offers offline tokens issues one that outlives the
   user's browser session; without it the refresh token ends with that

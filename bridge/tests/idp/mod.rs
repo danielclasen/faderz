@@ -1,5 +1,5 @@
 //! A stand-in OpenID Connect provider for the tests: discovery, an ES256
-//! key set, the device authorization grant (RFC 8628) for the client
+//! key set, the device authorization grant (RFC 8628, with PKCE enforced on request) for the client
 //! `faderz-bridge`, and refresh tokens that rotate. Access tokens name
 //! the user `alice` with the group `faderz-operator`, the claims faderz in
 //! oidc mode reads.
@@ -19,6 +19,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 pub const CLIENT: &str = "faderz-bridge";
 pub const USER_CODE: &str = "WDJB-MJHT";
@@ -47,6 +48,11 @@ pub struct Book {
     /// Token requests answered 401 without a body.
     pub unauthorized: bool,
     pub device_requests: Vec<Value>,
+    /// Refuses a device authorization request without an S256 challenge
+    /// and a device token request whose verifier does not match it, as a
+    /// provider enforcing PKCE does.
+    pub require_pkce: bool,
+    challenge: Option<String>,
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -141,6 +147,22 @@ async fn device(
     if form.get("client_id").map(String::as_str) != Some(CLIENT) {
         return error("invalid_client");
     }
+    if book.require_pkce {
+        let challenge = form.get("code_challenge").filter(|c| !c.is_empty());
+        if form.get("code_challenge_method").map(String::as_str) != Some("S256")
+            || challenge.is_none()
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_request",
+                    "error_description": "Missing parameter: code_challenge_method",
+                })),
+            )
+                .into_response();
+        }
+        book.challenge = challenge.cloned();
+    }
     Json(json!({
         "device_code": "dc1", "user_code": USER_CODE,
         "verification_uri": format!("{issuer}/device/verify"),
@@ -169,6 +191,17 @@ async fn token(
         Some("urn:ietf:params:oauth:grant-type:device_code") => {
             if form.get("device_code").map(String::as_str) != Some("dc1") {
                 return error("invalid_grant");
+            }
+            if book.require_pkce {
+                let verifier = form.get("code_verifier").map(String::as_str);
+                let ok = verifier.is_some_and(|v| {
+                    (43..=128).contains(&v.len())
+                        && book.challenge.as_deref()
+                            == Some(&b64(Sha256::digest(v.as_bytes()).as_ref()))
+                });
+                if !ok {
+                    return error("invalid_grant");
+                }
             }
             book.polls += 1;
             match book.pending {
@@ -209,6 +242,8 @@ impl Idp {
             failing: 0,
             unauthorized: false,
             device_requests: Vec::new(),
+            require_pkce: false,
+            challenge: None,
         }));
         let router = Router::new()
             .route(

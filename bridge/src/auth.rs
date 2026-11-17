@@ -10,8 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::bridge::Credentials;
@@ -73,6 +76,10 @@ pub struct DeviceCode {
     pub expires_in: u64,
     #[serde(default)]
     pub interval: Option<u64>,
+    /// The PKCE verifier (RFC 7636) whose S256 challenge went with the
+    /// request; every token poll of this grant carries it.
+    #[serde(skip)]
+    pub code_verifier: String,
 }
 
 /// Why a token request failed.
@@ -191,20 +198,38 @@ async fn post_form(
     }
 }
 
-/// Starts a sign-in: the code the user enters and where.
+/// The S256 code challenge of `verifier` (RFC 7636 4.2).
+pub fn code_challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+/// Starts a sign-in: the code the user enters and where. The request
+/// always carries a PKCE S256 challenge; a provider that does not use it
+/// ignores it, one that enforces it refuses the request without.
 pub async fn start(
     http: &reqwest::Client,
     provider: &Provider,
     client_id: &str,
     scope: &str,
 ) -> Result<DeviceCode, Failure> {
+    let verifier = crate::session::random_id()
+        .map_err(|e| Failure::Transient(format!("no random source: {e}")))?;
+    let challenge = code_challenge(&verifier);
     let body = post_form(
         http,
         &provider.device_authorization_endpoint,
-        &[("client_id", client_id), ("scope", scope)],
+        &[
+            ("client_id", client_id),
+            ("scope", scope),
+            ("code_challenge", &challenge),
+            ("code_challenge_method", "S256"),
+        ],
     )
     .await?;
-    serde_json::from_value(body).map_err(|e| Failure::Transient(e.to_string()))
+    let mut code: DeviceCode =
+        serde_json::from_value(body).map_err(|e| Failure::Transient(e.to_string()))?;
+    code.code_verifier = verifier;
+    Ok(code)
 }
 
 fn tokens(body: &Value, previous_refresh: Option<&str>) -> Result<Tokens, Failure> {
@@ -253,6 +278,7 @@ pub async fn poll(
             ("grant_type", DEVICE_GRANT),
             ("device_code", code.device_code.as_str()),
             ("client_id", client_id),
+            ("code_verifier", code.code_verifier.as_str()),
         ];
         match post_form(http, &provider.token_endpoint, &form).await {
             Ok(body) => return tokens(&body, None),

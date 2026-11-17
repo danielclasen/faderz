@@ -126,3 +126,28 @@ async fn a_provider_failing_at_start_is_waited_for_not_signed_in_again() {
     assert_eq!(r.unwrap_err(), Failure::Refused("unauthorized".into()));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn a_provider_enforcing_pkce_signs_the_bridge_in_and_refuses_a_wrong_verifier() {
+    let idp = Idp::start(300).await;
+    idp.book().require_pkce = true;
+    let (s, dir) = session(&idp).await;
+    s.sign_in(&|_| {}).await.unwrap();
+    let sent = idp.book().device_requests[0].clone();
+    assert_eq!(sent["code_challenge_method"], "S256");
+    assert_eq!(sent["code_challenge"].as_str().unwrap().len(), 43);
+    // Refresh requests carry no verifier: the stored token is accepted.
+    s.sign_in(&|_| {}).await.unwrap();
+    assert_eq!(idp.book().refreshes, 1);
+
+    // A verifier that does not match the challenge is refused.
+    let mut code = auth::start(&s.http, &s.provider, CLIENT, "openid")
+        .await
+        .unwrap();
+    assert!((43..=128).contains(&code.code_verifier.len()));
+    code.code_verifier = "x".repeat(43);
+    code.interval = Some(0);
+    let r = auth::poll(&s.http, &s.provider, CLIENT, &code).await;
+    assert_eq!(r.unwrap_err(), Failure::Refused("invalid_grant".into()));
+    std::fs::remove_dir_all(dir).unwrap();
+}
