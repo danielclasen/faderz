@@ -9,3 +9,4 @@ web/dist
 web/test-results
 web/playwright-report
 web/playwright-report-binary
+bridge
