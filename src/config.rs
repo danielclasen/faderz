@@ -41,7 +41,8 @@ pub struct Config {
     pub mxl: Option<Mxl>,
     /// samplez's engine timing: `sampleRate`, `blockSize`,
     /// `readerMarginSamples`, `maxCatchupBlocks`, `pruneAfterBlocks`,
-    /// `rampSamples`. samplez checks the values and supplies defaults.
+    /// `rampSamples`. samplez checks the values and supplies defaults,
+    /// but for `readerMarginSamples`, [`READER_MARGIN`] here.
     #[serde(default)]
     pub engine: Map<String, Value>,
     /// samplez's RT thread settings (`enabled`, `priority`, `rtCpu`).
@@ -101,6 +102,12 @@ pub struct Output {
     #[serde(default)]
     pub domain: Option<String>,
 }
+
+/// `readerMarginSamples` when the configuration sets none: 32 ms. An
+/// input read through a copy of a flow on another node has needed 1303
+/// to 1399 samples, which samplez's default of 576 reads almost wholly
+/// late; the margin delays every output by as much.
+pub const READER_MARGIN: u32 = 1536;
 
 /// The `engine` keys faderz passes to samplez; the others it sets itself.
 const ENGINE_KEYS: [&str; 6] = [
@@ -552,7 +559,11 @@ impl Config {
         let columns: usize = (shape.outputs.iter().map(|o| o.width))
             .chain(shape.meter_columns().iter().map(|m| m.1))
             .sum();
-        let mut v = Value::Object(self.engine.clone());
+        let mut engine = self.engine.clone();
+        engine
+            .entry("readerMarginSamples")
+            .or_insert(json!(READER_MARGIN));
+        let mut v = Value::Object(engine);
         v["libmxl"] = json!(mxl.library_path);
         v["domains"] = mxl
             .domains
@@ -819,5 +830,11 @@ mod tests {
         let stereo = Some(vec!["L".to_owned(), "R".to_owned()]);
         assert_eq!(e.inputs[2].loudness_channels, stereo);
         assert_eq!(e.meters[0].loudness_channels, stereo);
+        assert_eq!(e.reader_margin_samples, READER_MARGIN);
+
+        let mut set: Value = serde_json::from_str(&ok).unwrap();
+        set["engine"] = json!({ "readerMarginSamples": 960 });
+        let (c, ..) = Config::parse(&set.to_string(), || unreachable!()).unwrap();
+        assert_eq!(c.audio.unwrap().reader_margin_samples, 960);
     }
 }
