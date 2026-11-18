@@ -1,25 +1,58 @@
 //! MIDI transports: a surface's USB-MIDI ports through midir (ALSA on
-//! Linux), or an in-process pair whose far end is an [`Emulator`].
+//! Linux), an RTP-MIDI session ([`rtpmidi`]), or an in-process pair whose
+//! far end is an [`Emulator`].
 //!
 //! [`Emulator`]: crate::emulator::Emulator
+//! [`rtpmidi`]: crate::rtpmidi
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::watch;
 
 /// What keeps a surface's MIDI ports open.
 pub type Open = Option<Box<dyn Send>>;
+
+/// The connection of a surface that comes and goes, as one on the
+/// network does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Link {
+    pub connected: bool,
+    /// Counts the sessions so far: a new one shows nothing yet.
+    pub session: u64,
+    /// Counts the times the surface may have missed messages and is to
+    /// get its whole state again.
+    pub resync: u64,
+    /// Counts the times messages from the surface went missing, a fader
+    /// let go among them perhaps.
+    pub missed: u64,
+}
 
 /// The bridge's side of a surface: complete MIDI messages in and out.
 pub struct Port {
     pub input: UnboundedReceiver<Vec<u8>>,
     pub output: UnboundedSender<Vec<u8>>,
+    /// The connection, for a surface that has one of its own; a local
+    /// port has none.
+    pub link: Option<watch::Receiver<Link>>,
     /// Whatever keeps the ports open while the bridge runs.
     _open: Open,
 }
 
+/// What a [`Port`] is made of.
+pub struct Parts {
+    pub input: UnboundedReceiver<Vec<u8>>,
+    pub output: UnboundedSender<Vec<u8>>,
+    pub link: Option<watch::Receiver<Link>>,
+    pub open: Open,
+}
+
 impl Port {
-    /// The input, the output, and what keeps them open.
-    pub fn into_parts(self) -> (UnboundedReceiver<Vec<u8>>, UnboundedSender<Vec<u8>>, Open) {
-        (self.input, self.output, self._open)
+    pub fn into_parts(self) -> Parts {
+        Parts {
+            input: self.input,
+            output: self.output,
+            link: self.link,
+            open: self._open,
+        }
     }
 }
 
@@ -32,10 +65,34 @@ pub fn pair() -> (Port, UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>) {
         Port {
             input,
             output,
+            link: None,
             _open: None,
         },
         to_bridge,
         from_bridge,
+    )
+}
+
+/// The far end of a [`linked_pair`].
+pub struct Far {
+    pub to_bridge: UnboundedSender<Vec<u8>>,
+    pub from_bridge: UnboundedReceiver<Vec<u8>>,
+    /// Where the far end reports its connection.
+    pub link: watch::Sender<Link>,
+}
+
+/// [`pair`] with a [`Link`].
+pub fn linked_pair() -> (Port, Far) {
+    let (mut port, to_bridge, from_bridge) = pair();
+    let (link, rx) = watch::channel(Link::default());
+    port.link = Some(rx);
+    (
+        port,
+        Far {
+            to_bridge,
+            from_bridge,
+            link,
+        },
     )
 }
 
@@ -100,6 +157,7 @@ pub fn open(input: &str, output: &str) -> Result<Port, String> {
     Ok(Port {
         input: rx,
         output: tx,
+        link: None,
         _open: Some(Box::new(connection)),
     })
 }

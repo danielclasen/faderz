@@ -10,12 +10,17 @@ use serde_json::{Value, json};
 
 use crate::engine::{Engine, Event};
 use crate::mcu::{self, Device, Input, Key, Led};
+use crate::midi::Link;
 use crate::taper;
 
 /// How often a motor fader is moved at most.
 pub const MOTOR_INTERVAL_MS: u64 = 20;
 /// A refused touch held this long asks the holder to give the control up.
 pub const REQUEST_AFTER_MS: u64 = 1000;
+/// After messages from a network surface went missing, a touched fader
+/// that does not move for this long is taken as let go: its release may
+/// have been among them.
+pub const STALE_TOUCH_MS: u64 = 1500;
 
 /// One physical unit.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +40,8 @@ struct Touch {
     refused: Option<String>,
     since: u64,
     requested: bool,
+    /// Since when the touch may have been let go unseen.
+    suspect: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -181,6 +188,54 @@ impl Surface {
         }
     }
 
+    /// Unit `unit` lost what it showed (a new session, or messages lost
+    /// on the way): the next render sends it everything again.
+    pub fn resend(&mut self, unit: usize) {
+        self.units[unit].shown = Shown::default();
+    }
+
+    /// Unit `unit` went away or came back as a new session: what its
+    /// faders held is let go, and it is shown everything again.
+    pub fn reconnected(&mut self, unit: usize, engine: &mut Engine, now: u64) {
+        for t in self.units[unit].touches.iter_mut() {
+            if let Some(t) = t.take()
+                && t.refused.is_none()
+            {
+                engine.release(&t.path, now);
+            }
+        }
+        self.resend(unit);
+    }
+
+    /// Messages from unit `unit` went missing: its touched faders that do
+    /// not move within [`STALE_TOUCH_MS`] are let go.
+    pub fn missed(&mut self, unit: usize, now: u64) {
+        for t in self.units[unit].touches.iter_mut().flatten() {
+            t.suspect.get_or_insert(now);
+        }
+    }
+
+    /// Unit `unit`'s connection changed from `was` to `is`.
+    pub fn link_changed(
+        &mut self,
+        unit: usize,
+        was: Link,
+        is: Link,
+        engine: &mut Engine,
+        now: u64,
+    ) {
+        if is.session != was.session || !is.connected {
+            self.reconnected(unit, engine, now);
+            return;
+        }
+        if is.missed != was.missed {
+            self.missed(unit, now);
+        }
+        if is.resync != was.resync {
+            self.resend(unit);
+        }
+    }
+
     /// The controls held by a touched fader.
     pub fn touching(&self) -> HashSet<String> {
         self.units
@@ -207,6 +262,7 @@ impl Surface {
                     refused: None,
                     since: now,
                     requested: false,
+                    suspect: None,
                 });
             }
             Input::Touch { strip, down: false } => {
@@ -223,10 +279,11 @@ impl Surface {
             // A fader that moves without a touch is a motor's echo or a
             // surface without touch sense: never written.
             Input::Fader { strip, value } => {
-                if let Some(t) = &self.units[unit].touches[usize::from(strip)]
-                    && t.refused.is_none()
-                {
-                    engine.set(&t.path, json!(taper::fader_to_db(value)), now);
+                if let Some(t) = &mut self.units[unit].touches[usize::from(strip)] {
+                    t.suspect = None;
+                    if t.refused.is_none() {
+                        engine.set(&t.path, json!(taper::fader_to_db(value)), now);
+                    }
                 }
             }
             Input::Key { key, down: true } => self.key(unit, key, engine, now),
@@ -304,6 +361,25 @@ impl Surface {
     /// Asks for refused controls held for a second, and notices a touched
     /// control that went to another session.
     pub fn tick(&mut self, engine: &mut Engine, now: u64) {
+        for u in &mut self.units {
+            for (strip, slot) in u.touches.iter_mut().enumerate() {
+                if slot
+                    .as_ref()
+                    .is_some_and(|t| t.suspect.is_some_and(|at| now >= at + STALE_TOUCH_MS))
+                {
+                    let t = slot.take().expect("checked");
+                    tracing::info!(
+                        path = t.path,
+                        "a touch that may have been let go unseen released"
+                    );
+                    if t.refused.is_none() {
+                        engine.release(&t.path, now);
+                    }
+                    u.shown.faders[strip] = None;
+                    u.shown.moved_at[strip] = None;
+                }
+            }
+        }
         for t in self
             .units
             .iter_mut()
@@ -625,6 +701,89 @@ mod tests {
                 ("touch".into(), "/channels/ch1/fader".into()),
             ]
         );
+    }
+
+    #[test]
+    fn a_new_session_lets_go_of_held_faders_and_gets_everything_again() {
+        let mut e = live(1);
+        let mut s = Surface::new(units(2), None);
+        let first = s.render(&e, 0);
+        // Faders, LEDs and both lines of every strip, per unit.
+        let on = |out: &[(usize, Vec<u8>)], unit| out.iter().filter(|(u, _)| *u == unit).count();
+        assert_eq!(on(&first, 0), 9 + 8 * 4 + 16);
+        assert_eq!(on(&first, 1), 8 + 8 * 4 + 16);
+        assert!(s.render(&e, 100).is_empty(), "only what changed");
+
+        s.resend(1);
+        let again = s.render(&e, 200);
+        assert_eq!(on(&again, 0), 0);
+        assert_eq!(on(&again, 1), on(&first, 1));
+
+        s.input(0, &[0x90, 104, 0x7f], &mut e, 300);
+        e.take_actions();
+        s.reconnected(0, &mut e, 400);
+        assert_eq!(
+            sent_types(&e.take_actions()),
+            vec![("release".into(), "/channels/ch1/fader".into())]
+        );
+        assert!(s.touching().is_empty());
+        assert_eq!(on(&s.render(&e, 500), 0), on(&first, 0));
+    }
+
+    #[test]
+    fn after_missed_messages_a_touch_that_does_not_move_is_let_go() {
+        let mut e = live(1);
+        let mut s = Surface::new(units(1), None);
+        let held = || HashSet::from(["/channels/ch1/fader".to_owned()]);
+        s.render(&e, 0);
+        s.input(0, &[0x90, 104, 0x7f], &mut e, 0);
+        e.take_actions();
+        let link = Link {
+            connected: true,
+            session: 1,
+            ..Link::default()
+        };
+        let lost = |n: u64| Link {
+            resync: n,
+            missed: n,
+            ..link
+        };
+        // The fader moves after the loss: still held.
+        s.link_changed(0, link, lost(1), &mut e, 1000);
+        s.input(0, &[0xe0, 0, 0x40], &mut e, 2000);
+        s.tick(&mut e, 5000);
+        assert_eq!(s.touching(), held());
+        e.take_actions();
+        // It does not move after the next one: let go.
+        s.link_changed(0, lost(1), lost(2), &mut e, 6000);
+        s.tick(&mut e, 7499);
+        assert_eq!(s.touching(), held());
+        s.tick(&mut e, 7500);
+        assert_eq!(
+            sent_types(&e.take_actions()),
+            vec![("release".into(), "/channels/ch1/fader".into())]
+        );
+        assert!(s.touching().is_empty());
+
+        // A loss of what went to the surface alone leaves touches alone,
+        // and sends it everything again.
+        s.input(0, &[0x90, 104, 0x7f], &mut e, 8000);
+        s.render(&e, 8000);
+        let resend = Link {
+            resync: 3,
+            ..lost(2)
+        };
+        s.link_changed(0, lost(2), resend, &mut e, 8000);
+        s.tick(&mut e, 20_000);
+        assert_eq!(s.touching(), held());
+        assert_eq!(s.render(&e, 20_000).len(), 9 + 8 * 4 + 16 - 1);
+        // The session ending lets go of everything.
+        let down = Link {
+            connected: false,
+            ..resend
+        };
+        s.link_changed(0, resend, down, &mut e, 21_000);
+        assert!(s.touching().is_empty());
     }
 
     #[test]

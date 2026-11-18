@@ -10,6 +10,7 @@ mod fixtures;
 pub mod mcu;
 pub mod midi;
 pub mod mirror;
+pub mod rtpmidi;
 pub mod session;
 pub mod surface;
 pub mod taper;

@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
 use crate::engine::{Action, Engine, LinkId};
-use crate::midi::Port;
+use crate::midi::{Link, Port};
 use crate::surface::{Surface, UnitSpec};
 
 /// How often the surfaces are brought up to date at least: the motor pace.
@@ -173,20 +173,34 @@ pub async fn run(options: Options, ports: Vec<Port>, shutdown: impl Future<Outpu
     let (net_tx, mut net_rx) = unbounded_channel::<Net>();
     let mut links: HashMap<LinkId, UnboundedSender<String>> = HashMap::new();
     let (midi_tx, mut midi_rx) = unbounded_channel::<(usize, Vec<u8>)>();
+    let (link_tx, mut link_rx) = unbounded_channel::<(usize, Link, Link)>();
     let mut outputs = Vec::new();
     let mut kept = Vec::new();
     for (unit, port) in ports.into_iter().enumerate() {
-        let (mut input, output, open) = port.into_parts();
+        let mut parts = port.into_parts();
         let tx = midi_tx.clone();
         tokio::spawn(async move {
-            while let Some(m) = input.recv().await {
+            while let Some(m) = parts.input.recv().await {
                 if tx.send((unit, m)).is_err() {
                     break;
                 }
             }
         });
-        outputs.push(output);
-        kept.push(open);
+        if let Some(mut link) = parts.link {
+            let tx = link_tx.clone();
+            tokio::spawn(async move {
+                let mut was = *link.borrow_and_update();
+                while link.changed().await.is_ok() {
+                    let is = *link.borrow_and_update();
+                    if tx.send((unit, was, is)).is_err() {
+                        break;
+                    }
+                    was = is;
+                }
+            });
+        }
+        outputs.push(parts.output);
+        kept.push(parts.open);
     }
     let connect = |id: LinkId, endpoint: usize| {
         let (tx, rx) = unbounded_channel();
@@ -234,6 +248,9 @@ pub async fn run(options: Options, ports: Vec<Port>, shutdown: impl Future<Outpu
         let sleep = tokio::time::sleep_until(start + Duration::from_millis(wake));
         tokio::select! {
             Some((unit, message)) = midi_rx.recv() => surface.input(unit, &message, &mut engine, now()),
+            Some((unit, was, is)) = link_rx.recv() => {
+                surface.link_changed(unit, was, is, &mut engine, now());
+            }
             Some(n) = net_rx.recv() => match n {
                 Net::Opened(id) => engine.opened(id, now()),
                 Net::Text(id, text) => engine.received(id, &text, now()),
