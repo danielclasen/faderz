@@ -299,5 +299,62 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
         !flow.exists()
     })
     .await;
+
+    // A scheduled activation cancelled before its time never fires, and
+    // the state holds it no longer.
+    let staged = json!({
+        "transport_params": [{ "mxl_flow_id": f.ch1 }],
+        "activation": { "mode": "activate_scheduled_relative", "requested_time": "1:0" },
+    });
+    let path = format!("{CONNECTION}/{ch1}/staged");
+    let (status, body) = request(server.nmos, "PATCH", &path, Some(&staged)).await;
+    assert_eq!(status, 202, "{body}");
+    until("the schedule is state", async || scheduled(&server) == 1).await;
+    let cancel = json!({ "activation": { "mode": null } });
+    let (status, body) = request(server.nmos, "PATCH", &path, Some(&cancel)).await;
+    assert_eq!(status, 200, "{body}");
+    until("the cancel is state", async || scheduled(&server) == 0).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(input(&server, 0).0, InputState::Detached);
+    assert_eq!(scheduled(&server), 0, "the cancel left a schedule behind");
+
+    // A channel detached in the state is not heard after a restart: ch1,
+    // fader up and routed to the programme bus, the one channel open, the
+    // output written from the start peaks at nothing.
+    patch(
+        &server,
+        &[
+            ("/channels/ch1/fader", json!(0)),
+            ("/channels/ch1/routes/pgm", json!(true)),
+        ],
+    )
+    .await;
+    activate(&server, &pgm, json!({ "master_enable": true })).await;
+    until("the output writes its flow", async || flow.exists()).await;
     server.stop().await;
+    let server = start(&data.0, &domain.0, &f, at).await;
+    until("ch1 is detached after the restart", async || {
+        input(&server, 0).0 == InputState::Detached
+    })
+    .await;
+    until("the output writes its flow", async || flow.exists()).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let peak = || {
+        let status = server.audio.as_ref().unwrap().engine().status();
+        status.outputs[0].meters.max_true_peak.clone()
+    };
+    assert!(
+        peak().iter().all(|&p| p == 0.0),
+        "ch1 was heard: {:?}",
+        peak()
+    );
+    // Attached, it is heard: the meter sees the output.
+    activate(&server, &ch1, json!({ "master_enable": true })).await;
+    until("ch1 is heard", async || peak().iter().any(|&p| p > 0.0)).await;
+    server.stop().await;
+}
+
+/// The scheduled activations the replica's state holds.
+fn scheduled(server: &Server) -> usize {
+    (server.app.replica.store()).with_state(|sm| sm.product.scheduled().len())
 }

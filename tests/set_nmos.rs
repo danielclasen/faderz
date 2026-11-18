@@ -228,6 +228,13 @@ impl Node {
         (self.server.app.replica.store()).with_state(|sm| sm.product.scheduled().len())
     }
 
+    /// The highest true peak of each leg of the output its engine wrote
+    /// since it started.
+    fn peak(&self) -> Vec<f32> {
+        let status = self.server.audio.as_ref().unwrap().engine().status();
+        status.outputs[0].meters.max_true_peak.clone()
+    }
+
     fn kill(self) {
         let Node { runtime, server } = self;
         drop(server);
@@ -236,10 +243,21 @@ impl Node {
 }
 
 async fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>) -> (u16, Value) {
+    request_with(addr, method, path, body, "").await
+}
+
+/// [`request`] with `headers`, each line ending in CRLF.
+async fn request_with(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    headers: &str,
+) -> (u16, Value) {
     let body = body.map(Value::to_string).unwrap_or_default();
     let mut tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n{headers}\
          Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
@@ -585,6 +603,23 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         (0..REPLICAS).all(|n| shows(&nodes, n, &ch1) == set.other)
     });
     assert!(shown, "not every replica shows the activation");
+    // The followers, which the leader served the activation for, show
+    // its activation from the state.
+    for n in [fa, fb] {
+        let a = &active(&nodes, n, &ch1)["activation"];
+        assert_eq!(a["mode"], "activate_immediate", "replica {n}: {a}");
+        assert!(a["activation_time"].is_string(), "replica {n}: {a}");
+    }
+    // A request marked forwarded that reaches a follower is not staged
+    // there.
+    let marked = node(&nodes, fa).runtime.block_on(request_with(
+        node(&nodes, fa).server.nmos,
+        "PATCH",
+        &format!("{CONNECTION}/{ch1}/staged"),
+        Some(&json!({ "master_enable": true })),
+        "x-faderz-forwarded: 1\r\n",
+    ));
+    assert_eq!(marked.0, 503, "{marked:?}");
     let after = alike(&set, &nodes, now_block() + 1, 100);
     assert!(
         (after - before).abs() > before * 0.1,
@@ -695,10 +730,58 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     );
     alike(&set, &nodes, now_block() + 1, 100);
 
+    // A scheduled activation staged on one follower and cancelled on the
+    // other never fires.
+    let staged = json!({
+        "transport_params": [{ "mxl_flow_id": set.other }],
+        "activation": { "mode": "activate_scheduled_relative", "requested_time": "2:0" },
+    });
+    let (status, body) = node(&nodes, fa).nmos(
+        "PATCH",
+        &format!("{CONNECTION}/{ch1}/staged"),
+        Some(&staged),
+    );
+    assert_eq!(status, 202, "{body}");
+    let taken = until(5, || {
+        (0..REPLICAS).all(|n| node(&nodes, n).scheduled() == 1)
+    });
+    assert!(taken, "the schedule is not state on every replica");
+    let cancel = json!({ "activation": { "mode": null } });
+    let (status, body) = node(&nodes, fb).nmos(
+        "PATCH",
+        &format!("{CONNECTION}/{ch1}/staged"),
+        Some(&cancel),
+    );
+    assert_eq!(status, 200, "{body}");
+    let gone = until(5, || {
+        (0..REPLICAS).all(|n| node(&nodes, n).scheduled() == 0)
+    });
+    assert!(gone, "the cancel did not reach the state");
+    std::thread::sleep(Duration::from_secs(3));
+    for n in 0..REPLICAS {
+        assert_eq!(
+            node(&nodes, n).scheduled(),
+            0,
+            "the cancel left a schedule behind"
+        );
+        assert_eq!(
+            node(&nodes, n).input(0).1,
+            set.ch1,
+            "replica {n} fired a cancelled activation"
+        );
+        assert_eq!(shows(&nodes, n, &ch1), set.ch1, "replica {n}");
+    }
+
     // A scheduled activation staged on a follower is state at once. The
     // leader stopped gracefully before its time, the others route and
     // show it on time; the stopped leader deletes nothing from the
-    // registry, and the new leader registers the same ids.
+    // registry, and the new leader registers the same ids. The leader is
+    // looked up again: a loaded host may have elected another.
+    let leader = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).leads())
+        .expect("a leader");
+    let followers: Vec<usize> = (0..REPLICAS).filter(|&n| n != leader).collect();
+    let fa = followers[0];
     let staged = json!({
         "transport_params": [{ "mxl_flow_id": set.other }],
         "activation": { "mode": "activate_scheduled_relative", "requested_time": "3:0" },
@@ -714,10 +797,11 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         (0..REPLICAS).all(|n| node(&nodes, n).scheduled() == 1)
     });
     assert!(taken, "the schedule is not state on every replica");
+    let stopping = Instant::now();
     nodes[leader].take().unwrap().stop();
     let stopped = Instant::now();
     assert!(
-        heard(&registry, leader, stopped - Duration::from_secs(10))
+        heard(&registry, leader, stopping)
             .iter()
             .all(|s| !s.request.starts_with("DELETE")),
         "the stopped leader deleted from the registry"
@@ -770,10 +854,125 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         )) >= 1
     );
 
+    let other = followers.iter().copied().find(|&n| n != new).unwrap();
+
+    // A channel detached in the state is not heard from a replica
+    // started again before it took the state: ch1, the one channel open
+    // to the programme bus, detached, the restarted replica's output
+    // peaks at nothing; ch1 attached again, it is heard.
+    activate(&nodes, new, &ch1, json!({ "master_enable": false }));
+    let detached = until(10, || {
+        [new, other]
+            .iter()
+            .all(|&n| node(&nodes, n).input(0).0 == InputState::Detached)
+    });
+    assert!(detached, "ch1 is not detached: {}", states(&nodes));
+    nodes[leader] = Some(set.start(leader, None));
+    steady(&nodes, leader);
+    std::thread::sleep(Duration::from_secs(2));
+    let silent = node(&nodes, leader).peak();
+    assert!(
+        silent.iter().all(|&p| p == 0.0),
+        "a detached channel was heard: {silent:?}"
+    );
+    activate(
+        &nodes,
+        new,
+        &ch1,
+        json!({ "master_enable": true, "transport_params": [{ "mxl_flow_id": set.other }] }),
+    );
+    let heard_again = until(10, || node(&nodes, leader).peak().iter().any(|&p| p > 0.0));
+    assert!(
+        heard_again,
+        "the restarted replica's output stays silent: {}",
+        states(&nodes)
+    );
+
+    // A scheduled activation taken by a leader that then stops shows in
+    // the next leader's /staged, which it locks; a cancel through any
+    // replica removes it, and the same time staged again with another
+    // target fires that one.
+    let ch2_flow = set.inputs["ch2"]["flow"].as_str().unwrap().to_owned();
+    let now = samplez_nmos::TaiClock::now(&samplez_nmos::SystemTai).as_nanos();
+    let at = now + 12_000_000_000;
+    let at = format!("{}:{}", at / 1_000_000_000, at % 1_000_000_000);
+    let absolute = |flow: &str| {
+        json!({
+            "transport_params": [{ "mxl_flow_id": flow }],
+            "activation": { "mode": "activate_scheduled_absolute", "requested_time": at },
+        })
+    };
+    let path = format!("{CONNECTION}/{ch1}/staged");
+    let (status, body) = node(&nodes, new).nmos("PATCH", &path, Some(&absolute(&set.ch1)));
+    assert_eq!(status, 202, "{body}");
+    let taken = until(5, || {
+        [new, other, leader]
+            .iter()
+            .all(|&n| node(&nodes, n).scheduled() == 1)
+    });
+    assert!(taken, "the schedule is not state on every replica");
+    nodes[new].take().unwrap().stop();
+    let survivors = [leader, other];
+    let mut next = None;
+    let elected = until(30, || {
+        next = survivors.iter().copied().find(|&n| node(&nodes, n).leads());
+        next.is_some()
+    });
+    assert!(
+        elected,
+        "no leader after the second stop: {}",
+        states(&nodes)
+    );
+    let next = next.unwrap();
+    let follower = survivors.iter().copied().find(|&n| n != next).unwrap();
+    for n in survivors {
+        let (status, staged) = node(&nodes, n).nmos("GET", &path, None);
+        assert_eq!(status, 200, "{staged}");
+        assert_eq!(
+            staged["activation"]["mode"], "activate_scheduled_absolute",
+            "{staged}"
+        );
+        assert_eq!(
+            staged["activation"]["requested_time"],
+            at.as_str(),
+            "{staged}"
+        );
+        assert_eq!(
+            staged["transport_params"][0]["mxl_flow_id"],
+            set.ch1.as_str(),
+            "{staged}"
+        );
+    }
+    let (status, _) =
+        node(&nodes, follower).nmos("PATCH", &path, Some(&json!({ "master_enable": true })));
+    assert_eq!(status, 423, "a pending activation locks /staged");
+    let (status, body) = node(&nodes, follower).nmos("PATCH", &path, Some(&cancel));
+    assert_eq!(status, 200, "{body}");
+    let gone = until(5, || {
+        survivors.iter().all(|&n| node(&nodes, n).scheduled() == 0)
+    });
+    assert!(gone, "the cancel did not reach the state");
+    let (_, staged) = node(&nodes, next).nmos("GET", &path, None);
+    assert!(staged["activation"]["mode"].is_null(), "{staged}");
+    let (status, body) = node(&nodes, follower).nmos("PATCH", &path, Some(&absolute(&ch2_flow)));
+    assert_eq!(status, 202, "{body}");
+    let fired = until(20, || {
+        survivors.iter().all(|&n| {
+            let input = node(&nodes, n).input(0).1;
+            assert_ne!(input, set.ch1, "replica {n} fired the cancelled activation");
+            input == ch2_flow && shows(&nodes, n, &ch1) == ch2_flow
+        })
+    });
+    assert!(
+        fired,
+        "the activation staged again did not fire: {}",
+        states(&nodes)
+    );
+    let (new, other) = (next, follower);
+
     // The other follower killed, the leader has no quorum: it stops
     // heartbeating, and an activation on it fails and its /active shows
     // the state's connection again.
-    let other = followers.iter().copied().find(|&n| n != new).unwrap();
     nodes[other].take().unwrap().kill();
     std::thread::sleep(Duration::from_secs(3));
     let quiet = Instant::now();
@@ -783,6 +982,7 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         0,
         "a leader without a quorum heartbeats"
     );
+    let was = shows(&nodes, new, &ch1);
     activate(
         &nodes,
         new,
@@ -796,7 +996,7 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     );
     let back = until(30, || {
         let a = active(&nodes, new, &ch1);
-        a["master_enable"] == true && a["transport_params"][0]["mxl_flow_id"] == set.other.as_str()
+        a["master_enable"] == true && a["transport_params"][0]["mxl_flow_id"] == was.as_str()
     });
     assert!(
         back,
