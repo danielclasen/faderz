@@ -682,6 +682,7 @@ pub(crate) mod tests {
             .append(Body::LeaseExpiry {
                 session: s.clone(),
                 renewed,
+                at_index: None,
             })
             .unwrap();
         until_lease(&app, &s, false).await;
@@ -707,6 +708,7 @@ pub(crate) mod tests {
             .append(Body::LeaseExpiry {
                 session: s.clone(),
                 renewed,
+                at_index: None,
             })
             .unwrap();
         until_lease(&app, &s, false).await;
