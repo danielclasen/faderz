@@ -3,87 +3,22 @@
 //! memory: a write sent to any replica reaches the clients of every
 //! other.
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use faderz::config::Config;
 use faderz::server::{Server, SetParts};
-use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
-use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, IsCa, KeyPair};
-use samplez_replica::bootstrap::{Marker, Markers};
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+mod common;
+use common::*;
+
 const REPLICAS: usize = 3;
-
-/// The marker ConfigMap, in memory.
-#[derive(Default)]
-struct Memory(Mutex<Option<Marker>>);
-
-impl Markers for Memory {
-    fn name(&self) -> &str {
-        "memory"
-    }
-
-    fn get(&self) -> BoxFuture<'_, Result<Option<Marker>, String>> {
-        let marker = *self.0.lock().unwrap();
-        Box::pin(async move { Ok(marker) })
-    }
-
-    fn create(&self, marker: Marker) -> BoxFuture<'_, Result<bool, String>> {
-        let mut held = self.0.lock().unwrap();
-        let created = held.is_none();
-        if created {
-            *held = Some(marker);
-        }
-        Box::pin(async move { Ok(created) })
-    }
-}
-
-/// A directory under the target directory, removed when dropped.
-struct Dir(PathBuf);
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn dir(name: &str) -> Dir {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("faderz-set-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    Dir(dir)
-}
-
-/// A CA, and per replica a certificate it issued for `localhost`: the
-/// `replica.peer.tls` of each.
-fn certificates(at: &Path) -> Vec<Value> {
-    let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
-    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let ca = CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap();
-    let ca_file = at.join("ca.crt");
-    std::fs::write(&ca_file, ca.pem()).unwrap();
-    (0..REPLICAS)
-        .map(|n| {
-            let key = KeyPair::generate().unwrap();
-            let cert = CertificateParams::new(vec!["localhost".into()])
-                .unwrap()
-                .signed_by(&key, &ca)
-                .unwrap();
-            let (cert_file, key_file) = (at.join(format!("{n}.crt")), at.join(format!("{n}.key")));
-            std::fs::write(&cert_file, cert.pem()).unwrap();
-            std::fs::write(&key_file, key.serialize_pem()).unwrap();
-            json!({ "mode": "files", "certFile": cert_file, "keyFile": key_file,
-                    "clientCaFile": ca_file })
-        })
-        .collect()
-}
 
 fn shape() -> Value {
     json!({
@@ -96,7 +31,7 @@ fn shape() -> Value {
 }
 
 async fn start_set(at: &Path, markers: Arc<Memory>) -> Vec<Server> {
-    let tls = certificates(at);
+    let tls = certificates(at, REPLICAS);
     // Bound before any replica starts, and handed to it: no other test
     // can take the port between.
     let listeners: Vec<std::net::TcpListener> = (0..REPLICAS)
@@ -238,7 +173,7 @@ async fn answer(ws: &mut Ws, id: &str) -> Value {
 /// set on one follower reaches a client of the other.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_write_to_one_replica_reaches_the_clients_of_another() {
-    let at = dir("write");
+    let at = scratch("write");
     let servers = start_set(&at.0, Arc::default()).await;
     formed(&servers).await;
     let path = "/channels/ch1/fader";
