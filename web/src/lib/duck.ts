@@ -272,12 +272,11 @@ export class DuckPress {
 /** Width of a duck tile in the masters band, px, and the gap after it. */
 export const TILE_W = 141;
 /**
- * The least width the band's summary takes, px; narrower than
- * SUMMARY_FULL_W it drops the reduction bar. Each group takes two rows,
- * so the band's height holds SUMMARY_MAX_GROUPS of them.
+ * The least width the band's summary takes, px; narrower than 300 px
+ * it drops the reduction bar (DuckSummary.svelte). Each group takes two
+ * rows, so the band's height holds SUMMARY_MAX_GROUPS of them.
  */
 export const SUMMARY_MIN_W = 180;
-export const SUMMARY_FULL_W = 300;
 export const SUMMARY_MAX_GROUPS = 4;
 
 /**

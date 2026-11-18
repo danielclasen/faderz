@@ -3,7 +3,7 @@
   // rows. The first has its name, the outputs it lowers and its gain
   // reduction in dB; the second the targets it lowers in them, the
   // reduction as a bar, KEY lit while the key triggers it, and the key as
-  // a bar against its threshold. Narrower than SUMMARY_FULL_W the
+  // a bar against its threshold. Narrower than 300 px the
   // reduction bar goes. Every part has a fixed size and the whole a strict
   // containment, so no reading lays out anything outside it; none of it
   // is a live region. Focused or pointed at, a line's tip adds its
@@ -213,7 +213,8 @@
   }
   /* Narrower: the outputs take the whole first row but the name, and the
      reduction moves to the second, which drops its bar. */
-  @container (width < 300px) {
+  /* 300 px of summary, less its padding: the container's content box. */
+  @container (width < 284px) {
     .line {
       grid-template-columns: 8ch minmax(0, 1fr) 42px auto auto 32px;
       grid-template-areas:

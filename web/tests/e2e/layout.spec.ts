@@ -508,6 +508,16 @@ for (const tiles of [3, 4]) {
       const into = page.getByTestId(`duck-summary-into-${id}`);
       const cut = await into.evaluate((e) => e.scrollWidth > e.clientWidth);
       expect(cut, `${id}: ${await into.textContent()}`).toBe(false);
+      // The reduction reads whole in its cell.
+      const gr = page.getByTestId(`duck-summary-gr-${id}`);
+      const clipped = await gr.evaluate((e) => {
+        const box = e.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(e);
+        const text = range.getBoundingClientRect();
+        return text.left < box.left - 0.5 || text.right > box.right + 0.5;
+      });
+      expect(clipped, `${id}: ${await gr.textContent()}`).toBe(false);
     }
   });
 }
