@@ -104,7 +104,7 @@ whether it is engaged.
 
 ![The DUCK view with the Commentary and Remote comm groups: mode, detector, presets, destinations, and the trigger, target and depth of every channel](docs/screenshots/duck-view.png)
 
-![The duck tiles over the masters: Commentary held by an operator, Remote comm latched on](docs/screenshots/duck-tiles.png)
+![The duck tiles over the masters, Commentary held by an operator and Remote comm latched on, and beside them a line per group with what it lowers, its gain reduction and its key level](docs/screenshots/duck-tiles.png)
 
 Scenes are stored and recalled from the SCENES view; recall-safe groups
 keep chosen parameters of a channel out of every recall. The view's note

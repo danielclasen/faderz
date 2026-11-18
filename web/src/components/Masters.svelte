@@ -3,12 +3,15 @@
   // and the monitor. It draws its meters on its own canvas, so where it
   // lies over the strips (narrow screens) no strip meter shows through it.
   import { onMount } from 'svelte';
+  import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { MeterLayer, provideMeterLayer } from '../lib/meters/layer';
   import BusMaster from './BusMaster.svelte';
   import VcaMaster from './VcaMaster.svelte';
   import MonitorSection from './MonitorSection.svelte';
   import DuckTile from './DuckTile.svelte';
+  import DuckSummary from './DuckSummary.svelte';
+  import { summaryFits } from '../lib/duck';
 
   interface Props {
     id: string;
@@ -30,16 +33,26 @@
   $effect(() => meters.setZones(mixer.state!.metering.zones));
   const shape = $derived(mixer.shape!);
   const kindTag: Record<string, string> = { program: 'PGM', me: 'M&E', cleanFeed: 'CF' };
+  // The band's summary takes the width its tiles leave, where there is
+  // enough of it; it shows or hides only as the band's width changes,
+  // never with a duck's state.
+  const coarse = new MediaQuery('pointer: coarse');
+  const narrow = new MediaQuery('max-width: 1399px');
+  let bandWidth = $state(0);
+  const summary = $derived(summaryFits(bandWidth, (shape.ducks ?? []).length, coarse.current, narrow.current));
 </script>
 
 <div class="masters" class:open {id} tabindex="-1" role="region" aria-label="Masters" data-testid="masters" bind:this={root}>
   <!-- A band of fixed tiles over the masters: first in view where the
        masters lie over the strips, and taking height, never width, beside them. -->
   {#if (shape.ducks ?? []).length > 0}
-    <div class="ducks" role="group" aria-label="Duck groups">
+    <div class="ducks" class:summary role="group" aria-label="Duck groups" bind:clientWidth={bandWidth}>
       {#each shape.ducks ?? [] as duck, i (duck.id)}
         <DuckTile {duck} shortcut={i + 1} />
       {/each}
+      {#if summary}
+        <DuckSummary />
+      {/if}
     </div>
   {/if}
   <div class="row">
@@ -91,6 +104,10 @@
     gap: 1px;
     border-bottom: 1px solid var(--line-strong);
     background: var(--line);
+  }
+  /* With the summary the tiles and it share one row of the band. */
+  .ducks.summary {
+    flex-wrap: nowrap;
   }
   /* Anchored at the corner; the meter layer sizes it and moves it over
      the visible meters by a transform. */

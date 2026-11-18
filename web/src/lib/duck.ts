@@ -268,3 +268,40 @@ export class DuckPress {
     this.mixer.release(hold);
   }
 }
+
+/** Width of a duck tile in the masters band, px, and the gap after it. */
+export const TILE_W = 141;
+/** The least width the band's summary takes, px: one group's line with its name, what it lowers, its bar and its readouts. */
+export const SUMMARY_MIN_W = 360;
+
+/**
+ * Whether the masters band shows its summary beside `groups` tiles in
+ * `width` px: only with a fine pointer, outside the narrow layout where
+ * the masters lie over the strips, and where the tiles leave it its
+ * least width. Otherwise the band keeps its tiles alone.
+ */
+export function summaryFits(width: number, groups: number, coarse: boolean, narrow: boolean): boolean {
+  return !coarse && !narrow && groups > 0 && width - groups * TILE_W >= SUMMARY_MIN_W;
+}
+
+/** What a group lowers and where, by name: its targets in shape order, then its destinations. */
+export function duckReach(shape: Shape, d: DuckState): { targets: string; into: string } {
+  const named = (ids: string[]) => ids.join(', ') || 'none';
+  const targets = shape.channels.filter((c) => d.channels[c.id]?.target).map((c) => c.name);
+  const into = [...shape.buses, ...shape.auxes, ...shape.mixMinus].filter((e) => d.destinations[e.id]).map((e) => e.name);
+  return { targets: named(targets), into: named(into) };
+}
+
+/** Characters a key level readout takes, "-23.4" or "-inf". */
+export const KEY_WIDTH = 5;
+
+/** A group's key level as the summary shows it: dBFS with one decimal, "-inf" for silence, "--" while the group reports none. */
+export function keyText(key: number | null): string {
+  if (key === null) return fit('--', KEY_WIDTH);
+  return fit(key <= -120 ? '-inf' : key.toFixed(1), KEY_WIDTH);
+}
+
+/** How much of the summary's reduction bar is lit: the reduction over the group's deepest depth, 0..1. */
+export function reductionShare(gr: number, depth: number): number {
+  return depth > 0 ? Math.min(1, Math.max(0, gr / depth)) : 0;
+}

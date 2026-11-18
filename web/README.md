@@ -338,7 +338,13 @@ its envelope is above 0, how far its deepest target is lowered (DUCK
 -12.0), else DUCK HELD, DUCK ON, BYPASS or AUTO, with KEY while the key
 triggers it; it sets the threshold, and its key meter row shows the key
 level against it. More groups than fit one row of tiles scroll within
-it. A strip in a group carries a DK chip (KEY on a trigger), lit while
+it. Beside the masters with a fine pointer, where the tiles leave the
+band at least 360 px, the band's summary takes the rest of it: a line
+per group with its name, the targets it lowers and the buses, auxes and
+mix-minus outputs it lowers them in, its gain reduction as a bar and in
+dB, and its key level; the band keeps its height. Under 1400 px, where
+the masters lie over the strips, and with a coarse pointer the band
+shows its tiles alone. A strip in a group carries a DK chip (KEY on a trigger), lit while
 a group that lowers it is held or latched in or lowers it now, when it
 reads the gain reduction in place of DK, or, on a trigger, while a
 group it keys is engaged; it opens the Duck section of its processing
