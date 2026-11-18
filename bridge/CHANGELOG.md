@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.1...faderz-bridge-v0.1.2) (2026-11-18)
+
+
+### Features
+
+* **bridge:** add an RTP-MIDI transport ([#51](https://github.com/danielclasen/faderz/issues/51)) ([415dedf](https://github.com/danielclasen/faderz/commit/415dedfc88b3ab06e707214a31c4d5309aab9172))
+
 ## [0.1.1](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.0...faderz-bridge-v0.1.1) (2026-11-17)
 
 

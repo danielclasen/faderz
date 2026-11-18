@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/danielclasen/faderz/compare/v0.1.7...v0.1.8) (2026-11-18)
+
+
+### Features
+
+* **state:** add duck groups to the shape and state ([#53](https://github.com/danielclasen/faderz/issues/53)) ([2520012](https://github.com/danielclasen/faderz/commit/252001226b9ffe05b78273d18e8222a8fc2588c2))
+
 ## [0.1.7](https://github.com/danielclasen/faderz/compare/v0.1.6...v0.1.7) (2026-11-17)
 
 
