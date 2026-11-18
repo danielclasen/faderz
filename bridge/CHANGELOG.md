@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.4...faderz-bridge-v0.2.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **audio:** meter frames are format 4; a decoder of format 3 drops them.
+
+### Features
+
+* **audio:** duck targets under their groups' triggers ([2343d4d](https://github.com/danielclasen/faderz/commit/2343d4d789713eb29f3c48e353152d0722469847))
+* **bridge:** light duck keys while their group ducks ([2343d4d](https://github.com/danielclasen/faderz/commit/2343d4d789713eb29f3c48e353152d0722469847))
+* **web:** show duck key level and gain reduction from meter frames ([2343d4d](https://github.com/danielclasen/faderz/commit/2343d4d789713eb29f3c48e353152d0722469847))
+
 ## [0.1.4](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.3...faderz-bridge-v0.1.4) (2026-11-18)
 
 

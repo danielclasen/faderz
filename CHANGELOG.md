@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/danielclasen/faderz/compare/v0.2.0...v0.3.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **audio:** meter frames are format 4; a decoder of format 3 drops them.
+
+### Features
+
+* **api:** report a replica's role, readiness and engine at /status ([c5b1e0c](https://github.com/danielclasen/faderz/commit/c5b1e0cbade9f4c7a459ff0c5a4c5fdb2ceae9d4))
+* **audio:** duck targets under their groups' triggers ([2343d4d](https://github.com/danielclasen/faderz/commit/2343d4d789713eb29f3c48e353152d0722469847))
+* **bridge:** light duck keys while their group ducks ([2343d4d](https://github.com/danielclasen/faderz/commit/2343d4d789713eb29f3c48e353152d0722469847))
+* **web:** show duck key level and gain reduction from meter frames ([2343d4d](https://github.com/danielclasen/faderz/commit/2343d4d789713eb29f3c48e353152d0722469847))
+* **web:** summarise each duck group beside the tiles in the masters ([#66](https://github.com/danielclasen/faderz/issues/66)) ([007160f](https://github.com/danielclasen/faderz/commit/007160f22eaef74de6927d4a11ad9792d7774f0e))
+
+
+### Bug Fixes
+
+* **deps:** build against samplez 0.8.1 ([#69](https://github.com/danielclasen/faderz/issues/69)) ([47e4730](https://github.com/danielclasen/faderz/commit/47e473041a1ef7484b042088060c4d2a885a6c2b))
+* **replica:** start contact as the replica starts ([c5b1e0c](https://github.com/danielclasen/faderz/commit/c5b1e0cbade9f4c7a459ff0c5a4c5fdb2ceae9d4))
+
 ## [0.2.0](https://github.com/danielclasen/faderz/compare/v0.1.9...v0.2.0) (2026-11-18)
 
 
