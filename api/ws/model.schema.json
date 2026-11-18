@@ -1273,7 +1273,7 @@
       "maximum": 500
     },
     "DuckHoldMs": {
-      "description": "Time a duck stays in after the key last triggered or a manual hold ends.",
+      "description": "Time a duck stays in after the key last triggered, a manual hold ends or mode on is set back; mode off releases at once.",
       "type": "number",
       "minimum": 0,
       "maximum": 5000
