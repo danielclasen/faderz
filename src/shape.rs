@@ -19,8 +19,10 @@ pub struct Shape {
     pub auxes: Vec<ElementShape>,
     pub mix_minus: Vec<MixMinusShape>,
     pub vcas: Vec<VcaShape>,
-    /// Absent in configurations without duck groups.
-    #[serde(default)]
+    /// Absent in configurations without duck groups, and left out of a
+    /// serialized shape without them, so a binary that has no duck groups
+    /// loads its snapshots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ducks: Vec<DuckShape>,
     pub monitor_outputs: Vec<ElementShape>,
     pub outputs: Vec<OutputShape>,
@@ -475,14 +477,16 @@ pub(crate) mod tests {
         assert_eq!(comm["keyLpf"], json!({ "enabled": false, "freq": 4000 }));
     }
 
-    /// A configuration without duck groups has none.
+    /// A configuration without duck groups has none, and its serialized
+    /// shape leaves them out.
     #[test]
     fn duck_groups_are_optional() {
         let mut v = small();
         v.as_object_mut().unwrap().remove("ducks");
         let shape = Shape::parse(&v).unwrap();
         assert!(shape.ducks.is_empty());
-        assert_eq!(serde_json::to_value(&shape).unwrap()["ducks"], json!([]));
+        let serialized = serde_json::to_value(&shape).unwrap();
+        assert!(serialized.get("ducks").is_none(), "{serialized}");
         assert_eq!(shape.initial_state()["ducks"], json!({}));
     }
 
