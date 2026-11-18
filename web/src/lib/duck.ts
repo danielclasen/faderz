@@ -271,8 +271,13 @@ export class DuckPress {
 
 /** Width of a duck tile in the masters band, px, and the gap after it. */
 export const TILE_W = 141;
-/** The least width the band's summary takes, px: one group's line with its name, what it lowers, its bar and its readouts. */
-export const SUMMARY_MIN_W = 360;
+/**
+ * The least width the band's summary takes, px: its condensed form, a
+ * line per group with its name, outputs, reduction and key bar. From
+ * SUMMARY_FULL_W on it adds the targets and the reduction bar.
+ */
+export const SUMMARY_MIN_W = 180;
+export const SUMMARY_FULL_W = 300;
 
 /**
  * Whether the masters band shows its summary beside `groups` tiles in
@@ -284,24 +289,39 @@ export function summaryFits(width: number, groups: number, coarse: boolean, narr
   return !coarse && !narrow && groups > 0 && width - groups * TILE_W >= SUMMARY_MIN_W;
 }
 
-/** What a group lowers and where, by name: its targets in shape order, then its destinations. */
+/** What a group lowers and where, by name: its destinations (buses, auxes, mix-minus outputs) and its targets, each in shape order. */
 export function duckReach(shape: Shape, d: DuckState): { targets: string; into: string } {
-  const named = (ids: string[]) => ids.join(', ') || 'none';
   const targets = shape.channels.filter((c) => d.channels[c.id]?.target).map((c) => c.name);
   const into = [...shape.buses, ...shape.auxes, ...shape.mixMinus].filter((e) => d.destinations[e.id]).map((e) => e.name);
-  return { targets: named(targets), into: named(into) };
+  return { targets: targets.join(', ') || 'no targets', into: into.join(', ') || 'no outputs' };
 }
 
 /** Characters a key level readout takes, "-23.4" or "-inf". */
 export const KEY_WIDTH = 5;
 
-/** A group's key level as the summary shows it: dBFS with one decimal, "-inf" for silence, "--" while the group reports none. */
+/**
+ * A group's key level in words and the line's description: dBFS with one
+ * decimal, "-inf" at -100 and below as other level readouts
+ * (format.ts), "--" while the group reports none.
+ */
 export function keyText(key: number | null): string {
   if (key === null) return fit('--', KEY_WIDTH);
-  return fit(key <= -120 ? '-inf' : key.toFixed(1), KEY_WIDTH);
+  return fit(key <= -100 ? '-inf' : key.toFixed(1), KEY_WIDTH);
 }
 
-/** How much of the summary's reduction bar is lit: the reduction over the group's deepest depth, 0..1. */
-export function reductionShare(gr: number, depth: number): number {
-  return depth > 0 ? Math.min(1, Math.max(0, gr / depth)) : 0;
+/** A gain reduction of `db` (0 or more) as the summary shows it: one decimal, as the tile's lamp, in 5 characters. */
+export function summaryReduction(db: number): string {
+  return fit(db > 0 ? `-${db.toFixed(1)}` : '0.0', 5);
 }
+
+/**
+ * How much of the summary's reduction bar is lit: the reduction on one
+ * scale for every line, 0 to `scale` dB (the deepest depth of any
+ * group), so equal bars are equal reductions; 0..1.
+ */
+export function reductionShare(gr: number, scale: number): number {
+  return scale > 0 ? Math.min(1, Math.max(0, gr / scale)) : 0;
+}
+
+/** A key level on the threshold's scale, -60..0 dBFS, as 0..1; none for no reading. */
+export const keyShare = (key: number | null): number => (key === null ? 0 : Math.min(1, Math.max(0, (key + 60) / 60)));
