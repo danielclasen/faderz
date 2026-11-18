@@ -84,6 +84,16 @@ pub fn members_of(path: &str) -> Option<&str> {
     }
 }
 
+/// The group `id` of a duck group whose routing `path` sets: its
+/// triggers, targets and destinations.
+pub fn routing_of(path: &str) -> Option<&str> {
+    let tokens: Vec<String> = path.split('/').skip(3).map(str::to_owned).collect();
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["", "ducks", id, ..] if recall_group(&tokens) == Some("routing") => Some(*id),
+        _ => None,
+    }
+}
+
 /// The recall-safe group of a duck group's leaf, from the tokens after
 /// the group id: triggers, targets and destinations are routing, the key
 /// tap, detector and depths dynamics. `None` for mode and hold, which are

@@ -786,9 +786,16 @@ impl Mixer {
             })
             .collect();
         // With a channel added since the scene was stored, a group's
-        // triggers can pass the limit: that group keeps its members.
-        while let Some((group, _)) = self.broken_duck(&written) {
-            written.retain(|(p, _)| duck::members_of(p) != Some(group.as_str()));
+        // triggers can pass the limit: that group keeps its routing, as
+        // if it were recall-safe, so its members and destinations stay a
+        // pair an operator set.
+        while let Some((group, e)) = self.broken_duck(&written) {
+            tracing::warn!(
+                scene,
+                duck = group,
+                "recall keeps the routing of the duck group: {e}"
+            );
+            written.retain(|(p, _)| duck::routing_of(p) != Some(group.as_str()));
         }
         written.push(("/sceneRecalled".into(), json!({ "id": scene, "at": at })));
         changed(self.write(written))
@@ -3147,10 +3154,10 @@ mod tests {
 
     /// A recall that would bring a group past eight triggers, with eight
     /// in the scene and a channel the scene does not know triggering,
-    /// leaves that group's
-    /// members as they are and recalls the rest.
+    /// leaves that group's routing (members and destinations) as it is,
+    /// recalls the rest and says so in the log.
     #[test]
-    fn a_recall_keeps_the_members_of_a_group_it_would_overfill() {
+    fn a_recall_keeps_the_routing_of_a_group_it_would_overfill() {
         let mut m = nine_channels();
         let scene = store(&mut m, "s1", None, "Opening");
         let data = m.scenes.get_mut(&scene).unwrap();
@@ -3161,6 +3168,7 @@ mod tests {
         }
         data["ducks"]["comm"]["channels"]["ch1"]["depth"] = json!(30);
         data["ducks"]["comm"]["threshold"] = json!(-45);
+        data["ducks"]["comm"]["destinations"]["aux1"] = json!(true);
         values(&set(
             &mut m,
             "a",
@@ -3168,18 +3176,57 @@ mod tests {
             "/ducks/comm/channels/ch9/trigger",
             json!(true),
         ));
-        let v = values(&rest(
-            &mut m,
-            Command::Recall {
-                id: "r".into(),
-                scene,
-                at: "2026-11-15T12:01:00.000Z".into(),
-            },
-        ));
+        let log = Log::default();
+        let subscriber = tracing_subscriber::fmt().with_writer(log.clone()).finish();
+        let v = tracing::subscriber::with_default(subscriber, || {
+            values(&rest(
+                &mut m,
+                Command::Recall {
+                    id: "r".into(),
+                    scene: scene.clone(),
+                    at: "2026-11-15T12:01:00.000Z".into(),
+                },
+            ))
+        });
         assert!(!v.iter().any(|(p, _)| p.ends_with("/trigger")), "{v:?}");
+        assert_eq!(*at(&m, "/ducks/comm/destinations/aux1"), json!(false));
+        let log = log.text();
+        assert!(
+            log.contains("WARN") && log.contains(&scene) && log.contains("duck=\"comm\""),
+            "{log}"
+        );
         assert!(v.contains(&("/ducks/comm/channels/ch1/depth".into(), json!(30))));
         assert!(v.contains(&("/ducks/comm/threshold".into(), json!(-45))));
         duck::check(&m.state()["ducks"], "comm").unwrap();
+    }
+
+    /// A log in memory.
+    #[derive(Clone, Default)]
+    struct Log(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Log {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl std::io::Write for Log {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Log {
+        type Writer = Log;
+
+        fn make_writer(&'a self) -> Log {
+            self.clone()
+        }
     }
 
     /// A duck write names its leaf, a hold release the hold, and a recall
