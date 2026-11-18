@@ -313,26 +313,35 @@ is stopped there, and the screen names the holder. A latch stopped
 while writes are locked stays shown until the server reports the talk
 off.
 
-DUCK on a duck group's tile in the masters, by pointer, Space or Enter,
-or Shift+D+n for the n-th group (while the digit is down): the press
-holds the duck in at once, and held longer than 0.3 s it is momentary;
-a shorter tap latches mode on, or sets a latched group back to auto. A
-cancelled touch, a lost pointer, focus leaving the key, the page going
-hidden or away, or leaving the view ends a hold and changes no mode; the
-latch stays, on every screen, until mode is set again. While another
-session holds a group the press holds nothing and the notice names the
-holder; a tap still latches, as mode has no owner. A tap on a bypassed
-group (mode OFF) changes nothing and says so: OFF takes a 0.5 s hold,
-AUTO and ON one press. No hold starts while nothing commits. The tile
-names the holder, says what the group does (DUCK HELD, DUCK ON, BYPASS,
-AUTO) and sets the threshold; the meter frames carry no duck telemetry
-yet, so no key level or gain reduction is shown. A strip's DK chip
-(KEY on a trigger) lights while a group that lowers it is held or
-latched in, and opens the Duck section of its processing panel. The
+DUCK on a duck group's tile in the masters, or on its pill in the bank
+bar between 1024 and 1399 px, where the masters lie over the strips,
+by pointer, Space or Enter: the press holds the duck in at once, and
+held longer than 0.3 s it is momentary; a shorter tap latches mode on,
+or sets a latched group back to auto. Shift+D+n holds the n-th group
+while the digit is down and never latches. A cancelled touch, a lost
+pointer, focus leaving the key, the page going hidden or away, or
+leaving the view ends a hold and changes no mode; the latch stays, on
+every screen, until mode is set again. While another session holds a
+group the press holds nothing, the notice names the holder, and the
+key's face shows it; a tap still latches, as mode has no owner. On a
+bypassed group (mode OFF, hatched) a tap sends nothing and says so, and
+a press holds the duck in only once it has lasted 0.3 s. OFF takes a
+0.5 s hold, AUTO and ON one press; the mode keys are one tab stop, and
+the arrow keys move the focus among them without selecting. No hold
+starts while nothing commits. The tile says what the group does (DUCK
+HELD, DUCK ON, BYPASS, AUTO) and sets the threshold; its key meter row
+shows the threshold only, as the meter frames carry no duck telemetry
+yet, so no key level or gain reduction is shown. More groups than fit
+one row of tiles scroll within it. A strip in a group carries a DK chip
+(KEY on a trigger), lit while a group that lowers it is held or
+latched in; it opens the Duck section of its processing panel. The
 DUCK view sets up every group: mode, key tap, detector and key filters,
-presets (LIGHT, HEAVY, VOICE, each one atomic PATCH), destinations, and
-per channel TRIG, TARGET and the depth; its channel grid is one tab
-stop, walked with the arrow keys. A phone shows one group at a time.
+destinations, and per channel TRIG, TARGET and the depth; up to 1280 px
+the detector starts folded to its mode keys. Its channel grid is one
+tab stop, walked with the arrow keys. The presets LIGHT, HEAVY and
+VOICE write in one atomic PATCH and take a second press within 3 s or a
+0.5 s hold; leaving the key disarms it. A phone shows one group at a
+time.
 
 A gesture on a control another session holds is refused at once and
 the notice names the holder. ASK in that notice sends the holder a

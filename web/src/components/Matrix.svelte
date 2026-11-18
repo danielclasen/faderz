@@ -134,8 +134,8 @@
     width: 30px;
     height: 20px;
     border-radius: 3px;
-    border: 1px solid var(--line-strong);
-    background: var(--well);
+    border: 1px solid var(--key-edge);
+    background: var(--switch-off);
     cursor: pointer;
     padding: 0;
   }

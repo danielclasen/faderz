@@ -1740,18 +1740,27 @@ test('bypasses a duck group only after a hold on OFF, and a tap on DUCK never ta
     await page.mouse.up();
     await expect.poll(async () => (await duck()).mode).toBe('off');
     await expect(lamp).toHaveText('BYPASS');
+    // A hatch as well as the word: bypassed reads from across the desk without colour.
+    const hatch = (l: typeof lamp) => l.evaluate((el) => getComputedStyle(el).backgroundImage);
+    expect(await hatch(lamp)).toContain('repeating-linear-gradient');
     await key.click();
     await expect(page.getByTestId('notice')).toContainText('Commentary is bypassed: choose AUTO or ON to arm it');
     await page.waitForTimeout(300);
     expect((await duck()).mode).toBe('off');
     await tile.getByRole('radio', { name: /^Commentary auto/ }).click();
     await expect.poll(async () => (await duck()).mode).toBe('auto');
-    // Sensitivity from the tile: the threshold moves by a step, with no jump.
+    expect(await hatch(lamp)).toBe('none');
+    // Sensitivity from the tile: the threshold moves by a step, with no
+    // jump, and its marker in the reserved key meter row moves with it.
+    const marker = page.getByTestId('duck-keymeter-comm').locator('.travel');
+    const before = await marker.evaluate((el) => getComputedStyle(el).transform);
     const thr = page.getByRole('slider', { name: 'Commentary duck threshold' });
     await thr.focus();
     await page.keyboard.press('ArrowLeft');
     await expect.poll(async () => (await duck()).threshold).toBe(-31);
     await expect(page.getByTestId('duck-threshold-comm')).toHaveText('-31.0');
+    await expect.poll(() => marker.evaluate((el) => getComputedStyle(el).transform)).not.toBe(before);
+    expect((await page.getByTestId('duck-keymeter-comm').boundingBox())!.height).toBe(8);
   } finally {
     await patch(request, '/ducks/comm/mode', 'auto');
     await patch(request, '/ducks/comm/threshold', -30);
@@ -1768,6 +1777,9 @@ test('a second client sees who holds a duck, cannot take the hold but can latch,
     const b = await duckTile(await other.newPage(), request);
     const tag = (await a.owner())!;
     await expect(b.holder).toHaveText(handleTag(tag.handle));
+    // The key's face names the holder, read from across the desk.
+    await expect(b.key).toHaveText(handleTag(tag.handle));
+    await expect(a.key).toHaveText('you');
     await expect(b.lamp).toHaveText('DUCK HELD');
     await expect(b.key).toHaveAccessibleName(`Commentary duck, held by web client ${handleTag(tag.handle)}, Shift+D+1`);
     // B's press holds nothing and names the holder; its tap still latches.
@@ -1780,6 +1792,7 @@ test('a second client sees who holds a duck, cannot take the hold but can latch,
     await expect.poll(async () => (await b.duck()).hold, { timeout: 15_000 }).toBe(false);
     await expect.poll(b.owner).toBeUndefined();
     await expect(b.holder).toHaveText('');
+    await expect(b.key).toHaveText('DUCK');
     await expect(b.lamp).toHaveText('DUCK ON');
   } finally {
     await other.close();
@@ -1787,29 +1800,147 @@ test('a second client sees who holds a duck, cannot take the hold but can latch,
   }
 });
 
-test("a strip's duck chip opens the Duck section of its panel, which sets membership and depth", async ({ page, request }) => {
+test("a strip's duck chip shows only on a member, is a 24 px target, and opens the Duck section of its panel", async ({ page, request }) => {
   await live(page);
-  const chip = page.getByTestId('duck-chip-ch3');
+  // In no group: the slot stays empty, with no key to press.
+  await expect(page.getByTestId('duck-chip-ch3')).not.toHaveRole('button');
+  await expect(page.getByTestId('duck-chip-ch3')).toHaveText('');
+  const chip = page.getByTestId('duck-chip-ch13');
   await expect(chip).toHaveText('DK');
-  await expect(chip).toHaveAccessibleName('Guest 1 duck, in no duck group');
+  await expect(chip).toHaveAccessibleName('Amb 1 duck, lowered by Commentary 10 dB, Remote comm 8 dB');
+  // A trigger's chip, in view: 24 px wide, and its hit area reaches 3 px above and below the 18 px face.
+  const key = page.getByTestId('duck-chip-ch1');
+  await expect(key).toHaveText('KEY');
+  const box = (await key.boundingBox())!;
+  expect(box.width).toBeGreaterThanOrEqual(24);
+  for (const dy of [-11.5, 11.5]) {
+    expect(await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest('[data-testid]')?.getAttribute('data-testid'), [box.x + box.width / 2, box.y + box.height / 2 + dy])).toBe('duck-chip-ch1');
+  }
   await chip.click();
   const section = page.locator('[data-section="duck"]');
   await expect(section).toBeInViewport();
-  const duck = async () => (await serverState(request)).state.ducks['remote']!.channels['ch3']!;
+  const duck = async () => (await serverState(request)).state.ducks['remote']!.channels['ch13']!;
   try {
-    await section.getByRole('button', { name: 'Guest 1 is lowered by Remote comm' }).click();
+    await section.getByRole('button', { name: 'Amb 1 is lowered by Remote comm' }).click();
+    await expect.poll(async () => (await duck()).target).toBe(false);
+    await expect(chip).toHaveAccessibleName('Amb 1 duck, lowered by Commentary 10 dB');
+    await section.getByRole('button', { name: 'Amb 1 is lowered by Remote comm' }).click();
     await expect.poll(async () => (await duck()).target).toBe(true);
-    await expect(chip).toHaveAccessibleName('Guest 1 duck, lowered by Remote comm 10 dB');
     const depth = section.getByRole('textbox', { name: 'Depth value, type to set' }).nth(1);
     await depth.fill('18');
     await depth.press('Enter');
     await expect.poll(async () => (await duck()).depth).toBe(18);
     // A target cannot key the group that lowers it: said, not sent.
-    await section.getByRole('button', { name: 'Guest 1 triggers Remote comm' }).click({ force: true });
-    await expect(page.getByTestId('notice')).toContainText('Guest 1 is a target of Remote comm');
+    await section.getByRole('button', { name: 'Amb 1 triggers Remote comm' }).click({ force: true });
+    await expect(page.getByTestId('notice')).toContainText('Amb 1 is a target of Remote comm');
     expect((await duck()).trigger).toBe(false);
+    // Joining a group puts the chip in the empty slot.
+    await patch(request, '/ducks/remote/channels/ch3/target', true);
+    await expect(page.getByTestId('duck-chip-ch3')).toHaveText('DK');
   } finally {
+    await patch(request, '/ducks/remote/channels/ch13/depth', 8);
+    await patch(request, '/ducks/remote/channels/ch13/target', true);
     await patch(request, '/ducks/remote/channels/ch3/target', false);
-    await patch(request, '/ducks/remote/channels/ch3/depth', 10);
   }
+});
+
+test('a tap on DUCK of a bypassed group sends nothing to the server', { tag: '@mock' }, async ({ page, request }) => {
+  const { key, duck } = await duckTile(page, request);
+  try {
+    await patch(request, '/ducks/comm/mode', 'off');
+    await expect(key).toHaveAccessibleName(/, bypassed/);
+    await request.post('/__mock/audit/reset');
+    await key.click();
+    await expect(page.getByTestId('notice')).toContainText('Commentary is bypassed');
+    await page.waitForTimeout(500);
+    expect((await audit(request)).entries.filter((e) => e.path === DUCK_HOLD)).toEqual([]);
+    expect((await duck()).mode).toBe('off');
+    // A deliberate hold still ducks it.
+    await key.hover();
+    await page.mouse.down();
+    await expect.poll(async () => (await duck()).hold).toBe(true);
+    await page.mouse.up();
+    await expect.poll(async () => (await duck()).hold).toBe(false);
+  } finally {
+    await patch(request, '/ducks/comm/mode', 'auto');
+  }
+});
+
+test('takes one tab stop for the mode keys of a tile, whose arrows move the focus and change nothing', async ({ page, request }) => {
+  const { tile, duck } = await duckTile(page, request);
+  const stops = await tile.evaluate((t) => [...t.querySelectorAll<HTMLElement>('button, [tabindex]')].filter((e) => e.tabIndex >= 0).map((e) => e.getAttribute('aria-label') ?? e.textContent));
+  expect(stops).toEqual([expect.stringMatching(/^Commentary auto/), expect.stringMatching(/^Commentary duck/), 'Commentary duck threshold']);
+  const auto = tile.getByRole('radio', { name: /^Commentary auto/ });
+  await auto.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(tile.getByRole('radio', { name: /^Commentary on/ })).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(tile.getByRole('radio', { name: /^Commentary off/ })).toBeFocused();
+  await page.waitForTimeout(300);
+  expect((await duck()).mode).toBe('auto');
+  try {
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press(' ');
+    await expect.poll(async () => (await duck()).mode).toBe('on');
+  } finally {
+    await patch(request, '/ducks/comm/mode', 'auto');
+  }
+  // Shift+D+1 only ever holds: a short chord leaves no latch.
+  await page.locator('body').focus();
+  await page.keyboard.down('Shift');
+  await page.keyboard.down('KeyD');
+  await page.keyboard.press('Digit1');
+  await page.keyboard.up('KeyD');
+  await page.keyboard.up('Shift');
+  await page.waitForTimeout(300);
+  expect(await duck()).toMatchObject({ mode: 'auto', hold: false });
+});
+
+test('keeps the tile band to one row, scrolling within it when more groups than fit', async ({ page, request }) => {
+  const { tile } = await duckTile(page, request);
+  const band = page.getByRole('group', { name: 'Duck groups', exact: true });
+  const one = (await tile.boundingBox())!.height;
+  // Six more tiles of the same make, as a shape with eight groups has.
+  await band.evaluate((b) => {
+    for (let i = 0; i < 6; i++) b.append(b.firstElementChild!.cloneNode(true));
+  });
+  const m = await band.evaluate((b) => ({ ch: b.clientHeight, sh: b.scrollHeight }));
+  expect(m.ch).toBeLessThanOrEqual(Math.ceil(one) + 1);
+  expect(m.sh).toBeGreaterThan(m.ch);
+});
+
+test('works every duck group from the bank bar with the masters closed at 1280 and 1180 px', async ({ page, request }) => {
+  for (const vp of [{ width: 1280, height: 800 }, { width: 1180, height: 820 }]) {
+    await page.setViewportSize(vp);
+    await live(page);
+    await expect(page.getByRole('button', { name: 'MASTERS' })).toHaveAttribute('aria-pressed', 'false');
+    const pill = page.getByTestId('duck-pill-comm');
+    await expect(pill).toBeInViewport();
+    await expect(pill).toHaveText(/Commentary\s*AUTO/);
+    await expect(page.getByTestId('duck-pill-remote')).toBeInViewport();
+    const duck = async () => (await serverState(request)).state.ducks['comm']!;
+    try {
+      await pill.click();
+      await expect.poll(async () => (await duck()).mode).toBe('on');
+      await expect(pill).toHaveText(/Commentary\s*ON/);
+      await pill.click();
+      await expect.poll(async () => (await duck()).mode).toBe('auto');
+      await pill.hover();
+      await page.mouse.down();
+      await expect.poll(async () => (await duck()).hold).toBe(true);
+      await expect(pill).toHaveText(/Commentary\s*HELD/);
+      await page.waitForTimeout(400);
+      await page.mouse.up();
+      await expect.poll(async () => (await duck()).hold).toBe(false);
+      expect((await duck()).mode).toBe('auto');
+      await patch(request, '/ducks/comm/mode', 'off');
+      await expect(pill).toHaveText(/Commentary\s*BYP/);
+      expect(await pill.evaluate((el) => getComputedStyle(el).backgroundImage)).toContain('repeating-linear-gradient');
+    } finally {
+      await patch(request, '/ducks/comm/mode', 'auto');
+    }
+  }
+  // Beside the masters the tiles are in sight, and the bank bar has no pills.
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect(page.getByTestId('duck-pill-comm')).toBeHidden();
 });

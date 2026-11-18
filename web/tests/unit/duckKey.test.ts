@@ -64,12 +64,31 @@ describe('DuckPress', () => {
     expect(posted).toEqual([...HELD, { type: 'set', path: MODE, value: 'auto' }, ...ENDED]);
   });
 
-  it('never takes a group out of bypass with a tap, says so, and still holds a bypassed duck in while pressed', () => {
-    const { s, posted, key } = press([[MODE, 'off']]);
-    key.press(0);
-    key.lift(10);
-    expect(posted).toEqual([...HELD, ...ENDED]);
-    expect(s.notices.map((n) => [n.kind, n.text])).toEqual([['info', 'Commentary is bypassed: choose AUTO or ON to arm it']]);
+  it('sends nothing for a tap on a bypassed group and says so, and holds it in only once a press lasts LATCH_MS', () => {
+    vi.useFakeTimers();
+    try {
+      const { s, posted, key } = press([[MODE, 'off']]);
+      key.press(0);
+      vi.advanceTimersByTime(LATCH_MS - 1);
+      key.lift(LATCH_MS - 1);
+      vi.runAllTimers();
+      expect(posted).toEqual([]);
+      expect(s.notices.map((n) => [n.kind, n.text])).toEqual([['info', 'Commentary is bypassed: choose AUTO or ON to arm it']]);
+      key.press(1000);
+      expect(posted).toEqual([]);
+      vi.advanceTimersByTime(LATCH_MS);
+      expect(posted).toEqual(HELD);
+      key.lift(1000 + 2 * LATCH_MS);
+      expect(posted).toEqual([...HELD, ...ENDED]);
+      // An interrupted press before then sends nothing either.
+      posted.length = 0;
+      key.press(5000);
+      key.abort();
+      vi.runAllTimers();
+      expect(posted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('holds nothing while another session holds the duck, names the holder, and still toggles mode with a tap', () => {
@@ -182,6 +201,20 @@ describe('DUCK key', () => {
     }
   });
 
+  it('shows on its face who holds the group, and DUCK otherwise', () => {
+    const t = store([[HOLD, true]], [[HOLD, OTHER]]);
+    const target = document.body.appendChild(document.createElement('div'));
+    const c = mount(DuckKey, { target, props: { id: 'comm', name: 'Commentary' }, context: mixerContext(t.s) });
+    flushSync();
+    const button = target.querySelector('button')!;
+    expect(button.textContent!.trim()).toBe('b3RoZX');
+    expect(button.getAttribute('aria-label')).toBe('Commentary duck, held by web client b3RoZX');
+    t.s.apply({ type: 'patch', input: 1, changes: [[HOLD, false]], owners: [[HOLD, null]], status: LIVE });
+    flushSync();
+    expect(button.textContent!.trim()).toBe('DUCK');
+    unmount(c);
+  });
+
   it('ends a hold when the key leaves the screen', async () => {
     const { posted, button, c } = key();
     keyboard(button, 'keydown', { key: ' ' });
@@ -191,13 +224,14 @@ describe('DUCK key', () => {
     expect(posted).toEqual([...HELD, ...ENDED]);
   });
 
-  it('presses with Shift+D+its digit while the digit is down, and not while typing', () => {
+  it('holds with Shift+D+its digit while the digit is down, never latches with it, and not while typing', () => {
     const { posted, c } = key();
     now = 0;
     keyboard(window, 'keydown', { key: 'D', code: 'KeyD', shiftKey: true });
     keyboard(window, 'keydown', { key: '!', code: 'Digit1', shiftKey: true });
     expect(posted).toEqual(HELD);
-    now = LATCH_MS;
+    // However short, the chord only held: a slip of three keys leaves nothing on.
+    now = 10;
     keyboard(window, 'keyup', { key: '!', code: 'Digit1', shiftKey: true });
     expect(posted).toEqual([...HELD, ...ENDED]);
     // Another digit is another group's.

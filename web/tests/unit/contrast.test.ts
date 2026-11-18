@@ -25,10 +25,24 @@ function contrast(a: string, b: string): number {
 const dark = tokens(':root');
 const light = { ...dark, ...tokens(":root[data-theme='light']") };
 
+/** The input rule of NumberEntry.svelte: its text colour and face. */
+const entry = (() => {
+  const src = readFileSync(new URL('../../src/components/NumberEntry.svelte', import.meta.url), 'utf8');
+  const block = /\n  input \{([^}]*)\}/.exec(src)![1]!;
+  const prop = (name: string) => new RegExp(`\\n\\s*${name}:\\s*([^;]+);`).exec(block)?.[1]?.trim();
+  return { color: prop('color'), background: prop('background') };
+})();
+
+/** A colour as written in a rule: a token of the theme or a literal. */
+function resolve(value: string, t: Record<string, string>): string {
+  const token = /^var\(--([a-z0-9-]+)\)$/.exec(value);
+  return token ? t[token[1]!]! : value;
+}
+
 describe.each([
   ['dark', dark],
   ['light', light],
-])('%s theme', (_, t) => {
+])('%s theme', (theme, t) => {
   it.each(['strip', 'strip-alt', 'panel', 'panel-2'])('faint text reads on --%s', (surface) => {
     expect(contrast(t['text-faint']!, t[surface]!)).toBeGreaterThanOrEqual(4.5);
   });
@@ -42,6 +56,17 @@ describe.each([
   });
   it('a lit PAUSED loudness key carries readable ink', () => {
     expect(contrast(t['paused-ink']!, t['paused']!)).toBeGreaterThanOrEqual(4.5);
+  });
+  it('an ownership tag carries readable ink', () => {
+    expect(contrast(t['owned-ink']!, t['owned']!)).toBeGreaterThanOrEqual(4.5);
+  });
+  it('a lit cell of an on/off grid stands apart from an off one', () => {
+    expect(contrast(t['on']!, t['switch-off']!)).toBeGreaterThanOrEqual(3);
+  });
+  it('a typed number entry reads on the field it sits in', () => {
+    // The light theme gives every text field a white face (app.css), over the component's own.
+    const field = theme === 'light' ? /:root\[data-theme='light'\] input\[type='text'\],[^{]*\{\s*background:\s*#([0-9a-f]{3})\b/.exec(css)![1]!.replace(/./g, '$&$&').replace(/^/, '#') : resolve(entry.background!, t);
+    expect(contrast(resolve(entry.color!, t), field)).toBeGreaterThanOrEqual(4.5);
   });
   it('a lit duck key and lamp carry readable ink, and the key edge shows on the panels', () => {
     expect(contrast(t['duck-ink']!, t['duck']!)).toBeGreaterThanOrEqual(4.5);

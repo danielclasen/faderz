@@ -1,7 +1,9 @@
 <script lang="ts">
   // Live operation of one duck group in the masters: its mode, the DUCK
   // key, what it does now in words, who holds it, and its threshold. Every
-  // part has a fixed size, so no state change moves anything.
+  // part has a fixed size, so no state change moves anything. The key
+  // meter row is reserved: until the meter frames carry the key level its
+  // well is empty and shows where the threshold sits.
   import { fit } from '../lib/format';
   import { tip } from '../lib/tip';
   import { LAMP_WIDTH, forced, lampText } from '../lib/duck';
@@ -37,8 +39,7 @@
 
 <section class="tile" aria-label={`Duck ${duck.name}`} data-duck={duck.id}>
   <div class="top">
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <span class="name" role="note" tabindex="0" aria-label={description} use:tip={description}>{duck.name}</span>
+    <span class="name" role="note" aria-label={description} use:tip={description}>{duck.name}</span>
     <!-- Who holds the duck, in a slot kept whether held or not. -->
     <span class="holder" class:held={holder !== null} class:mine={mixer.isMine(holder)} role="note" aria-label={holderText || undefined} use:tip={holderText} data-testid={`duck-holder-${duck.id}`}
       ><span>{holder ? mixer.ownerShort(holder) : ''}</span></span
@@ -50,6 +51,9 @@
   </div>
   <DuckModes id={duck.id} name={duck.name} />
   <DuckKey id={duck.id} name={duck.name} {shortcut} />
+  <div class="keymeter" aria-hidden="true" data-testid={`duck-keymeter-${duck.id}`}>
+    <span class="travel" style:transform={`translateX(${((d.threshold + 60) / 60) * 100}%)`}><i class="marker"></i></span>
+  </div>
   <div class="sens">
     <span class="lbl">THR</span>
     <Slider
@@ -67,6 +71,7 @@
 <style>
   .tile {
     width: 140px;
+    height: var(--tile-h, auto);
     flex: none;
     display: flex;
     flex-direction: column;
@@ -111,6 +116,7 @@
   }
   .holder.held {
     background: var(--owned);
+    color: var(--owned-ink);
   }
   .holder.held.mine {
     background: var(--on);
@@ -143,6 +149,30 @@
   .lamp.bypass {
     border-style: dashed;
     border-color: var(--text-dim);
+    background-image: var(--hatch);
+    color: var(--text);
+  }
+  /* The key level against the threshold: a well of fixed size, the
+     marker moved by transform. */
+  .keymeter {
+    position: relative;
+    height: 8px;
+    border-radius: 2px;
+    background: var(--well);
+    box-shadow: inset 0 0 0 1px var(--line);
+    overflow: clip;
+  }
+  .keymeter .travel {
+    position: absolute;
+    inset: 0 2px 0 0;
+  }
+  .keymeter .marker {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--meter-tp);
   }
   .sens {
     display: grid;

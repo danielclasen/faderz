@@ -44,6 +44,10 @@
   --err: #ff3b47;
   --focus: #3fd0e0;
   --owned: #c77dff;
+  /* Text on a filled ownership tag, at 4.5:1 or more. */
+  --owned-ink: #1a0a2a;
+  /* An off cell of an on/off grid: apart from a lit cell at 3:1 or more. */
+  --switch-off: #07090b;
 
   --meter-low: #2fd36b;
   --meter-mid: #e8d22c;
@@ -61,6 +65,8 @@
      amber, AFL cyan, mute red, ownership purple and the neutral lit key. */
   --duck: #f472b6;
   --duck-ink: #1f0012;
+  /* A bypassed duck group: a texture, not a hue of its own. */
+  --hatch: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--text-dim) 45%, transparent) 0 3px, transparent 3px 7px);
 
   color-scheme: dark;
 }
@@ -106,6 +112,8 @@
   --err: #d1202c;
   --focus: #00788a;
   --owned: #7b2fbf;
+  --owned-ink: #ffffff;
+  --switch-off: #e3e7ec;
 
   color-scheme: light;
 }

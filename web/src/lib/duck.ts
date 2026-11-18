@@ -75,7 +75,9 @@ export const MAX_TRIGGERS = 8;
  * The hold is owned: while another session holds it, a press holds
  * nothing and the notice names the holder, and a tap still toggles mode,
  * which has no owner. A bypassed group (mode off) changes mode only
- * through its mode keys, never by a tap here; a hold still ducks it.
+ * through its mode keys, never by a tap here, and its hold starts only
+ * once the press has lasted LATCH_MS: a stray tap during a break on open
+ * microphones sends nothing, and a deliberate hold still ducks it.
  * While nothing commits no hold starts, as a hold sent late could
  * outlast the press.
  */
@@ -83,6 +85,8 @@ export class DuckPress {
   private pressing = false;
   private holding = false;
   private pressedAt = 0;
+  /** The deferred start of a bypassed group's hold. */
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly mixer: MixerStore,
@@ -101,16 +105,30 @@ export class DuckPress {
     this.pressedAt = now;
     const hold = duckPath(this.id, 'hold');
     if (this.mixer.refuseIfHeld(hold) || this.mixer.notCommitting) return;
+    if (this.mixer.value<DuckMode>(duckPath(this.id, 'mode')) !== 'off') return this.start();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.pressing && !this.mixer.notCommitting) this.start();
+    }, LATCH_MS);
+  }
+
+  private start(): void {
+    const hold = duckPath(this.id, 'hold');
     this.holding = true;
     this.mixer.touch(hold);
     this.mixer.set(hold, true);
   }
 
-  /** The press ended where it was made: a short one toggles the latch. */
-  lift(now: number): void {
+  /**
+   * The press ended where it was made: a short one toggles the latch,
+   * unless `latch` is false, as for the keyboard shortcut, which only
+   * ever holds.
+   */
+  lift(now: number, latch = true): void {
     if (!this.pressing) return;
     this.pressing = false;
-    if (now - this.pressedAt < LATCH_MS) {
+    this.cancel();
+    if (latch && now - this.pressedAt < LATCH_MS) {
       const path = duckPath(this.id, 'mode');
       const mode = this.mixer.value<DuckMode>(path);
       if (mode === 'off') this.mixer.notify('info', `${this.name()} is bypassed: choose AUTO or ON to arm it`, path);
@@ -123,7 +141,13 @@ export class DuckPress {
   abort(): void {
     if (!this.pressing) return;
     this.pressing = false;
+    this.cancel();
     this.end();
+  }
+
+  private cancel(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   private end(): void {

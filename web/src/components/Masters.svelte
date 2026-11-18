@@ -75,7 +75,13 @@
   /* Kept in view where the masters scroll sideways. As wide as the
      masters below it, whatever its tiles would take in one row: the tiles
      wrap, so the band never widens the masters and narrows the strips. */
+  /* One row of tiles at most: more groups than fit scroll within it,
+     so the band never takes more of the faders' travel. */
   .ducks {
+    --tile-h: 162px;
+    max-height: var(--tile-h);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     contain: inline-size;
     position: sticky;
     left: 0;
@@ -96,6 +102,11 @@
     height: 0;
     pointer-events: none;
     z-index: 1;
+  }
+  @media (pointer: coarse) {
+    .ducks {
+      --tile-h: 214px;
+    }
   }
   /* Narrow screens: the strips take the whole width and the masters lie
      over their right end, below the bank bar, while MASTERS is lit. Opening or closing them

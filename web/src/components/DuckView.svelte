@@ -2,7 +2,10 @@
   // Setting up duck groups: per group a column with its mode, detector,
   // presets and destinations, and per channel the group's TRIG and TARGET
   // switches and the depth. The channel grid is one tab stop; the arrows
-  // move within it. A phone shows one group at a time, picked above.
+  // move within it. A phone shows one group at a time, picked above. Up
+  // to 1280 px the detector starts folded to its mode keys, so the channel
+  // rows are in view. A preset rewrites a group's times and every target's
+  // depth, so it takes a second press within ARM_MS or a hold.
   import { MediaQuery } from 'svelte/reactivity';
   import { pendingWrite } from '../lib/pending';
   import { fit } from '../lib/format';
@@ -15,11 +18,16 @@
   import Param from './Param.svelte';
   import NumberEntry from './NumberEntry.svelte';
   import DuckModes from './DuckModes.svelte';
+  import { hold } from '../lib/hold';
 
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
   const groups = $derived(shape.ducks ?? []);
   const phone = new MediaQuery('max-width: 700px');
+  const compact = new MediaQuery('max-width: 1280px');
+  /** Set by the fold key; until then the detector is folded up to 1280 px. */
+  let unfolded = $state<boolean | null>(null);
+  const detectorOpen = $derived(unfolded ?? !compact.current);
   let picked = $state<string | null>(null);
   const shown = $derived(phone.current ? groups.filter((g) => g.id === (picked ?? groups[0]?.id)) : groups);
   const destinations = $derived([...shape.buses, ...shape.auxes, ...shape.mixMinus]);
@@ -31,32 +39,63 @@
   /** Cells per group in the channel grid: TRIG, TARGET, depth. */
   const CELLS = 3;
 
-  /** Presets: one atomic write each (PATCH /state). Depth goes to every current target. */
-  const PRESETS = [
-    { key: 'LIGHT', label: 'Light: 6 dB, attack 20 ms, hold 300 ms, release 800 ms', depth: 6, attackMs: 20, holdMs: 300, releaseMs: 800 },
-    { key: 'HEAVY', label: 'Heavy: 15 dB, attack 10 ms, hold 500 ms, release 1500 ms', depth: 15, attackMs: 10, holdMs: 500, releaseMs: 1500 },
-  ] as const;
-  function preset(g: DuckShape, p: (typeof PRESETS)[number]): void {
+  /** Times of a timing preset. */
+  const times = (depth: number, attackMs: number, holdMs: number, releaseMs: number) => (g: DuckShape): Change[] => {
     const d = mixer.state!.ducks[g.id]!;
-    const changes: Change[] = [
+    return [
       ...Object.keys(d.channels)
         .filter((c) => d.channels[c]!.target)
-        .map((c) => ({ path: duckPath(g.id, 'channels', c, 'depth'), value: p.depth })),
-      { path: duckPath(g.id, 'attackMs'), value: p.attackMs },
-      { path: duckPath(g.id, 'holdMs'), value: p.holdMs },
-      { path: duckPath(g.id, 'releaseMs'), value: p.releaseMs },
+        .map((c) => ({ path: duckPath(g.id, 'channels', c, 'depth'), value: depth })),
+      { path: duckPath(g.id, 'attackMs'), value: attackMs },
+      { path: duckPath(g.id, 'holdMs'), value: holdMs },
+      { path: duckPath(g.id, 'releaseMs'), value: releaseMs },
     ];
-    void patchState(mixer, `${g.name} preset ${p.key}`, changes);
+  };
+  /** Presets: one atomic write each (PATCH /state). A depth goes to every current target. */
+  const PRESETS = [
+    { key: 'LIGHT', label: 'light: 6 dB, attack 20 ms, hold 300 ms, release 800 ms', changes: times(6, 20, 300, 800) },
+    { key: 'HEAVY', label: 'heavy: 15 dB, attack 10 ms, hold 500 ms, release 1500 ms', changes: times(15, 10, 500, 1500) },
+    {
+      key: 'VOICE',
+      label: 'voice focus: key HPF 150 Hz and LPF 4 kHz',
+      changes: (g: DuckShape): Change[] => [
+        { path: duckPath(g.id, 'keyHpf', 'enabled'), value: true },
+        { path: duckPath(g.id, 'keyHpf', 'freq'), value: 150 },
+        { path: duckPath(g.id, 'keyLpf', 'enabled'), value: true },
+        { path: duckPath(g.id, 'keyLpf', 'freq'), value: 4000 },
+      ],
+    },
+  ] as const;
+  /** An armed preset disarms after this long, or when its key loses the focus. */
+  const ARM_MS = 3000;
+  /** A hold this long applies a preset at once. */
+  const PRESET_HOLD_MS = 500;
+  /** The armed preset, as `group:KEY`. */
+  let armed = $state<string | null>(null);
+  let armTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A hold applied the preset: the click its release makes does nothing more. */
+  let heldOut = false;
+  function disarm(): void {
+    armed = null;
+    if (armTimer) clearTimeout(armTimer);
+    armTimer = null;
   }
-  /** Voice focus: the key hears speech only, HPF 150 Hz and LPF 4 kHz. */
-  function voice(g: DuckShape): void {
-    void patchState(mixer, `${g.name} voice focus`, [
-      { path: duckPath(g.id, 'keyHpf', 'enabled'), value: true },
-      { path: duckPath(g.id, 'keyHpf', 'freq'), value: 150 },
-      { path: duckPath(g.id, 'keyLpf', 'enabled'), value: true },
-      { path: duckPath(g.id, 'keyLpf', 'freq'), value: 4000 },
-    ]);
+  function apply(g: DuckShape, p: (typeof PRESETS)[number]): void {
+    disarm();
+    void patchState(mixer, `${g.name} preset ${p.key}`, p.changes(g));
   }
+  function press(g: DuckShape, p: (typeof PRESETS)[number]): void {
+    if (heldOut) {
+      heldOut = false;
+      return;
+    }
+    if (mixer.locked) return;
+    if (armed === `${g.id}:${p.key}`) return apply(g, p);
+    disarm();
+    armed = `${g.id}:${p.key}`;
+    armTimer = setTimeout(disarm, ARM_MS);
+  }
+  $effect(() => disarm);
 
   /** Makes a channel a trigger or target, or not; a refused change says why instead of being sent. */
   function toggle(g: DuckShape, channel: string, key: 'trigger' | 'target'): void {
@@ -119,20 +158,27 @@
           <tr class="labels">
             <th scope="col">Channel</th>
             {#each shown as g (g.id)}
-              <th scope="col" class="first" title={`Keys ${g.name}`}>TRIG</th>
-              <th scope="col" title={`Lowered by ${g.name}`}>TARGET</th>
-              <th scope="col" title="How far a target is lowered at full duck">DEPTH dB</th>
+              <th scope="col" class="first" title={`Keys ${g.name}`}>Trig</th>
+              <th scope="col" title={`Lowered by ${g.name}`}>Target</th>
+              <th scope="col" title="How far a target is lowered at full duck">Depth (dB)</th>
             {/each}
           </tr>
         </thead>
         <tbody class="setup">
           <tr>
-            <th scope="row">Detector</th>
+            <th scope="row">
+              <button class="key fold" aria-expanded={detectorOpen} aria-label="Detector settings" onclick={() => (unfolded = !detectorOpen)}
+                ><span aria-hidden="true">{detectorOpen ? '-' : '+'}</span> Detector</button
+              >
+            </th>
             {#each shown as g (g.id)}
               {@const d = mixer.state!.ducks[g.id]!}
               <td colspan={CELLS} class="first">
                 <div class="settings" role="group" aria-label={`${g.name} detector`}>
                   <DuckModes id={g.id} name={g.name} />
+                  {#if !detectorOpen}
+                    <p class="note summary">Thr {d.threshold} dB, att {d.attackMs}, hold {d.holdMs}, rel {d.releaseMs} ms</p>
+                  {:else}
                   <label class="tap">
                     <span class="lbl">Key</span>
                     <select
@@ -165,10 +211,27 @@
                   {/each}
                   <div class="presets" role="group" aria-label={`${g.name} presets`}>
                     {#each PRESETS as p (p.key)}
-                      <button class="key" aria-disabled={mixer.locked} aria-label={`${g.name} preset ${p.label}`} title={p.label} onclick={() => preset(g, p)}>{p.key}</button>
+                      {@const on = armed === `${g.id}:${p.key}`}
+                      <button
+                        class="key preset"
+                        class:armed={on}
+                        aria-disabled={mixer.locked}
+                        aria-label={on ? `Confirm ${g.name} preset ${p.label}` : `${g.name} preset ${p.label}, press twice or hold`}
+                        title={on ? 'Press again to apply' : `Preset ${p.label}: press twice or hold to apply`}
+                        use:hold={{
+                          ms: PRESET_HOLD_MS,
+                          fire: () => {
+                            if (mixer.locked) return;
+                            heldOut = true;
+                            apply(g, p);
+                          },
+                        }}
+                        onclick={() => press(g, p)}
+                        onblur={() => on && disarm()}>{on ? 'APPLY' : p.key}</button
+                      >
                     {/each}
-                    <button class="key" aria-disabled={mixer.locked} aria-label={`${g.name} voice focus: key HPF 150 Hz and LPF 4 kHz`} title="Voice focus: key HPF 150 Hz and LPF 4 kHz" onclick={() => voice(g)}>VOICE</button>
                   </div>
+                  {/if}
                 </div>
               </td>
             {/each}
@@ -330,6 +393,7 @@
     height: 24px;
     box-sizing: border-box;
     border-bottom-color: var(--line-strong);
+    text-transform: none;
   }
   th.group {
     border-left: 1px solid var(--line-strong);
@@ -366,6 +430,13 @@
   .lamp.bypass {
     border-style: dashed;
     border-color: var(--text-dim);
+    background-image: var(--hatch);
+    color: var(--text);
+  }
+  .fold {
+    width: 100%;
+    text-align: left;
+    padding: 0 4px;
   }
   tbody th {
     position: sticky;
@@ -455,10 +526,10 @@
   }
   td button[role='switch'] {
     width: 36px;
-    height: 22px;
+    height: 24px;
     border-radius: 3px;
     border: 1px solid var(--key-edge);
-    background: var(--well);
+    background: var(--switch-off);
     color: var(--on-ink);
     cursor: pointer;
     padding: 0;
@@ -477,12 +548,43 @@
   tbody.members tr:hover td {
     background: var(--panel-2);
   }
+  .settings .key,
+  .dests .key {
+    height: 24px;
+  }
+  /* An armed preset: lit, its word APPLY in the same width. */
+  .preset.armed {
+    background: var(--on);
+    border-color: var(--on);
+    color: var(--on-ink);
+  }
+  .preset {
+    position: relative;
+    overflow: hidden;
+  }
+  /* The hold that applies a preset fills a bar along its bottom; transform only. */
+  .preset::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: var(--text);
+    transform: scaleX(0);
+    transform-origin: left;
+  }
+  .preset:global(.arming)::after {
+    transform: scaleX(1);
+    transition: transform var(--hold) linear;
+  }
+  /* Touch: every key, switch and depth field at least 44 px tall. */
   @media (pointer: coarse) {
-    td button[role='switch'] {
-      height: 32px;
-    }
-    .labels th {
-      height: 24px;
+    td button[role='switch'],
+    .settings .key,
+    .dests .key,
+    .depth :global(input) {
+      height: 44px;
     }
   }
 </style>

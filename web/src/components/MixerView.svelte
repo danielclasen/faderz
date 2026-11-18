@@ -7,6 +7,7 @@
   import { fit } from '../lib/format';
   import { tip } from '../lib/tip';
   import Detail from './Detail.svelte';
+  import DuckKey from './DuckKey.svelte';
 
   interface Props {
     selected: string | null;
@@ -183,6 +184,14 @@
         onclick={() => (mixer.fine = !mixer.fine)}
         title="Fine: faders, pans and parameters move at a tenth of their travel, as with Shift held">FINE</button
       >
+      <!-- Where the masters lie over the strips, every duck group stays in
+           sight and in reach with them closed: a DUCK key per group that
+           says what the group does. -->
+      {#if (shape.ducks ?? []).length > 0}
+        <span class="duck-pills" role="group" aria-label="Duck groups in the bank bar">
+          {#each shape.ducks ?? [] as d (d.id)}<DuckKey id={d.id} name={d.name} pill />{/each}
+        </span>
+      {/if}
       <button
         class="key masters-key"
         aria-pressed={mastersOpen}
@@ -422,6 +431,18 @@
     .jump,
     .follow {
       display: none;
+    }
+  }
+  .duck-pills {
+    display: none;
+  }
+  @media (min-width: 1024px) and (max-width: 1399px) {
+    .duck-pills {
+      display: flex;
+      gap: 3px;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
     }
   }
   @media (max-width: 1399px) {

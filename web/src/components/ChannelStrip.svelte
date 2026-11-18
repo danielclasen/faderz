@@ -138,7 +138,7 @@
   <!-- On a touch screen a chip is too narrow for a finger: the row is one
        target that opens the processing panel there. -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-  <div class="proc" class:ducks={hasDucks} role="group" aria-label={`${channel.name} processing`} onclick={() => coarse.current && onselect(channel.id, 'input')}>
+  <div class="proc" role="group" aria-label={`${channel.name} processing`} onclick={() => coarse.current && onselect(channel.id, 'input')}>
     {#each [
       { key: 'HPF', on: st.hpf.enabled, to: 'input', what: 'High-pass filter' },
       { key: 'G', on: st.gate.enabled, to: 'dynamics', what: 'Gate' },
@@ -154,15 +154,23 @@
         aria-label={`${channel.name} ${chip.what}, ${chip.on ? 'in' : 'out'}`}>{chip.key}</button
       >
     {/each}
-    <!-- KEY on a trigger, DK on a target or a channel in no group; lit
-         while a group lowering it is held or latched in. The groups are
-         in its title and accessible name. -->
-    {#if hasDucks}
+  </div>
+  <!-- In a shape with duck groups the EQ curve shares its row with the duck chip. -->
+  <div class="eqrow">
+    <button class="eq" onclick={() => onselect(channel.id)} tabindex="-1" aria-hidden="true">
+      <EqCurve eq={st.eq} hpf={st.hpf} width={hasDucks ? 50 : 72} height={18} />
+    </button>
+    <!-- KEY on a trigger, DK on a target, lit while a group lowering it
+         is held or latched in; the groups are in its title and accessible
+         name. A channel in no group keeps the slot empty, so joining one
+         moves no chip. -->
+    {#if hasDucks && ducks.triggers.length + ducks.targets.length === 0}
+      <span class="chip duck blank" aria-hidden="true" data-testid={`duck-chip-${channel.id}`}></span>
+    {:else if hasDucks}
       <button
-        class="chip duck"
+        class="chip duck member"
         tabindex="-1"
         class:on={ducked.length > 0}
-        class:member={ducks.triggers.length + ducks.targets.length > 0}
         onclick={() => onselect(channel.id, 'duck')}
         title={`Duck: ${duckText}. Open it in the processing panel`}
         aria-label={`${channel.name} duck, ${duckText}`}
@@ -170,9 +178,6 @@
       >
     {/if}
   </div>
-  <button class="eq" onclick={() => onselect(channel.id)} tabindex="-1" aria-hidden="true">
-    <EqCurve eq={st.eq} hpf={st.hpf} width={72} height={18} />
-  </button>
 
   <!-- Every bus is an output that leaves the mixer: assigning or removing
        a channel takes a hold, as muting an output does. -->
@@ -473,16 +478,29 @@
     color: var(--afl-ink);
     background: var(--afl);
   }
-  /* Five chips: each as wide as its text, the rest shared, so HPF and
-     KEY keep their whole text in the strip. */
-  .proc.ducks .chip {
-    flex: 1 1 auto;
+  .eqrow {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  /* 24 px wide and, with its ::before, 24 px tall: a target of its own. */
+  .chip.duck {
+    flex: 0 0 24px;
+    height: 18px;
+  }
+  /* Its 3 px above and below win over the hit areas of the rows next to it. */
+  .chip.duck.member::before {
+    z-index: 1;
+  }
+  .chip.duck.blank {
+    background: none;
+    cursor: default;
   }
   /* In a group: an edge, so membership reads without colour. */
-  .proc .chip.duck.member {
+  .chip.duck.member {
     box-shadow: inset 0 0 0 1px var(--key-edge);
   }
-  .proc .chip.duck.on {
+  .chip.duck.on {
     color: var(--duck-ink);
     background: var(--duck);
     box-shadow: none;
@@ -622,6 +640,7 @@
   }
   .holder.held {
     background: var(--owned);
+    color: var(--owned-ink);
   }
   .holder.held.mine {
     background: var(--on);
@@ -689,6 +708,11 @@
       display: flex;
       align-items: center;
     }
+    /* Its own target here, not a row's: 24 px tall. */
+    .chip.duck {
+      height: 24px;
+      pointer-events: auto;
+    }
     .pan {
       min-height: 28px;
     }
@@ -714,7 +738,7 @@
       contain-intrinsic-size: auto 86px auto 280px;
     }
     .proc,
-    .eq,
+    .eqrow,
     .routes,
     .vca {
       display: none;

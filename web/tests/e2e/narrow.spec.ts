@@ -153,3 +153,33 @@ test('operates a duck group from the MASTERS sheet without a scroll, a whole ban
     await patch(request, '/ducks/comm/mode', 'auto');
   }
 });
+
+test('gives every duck key, switch and depth field a 44 px target on touch', async ({ page }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'MASTERS' }).click();
+  const h = async (loc: ReturnType<typeof page.locator>) => (await loc.boundingBox())!.height;
+  const tile = page.locator('[data-duck="comm"]');
+  expect(await h(page.getByTestId('duck-key-comm'))).toBeGreaterThanOrEqual(44);
+  for (const radio of await tile.getByRole('radio').all()) expect(await h(radio)).toBeGreaterThanOrEqual(44);
+  await page.getByRole('button', { name: 'MASTERS' }).click();
+  // A short screen has no chip rows; elsewhere the chip is a target of its own.
+  const chip = page.getByTestId('duck-chip-ch13');
+  if (await chip.isVisible()) {
+    const box = (await chip.boundingBox())!;
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(24);
+  }
+  await page.locator('[data-channel="ch13"] .head').click();
+  const section = page.locator('[data-section="duck"]');
+  await section.scrollIntoViewIfNeeded();
+  expect(await h(section.getByRole('button', { name: 'Amb 1 is lowered by Commentary' }))).toBeGreaterThanOrEqual(44);
+  expect(await h(section.getByRole('textbox', { name: 'Depth value, type to set' }).first())).toBeGreaterThanOrEqual(44);
+  await page.keyboard.press('Escape');
+  const tab = page.getByRole('button', { name: 'Duck', exact: true });
+  if (await tab.isVisible()) await tab.click();
+  else await page.getByRole('combobox', { name: 'View' }).selectOption({ label: 'Duck' });
+  expect(await h(page.getByRole('switch', { name: 'Pres 1 triggers Commentary' }))).toBeGreaterThanOrEqual(44);
+  expect(await h(page.getByRole('textbox', { name: /^Pres 1 depth under Commentary/ }))).toBeGreaterThanOrEqual(44);
+  expect(await h(page.getByRole('button', { name: 'Commentary lowers its targets in M&E' }))).toBeGreaterThanOrEqual(44);
+  await page.getByRole('button', { name: 'Detector settings' }).click();
+  expect(await h(page.getByRole('button', { name: /^Commentary preset heavy/ }))).toBeGreaterThanOrEqual(44);
+});

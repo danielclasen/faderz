@@ -90,7 +90,7 @@
     text-align: right;
     font-size: 12px;
     background: var(--well);
-    color: #e6edf3;
+    color: var(--text);
     border: 1px solid var(--line-strong);
     border-radius: 3px;
     padding: 0 5px;
