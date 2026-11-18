@@ -190,11 +190,14 @@ fn targets_and_diff_at_the_largest_shape() {
         quantile(&d, 0.99)
     );
     let mut catch_up = Vec::new();
+    let mut applying = Vec::new();
     for round in 0..rounds {
         let start = Instant::now();
         for n in 0..64 {
             let (path, value) = command(round * 64 + n + 7);
+            let at = Instant::now();
             apply(&mut m, &path, value);
+            applying.push(at.elapsed());
             let next = m.targets().unwrap();
             entries += image.diff(&next).len();
             image = next;
@@ -202,6 +205,12 @@ fn targets_and_diff_at_the_largest_shape() {
         catch_up.push(start.elapsed());
     }
     catch_up.sort();
+    applying.sort();
+    println!(
+        "apply alone: p50 {:?} p99 {:?}",
+        quantile(&applying, 0.5),
+        quantile(&applying, 0.99)
+    );
     let (p50, p99, max) = (
         quantile(&took, 0.5),
         quantile(&took, 0.99),
