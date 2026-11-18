@@ -195,7 +195,7 @@
         title={`Duck: ${duckText}. Open it in the processing panel`}
         aria-label={`${channel.name} duck, ${duckText}`}
         data-testid={`duck-chip-${channel.id}`}
-        ><span class="gr fixed">{reduction > 0 ? reductionText(reduction) : ducks.triggers.length > 0 ? 'KEY' : 'DK'}</span></button
+        ><span class="gr fixed">{reduction > 0 ? reductionText(reduction) : ducks.triggers.length > 0 ? 'KEY ' : ' DK '}</span></button
       >
     {/if}
   </div>
@@ -512,7 +512,8 @@
   }
   /* Its text changes per meter frame while it lowers: one span of fixed
      size and one font, whatever it reads, with strict containment, lays
-     out nothing outside it. The chip itself takes no containment, which
+     out nothing outside it, and every reading is GR_WIDTH characters of
+     it, so the text starts at one place and never shifts. The chip itself takes no containment, which
      would make it a stacking context and put the hit area of its
      ::before under the rows next to it. The chip's colour and line, not
      those of the strip's .fixed text. */
