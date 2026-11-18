@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
-import { live, patch, resetMock, serverState, settled } from './support';
+import { expect, test, type APIRequestContext } from '@playwright/test';
+import { live, patch, patchAll, resetMock, serverState, settled } from './support';
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
@@ -122,6 +122,18 @@ test('folds the detector up to 1280 px, so the channel rows are in view, and unf
   await expect(page.getByRole('slider', { name: 'Hyst' }).first()).toBeVisible();
 });
 
+/** The Commentary group as the preset test found it, in one write. */
+const restoreComm = (request: APIRequestContext) =>
+  patchAll(request, [
+    ...['ch13', 'ch14', 'ch15', 'ch16'].map((c) => ({ path: `/ducks/comm/channels/${c}/depth`, value: 10 })),
+    { path: '/ducks/comm/channels/st1/depth', value: 15 },
+    { path: '/ducks/comm/attackMs', value: 20 },
+    { path: '/ducks/comm/holdMs', value: 500 },
+    { path: '/ducks/comm/releaseMs', value: 1000 },
+    { path: '/ducks/comm/keyHpf/freq', value: 120 },
+    { path: '/ducks/comm/keyLpf/enabled', value: false },
+  ]);
+
 test('arms a preset from the keyboard, applies it on a second press, and a keyboard hold swallows no later click', async ({ page, request }) => {
   const duck = async () => (await serverState(request)).state.ducks['comm']!;
   await live(page);
@@ -148,13 +160,7 @@ test('arms a preset from the keyboard, applies it on a second press, and a keybo
     await voice.click();
     await expect.poll(async () => (await duck()).keyLpf).toEqual({ enabled: true, freq: 4000 });
   } finally {
-    for (const c of ['ch13', 'ch14', 'ch15', 'ch16']) await patch(request, `/ducks/comm/channels/${c}/depth`, 10);
-    await patch(request, '/ducks/comm/channels/st1/depth', 15);
-    await patch(request, '/ducks/comm/attackMs', 20);
-    await patch(request, '/ducks/comm/holdMs', 500);
-    await patch(request, '/ducks/comm/releaseMs', 1000);
-    await patch(request, '/ducks/comm/keyHpf/freq', 120);
-    await patch(request, '/ducks/comm/keyLpf/enabled', false);
+    await restoreComm(request);
   }
 });
 

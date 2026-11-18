@@ -54,12 +54,27 @@ export async function fader(request: APIRequestContext, channel: string): Promis
   return (await serverState(request)).state.channels[channel]!.fader;
 }
 
+/**
+ * One atomic PATCH of absolute values. A write the replica could not order in
+ * time (503) and a control another session still holds (409, whose lease runs
+ * out) are both transient on a loaded runner. Each attempt carries a new
+ * command id: the replica refuses a resent one once it is too old, and
+ * writing the same values twice changes nothing. Anything else fails at once.
+ */
+export async function patchAll(request: APIRequestContext, changes: Array<{ path: string; value: unknown }>): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  for (let wait = 100; ; wait = Math.min(wait * 2, 1000)) {
+    const res = await request.patch('/api/v1/state', { headers: HEADERS, data: { commandId: crypto.randomUUID(), changes } });
+    if (res.ok()) return;
+    if (![409, 503].includes(res.status()) || Date.now() > deadline) {
+      throw new Error(`PATCH /state: ${res.status()} ${await res.text()}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+}
+
 export async function patch(request: APIRequestContext, path: string, value: unknown): Promise<void> {
-  const res = await request.patch('/api/v1/state', {
-    headers: HEADERS,
-    data: { commandId: crypto.randomUUID(), changes: [{ path, value }] },
-  });
-  expect(res.ok()).toBe(true);
+  await patchAll(request, [{ path, value }]);
 }
 
 export async function audit(request: APIRequestContext): Promise<{ entries: AuditEntry[]; summary: { total: number; duplicates: number } }> {
