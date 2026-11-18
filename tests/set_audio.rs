@@ -520,8 +520,9 @@ fn steady(nodes: &[Option<Node>], n: usize) {
 /// Contact runs from each replica's start. The set forms with the first
 /// replica alone and grows by two voters at once: with two of the three
 /// running the first commits alone and the second stays a learner, and
-/// once the third starts all three are voters and commit. Every replica of the set then writes the same audio through a session of faders, trims,
-/// mutes, routes and input switches, with a duck group keyed by one
+/// once the third starts all three are voters and commit. Every replica
+/// of the set then writes the same audio through a session of faders,
+/// trims, mutes, routes and input switches, with a duck group keyed by one
 /// channel's fader lowering the other. A follower killed meanwhile misses
 /// commands, input switches among them; started again on its volume it
 /// catches up, commits again and writes what the others write. The leader
@@ -566,14 +567,25 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
         "the second replica is no learner: {}",
         states(&nodes)
     );
-    // samplez at 0.7 judges a replica serving whenever its set has one
-    // voter, a learner included; from 0.8 a learner is not ready.
-    let learner_judged = samplez::ENGINE_VERSION != "0.7.0";
+    // Contact runs on the learner too, which reports to be promoted, and
+    // a learner is never ready; the first replica, alone a voter, is.
+    let contact = until(10, || {
+        node(&nodes, 1)
+            .server
+            .app
+            .replica
+            .contact_metrics()
+            .is_some()
+    });
+    assert!(
+        contact,
+        "the learner's contact does not run: {}",
+        states(&nodes)
+    );
     for _ in 0..10 {
         assert_eq!(membership(&nodes), (1, 1), "{}", states(&nodes));
-        if learner_judged {
-            assert_eq!(node(&nodes, 1).ops("/readyz").0, 503, "{}", states(&nodes));
-        }
+        assert_eq!(node(&nodes, 1).ops("/readyz").0, 503, "{}", states(&nodes));
+        assert_eq!(node(&nodes, 0).ops("/readyz").0, 200, "{}", states(&nodes));
         std::thread::sleep(Duration::from_millis(100));
     }
     nodes[2] = Some(set.start(2, listeners[2].take()));
@@ -588,6 +600,28 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     for n in 0..REPLICAS {
         steady(&nodes, n);
     }
+    // Each replica's status: committing, a leader or a follower, its
+    // leader named by node id as it names itself.
+    let mut leaders = std::collections::BTreeSet::new();
+    let mut nodes_ids = std::collections::BTreeSet::new();
+    for n in 0..REPLICAS {
+        let node = node(&nodes, n);
+        let (code, body) = node
+            .runtime
+            .block_on(get(node.server.api, "/api/v1/status"));
+        assert_eq!(code, 200, "{body}");
+        let status: Value = serde_json::from_str(&body).unwrap();
+        let r = &status["replica"];
+        assert_eq!(r["state"], "committing", "{status}");
+        assert!(
+            ["leader", "follower"].contains(&r["role"].as_str().unwrap()),
+            "{status}"
+        );
+        nodes_ids.insert(r["node"].as_str().unwrap().to_owned());
+        leaders.insert(r["leader"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(leaders.len(), 1, "one leader: {leaders:?}");
+    assert!(nodes_ids.is_superset(&leaders), "{nodes_ids:?} {leaders:?}");
 
     write(&nodes, 0, &ducking());
     let from = Outputs::now() + 1;

@@ -423,12 +423,14 @@ ready and, in a set of one, the engine plays the state.
 - A set of more than one replica with an `mxl` section: `/healthz` passes
   while the engine runs, with or without a core. `/readyz` passes once
   the replica has joined and caught up and commits its outputs, or while
-  no other replica in contact with it commits. It fails while the
-  replica is diverged, resyncing or of another compatibility key than
-  the set's baseline, and while it is withdrawn once the set
-  applied its first baseline: such a replica writes none of what it
-  computes. Before that first baseline a withdrawn replica passes, so
-  the first replicas of a new set turn ready.
+  no other replica in contact with it commits. A replica with outputs
+  fails it while diverged, resyncing or of another compatibility key
+  than the set's baseline, and while withdrawn once the set applied its
+  first baseline: such a replica writes none of what it computes.
+  Before that first baseline a withdrawn replica passes, so the first
+  replicas of a new set turn ready. A learner is never ready. The set's
+  only voter is ready once it has joined and caught up, whatever its
+  state.
 - A set of more than one replica without an `mxl` section: `/readyz`
   follows the replica alone and passes once it has joined and caught up,
   while `/healthz` answers 503. A liveness probe on `/healthz` restarts

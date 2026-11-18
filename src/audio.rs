@@ -515,36 +515,12 @@ impl Audio {
         }
     }
 
-    /// The model `EngineStatus` of `GET /status`: per channel its input's
-    /// state in the engine, whether the log has it up, the flow it reads
-    /// and its blocks copied, late and too late; per output whether it is
-    /// enabled and realised, and why not.
-    pub fn status(&self) -> Value {
+    /// The model `Counters` of the `counters` message ([`counters`]) and
+    /// the engine of `GET /status` ([`engine_status`]), from one reading of
+    /// the engine's status.
+    pub fn readings(&self) -> (Value, Value) {
         let status = self.engine.status();
-        let inputs: Vec<Value> = (status.inputs.iter())
-            .map(|i| {
-                json!({
-                    "channel": i.name,
-                    "state": format!("{:?}", i.state).to_lowercase(),
-                    "up": i.up,
-                    "flowId": i.flow_id,
-                    "copiedBlocks": i.counters.copied,
-                    "lateBlocks": i.counters.late,
-                    "tooLateBlocks": i.counters.too_late,
-                })
-            })
-            .collect();
-        let outputs: Vec<Value> = (status.outputs.iter())
-            .map(|o| {
-                json!({
-                    "output": o.name,
-                    "enabled": o.enabled,
-                    "realised": o.realised,
-                    "reason": o.reason,
-                })
-            })
-            .collect();
-        json!({ "inputs": inputs, "outputs": outputs })
+        (self.counters(&status), engine_status(&status))
     }
 
     /// The model `Counters` of the `counters` message: the engine's counts
@@ -552,18 +528,52 @@ impl Audio {
     /// resends, totals since the engine started. None grows while the
     /// engine keeps up, so the UI's lamp lights on any growth; counts that
     /// grow every block, such as the blocks processed, are left out.
-    pub fn counters(&self) -> Value {
+    fn counters(&self, status: &samplez::Status) -> Value {
         let mut values: Map<String, Value> = engine_counters(self.engine.counters())
             .into_iter()
             .map(|(name, c)| (format!("{name}_total"), json!(c.load(Relaxed))))
             .collect();
-        let too_late: u64 = (self.engine.status().inputs.iter())
-            .map(|i| i.counters.too_late)
-            .sum();
+        let too_late: u64 = (status.inputs.iter()).map(|i| i.counters.too_late).sum();
         values.insert("input_too_late_blocks_total".into(), json!(too_late));
         values.insert("resends_total".into(), json!(self.resent.load(Relaxed)));
         Value::Object(values)
     }
+}
+
+/// The engine of `GET /status`: per channel its input's state in the
+/// engine, whether the log has it up, the flow it reads and its blocks
+/// copied, late and too late; per output whether it is enabled and
+/// realised, and why not.
+fn engine_status(status: &samplez::Status) -> Value {
+    let inputs: Vec<Value> = (status.inputs.iter())
+        .map(|i| {
+            let state = match i.state {
+                InputState::Attached => "attached",
+                InputState::Pruned => "pruned",
+                InputState::Detached => "detached",
+            };
+            json!({
+                "channel": i.name,
+                "state": state,
+                "up": i.up,
+                "flowId": i.flow_id,
+                "copiedBlocks": i.counters.copied,
+                "lateBlocks": i.counters.late,
+                "tooLateBlocks": i.counters.too_late,
+            })
+        })
+        .collect();
+    let outputs: Vec<Value> = (status.outputs.iter())
+        .map(|o| {
+            json!({
+                "output": o.name,
+                "enabled": o.enabled,
+                "realised": o.realised,
+                "reason": o.reason,
+            })
+        })
+        .collect();
+    json!({ "inputs": inputs, "outputs": outputs })
 }
 
 /// Notes in `held` the duck setting or mask `entry` sent.

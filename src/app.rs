@@ -221,17 +221,23 @@ impl App {
     /// state sees it, its audio replica's state in contact, and the
     /// engine's inputs and outputs as last read.
     pub fn status(&self) -> Value {
+        use samplez_replica::state::ReplicaState as S;
         let info = self.replica.replica();
         let contact = self.replica.contact_metrics();
         let in_contact = contact.as_ref().map(|m| m.in_contact);
         // None for a replica without an engine, and until the first step.
-        let state = (contact.and_then(|m| m.replica?.state)).map(|s| {
-            let name = format!("{s:?}");
-            name[..1].to_lowercase() + &name[1..]
+        let state = (contact.and_then(|m| m.replica?.state)).map(|s| match s {
+            S::Starting => "starting",
+            S::Committing => "committing",
+            S::Withdrawn => "withdrawn",
+            S::Diverged => "diverged",
+            S::VersionMismatch => "versionMismatch",
+            S::Resync => "resync",
         });
         json!({
             "replica": {
                 "id": self.name,
+                "node": self.replica.id().to_string(),
                 "role": info.role,
                 "leader": info.leader,
                 "inSync": info.in_sync,
@@ -253,8 +259,9 @@ impl App {
         ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             ticks.tick().await;
-            *self.counters.lock().expect("counters lock poisoned") = Some(audio.counters());
-            *self.engine.lock().expect("engine lock poisoned") = Some(audio.status());
+            let (counters, engine) = audio.readings();
+            *self.counters.lock().expect("counters lock poisoned") = Some(counters);
+            *self.engine.lock().expect("engine lock poisoned") = Some(engine);
             if let Some(m) = self.counters_message() {
                 self.hub.publish(Frame::Counters(m.into()));
             }

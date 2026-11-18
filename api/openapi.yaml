@@ -152,7 +152,9 @@ paths:
         The replica as the replicated state sees it and, with an engine,
         each channel's input and each output as the engine last reported
         them, read once a second. `ready` is the replica's term of
-        `/readyz` on the ops listener.
+        `/readyz` on the ops listener, which also needs the replica's engine
+        started. `node` and `leader` are node ids of the replicated state,
+        `id` this replica's name.
       responses:
         "200":
           description: Status.
@@ -681,22 +683,28 @@ components:
       properties:
         replica:
           type: object
-          required: [id, role, leader, inSync, ready, commitable, inContact, state]
+          required: [id, node, role, leader, inSync, ready, commitable, inContact, state]
           additionalProperties: false
           properties:
             id:
+              description: This replica's name.
               type: string
+            node:
+              description: This replica's node id in the replicated state, a decimal number.
+              type: string
+              pattern: "^[0-9]+$"
             role:
               description: The replica's role in the replicated state, such as leader, follower, candidate or learner.
               type: string
             leader:
-              description: The id of the replica that orders commands, when known.
+              description: The node id of the replica that orders commands, as `node` is this replica's, when known.
               type: [string, "null"]
+              pattern: "^[0-9]+$"
             inSync:
               description: Every committed entry this replica knows of is applied.
               type: boolean
             ready:
-              description: Joined and caught up and, in a set with engines, committing its outputs or with no other replica in contact committing.
+              description: The replica's term of /readyz, which also needs its engine started. Joined and caught up and, in a set with engines, committing its outputs or with no other replica in contact committing.
               type: boolean
             commitable:
               description: The replica takes client writes.
@@ -709,7 +717,7 @@ components:
               type: [string, "null"]
               enum: [starting, committing, withdrawn, diverged, versionMismatch, resync, null]
         engine:
-          description: Null without an engine.
+          description: Null without an engine, and until the engine is first read.
           oneOf:
             - type: "null"
             - type: object
