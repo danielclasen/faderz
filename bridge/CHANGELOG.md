@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.2...faderz-bridge-v0.1.3) (2026-11-18)
+
+
+### Features
+
+* **bridge:** drive duck groups from function keys ([#56](https://github.com/danielclasen/faderz/issues/56)) ([421f212](https://github.com/danielclasen/faderz/commit/421f212a605dcb763b93704a10b691b1440db180))
+
+
+### Bug Fixes
+
+* **bridge:** wait out the tap time before holding a bypassed duck ([#59](https://github.com/danielclasen/faderz/issues/59)) ([d14079e](https://github.com/danielclasen/faderz/commit/d14079ee9f4253bca8bd45329b917afa778b9880))
+
 ## [0.1.2](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.1...faderz-bridge-v0.1.2) (2026-11-18)
 
 

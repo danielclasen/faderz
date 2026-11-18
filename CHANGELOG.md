@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/danielclasen/faderz/compare/v0.1.8...v0.1.9) (2026-11-18)
+
+
+### Features
+
+* **web:** set up and operate duck groups ([#58](https://github.com/danielclasen/faderz/issues/58)) ([1cff324](https://github.com/danielclasen/faderz/commit/1cff3240fc9c2e8e81de7115f46ffd00a369fc75))
+
 ## [0.1.8](https://github.com/danielclasen/faderz/compare/v0.1.7...v0.1.8) (2026-11-18)
 
 
