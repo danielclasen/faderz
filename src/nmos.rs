@@ -21,8 +21,8 @@ use openraft::ServerState;
 use samplez_mxl::{Instance, MxlApi};
 use samplez_nmos::uuid::Uuid;
 use samplez_nmos::{
-    Active, Asset, BoxFuture, ChannelCount, ChannelDesc, Connections, Fail, FlowSeen, NmosConfig,
-    NodeModel, Port, PortKey, ReceiverDesc, Reject, SenderDesc, Store, SystemTai, Tai,
+    Active, Applied, Asset, BoxFuture, ChannelCount, ChannelDesc, Connections, Fail, FlowSeen,
+    NmosConfig, NodeModel, Port, PortKey, ReceiverDesc, Reject, SenderDesc, Store, SystemTai, Tai,
 };
 use samplez_replica::Replica;
 use samplez_replica::entry::SessionKey;
@@ -40,6 +40,9 @@ const SESSION: &str = "nmos";
 /// How often an activation the state refused for being ordered off the
 /// generation path is sent again.
 const RESENDS: usize = 3;
+/// How often a port's change in the state that waited on an activation
+/// is looked at again.
+const FOLLOW_TICK: Duration = Duration::from_millis(100);
 /// The file in a domain directory BCP-007-03 names its identity in.
 const DOMAIN_DEF: &str = "domain_def.json";
 
@@ -216,10 +219,14 @@ impl Node {
         }
     }
 
-    /// Shows in `/active` every change of a port's connection in the
-    /// state that this replica's own activation did not write already: an
-    /// activation another replica took, or a switch between a channel's
-    /// inputs a and b.
+    /// Shows in `/active` each change of a port's connection in the
+    /// state that `/active` does not show yet: an activation another
+    /// replica took, or a switch between a channel's inputs a and b. A
+    /// change waits while an activation of this replica is being
+    /// applied on the port, so an earlier one of its own committing does
+    /// not overwrite a later one `/active` shows; the state's order
+    /// decides once it is applied. A port whose activation failed keeps
+    /// showing `master_enable` false until the state changes.
     async fn follow(&self) {
         let Some(replica) = self.replica.upgrade() else {
             return;
@@ -229,11 +236,14 @@ impl Node {
             .store()
             .with_state(|sm| (actives(&sm.product, ports), sm.revision));
         drop(replica);
+        let mut changed = vec![false; ports.len()];
         loop {
             let Some(replica) = self.replica.upgrade() else {
                 return;
             };
-            replica.applied(revision + 1).await;
+            // Also when nothing is applied: a change waiting on an
+            // activation shows once that is done.
+            let _ = tokio::time::timeout(FOLLOW_TICK, replica.applied(revision + 1)).await;
             let now;
             (now, revision) = replica
                 .store()
@@ -241,8 +251,13 @@ impl Node {
             drop(replica);
             let shown = self.nmos.status();
             for (index, (active, before)) in now.iter().zip(&last).enumerate() {
+                changed[index] |= active != before;
                 let port = &shown.ports[index];
-                if active != before && port.active != *active {
+                if !changed[index] || port.applied == Applied::Applying {
+                    continue;
+                }
+                changed[index] = false;
+                if port.active != *active {
                     let generation = self.nmos.external_change(port.port, active.clone());
                     self.conns.saw(index, generation);
                 }

@@ -208,6 +208,35 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
         other.as_str()
     );
 
+    // Of two activations in a row the later one stands: the earlier one
+    // committing does not take /active back.
+    let flow_of = |a: Value| {
+        a["transport_params"][0]["mxl_flow_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    activate(
+        &server,
+        &ch1,
+        json!({ "transport_params": [{ "mxl_flow_id": f.ch1 }] }),
+    )
+    .await;
+    activate(
+        &server,
+        &ch1,
+        json!({ "transport_params": [{ "mxl_flow_id": other }] }),
+    )
+    .await;
+    for _ in 0..20 {
+        assert_eq!(flow_of(active(&server, &ch1).await), other);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    until("ch1 reads the later flow", async || {
+        input(&server, 0) == (InputState::Attached, other.clone())
+    })
+    .await;
+
     // Disabled, it reads nothing.
     activate(&server, &ch1, json!({ "master_enable": false })).await;
     until("ch1 is detached", async || {
