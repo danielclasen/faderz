@@ -4,6 +4,7 @@
 //! in `/active`, and a restart keeps the resource ids, `/active` and the
 //! routing.
 
+use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -45,7 +46,7 @@ struct Flows {
     pgm: String,
 }
 
-async fn start(data: &Path, domain: &Path, f: &Flows) -> Server {
+async fn start(data: &Path, domain: &Path, f: &Flows, registry: SocketAddr) -> Server {
     let listener = json!({ "bind": "127.0.0.1", "port": 0 });
     let config = json!({
         "listeners": { "api": listener, "ops": listener, "nmos": listener },
@@ -62,12 +63,12 @@ async fn start(data: &Path, domain: &Path, f: &Flows) -> Server {
             "outputs": { "out-pgm": { "flow": f.pgm } },
         },
         "rt": { "rtCpu": "none" },
-        // Nothing listens there: the node keeps trying, unregistered.
         "nmos": {
             "enabled": true,
             "advertiseHost": "127.0.0.1",
             "advertisePort": 8081,
-            "registry": { "url": "http://127.0.0.1:9" },
+            "heartbeatS": 1,
+            "registry": { "url": format!("http://{registry}/r0") },
         },
     });
     let (config, shape, name) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
@@ -173,7 +174,8 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
         Source::start(&domain.0, &f.ch1, vec![0.5]),
         Source::start(&domain.0, &other, vec![0.25]),
     ];
-    let server = start(&data.0, &domain.0, &f).await;
+    let (registry, at) = registry::start();
+    let server = start(&data.0, &domain.0, &f, at).await;
     let node = request(server.nmos, "GET", "/x-nmos/node/v1.3/self", None)
         .await
         .1;
@@ -259,11 +261,23 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
         active(&server, &ch2).await,
         active(&server, &pgm).await,
     ];
+    // A set of one registers, and deletes its Node when it stops.
+    let id = node["id"].as_str().unwrap().to_owned();
+    until("the node registers", async || {
+        registry.lock().unwrap().nodes() == [id.as_str()]
+    })
+    .await;
     server.stop().await;
+    let deleted = format!("DELETE resource/nodes/{id}");
+    {
+        let r = registry.lock().unwrap();
+        assert!(r.seen.iter().any(|s| s.request == deleted), "{:?}", r.seen);
+        assert!(r.nodes().is_empty());
+    }
 
     // The state carries the connections: a restart shows and routes them
     // under the same ids.
-    let server = start(&data.0, &domain.0, &f).await;
+    let server = start(&data.0, &domain.0, &f, at).await;
     let again = request(server.nmos, "GET", "/x-nmos/node/v1.3/self", None)
         .await
         .1;

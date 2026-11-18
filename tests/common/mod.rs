@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod registry;
+
 use std::hash::{BuildHasher, RandomState};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

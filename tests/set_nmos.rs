@@ -1,23 +1,19 @@
 //! NMOS in a set of three faderz replicas with engines, in one process,
-//! each on a runtime of its own: the set is one Node, which only the
-//! leader registers, with a mock registry each replica reaches under a
-//! path of its own; an IS-05 activation taken on a follower routes every
-//! replica's engine alike and shows in every replica's `/active`; a
-//! disabled sender releases every replica's member flow; and once the
-//! leader is killed the new leader registers the same Node.
+//! each on a runtime of its own, with a mock registry each replica
+//! reaches under a path of its own: the set is one Node, registered by
+//! the leader alone; staging goes to the leader from any replica; an
+//! activation is a command of the set, routed alike by every engine and
+//! shown by every replica's `/active`, through restarts and a leader
+//! change, scheduled ones included.
 
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::Router;
-use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::{Method, StatusCode, Uri};
-use axum::routing::any;
+use common::registry::{self, Seen, Shared};
 use common::*;
 use faderz::config::Config;
 use faderz::server::{Server, SetParts};
@@ -33,8 +29,6 @@ use tokio::runtime::Runtime;
 const REPLICAS: usize = 3;
 const DOMAIN: &str = "6f1f1d1e-56f6-4c4c-8d32-9e7f4a3b2c10";
 const CONNECTION: &str = "/x-nmos/connection/v1.2/single";
-/// A registry drops a Node it heard no heartbeat from for this long.
-const EXPIRY: Duration = Duration::from_secs(12);
 
 fn shape() -> Value {
     json!({
@@ -50,145 +44,6 @@ fn shape() -> Value {
             { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
         ],
     })
-}
-
-/// One request the mock registry took: from replica `from`, by the path
-/// prefix of the registry URL that replica was given.
-#[derive(Debug, Clone)]
-struct Seen {
-    from: usize,
-    at: Instant,
-    /// The method and what follows `/x-nmos/registration/v1.3/`.
-    request: String,
-    /// A POSTed resource: its type and id.
-    resource: Option<(String, String)>,
-}
-
-/// A Registration API, as far as a node's registration uses it: the
-/// resources it holds by id, each Node's last heartbeat, and every
-/// request it took.
-#[derive(Default)]
-struct Registry {
-    resources: BTreeMap<String, String>,
-    heartbeats: BTreeMap<String, Instant>,
-    seen: Vec<Seen>,
-}
-
-impl Registry {
-    /// Drops every Node, and with it every resource, whose last
-    /// heartbeat is older than [`EXPIRY`].
-    fn expire(&mut self) {
-        let now = Instant::now();
-        let expired: Vec<String> = (self.heartbeats.iter())
-            .filter(|(_, at)| now.duration_since(**at) > EXPIRY)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in expired {
-            self.heartbeats.remove(&id);
-            self.resources.clear();
-        }
-    }
-
-    fn nodes(&self) -> Vec<String> {
-        (self.resources.iter())
-            .filter(|(_, kind)| *kind == "node")
-            .map(|(id, _)| id.clone())
-            .collect()
-    }
-
-    /// The ids of the resources replica `n` posted at or after `since`.
-    fn posted_by(&self, n: usize, since: Instant) -> BTreeSet<String> {
-        (self.seen.iter())
-            .filter(|s| s.from == n && s.at >= since)
-            .filter_map(|s| s.resource.as_ref().map(|(_, id)| id.clone()))
-            .collect()
-    }
-}
-
-type Shared = Arc<Mutex<Registry>>;
-
-/// Serves the mock registry on a runtime of its own: replica `n` reaches
-/// it at `http://<addr>/r<n>`.
-fn registry() -> (Shared, SocketAddr, Runtime) {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
-    let shared: Shared = Arc::default();
-    let app = Router::new()
-        .route("/{*rest}", any(answer))
-        .with_state(shared.clone());
-    let listener = runtime
-        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-    runtime.spawn(async move { axum::serve(listener, app).await });
-    (shared, addr, runtime)
-}
-
-async fn answer(
-    State(shared): State<Shared>,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
-) -> (StatusCode, String) {
-    let path = uri.path();
-    let Some((from, rest)) = (path.strip_prefix("/r"))
-        .and_then(|p| p.split_once("/x-nmos/registration/v1.3/"))
-        .and_then(|(n, rest)| Some((n.parse::<usize>().ok()?, rest.to_owned())))
-    else {
-        return (StatusCode::NOT_FOUND, String::new());
-    };
-    let mut r = shared.lock().unwrap();
-    r.expire();
-    let mut seen = Seen {
-        from,
-        at: Instant::now(),
-        request: format!("{method} {rest}"),
-        resource: None,
-    };
-    let parts: Vec<&str> = rest.split('/').collect();
-    let reply = match (&method, parts.as_slice()) {
-        (&Method::POST, ["resource"]) => {
-            let v: Value = serde_json::from_slice(&body).unwrap_or_default();
-            let kind = v["type"].as_str().unwrap_or_default().to_owned();
-            let id = v["data"]["id"].as_str().unwrap_or_default().to_owned();
-            seen.resource = Some((kind.clone(), id.clone()));
-            if kind == "node" {
-                r.heartbeats.insert(id.clone(), Instant::now());
-            }
-            let held = r.resources.insert(id, kind).is_some();
-            let status = if held {
-                StatusCode::OK
-            } else {
-                StatusCode::CREATED
-            };
-            (status, v["data"].to_string())
-        }
-        (&Method::POST, ["health", "nodes", id]) => match r.heartbeats.get_mut(*id) {
-            Some(at) => {
-                *at = Instant::now();
-                (StatusCode::OK, json!({ "health": "0" }).to_string())
-            }
-            None => (StatusCode::NOT_FOUND, String::new()),
-        },
-        (&Method::DELETE, ["resource", "nodes", id]) => {
-            if r.heartbeats.remove(*id).is_some() {
-                r.resources.clear();
-                (StatusCode::NO_CONTENT, String::new())
-            } else {
-                (StatusCode::NOT_FOUND, String::new())
-            }
-        }
-        (&Method::DELETE, ["resource", _, id]) => match r.resources.remove(*id) {
-            Some(_) => (StatusCode::NO_CONTENT, String::new()),
-            None => (StatusCode::NOT_FOUND, String::new()),
-        },
-        _ => (StatusCode::BAD_REQUEST, String::new()),
-    };
-    r.seen.push(seen);
-    reply
 }
 
 /// What every replica of the set shares, and what each keeps across a
@@ -207,6 +62,9 @@ struct Set {
     markers: Arc<Memory>,
     /// Each replica's member flow of the programme output.
     members: Vec<String>,
+    merged: String,
+    /// Each replica's NMOS listener port.
+    nmos: Vec<u16>,
     registry: SocketAddr,
 }
 
@@ -233,13 +91,21 @@ impl Set {
             .map(|l| l.local_addr().unwrap().port())
             .collect();
         let members: Vec<String> = (0..REPLICAS).map(|_| mxl_id()).collect();
+        let merged = mxl_id();
         let set = Set {
             tls: certificates(&at.0, REPLICAS),
             at,
             domain,
             _sources: sources,
             inputs: json!({ "ch1": { "flow": ch1 }, "ch2": { "flow": ch2, "altFlow": ch2b } }),
-            outputs: json!({ "out-pgm": { "flows": members, "mergedFlow": mxl_id() } }),
+            outputs: json!({ "out-pgm": { "flows": members, "mergedFlow": merged } }),
+            merged,
+            nmos: (0..REPLICAS)
+                .map(|_| {
+                    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                    l.local_addr().unwrap().port()
+                })
+                .collect(),
             ch1,
             other,
             members,
@@ -267,8 +133,9 @@ impl Set {
             .map(|p| format!("localhost:{p}"))
             .collect();
         let api = json!({ "bind": "127.0.0.1", "port": 0 });
+        let nmos = json!({ "bind": "127.0.0.1", "port": self.nmos[n] });
         let config = json!({
-            "listeners": { "api": api, "ops": api, "nmos": api },
+            "listeners": { "api": api, "ops": api, "nmos": nmos },
             "auth": { "mode": "none" },
             "replica": {
                 "name": format!("faderz-{n}"),
@@ -296,6 +163,7 @@ impl Set {
                 "advertisePort": 8081,
                 "heartbeatS": 1,
                 "registry": { "url": format!("http://{}/r{n}", self.registry) },
+                "peers": self.nmos.iter().map(|p| format!("127.0.0.1:{p}")).collect::<Vec<_>>(),
             },
         });
         let (config, shape, name) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
@@ -346,6 +214,18 @@ impl Node {
         let status = self.server.audio.as_ref().unwrap().engine().status();
         let i = &status.inputs[slot];
         (i.state, i.flow_id.clone())
+    }
+
+    /// Stops the replica as SIGTERM does.
+    fn stop(self) {
+        let Node { runtime, server } = self;
+        runtime.block_on(server.stop());
+        runtime.shutdown_timeout(Duration::from_secs(5));
+    }
+
+    /// The connections the replica's state holds scheduled.
+    fn scheduled(&self) -> usize {
+        (self.server.app.replica.store()).with_state(|sm| sm.product.scheduled().len())
     }
 
     fn kill(self) {
@@ -554,13 +434,42 @@ fn write(nodes: &[Option<Node>], n: usize, changes: Value) {
     assert_eq!(status, "200", "{answer}");
 }
 
-/// Only the leader registers the Node. An activation taken on a follower
-/// is a command of the set: every replica's engine routes it at the same
-/// sample, so the member flows stay bit for bit alike, and every
-/// replica's `/active` shows it. A disabled sender releases every
-/// replica's member flow, an enabled one writes them again. Killed, the
-/// leader's Node is registered again by the new leader, under the same
-/// ids, and the registry holds that one Node.
+/// The flow port `port` of replica `n` shows in `/active`.
+fn shows(nodes: &[Option<Node>], n: usize, port: &str) -> String {
+    let a = active(nodes, n, port);
+    a["transport_params"][0]["mxl_flow_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Requests replica `n` took from the registry at or after `since`.
+fn heard(registry: &Shared, n: usize, since: Instant) -> Vec<Seen> {
+    let r = registry.lock().unwrap();
+    (r.seen.iter())
+        .filter(|s| s.from == n && s.at >= since)
+        .cloned()
+        .collect()
+}
+
+fn heartbeats(seen: &[Seen]) -> usize {
+    (seen.iter())
+        .filter(|s| s.request.starts_with("POST health/"))
+        .count()
+}
+
+/// The set is one Node. Only the leader registers it, and only while a
+/// quorum acknowledges it; a gracefully stopped leader leaves it
+/// registered, and the next leader registers the same ids. Staging on
+/// any replica reaches the leader, so parameters staged on one replica
+/// are activated on another. An activation is a command of the set:
+/// every engine routes it alike, every `/active` shows it, concurrent
+/// ones converge, a restarted replica catches up with it, and one that
+/// fails shows the state again. A receiver never takes the set's own
+/// output. A switch to input b shows on every replica. A disabled sender
+/// releases every member flow without costing readiness. A scheduled
+/// activation is taken into the state when staged and fires on time
+/// after the leader that took it stopped.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -571,7 +480,7 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         .with_writer(std::io::stderr)
         .with_max_level(tracing::Level::WARN)
         .try_init();
-    let (registry, addr, _registry_runtime) = registry();
+    let (registry, addr) = registry::start();
     let (set, listeners) = Set::new(addr);
     let mut nodes: Vec<Option<Node>> = listeners
         .into_iter()
@@ -591,9 +500,10 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         .find(|&n| node(&nodes, n).leads())
         .expect("a leader");
     let followers: Vec<usize> = (0..REPLICAS).filter(|&n| n != leader).collect();
+    let (fa, fb) = (followers[0], followers[1]);
     let since = Instant::now();
 
-    // (a) The leader registers every resource; the followers send the
+    // The leader registers every resource; the followers send the
     // registry nothing, through several heartbeats.
     let registered = until(20, || {
         let r = registry.lock().unwrap();
@@ -605,30 +515,35 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         registry.lock().unwrap().seen
     );
     std::thread::sleep(Duration::from_secs(3));
-    {
-        let r = registry.lock().unwrap();
-        for &f in &followers {
-            let spoke = r
-                .seen
-                .iter()
-                .filter(|s| s.from == f && s.at >= since)
-                .count();
-            assert_eq!(spoke, 0, "follower {f} spoke to the registry: {:?}", r.seen);
-        }
-        let heartbeats = (r.seen.iter())
-            .filter(|s| s.from == leader && s.request.starts_with("POST health/"))
-            .count();
+    for &f in &followers {
+        let spoke = heard(&registry, f, since);
         assert!(
-            heartbeats >= 2,
-            "the leader does not heartbeat: {:?}",
-            r.seen
+            spoke.is_empty(),
+            "follower {f} spoke to the registry: {spoke:?}"
         );
-        assert_eq!(r.nodes().len(), 1);
+    }
+    assert!(
+        heartbeats(&heard(&registry, leader, since)) >= 2,
+        "the leader does not heartbeat"
+    );
+    assert_eq!(registry.lock().unwrap().nodes().len(), 1);
+
+    let ch1 = format!("receivers/{}", id_of(&nodes, 0, "receivers", "Pres 1"));
+    let ch2 = format!("receivers/{}", id_of(&nodes, 0, "receivers", "Pres 2"));
+    let pgm = format!("senders/{}", id_of(&nodes, 0, "senders", "PGM out"));
+
+    // No receiver takes the set's own output: the merged flow or any
+    // replica's member flow, staged on any replica.
+    for n in 0..REPLICAS {
+        for flow in std::iter::once(&set.merged).chain(&set.members) {
+            let staged = json!({ "transport_params": [{ "mxl_flow_id": flow }] });
+            let path = format!("{CONNECTION}/{ch1}/staged");
+            let (status, body) = node(&nodes, n).nmos("PATCH", &path, Some(&staged));
+            assert_eq!(status, 400, "replica {n}, flow {flow}: {body}");
+        }
     }
 
-    // (c) An activation PATCHed to a follower routes every replica's
-    // engine to the flow and shows in every replica's /active. ch1 is
-    // the one channel open to the programme bus.
+    // ch1 is the one channel open to the programme bus.
     write(
         &nodes,
         leader,
@@ -641,13 +556,23 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     std::thread::sleep(Duration::from_millis(500));
     let before = alike(&set, &nodes, now_block() + 1, 100);
     assert!(before > 1e-6, "a silent mix");
-    let ch1 = format!("receivers/{}", id_of(&nodes, 0, "receivers", "Pres 1"));
-    activate(
-        &nodes,
-        followers[0],
-        &ch1,
-        json!({ "transport_params": [{ "mxl_flow_id": set.other }] }),
+
+    // Parameters staged on one follower are what an activation on the
+    // other activates: both reach the leader. Every engine routes it
+    // and every /active shows it.
+    let staged = json!({ "transport_params": [{ "mxl_flow_id": set.other }] });
+    let (status, body) = node(&nodes, fa).nmos(
+        "PATCH",
+        &format!("{CONNECTION}/{ch1}/staged"),
+        Some(&staged),
     );
+    assert_eq!(status, 200, "{body}");
+    let (_, seen) = node(&nodes, fb).nmos("GET", &format!("{CONNECTION}/{ch1}/staged"), None);
+    assert_eq!(
+        seen["transport_params"][0]["mxl_flow_id"],
+        set.other.as_str()
+    );
+    activate(&nodes, fb, &ch1, json!({}));
     let routed = until(20, || {
         (0..REPLICAS).all(|n| node(&nodes, n).input(0) == (InputState::Attached, set.other.clone()))
     });
@@ -657,9 +582,7 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         states(&nodes)
     );
     let shown = until(10, || {
-        (0..REPLICAS).all(|n| {
-            active(&nodes, n, &ch1)["transport_params"][0]["mxl_flow_id"] == set.other.as_str()
-        })
+        (0..REPLICAS).all(|n| shows(&nodes, n, &ch1) == set.other)
     });
     assert!(shown, "not every replica shows the activation");
     let after = alike(&set, &nodes, now_block() + 1, 100);
@@ -667,26 +590,80 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         (after - before).abs() > before * 0.1,
         "the activation did not change the mix: {before} -> {after}"
     );
-    assert_ne!(set.other, set.ch1);
 
-    // (d) A sender disabled on a follower releases every replica's member
-    // flow; enabled on another, it writes them again.
-    let pgm = format!("senders/{}", id_of(&nodes, 0, "senders", "PGM out"));
+    // Two activations of one port at once, on two replicas, converge:
+    // every replica shows and reads the same flow.
+    std::thread::scope(|scope| {
+        for (n, flow) in [(fa, &set.ch1), (fb, &set.other)] {
+            let nodes = &nodes;
+            let ch1 = &ch1;
+            scope.spawn(move || {
+                activate(
+                    nodes,
+                    n,
+                    ch1,
+                    json!({ "transport_params": [{ "mxl_flow_id": flow }] }),
+                );
+            });
+        }
+    });
+    let converged = until(20, || {
+        let shown: BTreeSet<String> = (0..REPLICAS).map(|n| shows(&nodes, n, &ch1)).collect();
+        shown.len() == 1
+            && (0..REPLICAS).all(|n| {
+                node(&nodes, n).input(0) == (InputState::Attached, shown.first().unwrap().clone())
+            })
+    });
+    assert!(
+        converged,
+        "the replicas did not converge: {}",
+        states(&nodes)
+    );
+    alike(&set, &nodes, now_block() + 1, 100);
+
+    // A switch to input b on a follower shows on every replica, under a
+    // new IS-04 version of the receiver.
+    let path = format!("/x-nmos/node/v1.3/{ch2}");
+    let versions: Vec<Value> = (0..REPLICAS)
+        .map(|n| node(&nodes, n).nmos("GET", &path, None).1["version"].clone())
+        .collect();
+    write(
+        &nodes,
+        fa,
+        json!([{ "path": "/channels/ch2/input", "value": "b" }]),
+    );
+    let b = set.inputs["ch2"]["altFlow"].as_str().unwrap().to_owned();
+    let switched = until(10, || (0..REPLICAS).all(|n| shows(&nodes, n, &ch2) == b));
+    assert!(switched, "not every replica shows input b");
+    for (n, before) in versions.iter().enumerate() {
+        let version = node(&nodes, n).nmos("GET", &path, None).1["version"].clone();
+        assert_ne!(version, *before, "replica {n}'s receiver version");
+    }
+
+    // A sender disabled on a follower releases every replica's member
+    // flow; the replicas stay ready. Enabled on the leader, every member
+    // flow is written again and they agree.
     for n in 0..REPLICAS {
         assert!(set.member(n).exists(), "replica {n}'s member flow");
     }
-    activate(
-        &nodes,
-        followers[1],
-        &pgm,
-        json!({ "master_enable": false }),
-    );
+    activate(&nodes, fb, &pgm, json!({ "master_enable": false }));
     let released = until(20, || (0..REPLICAS).all(|n| !set.member(n).exists()));
     assert!(released, "a member flow is still there: {}", states(&nodes));
     let disabled = until(10, || {
         (0..REPLICAS).all(|n| active(&nodes, n, &pgm)["master_enable"] == false)
     });
     assert!(disabled, "not every replica shows the sender disabled");
+    for _ in 0..20 {
+        for n in 0..REPLICAS {
+            assert_eq!(
+                node(&nodes, n).ops("/readyz").0,
+                200,
+                "replica {n}: {}",
+                states(&nodes)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     activate(&nodes, leader, &pgm, json!({ "master_enable": true }));
     let written = until(20, || (0..REPLICAS).all(|n| set.member(n).exists()));
     assert!(written, "a member flow is not back: {}", states(&nodes));
@@ -695,11 +672,68 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     }
     alike(&set, &nodes, now_block() + 1, 100);
 
-    // (b) The leader killed, the new leader registers the same Node: the
-    // same ids, and the registry holds that Node alone, heartbeated by
-    // the new leader.
-    nodes[leader].take().unwrap().kill();
-    let killed = Instant::now();
+    // A follower down while ch1 is activated catches up with it when it
+    // is back.
+    nodes[fa].take().unwrap().kill();
+    activate(
+        &nodes,
+        leader,
+        &ch1,
+        json!({ "transport_params": [{ "mxl_flow_id": set.ch1 }] }),
+    );
+    let routed = until(20, || node(&nodes, fb).input(0).1 == set.ch1);
+    assert!(routed, "the follower does not read ch1's flow");
+    nodes[fa] = Some(set.start(fa, None));
+    steady(&nodes, fa);
+    let caught = until(20, || {
+        shows(&nodes, fa, &ch1) == set.ch1 && node(&nodes, fa).input(0).1 == set.ch1
+    });
+    assert!(
+        caught,
+        "the restarted replica did not catch up: {}",
+        states(&nodes)
+    );
+    alike(&set, &nodes, now_block() + 1, 100);
+
+    // A scheduled activation staged on a follower is state at once. The
+    // leader stopped gracefully before its time, the others route and
+    // show it on time; the stopped leader deletes nothing from the
+    // registry, and the new leader registers the same ids.
+    let staged = json!({
+        "transport_params": [{ "mxl_flow_id": set.other }],
+        "activation": { "mode": "activate_scheduled_relative", "requested_time": "3:0" },
+    });
+    let (status, body) = node(&nodes, fa).nmos(
+        "PATCH",
+        &format!("{CONNECTION}/{ch1}/staged"),
+        Some(&staged),
+    );
+    assert_eq!(status, 202, "{body}");
+    let at = Instant::now() + Duration::from_secs(3);
+    let taken = until(5, || {
+        (0..REPLICAS).all(|n| node(&nodes, n).scheduled() == 1)
+    });
+    assert!(taken, "the schedule is not state on every replica");
+    nodes[leader].take().unwrap().stop();
+    let stopped = Instant::now();
+    assert!(
+        heard(&registry, leader, stopped - Duration::from_secs(10))
+            .iter()
+            .all(|s| !s.request.starts_with("DELETE")),
+        "the stopped leader deleted from the registry"
+    );
+    std::thread::sleep(at.saturating_duration_since(Instant::now()));
+    let fired = until(10, || {
+        followers.iter().all(|&n| {
+            node(&nodes, n).input(0).1 == set.other && shows(&nodes, n, &ch1) == set.other
+        })
+    });
+    assert!(
+        fired,
+        "the scheduled activation did not fire: {}",
+        states(&nodes)
+    );
+    assert!(followers.iter().all(|&n| node(&nodes, n).scheduled() == 0));
     let mut new = None;
     let elected = until(30, || {
         new = followers.iter().copied().find(|&n| node(&nodes, n).leads());
@@ -707,42 +741,68 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     });
     assert!(elected, "no new leader: {}", states(&nodes));
     let new = new.unwrap();
-    let again = until(30, || {
-        registry.lock().unwrap().posted_by(new, killed) == all
+    let again = until(10, || {
+        registry.lock().unwrap().posted_by(new, stopped) == all
     });
     assert!(
         again,
         "the new leader did not register the Node: {:?}",
         registry.lock().unwrap().seen
     );
-    std::thread::sleep(Duration::from_secs(3));
-    let r = registry.lock().unwrap();
-    let after_kill: Vec<&Seen> = r.seen.iter().filter(|s| s.at > killed).collect();
-    let others: Vec<&&Seen> = after_kill.iter().filter(|s| s.from != new).collect();
-    // The killed leader's runtime is gone; the remaining follower stays
-    // silent.
-    assert!(others.is_empty(), "only the new leader speaks: {others:?}");
-    let node_id = node(&nodes, new)
-        .nmos("GET", "/x-nmos/node/v1.3/self", None)
-        .1["id"]
-        .clone();
-    assert_eq!(r.nodes(), [node_id.as_str().unwrap()]);
-    let recent = Instant::now() - Duration::from_secs(2);
-    assert!(
-        after_kill
-            .iter()
-            .any(|s| s.at > recent && s.request.starts_with("POST health/")),
-        "the new leader does not heartbeat"
-    );
-    drop(r);
-    // The activations held across the leader change.
-    for &n in &followers {
-        assert_eq!(
-            active(&nodes, n, &ch1)["transport_params"][0]["mxl_flow_id"],
-            set.other.as_str()
-        );
-        assert_eq!(node(&nodes, n).input(0).1, set.other);
+    std::thread::sleep(Duration::from_secs(2));
+    {
+        let r = registry.lock().unwrap();
+        let others: Vec<&Seen> = (r.seen.iter())
+            .filter(|s| s.at > stopped && s.from != new)
+            .collect();
+        assert!(others.is_empty(), "only the new leader speaks: {others:?}");
+        let node_id = node(&nodes, new)
+            .nmos("GET", "/x-nmos/node/v1.3/self", None)
+            .1["id"]
+            .clone();
+        assert_eq!(r.nodes(), [node_id.as_str().unwrap()]);
     }
+    assert!(
+        heartbeats(&heard(
+            &registry,
+            new,
+            Instant::now() - Duration::from_secs(2)
+        )) >= 1
+    );
+
+    // The other follower killed, the leader has no quorum: it stops
+    // heartbeating, and an activation on it fails and its /active shows
+    // the state's connection again.
+    let other = followers.iter().copied().find(|&n| n != new).unwrap();
+    nodes[other].take().unwrap().kill();
+    std::thread::sleep(Duration::from_secs(3));
+    let quiet = Instant::now();
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(
+        heartbeats(&heard(&registry, new, quiet)),
+        0,
+        "a leader without a quorum heartbeats"
+    );
+    activate(
+        &nodes,
+        new,
+        &ch1,
+        json!({ "transport_params": [{ "mxl_flow_id": set.ch1 }] }),
+    );
+    assert_eq!(
+        shows(&nodes, new, &ch1),
+        set.ch1,
+        "/active shows the activation at once"
+    );
+    let back = until(30, || {
+        let a = active(&nodes, new, &ch1);
+        a["master_enable"] == true && a["transport_params"][0]["mxl_flow_id"] == set.other.as_str()
+    });
+    assert!(
+        back,
+        "/active does not show the state again: {}",
+        active(&nodes, new, &ch1)
+    );
     for node in nodes.into_iter().flatten() {
         node.kill();
     }
@@ -770,15 +830,4 @@ fn states(nodes: &[Option<Node>]) -> String {
         );
     }
     out
-}
-
-#[test]
-fn the_mock_registry_expires_a_silent_node() {
-    let mut r = Registry::default();
-    r.resources.insert("n".into(), "node".into());
-    r.resources.insert("d".into(), "device".into());
-    r.heartbeats
-        .insert("n".into(), Instant::now() - EXPIRY - Duration::from_secs(1));
-    r.expire();
-    assert!(r.resources.is_empty() && r.heartbeats.is_empty());
 }
