@@ -234,13 +234,13 @@ variable; the flag wins over the variable, the variable over the file.
 | `replica.peers` | | every replica's peer address, `host:port`, by ordinal |
 | `replica.peer` | | `{bind, port, tls}`: the peer listener of a set |
 | `replica.marker` | | the ConfigMap a set starts from; `FADERZ_REPLICA_MARKER` when the file sets none |
-| `replica.maxApplyLeadMs` | `50` | 30 to 120: the most a set's apply deadline leads the engine; a set runs no engine yet, so it has no effect |
+| `replica.maxApplyLeadMs` | `50` | 30 to 120: the most a set's apply lead may grow to; see [Lateness and lead](#lateness-and-lead) |
 | `shape` | required | the mixer's shape, model `Shape` in `api/ws/model.schema.json` |
 | `consoles` | `[]` | consoles known before any registers: `id`, `name`, `protocol` (`mcu`), `transport` (`bridge`), `strips` (8) |
 | `mxl.libraryPath` | `/opt/mxl/lib/libmxl.so` | libmxl, loaded at start |
 | `mxl.domains` | | `[{name, path}]`: the mounted MXL domains |
 | `mxl.inputs.<channel>` | | `flow`; `altFlow` for a channel with `altInput`; `domain` with more than one domain; `channels`, the 1-based flow channel each leg reads |
-| `mxl.outputs.<output>` | | `flow`; `domain` with more than one domain |
+| `mxl.outputs.<output>` | | `flow` in a set of one; `flows`, one member flow per replica by ordinal, in a set of more; `domain` with more than one domain |
 | `engine.sampleRate` | `48000` | |
 | `engine.blockSize` | `48` | samples per block |
 | `engine.readerMarginSamples` | `1536` | read delay behind libmxl's clock; delays every output by as much |
@@ -280,13 +280,69 @@ listener:
 - A set starts on empty volumes. The data directory of a set of one
   cannot join a set, nor that of a set run alone, so changing between
   the two needs new volumes and leaves the state behind.
-- A set of more than one replica runs no engine: a configuration with an
-  `mxl` section is refused. samplez's replicated engine takes one gain per
-  log entry, and one mixer command sets many.
 - In `oidc` mode the replicas behind one host name share
   `auth.oidc.sessionKey`.
-- A set runs no engine, so its probes differ from a set of one; see
-  [Health](#health).
+- The configuration that changes how a command applies, the shape, the
+  declared consoles and each channel's input flows and domain, is equal
+  on every replica: the leader orders no command while a replica reports
+  another, and a replica of another one exits rather than install the
+  set's snapshot. Changing it needs every replica stopped.
+- With an `mxl` section every replica runs an engine of its own
+  (below); without one the set serves the state and mixes nothing.
+
+### Engines in a set
+
+Every replica reads the same input flows and writes its own member flow
+of each output: `mxl.outputs.<output>.flows` lists one flow per replica,
+by ordinal, and replica n writes the n-th. No two outputs or replicas
+name the same flow, and none names an input's. faderz writes no flow
+that merges the members.
+
+The engine follows the replicated log (samplez's replicated mode). Each
+log entry's engine entries are derived from the mixer state as the entry
+applies: the difference between the gains, strip parameters and input
+flows the state sets before and after it. So every replica hands its
+engine the same entries at the same sample index. The engines hash the
+pages they compute and the set compares them; a replica whose pages
+differ is withdrawn and resynced from another replica's engine core.
+
+- A replica starts with its engine idle and builds the engine's core
+  from the state it applied once its clock is verified; it commits its
+  outputs once its pages match the others'. A replica restarted on its
+  volume catches up the same way.
+- An input the engine prunes is written to the log as down, and one
+  readable again as up, so every replica silences and raises it at the
+  same index.
+- A command that switches an input is ordered alone and stamped later
+  by the longest time a replica reports for building an input
+  generation; the commands ordered after it take effect no earlier. One
+  that would switch inputs of more than one MXL domain is refused.
+- The compatibility key a rollout hands the set over by hashes the
+  samplez engine version, the mixer configuration, the `engine` settings
+  and each channel's flow channel selection; the member flows are left
+  out. Each replica reads its StatefulSet's target revision every 5 s,
+  which needs `get` on `statefulsets`, and its own revision from
+  `FADERZ_POD_REVISION`, the pod's `controller-revision-hash` label
+  through the downward API. The StatefulSet is the pod name without its
+  `-<ordinal>`; the marker ConfigMap is owned by it, so it is deleted
+  after the StatefulSet.
+
+### Lateness and lead
+
+The leader stamps every entry with a sample index a lead ahead of the
+set's processed index. Each replica has to apply the entry before that
+index, less a guard of 20 ms at the default timing; an entry a replica
+applies later is unresolved there, its record never reaches that
+replica's engine, and the log decides it: it is applied again at a
+later index, or the replica is resynced. The leader raises the lead on
+the slack every replica reports when it hands an entry to its engine,
+up to `replica.maxApplyLeadMs`.
+
+A larger cap keeps a set whose slowest follower applies late, such as
+one whose volume syncs slowly, free of unresolved entries; it is also
+the longest a control change can take from the write to the audio. In
+samplez's tests a follower with a 20 ms fsync settles the lead near
+76 ms, above the default of 50.
 
 ## API
 
@@ -327,10 +383,15 @@ ready and, in a set of one, the engine plays the state.
 
 - A set of one with an `mxl` section: both pass once the engine runs.
 - A set of one without an `mxl` section: both answer 503.
-- A set of more than one replica, which runs no engine: `/readyz`
+- A set of more than one replica with an `mxl` section: `/healthz` passes
+  while the engine runs, with or without a core. `/readyz` passes once
+  the replica has joined and caught up and commits its outputs, or while
+  no other replica in contact with it commits; a withdrawn, diverged or
+  resyncing replica beside committing ones fails it.
+- A set of more than one replica without an `mxl` section: `/readyz`
   follows the replica alone and passes once it has joined and caught up,
   while `/healthz` answers 503. A liveness probe on `/healthz` restarts
-  such a pod over and over, so a set takes none on `/healthz`.
+  such a pod over and over, so such a set takes none on `/healthz`.
 
 Besides samplez's metrics, faderz exports
 `faderz_engine_resends_total`, `faderz_engine_resend_pending` and, per

@@ -2,11 +2,16 @@
 //! beside them.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use samplez::rt::ProcessStatus;
 use samplez_replica::bootstrap::{Kube, Markers};
+use samplez_replica::bridge::EngineAudio;
+use samplez_replica::contact::SystemClocks;
+use samplez_replica::rollout::{self, Fixed};
+use samplez_replica::state_machine::Product as _;
 use samplez_replica::{Estimate, Replica};
+use samplez_service::replica::ReadIndex;
 use samplez_service::{Ops, PeerTls, ReplicatedState, Service, ServiceConfig};
 use tokio::task::JoinHandle;
 
@@ -16,6 +21,9 @@ use crate::config::Config;
 use crate::shape::Shape;
 use crate::state::Mixer;
 use crate::{api, replica, ui, ws};
+
+/// How often a set's replica reads its StatefulSet's target revision.
+const ROLLOUT_READ: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What a test gives a set of more than one replica in place of what
 /// [`Server::start`] takes from the pod and the configuration.
@@ -76,32 +84,39 @@ impl Server {
             config.consoles.clone(),
             config.wiring.clone(),
         );
-        let (state, peer) = match &config.set {
+        let product = mixer().config_hash();
+        let (state, peer, kube) = match &config.set {
             None => {
                 let state = replica::start(dir, mixer, estimate).await?;
-                (Arc::new(state), None)
+                (Arc::new(state), None, None)
             }
             Some(set) => {
                 let tls = PeerTls::new(&set.peer.tls, ops_state.metrics())
                     .map_err(|e| format!("replica.peer.tls: {e}"))?;
                 let tls = Arc::new(tls);
                 let bind = |e: std::io::Error| format!("binding the peer listener: {e}");
-                let (markers, tcp, write_timeout) = match parts {
+                let (markers, tcp, write_timeout, kube) = match parts {
                     Some(p) => {
                         p.listener.set_nonblocking(true).map_err(bind)?;
                         let tcp = tokio::net::TcpListener::from_std(p.listener).map_err(bind)?;
-                        (p.markers, tcp, p.write_timeout)
+                        (p.markers, tcp, p.write_timeout, None)
                     }
                     None => {
-                        let kube = Kube::in_cluster(set.marker.clone())
+                        let mut kube = Kube::in_cluster(set.marker.clone())
                             .map_err(|e| format!("replica.marker: {e}"))?;
+                        // The marker goes with the StatefulSet.
+                        if let Some(statefulset) = &set.statefulset {
+                            kube = kube.owned_by(statefulset.clone());
+                        }
+                        let kube = Arc::new(kube);
                         let tcp = tokio::net::TcpListener::bind((set.peer.bind, set.peer.port))
                             .await
                             .map_err(bind)?;
                         (
-                            Arc::new(kube) as Arc<dyn Markers>,
+                            kube.clone() as Arc<dyn Markers>,
                             tcp,
                             replica::WRITE_TIMEOUT,
+                            Some(kube),
                         )
                     }
                 };
@@ -115,7 +130,7 @@ impl Server {
                     write_timeout,
                 )
                 .await?;
-                (Arc::new(state), Some((tls, tcp)))
+                (Arc::new(state), Some((tls, tcp)), kube)
             }
         };
         let peer_addr = match &peer {
@@ -132,14 +147,42 @@ impl Server {
             Some(engine) => {
                 let process = process.unwrap_or_else(|| samplez::rt::setup_process(&engine.rt));
                 let (live, revision) = audio::state_of(&state);
-                let audio = Audio::start(
-                    engine.clone(),
-                    process,
-                    &shape,
-                    config.wiring.clone(),
-                    &live,
-                    ops_state.clone(),
-                )?;
+                let audio = match &config.set {
+                    None => Audio::start(
+                        engine.clone(),
+                        process,
+                        &shape,
+                        config.wiring.clone(),
+                        &live,
+                        ops_state.clone(),
+                    )?,
+                    Some(set) => {
+                        let started = Audio::start_set(
+                            engine.clone(),
+                            process,
+                            &shape,
+                            config.wiring.clone(),
+                            &live,
+                            ops_state.clone(),
+                            set,
+                        )?;
+                        let bridge = Arc::new(started.bridge);
+                        let key = rollout::key(&config.compatibility(product));
+                        let fixed = Fixed::new(key, set.revision.clone());
+                        let follow = (kube.zip(set.statefulset.clone()))
+                            .map(|(kube, statefulset)| (kube, statefulset, fixed.clone()));
+                        let contact = Contact {
+                            timing: started.timing,
+                            bridge,
+                            rollout: fixed,
+                            follow,
+                            voters: usize::from(set.voters.replicas),
+                        };
+                        tokio::spawn(contact.begin(Arc::downgrade(&state)));
+                        audio::report_inputs(started.reports, Arc::downgrade(&state));
+                        started.audio
+                    }
+                };
                 Some((Arc::new(audio), live, revision))
             }
             None => None,
@@ -174,10 +217,13 @@ impl Server {
             .machine_addr()
             .transpose()
             .map_err(|e| e.to_string())?;
-        // Started once the engine plays the state: Audio::follow. A set
-        // runs no engine, so its replicas are ready on the replica's terms
-        // alone: joined and caught up.
+        // A set of one is started once its engine plays the state
+        // (Audio::follow). A replica of a set of more is ready on the
+        // replica's terms: joined and caught up and, with an engine,
+        // committing its outputs, or none of the set's replicas in contact
+        // with it does (samplez_replica's ReplicaInfo::ready).
         ops_state.set_engine_started(config.set.is_some());
+        let replicated = config.set.is_some();
         let engine = audio.as_ref().map(|(a, _, _)| a.clone());
         let (tasks_app, tasks_state) = (app.clone(), state.clone());
         let failure = Arc::new(Mutex::new(None));
@@ -207,7 +253,14 @@ impl Server {
                     Some((audio, live, revision)) => {
                         let meter = audio.meter(&tasks_app.hub, &name);
                         let count = tasks_app.count(&audio);
-                        tokio::join!(audio.follow(&tasks_state, live, revision), meter, count);
+                        // A set's engine follows the replicated log.
+                        let follow = async {
+                            if !replicated {
+                                audio.follow(&tasks_state, live, revision).await;
+                            }
+                            std::future::pending::<()>().await
+                        };
+                        tokio::join!(follow, meter, count);
                     }
                     None => std::future::pending::<()>().await,
                 }
@@ -261,7 +314,9 @@ impl Server {
     /// Stops serving, stops the engine, which deletes its output flows,
     /// and shuts the replica down; what it applied is on its volume. A
     /// replica of a set first stops ordering commands and, leading, waits
-    /// up to a write's timeout for every voter to hold what it appended.
+    /// up to a write's timeout for every voter to hold what it appended;
+    /// its engine stops once the runtime ends the replica's tasks, as the
+    /// process exits.
     pub async fn stop(self) {
         if self.peer.is_some() {
             self.replica.quiesce(replica::WRITE_TIMEOUT).await;
@@ -274,6 +329,69 @@ impl Server {
         self.replica.shutdown().await;
     }
 }
+
+/// What a set's replica starts contact with: the timers, its engine's
+/// bridge, its rollout, and the StatefulSet whose target revision it
+/// follows.
+struct Contact {
+    timing: samplez_replica::contact::Timing,
+    bridge: Arc<EngineAudio>,
+    rollout: Arc<Fixed>,
+    follow: Option<(Arc<Kube>, String, Arc<Fixed>)>,
+    /// The set's voters.
+    voters: usize,
+}
+
+impl Contact {
+    /// Starts contact, and the replica's engine with it, once the replica
+    /// is a voter of a membership of all the set's voters and has applied
+    /// what the set committed. A leader running contact promotes a
+    /// learner only on the learner's own reports, which a learner does not
+    /// send, so a set forms before contact starts; a restarted replica
+    /// catches up first. Until then the engine computes and commits
+    /// nothing.
+    async fn begin(self, replica: Weak<Replica<Mixer>>) {
+        let mut tick = tokio::time::interval(CONTACT_WAIT);
+        loop {
+            tick.tick().await;
+            let Some(replica) = replica.upgrade() else {
+                return;
+            };
+            let metrics = replica.raft().metrics().borrow().clone();
+            let membership = metrics.membership_config.membership();
+            let voters: Vec<_> = membership.voter_ids().collect();
+            if voters.len() < self.voters
+                || !voters.contains(&replica.id())
+                || membership.learner_ids().next().is_some()
+                || membership.get_joint_config().len() > 1
+            {
+                continue;
+            }
+            // Entries it applies while it catches up would be late, and
+            // held unresolved by the engine with nothing to decide them.
+            let caught_up = match replica.read_index().await {
+                ReadIndex::Confirmed(revision) => replica.revision() >= revision,
+                _ => false,
+            };
+            if !caught_up {
+                continue;
+            }
+            let started = replica
+                .contact(self.timing, Arc::new(SystemClocks), Some(self.bridge))
+                .and_then(|()| replica.rollout(self.rollout));
+            if let Err(e) = started {
+                tracing::error!("contact did not start: {e}");
+            }
+            if let Some((kube, statefulset, into)) = self.follow {
+                tokio::spawn(rollout::follow(kube, statefulset, into, ROLLOUT_READ));
+            }
+            return;
+        }
+    }
+}
+
+/// How often a set's replica checks whether it may start contact.
+const CONTACT_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Why the serving task ended: its error, or its panic. A panic would
 /// otherwise leave the process running with no listeners.
