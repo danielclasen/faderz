@@ -3601,6 +3601,58 @@ mod tests {
         assert!(wired().targets().is_some());
     }
 
+    /// An AFV stage closing and opening by tally, and its off level set
+    /// while closed, move its channel's rows in the targets kept, to
+    /// those of the whole state.
+    #[test]
+    fn an_afv_stage_moves_its_channels_rows() {
+        let mut m = wired();
+        let kept = |m: &Mixer| {
+            let kept = m.targets().unwrap();
+            let whole = mix::targets(m.shape(), &m.wiring, m.state());
+            assert_eq!(gain_bits(&kept), gain_bits(&whole));
+            kept.gains
+        };
+        let tally = |m: &mut Mixer, source: &str, state: &str| {
+            rest(
+                m,
+                Command::Tally {
+                    id: format!("t-{source}-{state}"),
+                    sources: [(source.to_owned(), state.to_owned())].into(),
+                    replace: false,
+                },
+            )
+        };
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let pgm_left_is = |g: f32, db: f64| (f64::from(g) - h * mix::gain(db)).abs() < 1e-6;
+        patch(
+            &mut m,
+            "p1",
+            &[
+                ("/channels/ch1/fader", json!(0)),
+                ("/channels/ch2/fader", json!(0)),
+                ("/afv/ch1/enabled", json!(true)),
+                ("/afv/ch1/offLevel", json!(-20)),
+                ("/afv/ch1/source", json!("cam1")),
+                ("/afv/ch2/enabled", json!(true)),
+                ("/afv/ch2/offLevel", json!(-30)),
+                ("/afv/ch2/source", json!("cam2")),
+            ],
+        );
+        assert!(pgm_left_is(kept(&m)[0][0], 0.0));
+        tally(&mut m, "cam1", "preview");
+        assert_eq!(at(&m, "/afv/ch1/open"), &json!(false));
+        assert!(pgm_left_is(kept(&m)[0][0], -20.0), "closed by tally");
+        tally(&mut m, "cam1", "program");
+        assert!(pgm_left_is(kept(&m)[0][0], 0.0), "opened by tally");
+        tally(&mut m, "cam2", "preview");
+        assert!(pgm_left_is(kept(&m)[1][0], -30.0), "closed by tally");
+        set(&mut m, "s", 1, "/afv/ch2/offLevel", json!(-10));
+        let gains = kept(&m);
+        assert!(pgm_left_is(gains[1][0], -10.0), "off level set");
+        assert!(pgm_left_is(gains[0][0], 0.0), "ch1 stays open");
+    }
+
     /// The small shape with more channels, a 5.1 one among them, a
     /// second VCA, a stereo aux and a direct out, each channel wired to
     /// flows of its own in one domain.
