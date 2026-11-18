@@ -13,8 +13,12 @@
     unit?: string;
     /** Label only for assistive technology, e.g. in a table with column headers. */
     compact?: boolean;
+    /** Tab order of the field, for a grid with one tab stop. */
+    tabindex?: number;
+    /** Runs first on every key; a key it prevents is not handled here. */
+    onnav?: (e: KeyboardEvent) => void;
   }
-  let { path, label, min, max, step = 0.1, unit = '', compact = false }: Props = $props();
+  let { path, label, min, max, step = 0.1, unit = '', compact = false, tabindex, onnav }: Props = $props();
   const mixer = getMixer();
   const value = $derived(mixer.value<number>(path));
   const decimals = $derived(step >= 1 ? 0 : Math.min(2, Math.ceil(-Math.log10(step))));
@@ -33,6 +37,8 @@
     if (v !== value) mixer.set(path, v);
   }
   function keydown(e: KeyboardEvent): void {
+    onnav?.(e);
+    if (e.defaultPrevented) return;
     if (e.key === 'Enter') {
       commit();
       input?.select();
@@ -55,6 +61,7 @@
     onchange={commit}
     onkeydown={keydown}
     onfocus={() => input?.select()}
+    {tabindex}
     aria-label={`${label}, ${min} to ${max}${unit ? ` ${unit}` : ''}`}
     data-path={path}
   />

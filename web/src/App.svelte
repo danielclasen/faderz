@@ -6,6 +6,7 @@
   import RoutingView from './components/RoutingView.svelte';
   import AuxView from './components/AuxView.svelte';
   import AfvView from './components/AfvView.svelte';
+  import DuckView from './components/DuckView.svelte';
   import ScenesView from './components/ScenesView.svelte';
   import SetupView from './components/SetupView.svelte';
   import StatusArea from './components/StatusArea.svelte';
@@ -41,6 +42,7 @@
     { id: 'routing', label: 'Routing' },
     { id: 'aux', label: 'Aux / N-1' },
     { id: 'afv', label: 'AFV' },
+    { id: 'duck', label: 'Duck' },
     { id: 'scenes', label: 'Scenes' },
     { id: 'setup', label: 'Setup' },
   ] as const;
@@ -129,6 +131,8 @@
       <AuxView />
     {:else if view === 'afv'}
       <AfvView />
+    {:else if view === 'duck'}
+      <DuckView />
     {:else if view === 'scenes'}
       <ScenesView />
     {:else}
@@ -232,6 +236,14 @@
     .brand {
       font-size: 0;
       gap: 0;
+    }
+  }
+  /* Just above the menu width the seven view tabs fit the header row
+     beside the right group only a little tighter. */
+  @media (min-width: 1024px) and (max-width: 1199px) {
+    .tab {
+      padding: 0 6px;
+      letter-spacing: 0.05em;
     }
   }
   /* Tablets in portrait: room for a second header row, which carries the

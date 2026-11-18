@@ -6,7 +6,8 @@
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { pointer } from '../lib/state/pointer';
-  import { recallSafePath } from '../lib/state/paths';
+  import { duckPath, recallSafePath } from '../lib/state/paths';
+  import { lampText, targetRefusal, triggerRefusal } from '../lib/duck';
   import { formatDb, formatFreq } from '../lib/audio/db';
   import Param from './Param.svelte';
   import DelayEntry from './DelayEntry.svelte';
@@ -70,6 +71,14 @@
   function toggleVca(vcaId: string): void {
     const members = mixer.state!.vcas[vcaId]!.members;
     mixer.set(pointer('vcas', vcaId, 'members'), members.includes(id) ? members.filter((m) => m !== id) : [...members, id]);
+  }
+  /** Makes the channel a trigger or target of a duck group, or not; a refused change says why instead of being sent. */
+  function toggleDuck(duck: string, key: 'trigger' | 'target'): void {
+    const path = duckPath(duck, 'channels', id, key);
+    const on = mixer.value<boolean>(path);
+    const why = on ? null : (key === 'trigger' ? triggerRefusal : targetRefusal)(shape, mixer.state!, duck, id);
+    if (why) mixer.notify('info', why, path);
+    else mixer.set(path, !on);
   }
   /** Escape in a typed field restores that field (and a tooltip's closes it); only elsewhere does it close the panel. */
   function keydown(e: KeyboardEvent): void {
@@ -277,6 +286,38 @@
       </div>
     {/if}
 
+    {#if ch && (shape.ducks ?? []).length > 0}
+      <div class="col" data-section="duck">
+        <h3 class="panel-title">Duck</h3>
+        {#each shape.ducks ?? [] as duck (duck.id)}
+          {@const g = mixer.state!.ducks[duck.id]!}
+          {@const trigger = duckPath(duck.id, 'channels', id, 'trigger')}
+          {@const target = duckPath(duck.id, 'channels', id, 'target')}
+          {@const refused = (key: 'trigger' | 'target') => (key === 'trigger' ? triggerRefusal : targetRefusal)(shape, mixer.state!, duck.id, id)}
+          <div class="duck" role="group" aria-label={`${element.name} in duck ${duck.name}`}>
+            <span class="duck-name" title={`${duck.name}: ${lampText(g).toLowerCase()}`}>{duck.name}</span>
+            <button {@attach pendingWrite(mixer, trigger)}
+              class="key"
+              aria-disabled={mixer.locked || refused('trigger') !== null}
+              aria-pressed={g.channels[id]!.trigger}
+              aria-label={`${element.name} triggers ${duck.name}`}
+              title={refused('trigger') ?? `Lit: ${element.name} keys ${duck.name}`}
+              onclick={() => toggleDuck(duck.id, 'trigger')}>TRIG</button
+            >
+            <button {@attach pendingWrite(mixer, target)}
+              class="key"
+              aria-disabled={mixer.locked || refused('target') !== null}
+              aria-pressed={g.channels[id]!.target}
+              aria-label={`${element.name} is lowered by ${duck.name}`}
+              title={refused('target') ?? `Lit: ${duck.name} lowers ${element.name}`}
+              onclick={() => toggleDuck(duck.id, 'target')}>TARGET</button
+            >
+            <Param path={duckPath(duck.id, 'channels', id, 'depth')} label="Depth" min={0} max={40} step={0.5} format={(v) => `${v.toFixed(1)} dB`} />
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     <div class="col">
       <h3 class="panel-title">Recall safe</h3>
       <div class="grid">
@@ -403,6 +444,22 @@
   }
   .send :global(.param) {
     grid-template-columns: 22px 1fr auto;
+  }
+  .duck {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px 60px;
+    gap: 4px 6px;
+    align-items: center;
+  }
+  .duck :global(.param) {
+    grid-column: 1 / -1;
+  }
+  .duck-name {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .grid {
     display: grid;

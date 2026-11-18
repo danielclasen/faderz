@@ -120,6 +120,16 @@ test('nothing moves on load, live updates, failover and interaction', { tag: '@m
     ['/metering/loudness/tolerance', 1],
     ['/channels/ch2/meterTap', 'input'],
     ['/channels/ch2/meterTap', 'postFader'],
+    // Duck groups latched, bypassed and back, a member added and taken out, a threshold moved.
+    ['/ducks/comm/mode', 'on'],
+    ['/ducks/comm/mode', 'off'],
+    ['/ducks/comm/mode', 'auto'],
+    ['/ducks/remote/channels/ch3/target', true],
+    ['/ducks/remote/mode', 'on'],
+    ['/ducks/remote/mode', 'auto'],
+    ['/ducks/remote/channels/ch3/target', false],
+    ['/ducks/comm/threshold', -42.5],
+    ['/ducks/comm/threshold', -30],
   ] as const) await patch(request, path, value);
   await request.put('/api/v1/afv/tally', { headers: { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' }, data: { sources: { CAM1: 'off', CAM2: 'program' } } });
   await page.waitForTimeout(1500);
@@ -183,7 +193,7 @@ test('nothing moves on load, live updates, failover and interaction', { tag: '@m
   const scene = `Layout ${Date.now()}`;
   const created = await request.post('/api/v1/scenes', { headers: HEADERS, data: { commandId: crypto.randomUUID(), name: scene } });
   expect(created.ok()).toBe(true);
-  for (const name of ['Routing', 'Aux / N-1', 'AFV', 'Scenes', 'Setup', 'Mixer']) {
+  for (const name of ['Routing', 'Aux / N-1', 'AFV', 'Duck', 'Scenes', 'Setup', 'Mixer']) {
     await showView(page, name);
     await page.waitForTimeout(400);
     await expectNoShift(page, `view ${name}`);
@@ -219,6 +229,31 @@ test('nothing moves on load, live updates, failover and interaction', { tag: '@m
   const id = doc.state.scenes.find((x) => x.name === scene)!.id;
   expect((await request.delete(`/api/v1/scenes/${id}`, { headers: HEADERS })).ok()).toBe(true);
   info.annotations.push({ type: 'viewport', description: phone ? 'phone' : 'desktop' });
+});
+
+test('nothing moves while duck groups fire every second, on the mixer and in the Duck view', { tag: '@mock' }, async ({ page, request }) => {
+  test.setTimeout(60_000);
+  await live(page);
+  await page.evaluate(() => document.fonts.ready);
+  // Where the masters lie over the strips the tiles are in their sheet.
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  if (await masters.isVisible()) await masters.click();
+  const lamp = page.getByTestId('duck-lamp-comm');
+  await expect(lamp).toBeVisible();
+  try {
+    expect((await request.post('/__mock/ducks/script?ms=1000')).ok()).toBe(true);
+    // Twelve seconds of a console holding and letting go of every group.
+    await expect(lamp).toHaveText('DUCK HELD', { timeout: 3000 });
+    await expect(lamp).toHaveText('AUTO', { timeout: 3000 });
+    await page.waitForTimeout(4000);
+    await expectNoShift(page, 'ducks firing on the mixer');
+    await showView(page, 'Duck');
+    await expect(page.getByTestId('duck-view-lamp-comm')).toHaveText('DUCK HELD', { timeout: 3000 });
+    await page.waitForTimeout(4000);
+    await expectNoShift(page, 'ducks firing on the Duck view');
+  } finally {
+    await request.post('/__mock/ducks/script?ms=0');
+  }
 });
 
 test('every fader fits its box, VCA masters included', async ({ page }) => {

@@ -1656,3 +1656,160 @@ test('puts an aux on the channel faders and gives the faders back on EXIT', asyn
   await expect(page.getByRole('slider', { name: 'Pres 2 fader' })).toBeVisible();
   await expect(page.getByTestId('fader-value-ch2')).toHaveText(formatDb(faderBefore));
 });
+
+const DUCK_HOLD = '/ducks/comm/hold';
+
+/** The Commentary duck tile of the mixer view, opening the masters where they lie over the strips, and the server's group. */
+async function duckTile(page: Page, request: APIRequestContext) {
+  await live(page);
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  if (await masters.isVisible()) await masters.click();
+  const tile = page.locator('[data-duck="comm"]');
+  return {
+    tile,
+    key: page.getByTestId('duck-key-comm'),
+    lamp: page.getByTestId('duck-lamp-comm'),
+    holder: page.getByTestId('duck-holder-comm'),
+    duck: async () => (await serverState(request)).state.ducks['comm']!,
+    owner: async () => (await serverState(request)).owners[DUCK_HOLD],
+  };
+}
+
+test('holds a duck group in while DUCK is held, by pointer and by Space, and latches it with a tap', async ({ page, request }) => {
+  const { key, lamp, holder, duck, owner } = await duckTile(page, request);
+  try {
+    await key.hover();
+    await page.mouse.down();
+    await expect.poll(async () => (await duck()).hold).toBe(true);
+    await expect(lamp).toHaveText('DUCK HELD');
+    await expect(holder).toHaveText('you');
+    await expect(page.getByTestId('duck-chip-ch13')).toHaveAccessibleName(/ducked now by Commentary/);
+    await page.waitForTimeout(400);
+    await page.mouse.up();
+    await expect.poll(async () => (await duck()).hold).toBe(false);
+    await expect.poll(owner).toBeUndefined();
+    expect((await duck()).mode).toBe('auto');
+    await expect(lamp).toHaveText('AUTO');
+    await expect(holder).toHaveText('');
+
+    await key.focus();
+    await page.keyboard.down(' ');
+    await expect.poll(async () => (await duck()).hold).toBe(true);
+    await page.waitForTimeout(400);
+    await page.keyboard.up(' ');
+    await expect.poll(async () => (await duck()).hold).toBe(false);
+    expect((await duck()).mode).toBe('auto');
+
+    // A tap latches it on, past this screen; the next tap sets it back to auto.
+    await key.click();
+    await expect.poll(async () => (await duck()).mode).toBe('on');
+    await expect.poll(async () => (await duck()).hold).toBe(false);
+    await expect(key).toHaveAccessibleName('Commentary duck, latched, Shift+D+1');
+    await expect(lamp).toHaveText('DUCK ON');
+    await key.click();
+    await expect.poll(async () => (await duck()).mode).toBe('auto');
+    await expect(lamp).toHaveText('AUTO');
+
+    // Shift+D+1 is the same key on the keyboard.
+    await page.locator('body').focus();
+    await page.keyboard.down('Shift');
+    await page.keyboard.down('KeyD');
+    await page.keyboard.down('Digit1');
+    await expect.poll(async () => (await duck()).hold).toBe(true);
+    await page.waitForTimeout(400);
+    await page.keyboard.up('Digit1');
+    await page.keyboard.up('KeyD');
+    await page.keyboard.up('Shift');
+    await expect.poll(async () => (await duck()).hold).toBe(false);
+    expect((await duck()).mode).toBe('auto');
+  } finally {
+    await patch(request, '/ducks/comm/mode', 'auto');
+  }
+});
+
+test('bypasses a duck group only after a hold on OFF, and a tap on DUCK never takes it out of bypass', async ({ page, request }) => {
+  const { tile, key, lamp, duck } = await duckTile(page, request);
+  try {
+    const off = tile.getByRole('radio', { name: /^Commentary off/ });
+    await off.click();
+    await page.waitForTimeout(300);
+    expect((await duck()).mode).toBe('auto');
+    await off.hover();
+    await page.mouse.down();
+    await page.waitForTimeout(700);
+    await page.mouse.up();
+    await expect.poll(async () => (await duck()).mode).toBe('off');
+    await expect(lamp).toHaveText('BYPASS');
+    await key.click();
+    await expect(page.getByTestId('notice')).toContainText('Commentary is bypassed: choose AUTO or ON to arm it');
+    await page.waitForTimeout(300);
+    expect((await duck()).mode).toBe('off');
+    await tile.getByRole('radio', { name: /^Commentary auto/ }).click();
+    await expect.poll(async () => (await duck()).mode).toBe('auto');
+    // Sensitivity from the tile: the threshold moves by a step, with no jump.
+    const thr = page.getByRole('slider', { name: 'Commentary duck threshold' });
+    await thr.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(async () => (await duck()).threshold).toBe(-31);
+    await expect(page.getByTestId('duck-threshold-comm')).toHaveText('-31.0');
+  } finally {
+    await patch(request, '/ducks/comm/mode', 'auto');
+    await patch(request, '/ducks/comm/threshold', -30);
+  }
+});
+
+test('a second client sees who holds a duck, cannot take the hold but can latch, and the hold ends with the holder', async ({ page, browser, request }) => {
+  const a = await duckTile(page, request);
+  const other = await browser.newContext();
+  try {
+    await a.key.hover();
+    await page.mouse.down();
+    await expect.poll(async () => (await a.duck()).hold).toBe(true);
+    const b = await duckTile(await other.newPage(), request);
+    const tag = (await a.owner())!;
+    await expect(b.holder).toHaveText(handleTag(tag.handle));
+    await expect(b.lamp).toHaveText('DUCK HELD');
+    await expect(b.key).toHaveAccessibleName(`Commentary duck, held by web client ${handleTag(tag.handle)}, Shift+D+1`);
+    // B's press holds nothing and names the holder; its tap still latches.
+    await b.key.click();
+    await expect(b.tile.page().getByTestId('notice')).toContainText(`Commentary duck hold is held by web client ${handleTag(tag.handle)}`);
+    await expect.poll(async () => (await a.duck()).mode).toBe('on');
+    expect((await a.owner())!.handle).toBe(tag.handle);
+    // The holder's screen goes away mid-hold: the lease ends the hold.
+    await page.close();
+    await expect.poll(async () => (await b.duck()).hold, { timeout: 15_000 }).toBe(false);
+    await expect.poll(b.owner).toBeUndefined();
+    await expect(b.holder).toHaveText('');
+    await expect(b.lamp).toHaveText('DUCK ON');
+  } finally {
+    await other.close();
+    await patch(request, '/ducks/comm/mode', 'auto');
+  }
+});
+
+test("a strip's duck chip opens the Duck section of its panel, which sets membership and depth", async ({ page, request }) => {
+  await live(page);
+  const chip = page.getByTestId('duck-chip-ch3');
+  await expect(chip).toHaveText('DK');
+  await expect(chip).toHaveAccessibleName('Guest 1 duck, in no duck group');
+  await chip.click();
+  const section = page.locator('[data-section="duck"]');
+  await expect(section).toBeInViewport();
+  const duck = async () => (await serverState(request)).state.ducks['remote']!.channels['ch3']!;
+  try {
+    await section.getByRole('button', { name: 'Guest 1 is lowered by Remote comm' }).click();
+    await expect.poll(async () => (await duck()).target).toBe(true);
+    await expect(chip).toHaveAccessibleName('Guest 1 duck, lowered by Remote comm 10 dB');
+    const depth = section.getByRole('textbox', { name: 'Depth value, type to set' }).nth(1);
+    await depth.fill('18');
+    await depth.press('Enter');
+    await expect.poll(async () => (await duck()).depth).toBe(18);
+    // A target cannot key the group that lowers it: said, not sent.
+    await section.getByRole('button', { name: 'Guest 1 triggers Remote comm' }).click({ force: true });
+    await expect(page.getByTestId('notice')).toContainText('Guest 1 is a target of Remote comm');
+    expect((await duck()).trigger).toBe(false);
+  } finally {
+    await patch(request, '/ducks/remote/channels/ch3/target', false);
+    await patch(request, '/ducks/remote/channels/ch3/depth', 10);
+  }
+});

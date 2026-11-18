@@ -10,6 +10,7 @@ export const mixMinusPath = (id: string, ...rest: Array<string | number>) => poi
 export const vcaPath = (id: string, ...rest: Array<string | number>) => pointer('vcas', id, ...rest);
 export const monitorPath = (key: string) => pointer('monitor', key);
 export const afvPath = (id: string, key: string) => pointer('afv', id, key);
+export const duckPath = (id: string, ...rest: Array<string | number>) => pointer('ducks', id, ...rest);
 export const recallSafePath = (id: string) => pointer('recallSafe', id);
 export { escapeToken };
 
@@ -22,9 +23,11 @@ export function describePath(path: string, shape: Shape | null): string {
     auxes: shape?.auxes,
     mixMinus: shape?.mixMinus,
     vcas: shape?.vcas,
+    ducks: shape?.ducks,
   };
   const element = group && id ? lists[group]?.find((e) => e.id === id) : undefined;
   if (group === 'monitor') return `Monitor ${id ?? ''}`.trim();
+  if (group === 'ducks') return [element?.name ?? id, 'duck', ...rest].join(' ');
   const name = element?.name ?? id ?? group ?? path;
   return [name, ...rest].join(' ');
 }

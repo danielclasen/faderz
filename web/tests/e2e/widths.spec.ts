@@ -98,7 +98,7 @@ test('a tablet in portrait has the view tabs on a second header row, one tap eac
     await page.setViewportSize({ width, height });
     await live(page);
     const tabs = page.getByRole('navigation', { name: 'Views' }).getByRole('button');
-    await expect(tabs).toHaveCount(6);
+    await expect(tabs).toHaveCount(7);
     await expect(page.getByRole('combobox', { name: 'View' })).toBeHidden();
     const header = (await page.locator('header.top').boundingBox())!;
     expect(header.height, `${width}x${height}`).toBe(76);
@@ -182,4 +182,42 @@ test('the theme switches from the Setup view at every width, where the header ha
   await page.getByRole('button', { name: 'Setup', exact: true }).click();
   await expect(page.getByRole('radiogroup', { name: 'Theme of this screen' }).getByRole('radio', { name: 'DARK' })).toHaveAttribute('aria-checked', 'true');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
+
+test('the duck tiles and the Duck view fit every width from 320 px, with no sideways page scroll and no tile text cut', async ({ page }) => {
+  test.setTimeout(90_000);
+  await live(page);
+  const found: string[] = [];
+  for (const [width, height] of SIZES) {
+    await page.setViewportSize({ width, height });
+    const masters = page.getByRole('button', { name: 'MASTERS' });
+    const overlay = await masters.isVisible();
+    if (overlay && (await masters.getAttribute('aria-pressed')) !== 'true') await masters.click();
+    const tile = page.locator('[data-duck="comm"]');
+    if ((await tile.count()) === 0) found.push(`${width}x${height}: no duck tile`);
+    found.push(
+      ...(await tile.evaluateAll((tiles) =>
+        tiles.flatMap((t) =>
+          [...t.querySelectorAll<HTMLElement>('button, [role="slider"], .lamp span, .thr')].flatMap((el) => {
+            const r = el.getBoundingClientRect();
+            const name = el.getAttribute('aria-label') ?? el.textContent ?? '';
+            const out: string[] = [];
+            if (r.left < -0.5 || r.right > document.documentElement.clientWidth + 0.5) out.push(`${name} at ${Math.round(r.left)}..${Math.round(r.right)}`);
+            if (el.scrollWidth > el.clientWidth + 1) out.push(`${name} text ${el.scrollWidth} > ${el.clientWidth}`);
+            return out;
+          }),
+        ),
+      )).map((p) => `${width}x${height} tile: ${p}`),
+    );
+    found.push(...(await problems(page)).map((p) => `${width}x${height} mixer: ${p}`));
+    if (overlay) await masters.click();
+    const tab = page.getByRole('button', { name: 'Duck', exact: true });
+    if (await tab.isVisible()) await tab.click();
+    else await page.getByRole('combobox', { name: 'View' }).selectOption({ label: 'Duck' });
+    await expect(page.getByRole('table', { name: 'Duck groups' })).toBeVisible();
+    found.push(...(await problems(page)).map((p) => `${width}x${height} Duck view: ${p}`));
+    if (await page.getByRole('button', { name: 'Mixer', exact: true }).isVisible()) await page.getByRole('button', { name: 'Mixer', exact: true }).click();
+    else await page.getByRole('combobox', { name: 'View' }).selectOption({ label: 'Mixer' });
+  }
+  expect(found).toEqual([]);
 });

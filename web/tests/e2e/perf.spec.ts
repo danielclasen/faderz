@@ -59,7 +59,7 @@ async function sweep(page: Page, path: string, until: number): Promise<number> {
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
-test('three clients moving faders with meters on stay under 50 ms tasks, 4 ms patches at p99 and one frame per patch', { tag: '@mock' }, async ({ browser, request }) => {
+test('three clients moving faders with meters on and duck groups firing stay under 50 ms tasks, 4 ms patches at p99 and one frame per patch', { tag: '@mock' }, async ({ browser, request }) => {
   test.setTimeout(60_000);
   expect((await serverState(request)).shape.channels).toHaveLength(64);
   const contexts = await Promise.all([0, 1, 2].map(() => browser.newContext({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 } })));
@@ -68,9 +68,21 @@ test('three clients moving faders with meters on stay under 50 ms tasks, 4 ms pa
     for (const p of pages) await observe(p);
     await Promise.all(pages.map((p) => live(p)));
     await Promise.all(pages.map((p) => expect(p.getByTestId('meter-replica').locator('b')).toHaveText(/^r\d$/)));
+    // A console holds and lets go of every duck group each second; each
+    // page counts the changes of a group's lamp.
+    for (const p of pages) {
+      await p.evaluate(() => {
+        const w = window as unknown as { __duckChanges: number };
+        w.__duckChanges = 0;
+        new MutationObserver(() => w.__duckChanges++).observe(document.querySelector('[data-testid="duck-lamp-comm"]')!, { subtree: true, characterData: true, childList: true });
+      });
+    }
+    expect((await request.post('/__mock/ducks/script?ms=1000')).ok()).toBe(true);
     const starts = await Promise.all(pages.map((p) => p.evaluate(() => ({ t: performance.now(), patches: window.__faderz!.patches }))));
     const until = Date.now() + WINDOW_MS;
     const moves = await Promise.all(pages.map((p, i) => sweep(p, `/channels/ch${i + 1}/fader`, until)));
+    await request.post('/__mock/ducks/script?ms=0');
+    for (const p of pages) expect(await p.evaluate(() => (window as unknown as { __duckChanges: number }).__duckChanges)).toBeGreaterThanOrEqual(3);
     for (const [i, p] of pages.entries()) {
       const r = await p.evaluate((t0) => {
         const w = window as unknown as { __longTasks: Entry[]; __patches: Entry[] };
@@ -100,6 +112,7 @@ test('three clients moving faders with meters on stay under 50 ms tasks, 4 ms pa
       expect(maxWindowPatch).toBeLessThan(PATCH_CEILING_MS);
     }
   } finally {
+    await request.post('/__mock/ducks/script?ms=0');
     await Promise.all(contexts.map((c) => c.close()));
   }
 });

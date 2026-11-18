@@ -1,13 +1,14 @@
 <script lang="ts">
-  // The master section of the mixer view: VCAs, buses and the monitor.
-  // It draws its meters on its own canvas, so where it lies over the
-  // strips (narrow screens) no strip meter shows through it.
+  // The master section of the mixer view: the duck groups, VCAs, buses
+  // and the monitor. It draws its meters on its own canvas, so where it
+  // lies over the strips (narrow screens) no strip meter shows through it.
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { MeterLayer, provideMeterLayer } from '../lib/meters/layer';
   import BusMaster from './BusMaster.svelte';
   import VcaMaster from './VcaMaster.svelte';
   import MonitorSection from './MonitorSection.svelte';
+  import DuckTile from './DuckTile.svelte';
 
   interface Props {
     id: string;
@@ -32,6 +33,15 @@
 </script>
 
 <div class="masters" class:open {id} tabindex="-1" role="region" aria-label="Masters" data-testid="masters" bind:this={root}>
+  <!-- A band of fixed tiles over the masters: first in view where the
+       masters lie over the strips, and taking height, never width, beside them. -->
+  {#if (shape.ducks ?? []).length > 0}
+    <div class="ducks" role="group" aria-label="Duck groups">
+      {#each shape.ducks ?? [] as duck, i (duck.id)}
+        <DuckTile {duck} shortcut={i + 1} />
+      {/each}
+    </div>
+  {/if}
   <div class="row">
     {#each shape.vcas as vca (vca.id)}
       <VcaMaster {vca} />
@@ -49,15 +59,32 @@
     position: relative;
     isolation: isolate;
     display: flex;
+    flex-direction: column;
     min-height: 0;
     overflow-x: auto;
     border-left: 2px solid var(--line-strong);
     background: var(--panel);
   }
+  /* As wide as its masters, wider than the pane where they scroll. */
   .row {
     display: flex;
     flex: 1;
     min-height: 0;
+    min-width: max-content;
+  }
+  /* Kept in view where the masters scroll sideways. As wide as the
+     masters below it, whatever its tiles would take in one row: the tiles
+     wrap, so the band never widens the masters and narrows the strips. */
+  .ducks {
+    contain: inline-size;
+    position: sticky;
+    left: 0;
+    display: flex;
+    flex-wrap: wrap;
+    flex: none;
+    gap: 1px;
+    border-bottom: 1px solid var(--line-strong);
+    background: var(--line);
   }
   /* Anchored at the corner; the meter layer sizes it and moves it over
      the visible meters by a transform. */
@@ -91,7 +118,8 @@
       display: flex;
     }
     .row {
-      min-height: max(100%, 560px);
+      flex: 1 0 auto;
+      min-height: 560px;
     }
   }
 </style>

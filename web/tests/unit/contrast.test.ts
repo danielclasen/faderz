@@ -43,6 +43,10 @@ describe.each([
   it('a lit PAUSED loudness key carries readable ink', () => {
     expect(contrast(t['paused-ink']!, t['paused']!)).toBeGreaterThanOrEqual(4.5);
   });
+  it('a lit duck key and lamp carry readable ink, and the key edge shows on the panels', () => {
+    expect(contrast(t['duck-ink']!, t['duck']!)).toBeGreaterThanOrEqual(4.5);
+    for (const surface of ['panel', 'panel-2']) expect(contrast(t['duck']!, t[surface]!)).toBeGreaterThanOrEqual(3);
+  });
 });
 
 it('separates alternate strips in the light theme', () => {

@@ -14,6 +14,7 @@
   import { hold } from '../lib/hold';
   import { MediaQuery } from 'svelte/reactivity';
   import { pointer } from '../lib/state/pointer';
+  import { channelDucks, forced } from '../lib/duck';
 
   interface Props {
     channel: ChannelShape;
@@ -65,6 +66,22 @@
   const badge = $derived(channel.layout === 'mono' ? '' : channel.layout === 'stereo' ? 'ST' : channel.layout);
   const short = (bus: { name: string; kind: string }) =>
     bus.kind === 'cleanFeed' ? 'CF' : bus.kind === 'me' ? 'ME' : (bus.name.split(' ').at(-1) ?? bus.name).slice(0, 4);
+
+  /** The groups this channel keys and those that lower it; none in a shape without duck groups. */
+  const hasDucks = $derived((mixer.shape?.ducks ?? []).length > 0);
+  const ducks = $derived(hasDucks ? channelDucks(mixer.shape!, mixer.state!, channel.id) : { triggers: [], targets: [] });
+  /** Lowered now whatever the key: a group that lowers it is held or latched on. */
+  const ducked = $derived(ducks.targets.filter((d) => forced(mixer.state!.ducks[d.id]!)));
+  const duckText = $derived(
+    [
+      ducks.triggers.length > 0 ? `keys ${ducks.triggers.map((d) => d.name).join(', ')}` : '',
+      ducks.targets.length > 0
+        ? `lowered by ${ducks.targets.map((d) => `${d.name} ${mixer.state!.ducks[d.id]!.channels[channel.id]!.depth} dB`).join(', ')}${ducked.length > 0 ? `; ducked now by ${ducked.map((d) => d.name).join(', ')}` : ''}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('; ') || 'in no duck group',
+  );
 
   function toggleSolo(mode: Exclude<Solo, 'off'>): void {
     mixer.set(channelPath(channel.id, 'solo'), solo === mode ? 'off' : mode);
@@ -121,7 +138,7 @@
   <!-- On a touch screen a chip is too narrow for a finger: the row is one
        target that opens the processing panel there. -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-  <div class="proc" role="group" aria-label={`${channel.name} processing`} onclick={() => coarse.current && onselect(channel.id, 'input')}>
+  <div class="proc" class:ducks={hasDucks} role="group" aria-label={`${channel.name} processing`} onclick={() => coarse.current && onselect(channel.id, 'input')}>
     {#each [
       { key: 'HPF', on: st.hpf.enabled, to: 'input', what: 'High-pass filter' },
       { key: 'G', on: st.gate.enabled, to: 'dynamics', what: 'Gate' },
@@ -137,6 +154,21 @@
         aria-label={`${channel.name} ${chip.what}, ${chip.on ? 'in' : 'out'}`}>{chip.key}</button
       >
     {/each}
+    <!-- KEY on a trigger, DK on a target or a channel in no group; lit
+         while a group lowering it is held or latched in. The groups are
+         in its title and accessible name. -->
+    {#if hasDucks}
+      <button
+        class="chip duck"
+        tabindex="-1"
+        class:on={ducked.length > 0}
+        class:member={ducks.triggers.length + ducks.targets.length > 0}
+        onclick={() => onselect(channel.id, 'duck')}
+        title={`Duck: ${duckText}. Open it in the processing panel`}
+        aria-label={`${channel.name} duck, ${duckText}`}
+        data-testid={`duck-chip-${channel.id}`}>{ducks.triggers.length > 0 ? 'KEY' : 'DK'}</button
+      >
+    {/if}
   </div>
   <button class="eq" onclick={() => onselect(channel.id)} tabindex="-1" aria-hidden="true">
     <EqCurve eq={st.eq} hpf={st.hpf} width={72} height={18} />
@@ -440,6 +472,20 @@
   .proc .chip.on {
     color: var(--afl-ink);
     background: var(--afl);
+  }
+  /* Five chips: each as wide as its text, the rest shared, so HPF and
+     KEY keep their whole text in the strip. */
+  .proc.ducks .chip {
+    flex: 1 1 auto;
+  }
+  /* In a group: an edge, so membership reads without colour. */
+  .proc .chip.duck.member {
+    box-shadow: inset 0 0 0 1px var(--key-edge);
+  }
+  .proc .chip.duck.on {
+    color: var(--duck-ink);
+    background: var(--duck);
+    box-shadow: none;
   }
   .routes .chip.on {
     color: var(--on-ink);

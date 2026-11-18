@@ -57,6 +57,10 @@
   /* Line-up tone on an output. */
   --tone: #ff7a33;
   --tone-ink: #1a0800;
+  /* A duck group held or latched in: a hue of its own, apart from PFL
+     amber, AFL cyan, mute red, ownership purple and the neutral lit key. */
+  --duck: #f472b6;
+  --duck-ink: #1f0012;
 
   color-scheme: dark;
 }
@@ -64,6 +68,8 @@
 :root[data-theme='light'] {
   --tone: #c2410c;
   --tone-ink: #ffffff;
+  --duck: #a3175e;
+  --duck-ink: #ffffff;
   --bg: #d9dde3;
   --panel: #eceff3;
   --panel-2: #e3e7ec;

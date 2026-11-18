@@ -1,7 +1,7 @@
 // REST-backed operator actions. Each carries a fresh command id; RestClient
 // retries a failed request with the same id on the next endpoint.
 
-import type { CommandResult, Scene } from '../contract/types';
+import type { Change, CommandResult, Scene } from '../contract/types';
 import { RestClient } from '../net/rest';
 import { restBase } from '../sync/endpoints';
 import { uuid } from '../net/ids';
@@ -71,4 +71,9 @@ export function deleteScene(mixer: MixerStore, id: string) {
 /** A retry after a lost answer resets once more: the measurement restarts either way. */
 export function resetLoudness(mixer: MixerStore, ids: string[]) {
   return run(mixer, 'Loudness reset', () => client().request<null>('POST', '/loudness/reset', { ids }));
+}
+
+/** Writes `changes` in one revision, or none of them (PATCH /state), as a preset does. */
+export function patchState(mixer: MixerStore, what: string, changes: Change[]) {
+  return run(mixer, what, () => client().request<CommandResult>('PATCH', '/state', { commandId: uuid(), changes }));
 }

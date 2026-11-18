@@ -23,7 +23,8 @@ serves the UI with a mock faderz server on <http://localhost:5173>.
 The mock (`dev/mock/`) is dev-only: Vite loads it only under
 `npm run dev` and `vite preview`, and `npm run build` contains none of it. It simulates
 three replicas sharing one state, binary meter frames against credit,
-loudness, AFV tally cuts every 8 s and console activity, and validates
+loudness, AFV tally cuts every 8 s and console activity (a fader ride,
+bank changes, and every duck group held for 4 s in every 8 s), and validates
 every message it sends and receives against the contract; each meter
 frame is decoded and its values validated before it is sent.
 
@@ -58,6 +59,7 @@ restores replicas. The same controls answer JSON under `/__mock`:
 | `POST /__mock/drop-clients` | closes every socket |
 | `POST /__mock/slow-link?ms=<n>` | answers every later REST request and WebSocket upgrade `n` ms late, as over a slow link; `ms=0` ends it |
 | `POST /__mock/consoles/<id>/bank?offset=<n>` | moves that console's bank to start at channel index `n` |
+| `POST /__mock/ducks/script?ms=<n>` | a console session holds the hold of every duck group for `n` ms, lets go for `n` ms, and so on; `ms=0` stops and releases |
 | `POST /__mock/skip-revision` | advances the revision without a delta |
 | `POST /__mock/write` | body `{"changes": [{path, value}]}`: commits the changes in one revision whether or not a replica can commit, as a restore writing state does; answers like `PATCH /state` |
 | `POST /__mock/rewind?by=<n>` | rolls the cluster back `n` revisions, as a restore from an older backup would: a new epoch and every socket closed, so a client that held state reconnects with the old epoch and gets a snapshot of the new one |
@@ -310,6 +312,27 @@ key stops the talk, whichever screen lit it; one another session holds
 is stopped there, and the screen names the holder. A latch stopped
 while writes are locked stays shown until the server reports the talk
 off.
+
+DUCK on a duck group's tile in the masters, by pointer, Space or Enter,
+or Shift+D+n for the n-th group (while the digit is down): the press
+holds the duck in at once, and held longer than 0.3 s it is momentary;
+a shorter tap latches mode on, or sets a latched group back to auto. A
+cancelled touch, a lost pointer, focus leaving the key, the page going
+hidden or away, or leaving the view ends a hold and changes no mode; the
+latch stays, on every screen, until mode is set again. While another
+session holds a group the press holds nothing and the notice names the
+holder; a tap still latches, as mode has no owner. A tap on a bypassed
+group (mode OFF) changes nothing and says so: OFF takes a 0.5 s hold,
+AUTO and ON one press. No hold starts while nothing commits. The tile
+names the holder, says what the group does (DUCK HELD, DUCK ON, BYPASS,
+AUTO) and sets the threshold; the meter frames carry no duck telemetry
+yet, so no key level or gain reduction is shown. A strip's DK chip
+(KEY on a trigger) lights while a group that lowers it is held or
+latched in, and opens the Duck section of its processing panel. The
+DUCK view sets up every group: mode, key tap, detector and key filters,
+presets (LIGHT, HEAVY, VOICE, each one atomic PATCH), destinations, and
+per channel TRIG, TARGET and the depth; its channel grid is one tab
+stop, walked with the arrow keys. A phone shows one group at a time.
 
 A gesture on a control another session holds is refused at once and
 the notice names the holder. ASK in that notice sends the holder a
