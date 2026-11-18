@@ -16,11 +16,14 @@
 //! Every value is computed with `libm`, not the host's math library, so
 //! replicas on other hosts derive the same bits from the same state.
 
+use std::collections::BTreeSet;
+
 use samplez::Targets;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::shape::Shape;
+use crate::state::tokens;
 use crate::strip;
 
 /// A fader at this level or below is closed.
@@ -145,24 +148,48 @@ fn fold(from: usize, to: usize, i: usize, j: usize) -> f64 {
 /// coefficient in the same order of operations as one coefficient at a
 /// time, so the bits are those.
 pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
-    let mix = Mix::new(shape, state);
-    let columns: usize = (shape.outputs.iter().map(|o| o.width))
-        .chain(shape.meter_columns().iter().map(|m| m.1))
-        .sum();
-    let mut m: Vec<Vec<f32>> = (0..mix.rows).map(|_| Vec::with_capacity(columns)).collect();
+    let factors: Vec<Factors> = (shape.channels.iter())
+        .map(|c| Factors::of(state, &c.id))
+        .collect();
+    gains(shape, state, &factors)
+}
+
+/// [`matrix`] with each channel's `factors` given.
+fn gains(shape: &Shape, state: &Value, factors: &[Factors]) -> Vec<Vec<f32>> {
+    let all: Vec<usize> = (0..shape.channels.len()).collect();
+    let mix = Mix::of(shape, state, &all, |slot| factors[slot]);
+    let columns = columns(shape);
+    let width = columns.iter().map(|c| c.1).sum();
+    let mut m = vec![vec![0.0; width]; mix.rows];
+    let rows: Vec<usize> = (0..mix.rows).collect();
     let mut g = Vec::with_capacity(mix.rows * 8);
-    let outputs = shape.outputs.iter().map(|o| (o.source.as_str(), o.width));
-    let meters = shape.meter_columns().into_iter().map(|(id, w, _)| (id, w));
-    for (source, width) in outputs.chain(meters) {
+    let mut first = 0;
+    for (source, width) in columns {
         let ew = mix.element(source, &mut g);
-        for leg in 0..width {
-            for (row, r) in m.iter_mut().enumerate() {
-                let v = if leg < ew { g[row * ew + leg] } else { 0.0 };
-                r.push(v as f32);
-            }
-        }
+        put(&mut m, &rows, first, width, ew, &g);
+        first += width;
     }
     m
+}
+
+/// The element each of the matrix's columns carries and its width: the
+/// outputs, then the meter columns ([`Shape::meter_columns`]).
+fn columns(shape: &Shape) -> Vec<(&str, usize)> {
+    let outputs = shape.outputs.iter().map(|o| (o.source.as_str(), o.width));
+    let meters = shape.meter_columns().into_iter().map(|(id, w, _)| (id, w));
+    outputs.chain(meters).collect()
+}
+
+/// Writes the gains `g` of an element `ew` legs wide ([`Mix::element`])
+/// into the columns from `first` on of an output `width` legs wide, its
+/// rows into rows `rows` of `m`; legs the element lacks are 0.
+fn put(m: &mut [Vec<f32>], rows: &[usize], first: usize, width: usize, ew: usize, g: &[f64]) {
+    for (i, &row) in rows.iter().enumerate() {
+        for leg in 0..width {
+            let v = if leg < ew { g[i * ew + leg] } else { 0.0 };
+            m[row][first + leg] = v as f32;
+        }
+    }
 }
 
 /// One channel's input as the MXL configuration wires it: the flow of
@@ -178,31 +205,238 @@ pub struct Wiring {
 /// The flow each channel's selected input reads: input b's when the
 /// state selects b and the channel has one, else input a's.
 pub fn selected(shape: &Shape, wiring: &[Wiring], state: &Value) -> Vec<String> {
-    shape
-        .channels
-        .iter()
+    (shape.channels.iter())
         .zip(wiring)
-        .map(
-            |(c, w)| match (state["channels"][&c.id]["input"].as_str(), &w.b) {
-                (Some("b"), Some(b)) => b.clone(),
-                _ => w.a.clone(),
-            },
-        )
+        .map(|(c, w)| flow(state, &c.id, w))
         .collect()
+}
+
+/// The flow channel `id`, wired as `w`, reads.
+fn flow(state: &Value, id: &str, w: &Wiring) -> String {
+    match (state["channels"][id]["input"].as_str(), &w.b) {
+        (Some("b"), Some(b)) => b.clone(),
+        _ => w.a.clone(),
+    }
 }
 
 /// Everything the engine of `shape` plays from `state`: the gain matrix
 /// ([`matrix`]), each channel's strip ([`strip::params`]) and the flow
 /// its selected input reads ([`selected`]), one slot per channel.
 pub fn targets(shape: &Shape, wiring: &[Wiring], state: &Value) -> Targets {
-    Targets {
-        gains: matrix(shape, state),
-        flows: selected(shape, wiring, state),
-        strips: shape
-            .channels
-            .iter()
-            .map(|c| strip::params(&state["channels"][&c.id], c.width))
-            .collect(),
+    Derived::new(shape, wiring, state).targets
+}
+
+/// [`targets`] kept from one write to the next: a write derives again
+/// only what the leaves it changed move, with the same operations as
+/// [`targets`], so the bits are those ([`Derived::update`]).
+pub struct Derived {
+    targets: Targets,
+    /// Each channel's [`Factors`].
+    factors: Vec<Factors>,
+    /// Each channel's first row.
+    first: Vec<usize>,
+    /// The element each column carries ([`columns`]), its width and its
+    /// first column.
+    columns: Vec<(String, usize, usize)>,
+}
+
+/// What a write moves in [`targets`].
+#[derive(Default)]
+struct Moved {
+    /// Every target.
+    all: bool,
+    /// The rows of these channel slots.
+    rows: BTreeSet<usize>,
+    /// The columns of these buses, auxes and mix-minus outputs.
+    elements: BTreeSet<String>,
+    /// The columns of the monitor outputs.
+    monitor: bool,
+    /// The strips and flows of these slots.
+    strips: BTreeSet<usize>,
+    flows: BTreeSet<usize>,
+}
+
+impl Derived {
+    pub fn new(shape: &Shape, wiring: &[Wiring], state: &Value) -> Derived {
+        let factors: Vec<Factors> = (shape.channels.iter())
+            .map(|c| Factors::of(state, &c.id))
+            .collect();
+        let mut row = 0;
+        let first = (shape.channels.iter())
+            .map(|c| {
+                row += c.width;
+                row - c.width
+            })
+            .collect();
+        let mut col = 0;
+        let columns = (columns(shape).into_iter())
+            .map(|(id, width)| {
+                col += width;
+                (id.to_owned(), width, col - width)
+            })
+            .collect();
+        Derived {
+            targets: Targets {
+                gains: gains(shape, state, &factors),
+                flows: selected(shape, wiring, state),
+                strips: (shape.channels.iter())
+                    .map(|c| strip::params(&state["channels"][&c.id], c.width))
+                    .collect(),
+            },
+            factors,
+            first,
+            columns,
+        }
+    }
+
+    /// [`targets`] of the state last derived.
+    pub fn targets(&self) -> &Targets {
+        &self.targets
+    }
+
+    /// Derives again what a write of the leaves `paths` moved in
+    /// `state`, the state after it; `vcas` is `/vcas` before it, whose
+    /// former members a membership change moves.
+    pub fn update<'p>(
+        &mut self,
+        shape: &Shape,
+        wiring: &[Wiring],
+        state: &Value,
+        vcas: &Value,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) {
+        let moved = Moved::of(shape, state, vcas, paths);
+        // Past half the channels, recomputing their rows and then the
+        // columns besides costs more than the whole.
+        if moved.all || moved.rows.len() * 2 > shape.channels.len() {
+            *self = Derived::new(shape, wiring, state);
+            return;
+        }
+        let mut g = Vec::new();
+        if !moved.rows.is_empty() {
+            let slots: Vec<usize> = moved.rows.into_iter().collect();
+            for &slot in &slots {
+                self.factors[slot] = Factors::of(state, &shape.channels[slot].id);
+            }
+            let mix = Mix::of(shape, state, &slots, |slot| self.factors[slot]);
+            let rows: Vec<usize> = (slots.iter())
+                .flat_map(|&slot| self.first[slot]..self.first[slot] + shape.channels[slot].width)
+                .collect();
+            for (id, width, first) in &self.columns {
+                let ew = mix.element(id, &mut g);
+                put(&mut self.targets.gains, &rows, *first, *width, ew, &g);
+            }
+        }
+        let source = state["monitor"]["source"].as_str().unwrap_or_default();
+        let monitor = moved.monitor || moved.elements.contains(source);
+        let moved_columns: Vec<&(String, usize, usize)> = (self.columns.iter())
+            .filter(|(id, ..)| {
+                moved.elements.contains(id)
+                    || monitor && shape.monitor_outputs.iter().any(|m| m.id == *id)
+            })
+            .collect();
+        if !moved_columns.is_empty() {
+            let all: Vec<usize> = (0..shape.channels.len()).collect();
+            let mix = Mix::of(shape, state, &all, |slot| self.factors[slot]);
+            let rows: Vec<usize> = (0..mix.rows).collect();
+            for (id, width, first) in moved_columns {
+                let ew = mix.element(id, &mut g);
+                put(&mut self.targets.gains, &rows, *first, *width, ew, &g);
+            }
+        }
+        for slot in moved.strips {
+            let c = &shape.channels[slot];
+            self.targets.strips[slot] = strip::params(&state["channels"][&c.id], c.width);
+        }
+        for slot in moved.flows {
+            self.targets.flows[slot] = flow(state, &shape.channels[slot].id, &wiring[slot]);
+        }
+    }
+}
+
+impl Moved {
+    /// What a write of the leaves `paths` moves, `vcas` being `/vcas`
+    /// before it. [`targets`] reads the channels, AFV stages, VCAs,
+    /// buses, auxes, mix-minus outputs and the monitor; a leaf of
+    /// another group it is known not to read moves nothing, any other
+    /// moves everything.
+    fn of<'p>(
+        shape: &Shape,
+        state: &Value,
+        vcas: &Value,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) -> Moved {
+        let slot = |id: &str| shape.channels.iter().position(|c| c.id == id);
+        let mut moved = Moved::default();
+        for path in paths {
+            let t = tokens(path);
+            let group = t.first().map(String::as_str);
+            let id = t.get(1).map(String::as_str);
+            let key = t.get(2).map(String::as_str);
+            match (group, id) {
+                (Some("channels"), Some(id)) => {
+                    let Some(s) = slot(id) else {
+                        moved.all = true;
+                        continue;
+                    };
+                    match key {
+                        Some("fader" | "mute" | "routes" | "sends" | "pan" | "directOut") => {
+                            moved.rows.insert(s);
+                        }
+                        Some(
+                            "trim" | "legTrim" | "polarity" | "hpf" | "eq" | "gate" | "comp"
+                            | "dynamicsBeforeEq",
+                        ) => {
+                            moved.strips.insert(s);
+                        }
+                        Some("input") => {
+                            moved.flows.insert(s);
+                        }
+                        _ => {
+                            moved.rows.insert(s);
+                            moved.strips.insert(s);
+                            moved.flows.insert(s);
+                        }
+                    }
+                }
+                (Some("afv"), Some(id)) => match slot(id) {
+                    Some(s) => {
+                        moved.rows.insert(s);
+                    }
+                    None => moved.all = true,
+                },
+                // A VCA moves its members, those it had and those it has.
+                (Some("vcas"), _) => {
+                    for vcas in [vcas, &state["vcas"]] {
+                        let touched: Vec<&Value> = match id {
+                            Some(v) => vec![&vcas[v]],
+                            None => vcas
+                                .as_object()
+                                .into_iter()
+                                .flat_map(|v| v.values())
+                                .collect(),
+                        };
+                        let members = (touched.into_iter())
+                            .filter_map(|v| v["members"].as_array())
+                            .flatten();
+                        moved.rows.extend(members.filter_map(|m| slot(m.as_str()?)));
+                    }
+                }
+                (Some("buses" | "auxes" | "mixMinus"), Some(id)) => {
+                    moved.elements.insert(id.to_owned());
+                }
+                (Some("monitor"), _) => moved.monitor = true,
+                (
+                    Some(
+                        "ducks" | "tally" | "loudness" | "recallSafe" | "scenes" | "consoles"
+                        | "metering" | "tone" | "sceneRecalled",
+                    ),
+                    _,
+                ) => {}
+                _ => moved.all = true,
+            }
+        }
+        moved
     }
 }
 
@@ -236,6 +470,23 @@ pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
         .collect()
 }
 
+/// A channel's gain at [`Tap::PostFader`] and at [`Tap::Mix`]
+/// ([`channel`]), the same on every leg.
+#[derive(Clone, Copy)]
+struct Factors {
+    post: f64,
+    mix: f64,
+}
+
+impl Factors {
+    fn of(state: &Value, id: &str) -> Factors {
+        Factors {
+            post: channel(state, id, Tap::PostFader),
+            mix: channel(state, id, Tap::Mix),
+        }
+    }
+}
+
 /// One channel as the matrix reads it.
 struct Chan<'a> {
     id: &'a str,
@@ -247,17 +498,15 @@ struct Chan<'a> {
     /// The row of its first leg.
     row: usize,
     width: usize,
-    /// Its gain at [`Tap::PostFader`] and [`Tap::Mix`] ([`channel`]).
-    post: f64,
-    mix: f64,
+    factors: Factors,
 }
 
 impl Chan<'_> {
     fn at(&self, tap: Tap) -> f64 {
         match tap {
             Tap::Input | Tap::PreFader => 1.0,
-            Tap::PostFader => self.post,
-            Tap::Mix => self.mix,
+            Tap::PostFader => self.factors.post,
+            Tap::Mix => self.factors.mix,
         }
     }
 }
@@ -273,7 +522,8 @@ enum Kind<'a> {
     Other,
 }
 
-/// The state's matrix, each channel's tap gains taken once.
+/// The state's matrix over some of its channels, each channel's tap
+/// gains taken once.
 struct Mix<'a> {
     shape: &'a Shape,
     state: &'a Value,
@@ -282,10 +532,20 @@ struct Mix<'a> {
 }
 
 impl<'a> Mix<'a> {
-    fn new(shape: &'a Shape, state: &'a Value) -> Mix<'a> {
+    /// The channels at `slots` with the gains `factors` gives each slot,
+    /// their rows counted from 0 in that order. A coefficient takes only
+    /// its own channel's state and its element's, so a channel's rows
+    /// are the same bits whichever others are with it.
+    fn of(
+        shape: &'a Shape,
+        state: &'a Value,
+        slots: &[usize],
+        factors: impl Fn(usize) -> Factors,
+    ) -> Mix<'a> {
         let mut row = 0;
-        let chans = (shape.channels.iter())
-            .map(|c| {
+        let chans = (slots.iter())
+            .map(|&slot| {
+                let c = &shape.channels[slot];
                 let s = &state["channels"][&c.id];
                 let chan = Chan {
                     id: &c.id,
@@ -295,8 +555,7 @@ impl<'a> Mix<'a> {
                     pan: num(&s["pan"]["lr"]),
                     row,
                     width: c.width,
-                    post: channel(state, &c.id, Tap::PostFader),
-                    mix: channel(state, &c.id, Tap::Mix),
+                    factors: factors(slot),
                 };
                 row += c.width;
                 chan

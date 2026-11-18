@@ -293,6 +293,10 @@ pub struct Mixer {
     declared: Vec<Console>,
     /// Each channel's input flows and domain; empty without an engine.
     wiring: Vec<Wiring>,
+    /// The engine targets of the state, kept by every write; none
+    /// without an engine. Derived from the state alone, so neither
+    /// replicated nor saved.
+    derived: Option<mix::Derived>,
 }
 
 /// A snapshot from [`FORMAT`] on.
@@ -341,7 +345,16 @@ impl Mixer {
             ..Mixer::default()
         };
         m.state["consoles"] = m.console_list();
+        m.derive();
         m
+    }
+
+    /// Derives the engine targets of the whole state again.
+    fn derive(&mut self) {
+        self.derived = match (self.shape.as_deref(), self.wiring.is_empty()) {
+            (Some(shape), false) => Some(mix::Derived::new(shape, &self.wiring, &self.state)),
+            _ => None,
+        };
     }
 
     /// Builds [`Mixer::configured`]: the empty state every replica of a
@@ -584,9 +597,11 @@ impl Mixer {
     /// Writes `written` and what follows from it, and returns every leaf
     /// that changed: loudness target and tolerance from a preset, preset
     /// `custom` from a written target or tolerance, AFV stages from
-    /// bindings and tally.
+    /// bindings and tally. The engine targets follow the leaves changed.
     fn write(&mut self, written: Vec<(String, Value)>) -> Vec<(String, Value)> {
         let all = derived(written);
+        let vcas = (self.derived.is_some() && all.iter().any(|(p, _)| p.starts_with("/vcas")))
+            .then(|| self.state["vcas"].clone());
         let afv = all
             .iter()
             .any(|(p, _)| p.starts_with("/afv/") || p.starts_with("/tally/"));
@@ -606,6 +621,11 @@ impl Mixer {
                     changed.push((path, json!(open)));
                 }
             }
+        }
+        if let (Some(d), Some(shape)) = (&mut self.derived, self.shape.as_deref()) {
+            let vcas = vcas.as_ref().unwrap_or(&Value::Null);
+            let paths = changed.iter().map(|(p, _)| p.as_str());
+            d.update(shape, &self.wiring, &self.state, vcas, paths);
         }
         changed
     }
@@ -1316,10 +1336,10 @@ impl Product for Mixer {
         }
     }
 
-    /// [`mix::targets`] of the state; none without an engine's wiring.
+    /// [`mix::targets`] of the state, as every write keeps them; none
+    /// without an engine's wiring.
     fn targets(&self) -> Option<Targets> {
-        let shape = self.shape.as_deref()?;
-        (!self.wiring.is_empty()).then(|| mix::targets(shape, &self.wiring, &self.state))
+        self.derived.as_ref().map(|d| d.targets().clone())
     }
 
     fn reroutes(&self, _origin: &Origin, command: &[u8]) -> Vec<u32> {
@@ -1497,6 +1517,7 @@ impl Product for Mixer {
             self.dropped = Vec::new();
             self.consoles = saved.consoles;
         }
+        self.derive();
         Ok(())
     }
 
@@ -3578,6 +3599,257 @@ mod tests {
     fn no_wiring_no_targets() {
         assert_eq!(mixer().targets(), None);
         assert!(wired().targets().is_some());
+    }
+
+    /// The small shape with more channels, a 5.1 one among them, a
+    /// second VCA, a stereo aux and a direct out, each channel wired to
+    /// flows of its own in one domain.
+    fn wide() -> Mixer {
+        let mut shape = small();
+        let channel = |id: &str, width: usize, layout: &str| json!({ "id": id, "name": id, "width": width, "layout": layout, "altInput": true });
+        let more = [
+            channel("ch3", 1, "mono"),
+            channel("st2", 2, "stereo"),
+            channel("c51", 6, "5.1"),
+            channel("ch4", 1, "mono"),
+        ];
+        shape["channels"].as_array_mut().unwrap().extend(more);
+        shape["vcas"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "id": "vca2", "name": "MUSIC" }));
+        shape["auxes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "id": "aux2", "name": "FX", "width": 2, "layout": "stereo" }));
+        shape["outputs"].as_array_mut().unwrap().push(
+            json!({ "id": "o-ch1", "name": "DO 1", "source": "ch1", "width": 1, "layout": "mono" }),
+        );
+        let shape = Shape::parse(&shape).unwrap();
+        let wiring = (shape.channels.iter())
+            .map(|c| Wiring {
+                a: format!("a-{}", c.id),
+                b: c.alt_input.then(|| format!("b-{}", c.id)),
+                domain: "d".into(),
+            })
+            .collect();
+        Mixer::configured(shape, Vec::new(), wiring)
+    }
+
+    /// The targets a mixer keeps from write to write are those derived
+    /// from its whole state, bit for bit, after every command of random
+    /// sequences: sets, patches, touches and releases, scenes stored and
+    /// recalled, tally, expiries, refused commands and a save and load.
+    #[test]
+    fn the_kept_targets_are_those_of_the_whole_state_bit_for_bit() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let channels = ["ch1", "ch2", "st1", "ch3", "st2", "c51", "ch4"];
+        let elements = [
+            "buses/pgm",
+            "buses/cf",
+            "auxes/aux1",
+            "auxes/aux2",
+            "mixMinus/mm1",
+        ];
+        let sources = ["pgm", "cf", "aux1", "aux2", "mm1"];
+        // One random leaf the targets read, or one beside them.
+        let leaf = |next: &mut dyn FnMut(u64) -> u64| -> (String, Value) {
+            let ch = channels[next(channels.len() as u64) as usize];
+            let db = json!(next(1100) as f64 / 10.0 - 90.0);
+            let flag = json!(next(2) == 0);
+            let some = |next: &mut dyn FnMut(u64) -> u64| -> Value {
+                json!(channels.iter().filter(|_| next(3) == 0).collect::<Vec<_>>())
+            };
+            match next(30) {
+                0 => (format!("/channels/{ch}/fader"), db),
+                1 => (format!("/channels/{ch}/mute"), flag),
+                2 => (
+                    format!("/channels/{ch}/pan/lr"),
+                    json!(next(201) as f64 / 100.0 - 1.0),
+                ),
+                3 => (
+                    format!("/channels/{ch}/routes/{}", ["pgm", "cf"][next(2) as usize]),
+                    flag,
+                ),
+                4 => {
+                    let aux = ["aux1", "aux2"][next(2) as usize];
+                    let key = ["on", "level", "pre", "pan"][next(4) as usize];
+                    let value = match key {
+                        "level" => db,
+                        "pan" => json!(next(201) as f64 / 100.0 - 1.0),
+                        _ => flag,
+                    };
+                    (format!("/channels/{ch}/sends/{aux}/{key}"), value)
+                }
+                5 => (
+                    format!("/channels/{ch}/directOut/tap"),
+                    json!(["input", "preFader", "postFader"][next(3) as usize]),
+                ),
+                6 => (format!("/vcas/vca{}/members", 1 + next(2)), some(next)),
+                7 => (
+                    format!("/vcas/vca{}/offset", 1 + next(2)),
+                    json!(next(400) as f64 / 10.0 - 30.0),
+                ),
+                8 => (format!("/vcas/vca{}/mute", 1 + next(2)), flag),
+                9 => (format!("/{}/fader", elements[next(5) as usize]), db),
+                10 => (format!("/{}/mute", elements[next(5) as usize]), flag),
+                11 => (
+                    format!("/{}/polarity/{}", elements[next(4) as usize], next(2)),
+                    flag,
+                ),
+                12 => ("/mixMinus/mm1/exclude".into(), some(next)),
+                13 => (
+                    format!("/afv/{ch}/{}", ["enabled", "open"][next(2) as usize]),
+                    flag,
+                ),
+                14 => (format!("/afv/{ch}/source"), json!("cam1")),
+                15 => (format!("/afv/{ch}/offLevel"), json!(-(next(60) as f64))),
+                16 => ("/monitor/source".into(), json!(sources[next(5) as usize])),
+                17 => {
+                    let key = ["level", "dim", "cut", "mono", "downmix"][next(5) as usize];
+                    let value = match key {
+                        "level" => db,
+                        "downmix" => json!(["lr", "loRo"][next(2) as usize]),
+                        _ => flag,
+                    };
+                    (format!("/monitor/{key}"), value)
+                }
+                18 => (
+                    format!(
+                        "/monitor/{}/{}",
+                        ["speakerMute", "speakerSolo"][next(2) as usize],
+                        next(2)
+                    ),
+                    flag,
+                ),
+                19 => (
+                    format!("/channels/{ch}/trim"),
+                    json!(next(41) as f64 - 20.0),
+                ),
+                20 => (
+                    format!("/channels/{ch}/legTrim/0"),
+                    json!(next(13) as f64 - 6.0),
+                ),
+                21 => (format!("/channels/{ch}/polarity/0"), flag),
+                22 => (format!("/channels/{ch}/hpf/enabled"), flag),
+                23 => (
+                    format!("/channels/{ch}/eq/bands/{}/gain", next(4)),
+                    json!(next(31) as f64 - 15.0),
+                ),
+                24 => (
+                    format!("/channels/{ch}/gate/threshold"),
+                    json!(-(next(80) as f64)),
+                ),
+                25 => (format!("/channels/{ch}/comp/enabled"), flag),
+                26 => (format!("/channels/{ch}/dynamicsBeforeEq"), flag),
+                27 => (
+                    format!("/channels/{ch}/input"),
+                    json!(["a", "b"][next(2) as usize]),
+                ),
+                28 => (format!("/channels/{ch}/meterTap"), json!("preFader")),
+                _ => ("/metering/loudness/preset".into(), json!("atsc")),
+            }
+        };
+        let mut seq = 0;
+        let mut changed = 0;
+        for round in 0..150 {
+            let mut m = wide();
+            let mut scenes: Vec<String> = Vec::new();
+            for step in 0..60 {
+                seq += 1;
+                let session = ["a", "b"][next(2) as usize];
+                let effect = match next(20) {
+                    0..=9 => {
+                        let (path, value) = leaf(&mut next);
+                        set(&mut m, session, seq, &path, value)
+                    }
+                    10 => {
+                        let writes: Vec<(String, Value)> =
+                            (0..1 + next(8)).map(|_| leaf(&mut next)).collect();
+                        let writes: Vec<(&str, Value)> = writes
+                            .iter()
+                            .map(|(p, v)| (p.as_str(), v.clone()))
+                            .collect();
+                        patch(&mut m, &format!("p{seq}"), &writes)
+                    }
+                    11 => touch(&mut m, session, seq, &leaf(&mut next).0),
+                    12 => release(&mut m, session, seq, &leaf(&mut next).0),
+                    13 => {
+                        scenes.push(store(&mut m, &format!("s{seq}"), None, "S"));
+                        Effect::Unchanged
+                    }
+                    14 => match scenes.get(next(scenes.len().max(1) as u64) as usize) {
+                        Some(scene) => rest(
+                            &mut m,
+                            Command::Recall {
+                                id: format!("r{seq}"),
+                                scene: scene.clone(),
+                                at: "2026-11-15T12:00:00.000Z".into(),
+                            },
+                        ),
+                        None => Effect::Unchanged,
+                    },
+                    15 => {
+                        let state = ["program", "preview", "off"][next(3) as usize];
+                        rest(
+                            &mut m,
+                            Command::Tally {
+                                id: format!("t{seq}"),
+                                sources: [("cam1".to_owned(), state.to_owned())].into(),
+                                replace: next(2) == 0,
+                            },
+                        )
+                    }
+                    16 => m.expire(&origin(session).key()),
+                    // Refused: an unknown control, and an input switch
+                    // off the generation path.
+                    17 => set(&mut m, session, seq, "/channels/nope/fader", json!(0)),
+                    18 => {
+                        let ch = channels[next(channels.len() as u64) as usize];
+                        let other = if m.state()["channels"][ch]["input"] == "a" {
+                            "b"
+                        } else {
+                            "a"
+                        };
+                        apply_as(&mut m, &input(ch, other), Some(false))
+                    }
+                    _ => {
+                        let before = m.targets().unwrap();
+                        let mut loaded = wide();
+                        loaded.load(&m.save()).unwrap();
+                        assert_eq!(
+                            format!("{:?}", loaded.targets()),
+                            format!("{:?}", Some(before))
+                        );
+                        m = loaded;
+                        Effect::Unchanged
+                    }
+                };
+                if let Effect::Changed(_) = effect {
+                    changed += 1;
+                }
+                let kept = m.targets().unwrap();
+                let whole = mix::targets(m.shape(), &m.wiring, m.state());
+                let at = format!("round {round} step {step}");
+                assert_eq!(gain_bits(&kept), gain_bits(&whole), "{at}");
+                assert_eq!(
+                    format!("{:?}", kept.strips),
+                    format!("{:?}", whole.strips),
+                    "{at}"
+                );
+                assert_eq!(kept.flows, whole.flows, "{at}");
+            }
+        }
+        assert!(
+            changed > 150 * 60 / 3,
+            "{changed} commands changed the state"
+        );
     }
 
     fn input(ch: &str, value: &str) -> Command {
