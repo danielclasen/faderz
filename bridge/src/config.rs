@@ -1,10 +1,12 @@
 //! The bridge's configuration file (JSON).
 
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::mcu::Device;
+use crate::rtpmidi::{self, Cidr};
 use crate::surface::UnitSpec;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,11 +67,62 @@ pub struct Unit {
     pub name: String,
     #[serde(default)]
     pub model: Model,
-    /// A part of the MIDI input port's name.
-    pub midi_in: String,
-    /// A part of the MIDI output port's name; the input's when absent.
+    #[serde(default)]
+    pub transport: Transport,
+    /// `midi`: a part of the MIDI input port's name.
+    #[serde(default)]
+    pub midi_in: Option<String>,
+    /// `midi`: a part of the MIDI output port's name; the input's when
+    /// absent.
     #[serde(default)]
     pub midi_out: Option<String>,
+    /// `rtp-midi`: the session.
+    #[serde(default)]
+    pub rtp_midi: Option<RtpMidi>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Transport {
+    /// Local MIDI ports (USB-MIDI, or what a network MIDI daemon offers).
+    #[default]
+    Midi,
+    /// An RTP-MIDI (AppleMIDI) session of the bridge's own.
+    RtpMidi,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RtpMidi {
+    /// The control port; the data port is the one above it.
+    #[serde(default = "default_rtp_port")]
+    pub port: u16,
+    #[serde(default = "default_bind")]
+    pub bind: IpAddr,
+    /// The session name the peer sees; the unit's name when absent.
+    #[serde(default)]
+    pub session_name: Option<String>,
+    /// Addresses or ranges (`198.51.100.0/24`) whose invitations are
+    /// accepted.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// `host:port`: the control port of a peer the bridge invites.
+    #[serde(default)]
+    pub invite: Option<String>,
+    #[serde(default = "default_rate")]
+    pub max_bytes_per_second: u32,
+}
+
+fn default_rtp_port() -> u16 {
+    5004
+}
+
+fn default_bind() -> IpAddr {
+    IpAddr::from([0, 0, 0, 0])
+}
+
+fn default_rate() -> u32 {
+    32_000
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -80,6 +133,77 @@ pub enum Model {
     XTouch,
     /// An X-Touch Extender in MC mode: eight strips.
     XTouchExtender,
+}
+
+impl Unit {
+    fn check_transport(&self) -> Result<(), String> {
+        match (self.transport, &self.midi_in, &self.rtp_midi) {
+            (Transport::Midi, Some(_), None) => Ok(()),
+            (Transport::Midi, None, _) => Err("midiIn: the MIDI port to open".into()),
+            (Transport::Midi, _, Some(_)) => Err("rtpMidi needs transport rtp-midi".into()),
+            (Transport::RtpMidi, None, Some(r)) if self.midi_out.is_none() => {
+                if r.port == 0 || r.port == u16::MAX {
+                    return Err("rtpMidi.port: 1 to 65534".into());
+                }
+                for a in &r.allow {
+                    a.parse::<Cidr>()
+                        .map_err(|e| format!("rtpMidi.allow: {e}"))?;
+                }
+                if let Some(i) = &r.invite {
+                    let ok = i.rsplit_once(':').is_some_and(|(host, port)| {
+                        !host.is_empty() && port.parse::<u16>().is_ok_and(|p| p > 0)
+                    });
+                    if !ok {
+                        return Err(format!("rtpMidi.invite {i:?} is not host:port"));
+                    }
+                }
+                if r.allow.is_empty() && r.invite.is_none() {
+                    return Err("rtpMidi: allow or invite, or nobody can connect".into());
+                }
+                let name = r.session_name.as_deref().unwrap_or(&self.name);
+                if name.is_empty() || name.len() > 64 || name.contains('\0') {
+                    return Err("rtpMidi.sessionName: 1 to 64 octets".into());
+                }
+                if r.max_bytes_per_second < 1000 {
+                    return Err("rtpMidi.maxBytesPerSecond: at least 1000".into());
+                }
+                Ok(())
+            }
+            (Transport::RtpMidi, _, None) => Err("rtpMidi: the session to open".into()),
+            (Transport::RtpMidi, _, Some(_)) => {
+                Err("midiIn and midiOut belong to transport midi".into())
+            }
+        }
+    }
+
+    /// The RTP-MIDI session of a `rtp-midi` unit, its peer to invite
+    /// resolved.
+    pub fn rtp_options(&self) -> Result<Option<rtpmidi::Options>, String> {
+        let Some(r) = &self.rtp_midi else {
+            return Ok(None);
+        };
+        let invite = match &r.invite {
+            Some(i) => Some(
+                i.to_socket_addrs()
+                    .map_err(|e| format!("rtpMidi.invite {i}: {e}"))?
+                    .min_by_key(SocketAddr::is_ipv6)
+                    .ok_or_else(|| format!("rtpMidi.invite {i}: no address"))?,
+            ),
+            None => None,
+        };
+        Ok(Some(rtpmidi::Options {
+            bind: r.bind,
+            port: r.port,
+            name: r.session_name.clone().unwrap_or_else(|| self.name.clone()),
+            allow: r
+                .allow
+                .iter()
+                .map(|a| a.parse())
+                .collect::<Result<_, _>>()?,
+            invite,
+            max_bytes_per_second: r.max_bytes_per_second,
+        }))
+    }
 }
 
 fn default_state_dir() -> PathBuf {
@@ -122,6 +246,21 @@ impl Config {
             }
             if !seen.insert(&u.id) {
                 return Err(format!("unit id {} twice", u.id));
+            }
+            u.check_transport()
+                .map_err(|e| format!("unit {}: {e}", u.id))?;
+        }
+        let mut ports = std::collections::HashSet::new();
+        for (u, r) in config
+            .units
+            .iter()
+            .filter_map(|u| u.rtp_midi.as_ref().map(|r| (u, r)))
+        {
+            if !(ports.insert(r.port) && ports.insert(r.port.wrapping_add(1))) {
+                return Err(format!(
+                    "unit {}: rtpMidi ports taken by another unit",
+                    u.id
+                ));
             }
         }
         if let Auth::Token {
@@ -200,6 +339,38 @@ mod tests {
         assert_eq!(specs[0].device, Device::Main);
         assert_eq!(specs[1].device, Device::Extender);
         assert_eq!(c.master.as_deref(), Some("/monitor/level"));
+        assert_eq!(c.units[0].transport, Transport::Midi);
+        assert!(c.units[0].rtp_options().unwrap().is_none());
+    }
+
+    #[test]
+    fn an_rtp_midi_unit_names_its_ports_peers_and_rate() {
+        let c = Config::parse(
+            r#"{ "endpoints": ["wss://f.example/api/v1/ws"],
+                 "units": [
+                   { "id": "xt", "name": "X-Touch", "transport": "rtp-midi",
+                     "rtpMidi": { "allow": ["198.51.100.0/24", "192.0.2.101"] } },
+                   { "id": "xt-ext", "name": "X-Touch Ext", "model": "x-touch-extender",
+                     "transport": "rtp-midi",
+                     "rtpMidi": { "port": 5006, "bind": "127.0.0.1", "sessionName": "faderz ext",
+                                  "invite": "127.0.0.1:5104", "maxBytesPerSecond": 8000 } }
+                 ] }"#,
+        )
+        .unwrap();
+        let a = c.units[0].rtp_options().unwrap().unwrap();
+        assert_eq!(a.port, 5004);
+        assert_eq!(a.bind, IpAddr::from([0, 0, 0, 0]));
+        assert_eq!(a.name, "X-Touch");
+        assert!(a.allow[0].contains("198.51.100.7".parse().unwrap()));
+        assert!(a.allow[1].contains("192.0.2.101".parse().unwrap()));
+        assert_eq!(a.invite, None);
+        assert_eq!(a.max_bytes_per_second, 32_000);
+        let b = c.units[1].rtp_options().unwrap().unwrap();
+        assert_eq!(b.port, 5006);
+        assert_eq!(b.name, "faderz ext");
+        assert!(b.allow.is_empty());
+        assert_eq!(b.invite, Some("127.0.0.1:5104".parse().unwrap()));
+        assert_eq!(b.max_bytes_per_second, 8000);
     }
 
     #[test]
@@ -228,6 +399,11 @@ mod tests {
     #[test]
     fn mistakes_are_refused() {
         let unit = r#"{ "id": "xt", "name": "X", "midiIn": "X" }"#;
+        let rtp = |fields: &str| {
+            format!(
+                r#"{{ "endpoints": ["ws://x"], "units": [{{ "id": "xt", "name": "X", {fields} }}] }}"#
+            )
+        };
         for (text, why) in [
             (format!(r#"{{ "endpoints": [], "units": [{unit}] }}"#), "endpoints"),
             (format!(r#"{{ "endpoints": ["http://x"], "units": [{unit}] }}"#), "ws://"),
@@ -238,6 +414,23 @@ mod tests {
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "extra": 1 }}"#), "unknown field"),
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "auth": {{ "mode": "device", "issuer": "http://idp.example", "clientId": "b" }} }}"#), "loopback"),
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "auth": {{ "mode": "device", "issuer": "https://idp.example", "clientId": "" }} }}"#), "clientId"),
+            (r#"{ "endpoints": ["ws://x"], "units": [{ "id": "xt", "name": "X" }] }"#.into(), "midiIn"),
+            (rtp(r#""transport": "rtp-midi""#), "rtpMidi: the session"),
+            (rtp(r#""midiIn": "X", "rtpMidi": { "allow": ["192.0.2.1"] }"#), "transport rtp-midi"),
+            (rtp(r#""transport": "rtp-midi", "midiIn": "X", "rtpMidi": { "allow": ["192.0.2.1"] }"#), "belong to transport midi"),
+            (rtp(r#""transport": "rtp-midi", "rtpMidi": {}"#), "allow or invite"),
+            (rtp(r#""transport": "rtp-midi", "rtpMidi": { "allow": ["192.0.2.0/40"] }"#), "rtpMidi.allow"),
+            (rtp(r#""transport": "rtp-midi", "rtpMidi": { "invite": "192.0.2.1" }"#), "host:port"),
+            (rtp(r#""transport": "rtp-midi", "rtpMidi": { "port": 65535, "allow": ["192.0.2.1"] }"#), "1 to 65534"),
+            (rtp(r#""transport": "rtp-midi", "rtpMidi": { "allow": ["192.0.2.1"], "maxBytesPerSecond": 10 }"#), "at least 1000"),
+            (rtp(r#""transport": "rtp-midi", "rtpMidi": { "allow": ["192.0.2.1"], "tls": true }"#), "unknown field"),
+            (
+                r#"{ "endpoints": ["ws://x"], "units": [
+                    { "id": "a", "name": "A", "transport": "rtp-midi", "rtpMidi": { "allow": ["192.0.2.1"] } },
+                    { "id": "b", "name": "B", "transport": "rtp-midi", "rtpMidi": { "port": 5005, "allow": ["192.0.2.1"] } }
+                ] }"#.into(),
+                "taken by another unit",
+            ),
         ] {
             let e = Config::parse(&text).unwrap_err();
             assert!(e.contains(why), "{e}");
