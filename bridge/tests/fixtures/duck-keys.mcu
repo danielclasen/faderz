@@ -18,11 +18,17 @@
 > 90 37 7f
 ! none
 < f0 00 00 66 14 12 38 43 6f 6d 6d 65 6e 74 f7, f0 00 00 66 14 12 4d 61 6e 61 20 20 20 20 f7
++ 400
 > 90 37 00
 ! none
 < f0 00 00 66 14 12 4d 2d 69 6e 66 20 20 20 f7
+# The mode has no owner: a tap latches comm-b in while ana holds it, and
+# it stays lit once she lets go.
+> 90 37 7f
+> 90 37 00
+! set /ducks/comm-b/mode "on"
 @ {"changes": [{"path": "/ducks/comm-b/hold", "value": false}], "owners": [{"path": "/ducks/comm-b/hold", "owner": null}]}
-< 90 37 00
+< none-of 90
 # Held past a tap, F1 holds comm in while it is down.
 > 90 36 7f
 ! touch /ducks/comm/hold ; set /ducks/comm/hold true

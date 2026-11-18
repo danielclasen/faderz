@@ -3,7 +3,10 @@
 //! keys as notes, their LEDs, and the scribble strip text as SysEx.
 //!
 //! The values follow the published reverse-engineered MCU reference; they
-//! are not checked against a unit here.
+//! are not checked against a unit here. The function keys F1 to F8 at
+//! notes 54 to 61 (0x36 to 0x3d) are the notes Ardour's Mackie Control
+//! surface (`libs/surfaces/mackie/device_info.cc`) and REAPER's
+//! (`csurf_mcu.cpp` in the REAPER SDK) read.
 
 /// Strips of an X-Touch or an X-Touch Extender, not counting a master.
 pub const STRIPS: u8 = 8;

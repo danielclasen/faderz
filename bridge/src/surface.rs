@@ -90,6 +90,14 @@ struct Press {
     suspect: Option<u64>,
 }
 
+impl Press {
+    /// Whether the press holds its group's `hold`: a hold key's press
+    /// the server did not refuse.
+    fn holds(&self) -> bool {
+        self.action != KeyAction::Latch && self.refused.is_none()
+    }
+}
+
 fn hold_path(duck: &str) -> String {
     format!("/ducks/{duck}/hold")
 }
@@ -318,8 +326,8 @@ impl Surface {
                 engine.release(&t.path, now);
             }
         }
-        let presses = std::mem::take(&mut self.units[unit].presses);
-        for p in presses.into_values() {
+        // One at a time, so that two keys on one group release it once.
+        while let Some((_, p)) = self.units[unit].presses.pop_first() {
             self.let_go(p, engine, now);
         }
         self.resend(unit);
@@ -365,7 +373,7 @@ impl Surface {
             .map(|t| t.path.clone());
         let keys = (self.units.iter())
             .flat_map(|u| u.presses.values())
-            .filter(|p| p.refused.is_none())
+            .filter(|p| p.holds())
             .map(|p| hold_path(&p.duck));
         faders.chain(keys).collect()
     }
@@ -425,21 +433,23 @@ impl Surface {
     /// A duck key went down: a latch toggles the mode, a hold is taken
     /// unless another session has it.
     fn duck_down(&mut self, unit: usize, note: u8, key: DuckKey, engine: &mut Engine, now: u64) {
-        if key.action == KeyAction::Latch {
-            return Self::toggle_mode(&key.duck, engine, now);
-        }
         // A note on again without a note off between: the same press.
         if self.units[unit].presses.contains_key(&note) {
             return;
         }
         let path = hold_path(&key.duck);
-        let refused = engine
-            .owner(&path)
-            .filter(|o| !engine.mine(o))
-            .map(short_name);
-        if refused.is_none() {
-            engine.touch(&path, now);
-            engine.set(&path, json!(true), now);
+        let mut refused = None;
+        if key.action == KeyAction::Latch {
+            Self::toggle_mode(&key.duck, engine, now);
+        } else {
+            refused = engine
+                .owner(&path)
+                .filter(|o| !engine.mine(o))
+                .map(short_name);
+            if refused.is_none() {
+                engine.touch(&path, now);
+                engine.set(&path, json!(true), now);
+            }
         }
         let press = Press {
             duck: key.duck,
@@ -451,27 +461,32 @@ impl Surface {
         self.units[unit].presses.insert(note, press);
     }
 
-    /// A duck key went up: a tap toggles the mode, then the hold is let go.
+    /// A duck key went up: a tap toggles the mode, whoever holds the
+    /// hold, as the mode has no owner; then the hold is let go.
     fn duck_up(&mut self, p: Press, engine: &mut Engine, now: u64) {
-        if p.refused.is_none() && p.action == KeyAction::HoldOrLatch && now < p.since + LATCH_MS {
+        if p.action == KeyAction::HoldOrLatch && now < p.since + LATCH_MS {
             Self::toggle_mode(&p.duck, engine, now);
         }
         self.let_go(p, engine, now);
     }
 
-    /// Releases a hold `p` took, unless another key still holds it.
+    /// Releases the hold `p` took, unless another key still holds it.
     fn let_go(&self, p: Press, engine: &mut Engine, now: u64) {
-        if p.refused.is_none() && !self.touching().contains(&hold_path(&p.duck)) {
+        if p.holds() && !self.touching().contains(&hold_path(&p.duck)) {
             engine.release(&hold_path(&p.duck), now);
         }
     }
 
-    /// Sets duck group `duck`'s `mode` to `auto` when it is `on`, else
-    /// to `on`.
+    /// Sets duck group `duck`'s `mode` to `auto` when it is `on`, and to
+    /// `on` when it is `auto`. A bypass (`off`) is left as it is: only a
+    /// screen or the API sets and ends it.
     fn toggle_mode(duck: &str, engine: &mut Engine, now: u64) {
         let path = format!("/ducks/{duck}/mode");
-        let on = engine.display(&path).and_then(Value::as_str) == Some("on");
-        engine.set(&path, json!(if on { "auto" } else { "on" }), now);
+        match engine.display(&path).and_then(Value::as_str) {
+            Some("on") => engine.set(&path, json!("auto"), now),
+            Some("off") => {}
+            _ => engine.set(&path, json!("on"), now),
+        }
     }
 
     fn key(&mut self, unit: usize, key: Key, engine: &mut Engine, now: u64) {
@@ -532,6 +547,9 @@ impl Surface {
                         engine.set(path, json!(true), now);
                     }
                 }
+                for warning in self.unbound_keys(engine) {
+                    tracing::warn!("{warning}");
+                }
             }
             Event::Refused { path, owner } => {
                 for t in self
@@ -544,7 +562,7 @@ impl Surface {
                     }
                 }
                 for p in self.units.iter_mut().flat_map(|u| u.presses.values_mut()) {
-                    if hold_path(&p.duck) == *path && p.refused.is_none() {
+                    if hold_path(&p.duck) == *path && p.holds() {
                         p.refused = Some(short_name(owner));
                     }
                 }
@@ -596,7 +614,7 @@ impl Surface {
         }
         for p in self.units.iter_mut().flat_map(|u| u.presses.values_mut()) {
             let path = hold_path(&p.duck);
-            if p.refused.is_none()
+            if p.holds()
                 && !engine.touch_pending(&path)
                 && let Some(owner) = engine.owner(&path).filter(|o| !engine.mine(o))
             {
@@ -693,15 +711,37 @@ impl Surface {
         out
     }
 
-    /// While a duck key of unit `unit` is held down and refused, line 2
-    /// of its scribble strip says who holds the duck.
+    /// While a duck key of unit `unit` is down, line 2 of its scribble
+    /// strip says who holds the group when its hold was refused, or that
+    /// the group is bypassed.
     fn notice(&self, engine: &Engine, unit: usize) -> Option<String> {
-        let (p, holder) =
-            (self.units[unit].presses.values()).find_map(|p| p.refused.as_ref().map(|h| (p, h)))?;
-        let name = (Self::ducks(engine).into_iter())
-            .find(|(id, _)| *id == p.duck)
-            .map_or_else(|| p.duck.clone(), |(_, name)| name);
-        Some(format!("{name} held by {holder}"))
+        let name = |duck: &str| {
+            (Self::ducks(engine).into_iter())
+                .find(|(id, _)| id == duck)
+                .map_or_else(|| duck.to_owned(), |(_, name)| name)
+        };
+        let presses = self.units[unit].presses.values();
+        let refused = presses.clone().find_map(|p| {
+            p.refused
+                .as_ref()
+                .map(|h| format!("{} held by {h}", name(&p.duck)))
+        });
+        refused.or_else(|| {
+            presses
+                .clone()
+                .find(|p| engine.display(&format!("/ducks/{}/mode", p.duck)) == Some(&json!("off")))
+                .map(|p| format!("{} bypassed", name(&p.duck)))
+        })
+    }
+
+    /// What is wrong with the duck keys of their own on the shape: a key
+    /// bound to a group the shape lacks does nothing.
+    pub fn unbound_keys(&self, engine: &Engine) -> Vec<String> {
+        let ducks = Self::ducks(engine);
+        (self.keys.iter().flatten())
+            .filter(|(_, k)| !ducks.iter().any(|(id, _)| *id == k.duck))
+            .map(|(note, k)| format!("keys.{note}: the shape has no duck group {}", k.duck))
+            .collect()
     }
 
     fn strip_view(&self, engine: &Engine, unit: usize, strip: u8) -> StripView {
@@ -1177,7 +1217,7 @@ mod tests {
         key(&mut s, &mut e, F1, false, 1100);
         let out = values(&e.take_actions());
         assert_eq!(out[2], cmd("set", MODE, json!("auto")));
-        // From off a tap latches it on.
+        // A bypass is left as it is, and said while the key is down.
         let mut e = ducking();
         delta(
             &mut e,
@@ -1185,13 +1225,28 @@ mod tests {
             json!([{ "path": MODE, "value": "off" }]),
             json!([]),
         );
+        s.render(&e, 1999);
         key(&mut s, &mut e, F1, true, 2000);
+        let out = s.render(&e, 2000);
+        for (strip, text) in [(0, "Comment"), (1, "ary A b"), (2, "ypassed")] {
+            let cell = mcu::lcd(Device::Main, 56 + strip * 7, text);
+            assert!(out.contains(&(0, cell)), "{strip}: {out:02x?}");
+        }
         key(&mut s, &mut e, F1, false, 2001);
-        assert_eq!(values(&e.take_actions())[2], cmd("set", MODE, json!("on")));
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![
+                cmd("touch", HOLD, Value::Null),
+                cmd("set", HOLD, json!(true)),
+                cmd("release", HOLD, Value::Null),
+            ]
+        );
+        let out = s.render(&e, 2002);
+        assert!(out.contains(&(0, mcu::lcd(Device::Main, 56 + 14, "       "))));
     }
 
     #[test]
-    fn a_refused_duck_key_shows_the_holder_and_sends_nothing_more() {
+    fn a_refused_duck_key_shows_the_holder_and_only_a_tap_latches() {
         let ana = json!({ "principal": "ana", "handle": "aaaaaaaaaaaaaaaaaaaaaa", "kind": "ui", "connection": "c" });
         // Held elsewhere before the press: nothing goes out.
         let mut e = ducking();
@@ -1215,18 +1270,25 @@ mod tests {
             let cell = mcu::lcd(Device::Main, 56 + strip * 7, text);
             assert!(out.contains(&(0, cell)), "{strip}: {out:02x?}");
         }
-        key(&mut s, &mut e, F1, false, 30);
-        assert!(values(&e.take_actions()).is_empty(), "no mode, no release");
-        let out = s.render(&e, 40);
+        key(&mut s, &mut e, F1, false, 10 + LATCH_MS);
+        assert!(values(&e.take_actions()).is_empty(), "nothing to release");
+        let out = s.render(&e, 400);
         let value = mcu::cell(&taper::format_db(-90.0));
         assert!(
             out.contains(&(0, mcu::lcd(Device::Main, 56, &value))),
             "back to the fader: {out:02x?}"
         );
         assert!(out.contains(&(0, mcu::lcd(Device::Main, 56 + 21, "       "))));
+        // The mode has no owner: a tap latches while another holds.
+        key(&mut s, &mut e, F1, true, 500);
+        key(&mut s, &mut e, F1, false, 501);
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![cmd("set", MODE, json!("on"))]
+        );
 
         // Refused by the server after the press: shown, and let go
-        // without a release or a mode change, even after a tap.
+        // without a release.
         let mut e = ducking();
         let mut s = Surface::new(units(1), None);
         key(&mut s, &mut e, F1, true, 0);
@@ -1243,7 +1305,10 @@ mod tests {
         let out = s.render(&e, 6);
         assert!(out.contains(&(0, mcu::lcd(Device::Main, 56 + 21, "ana    "))));
         key(&mut s, &mut e, F1, false, 10);
-        assert!(values(&e.take_actions()).is_empty());
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![cmd("set", MODE, json!("on"))]
+        );
 
         // Answered, the hold went to another session: noticed on a tick.
         let mut e = ducking();
@@ -1490,5 +1555,99 @@ mod tests {
             values(&e.take_actions()),
             vec![cmd("release", HOLD, Value::Null)]
         );
+    }
+
+    #[test]
+    fn an_empty_keys_map_leaves_the_x_touch_without_duck_keys() {
+        let mut e = ducking();
+        let mut s = Surface::new(units(1), None).with_keys(Some(DuckKeys::new()));
+        let out = s.render(&e, 0);
+        key(&mut s, &mut e, F1, true, 1);
+        key(&mut s, &mut e, F1, false, 2);
+        assert!(values(&e.take_actions()).is_empty());
+        assert!(
+            !out.iter()
+                .any(|(_, m)| m[0] == 0x90 && (54..=61).contains(&m[1])),
+            "{out:02x?}"
+        );
+    }
+
+    #[test]
+    fn two_keys_on_one_group_release_it_once_when_their_session_ends() {
+        let mut e = ducking();
+        let keys = DuckKeys::from([
+            (
+                0,
+                DuckKey {
+                    duck: "comm".into(),
+                    action: KeyAction::Hold,
+                },
+            ),
+            (
+                1,
+                DuckKey {
+                    duck: "comm".into(),
+                    action: KeyAction::Hold,
+                },
+            ),
+        ]);
+        let mut s = Surface::new(units(1), None).with_keys(Some(keys));
+        key(&mut s, &mut e, 0, true, 0);
+        key(&mut s, &mut e, 1, true, 0);
+        e.take_actions();
+        s.reconnected(0, &mut e, 100);
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![cmd("release", HOLD, Value::Null)]
+        );
+    }
+
+    #[test]
+    fn a_latch_key_toggles_once_per_press() {
+        let mut e = ducking();
+        let keys = DuckKeys::from([(
+            F1,
+            DuckKey {
+                duck: "comm".into(),
+                action: KeyAction::Latch,
+            },
+        )]);
+        let mut s = Surface::new(units(1), None).with_keys(Some(keys));
+        // A note on repeated without a note off is the same press.
+        key(&mut s, &mut e, F1, true, 0);
+        key(&mut s, &mut e, F1, true, 5);
+        key(&mut s, &mut e, F1, false, 10);
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![cmd("set", MODE, json!("on"))]
+        );
+        assert!(s.touching().is_empty());
+    }
+
+    #[test]
+    fn keys_bound_to_groups_the_shape_lacks_are_named() {
+        let e = ducking();
+        let keys = DuckKeys::from([
+            (
+                0,
+                DuckKey {
+                    duck: "comm".into(),
+                    action: KeyAction::Hold,
+                },
+            ),
+            (
+                1,
+                DuckKey {
+                    duck: "gone".into(),
+                    action: KeyAction::Hold,
+                },
+            ),
+        ]);
+        let s = Surface::new(units(1), None).with_keys(Some(keys));
+        assert_eq!(
+            s.unbound_keys(&e),
+            vec!["keys.1: the shape has no duck group gone"]
+        );
+        assert!(Surface::new(units(1), None).unbound_keys(&e).is_empty());
     }
 }

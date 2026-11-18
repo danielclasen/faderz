@@ -3,7 +3,8 @@
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::de::{self, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 
 use crate::mcu::{Device, Key};
 use crate::rtpmidi::{self, Cidr};
@@ -28,8 +29,33 @@ pub struct Config {
     pub master: Option<String>,
     /// The X-Touch's duck keys by note; F1 to F8 on the shape's duck
     /// groups in order when absent.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "duck_keys")]
     pub keys: Option<DuckKeys>,
+}
+
+/// The `keys` map, its notes written in decimal; a note named twice
+/// (`"0"` and `"00"`) is refused rather than one entry dropped.
+fn duck_keys<'de, D: Deserializer<'de>>(d: D) -> Result<Option<DuckKeys>, D::Error> {
+    struct Keys;
+    impl<'de> Visitor<'de> for Keys {
+        type Value = DuckKeys;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a map of MIDI notes to duck keys")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<DuckKeys, A::Error> {
+            let mut keys = DuckKeys::new();
+            while let Some((note, key)) = map.next_entry::<String, _>()? {
+                let n: u8 = note
+                    .parse()
+                    .map_err(|_| de::Error::custom(format!("keys: {note:?} is not a MIDI note")))?;
+                if keys.insert(n, key).is_some() {
+                    return Err(de::Error::custom(format!("keys: note {n} twice")));
+                }
+            }
+            Ok(keys)
+        }
+    }
+    d.deserialize_map(Keys).map(Some)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -326,6 +352,17 @@ impl Config {
             .collect()
     }
 
+    /// What the configuration asks for that cannot take effect.
+    pub fn warnings(&self) -> Vec<String> {
+        let x_touch = self.units.iter().any(|u| u.model == Model::XTouch);
+        match &self.keys {
+            Some(keys) if !keys.is_empty() && !x_touch => {
+                vec!["keys: no unit is an x-touch, which has the duck keys".into()]
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn session_file(&self) -> PathBuf {
         self.state_dir.join("session")
     }
@@ -376,12 +413,29 @@ mod tests {
                            "55": { "duck": "comm-b", "action": "latch" } } }"#,
         )
         .unwrap();
-        let keys = c.keys.unwrap();
+        let keys = c.keys.as_ref().unwrap();
         assert_eq!(keys.len(), 3);
         assert_eq!(keys[&0].duck, "comm-a");
         assert_eq!(keys[&0].action, KeyAction::Hold);
         assert_eq!(keys[&54].action, KeyAction::HoldOrLatch);
         assert_eq!(keys[&55].action, KeyAction::Latch);
+        assert!(c.warnings().is_empty());
+        // An empty map is no duck keys, not the function keys.
+        let c = Config::parse(
+            r#"{ "endpoints": ["ws://x"], "units": [{ "id": "xt", "name": "X", "midiIn": "X" }],
+                 "keys": {} }"#,
+        )
+        .unwrap();
+        assert_eq!(c.keys, Some(DuckKeys::new()));
+        // Keys on a bridge with Extenders only cannot take effect.
+        let c = Config::parse(
+            r#"{ "endpoints": ["ws://x"],
+                 "units": [{ "id": "xe", "name": "X", "model": "x-touch-extender", "midiIn": "X" }],
+                 "keys": { "0": { "duck": "comm" } } }"#,
+        )
+        .unwrap();
+        assert_eq!(c.warnings().len(), 1, "{:?}", c.warnings());
+        assert!(c.warnings()[0].contains("x-touch"));
     }
 
     #[test]
@@ -469,7 +523,9 @@ mod tests {
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "keys": {{ "104": {{ "duck": "comm" }} }} }}"#), "keys.104"),
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "keys": {{ "1": {{ "duck": "Comm" }} }} }}"#), "not a faderz id"),
             (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "keys": {{ "1": {{ "duck": "comm", "action": "toggle" }} }} }}"#), "unknown variant"),
-            (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "keys": {{ "F1": {{ "duck": "comm" }} }} }}"#), "invalid"),
+            (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "keys": {{ "F1": {{ "duck": "comm" }} }} }}"#), "not a MIDI note"),
+            (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "keys": {{ "256": {{ "duck": "comm" }} }} }}"#), "not a MIDI note"),
+            (format!(r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "keys": {{ "0": {{ "duck": "a" }}, "00": {{ "duck": "b" }} }} }}"#), "note 0 twice"),
             (
                 r#"{ "endpoints": ["ws://x"], "units": [
                     { "id": "a", "name": "A", "transport": "rtp-midi", "rtpMidi": { "allow": ["192.0.2.1"] } },
