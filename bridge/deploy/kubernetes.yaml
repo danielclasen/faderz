@@ -1,0 +1,118 @@
+# faderz-bridge for network surfaces, as a Kubernetes example: one
+# replica, since both UDP ports of a unit have to reach the same
+# process; the configuration from a ConfigMap; the session id and the
+# signed-in tokens on a volume; every unit's control and data port on a
+# UDP LoadBalancer that keeps the client's address, which the bridge
+# checks against each unit's rtpMidi.allow.
+#
+# Set the image version, the endpoints, the sign-in, the units and the
+# address ranges (192.0.2.0/24 stands for the desks' addresses here).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faderz-bridge
+data:
+  config.json: |
+    {
+      "endpoints": ["wss://faderz.example/api/v1/ws"],
+      "auth": {
+        "mode": "device",
+        "issuer": "https://idp.example/realms/media",
+        "clientId": "faderz-bridge",
+        "scopes": ["offline_access"]
+      },
+      "units": [
+        { "id": "xtouch", "name": "X-Touch", "transport": "rtp-midi",
+          "rtpMidi": { "port": 5004, "allow": ["192.0.2.0/24"] } },
+        { "id": "xtouch-ext", "name": "X-Touch Ext", "model": "x-touch-extender",
+          "transport": "rtp-midi",
+          "rtpMidi": { "port": 5006, "allow": ["192.0.2.0/24"] } }
+      ]
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: faderz-bridge
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 16Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faderz-bridge
+spec:
+  replicas: 1
+  # The old pod lets go of the volume and the ports before the new one
+  # starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: faderz-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: faderz-bridge
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bridge
+          image: ghcr.io/danielclasen/faderz-bridge:<version>
+          args: ["--config", "/etc/faderz-bridge/config.json"]
+          ports:
+            - { name: xt-control, containerPort: 5004, protocol: UDP }
+            - { name: xt-data, containerPort: 5005, protocol: UDP }
+            - { name: ext-control, containerPort: 5006, protocol: UDP }
+            - { name: ext-data, containerPort: 5007, protocol: UDP }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/faderz-bridge
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/faderz-bridge
+      volumes:
+        - name: config
+          configMap:
+            name: faderz-bridge
+        - name: state
+          persistentVolumeClaim:
+            claimName: faderz-bridge
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faderz-bridge
+spec:
+  type: LoadBalancer
+  # Keeps the client's source address, which rtpMidi.allow checks.
+  externalTrafficPolicy: Local
+  loadBalancerSourceRanges:
+    - 192.0.2.0/24
+  selector:
+    app.kubernetes.io/name: faderz-bridge
+  ports:
+    - { name: xt-control, port: 5004, targetPort: xt-control, protocol: UDP }
+    - { name: xt-data, port: 5005, targetPort: xt-data, protocol: UDP }
+    - { name: ext-control, port: 5006, targetPort: ext-control, protocol: UDP }
+    - { name: ext-data, port: 5007, targetPort: ext-data, protocol: UDP }
