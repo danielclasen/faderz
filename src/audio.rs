@@ -360,7 +360,7 @@ impl Audio {
     /// ([`mix::EngineView::targets`]) that differs from what it was sent, a
     /// route or detach for every channel whose flow differs and an enable
     /// for every output whose enable differs, all at `at` rounded up to a
-    /// block. When the engine no
+    /// block; the gains no earlier than the detaches. When the engine no
     /// longer takes that index, the rest of the diff goes at the earliest
     /// one it does; while it holds as many changes as it takes, the next
     /// waits. With `settle`, the gains wait for the strips' ramps.
@@ -421,21 +421,6 @@ impl Audio {
         // After a refusal every setting and mask goes again on the next
         // write.
         sent.ducks = (!refused).then_some(held);
-        if settle {
-            at = (at + self.ramp).next_multiple_of(self.block);
-        }
-        *self.taps.lock().expect("taps lock poisoned") = mix::meter_taps(&self.shape, state);
-        for (input, (row, new)) in sent.matrix.iter_mut().zip(targets.gains).enumerate() {
-            for (output, (g, n)) in row.iter_mut().zip(new).enumerate() {
-                if *g != n
-                    && self
-                        .send(&mut at, |at| self.engine.set_gain(input, output, n, at))
-                        .await
-                {
-                    *g = n;
-                }
-            }
-        }
         for (slot, flow) in targets.flows.into_iter().enumerate() {
             while flow != sent.routed[slot] {
                 let sent_now = match &flow {
@@ -443,7 +428,15 @@ impl Audio {
                     None => self.engine.detach(slot, at),
                 };
                 match sent_now {
-                    Ok(_) => sent.routed[slot].clone_from(&flow),
+                    Ok(k) => {
+                        // A detached channel is silent before any gain
+                        // sent with it applies, so one detached at start
+                        // is never heard.
+                        if flow.is_none() {
+                            at = at.max(k.next_multiple_of(self.block));
+                        }
+                        sent.routed[slot].clone_from(&flow);
+                    }
                     Err(EntryError::Full) => tokio::time::sleep(FULL_RETRY).await,
                     Err(e) => {
                         tracing::warn!(slot, ?flow, "input route refused: {e}");
@@ -461,6 +454,21 @@ impl Audio {
                         tracing::warn!(slot, enabled, "output enable refused: {e}");
                         break;
                     }
+                }
+            }
+        }
+        if settle {
+            at = (at + self.ramp).next_multiple_of(self.block);
+        }
+        *self.taps.lock().expect("taps lock poisoned") = mix::meter_taps(&self.shape, state);
+        for (input, (row, new)) in sent.matrix.iter_mut().zip(targets.gains).enumerate() {
+            for (output, (g, n)) in row.iter_mut().zip(new).enumerate() {
+                if *g != n
+                    && self
+                        .send(&mut at, |at| self.engine.set_gain(input, output, n, at))
+                        .await
+                {
+                    *g = n;
                 }
             }
         }

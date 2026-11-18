@@ -482,16 +482,30 @@ neither, or two that differ, stops faderz at start.
   staged, and the replica leading at its time orders it, so it fires
   after a leader change too; a cancel removes it from the state.
 - Every replica serves the Node and Connection APIs under the same ids,
-  and each shows in `/active` what is in the state. The other replicas
-  forward `/staged` and `/bulk` to the leader, at `nmos.peers` by
-  ordinal, so staging on one replica and activating on another work
-  together; while the set elects a leader they answer 503. Staged
-  parameters not yet activated, and a cancel sent to a new leader for
-  an activation scheduled before the change, are lost when the leader
+  and each shows in `/active` what is in the state, the `activation`
+  included. The other replicas forward `/staged` and `/bulk` to the
+  leader, at `nmos.peers` by ordinal (a set refuses a loopback NMOS
+  listener without them), so staging on one replica and activating on
+  another work together; while the set elects a leader they answer
+  503, and 502 or 504 when the leader cannot be reached or does not
+  answer.
+- A scheduled activation taken by an earlier leader, or before a
+  restart, shows in the leader's `/staged` as an absolute one at its
+  time and locks it (423) until it fires or a cancel, through any
+  replica, removes it; `/bulk` does not lock it. A scheduled activation
+  of the connection the port already has is not taken.
+- Staged parameters not yet activated are lost when the leader
   changes.
 - Only the leader registers the Node, and only while a quorum of the
-  set acknowledges it. A replica of a set of more that stops leaves
-  the Node registered for the next leader; a set of one deletes it.
+  set acknowledges it; a leader cut off from the others may still post
+  for up to a second while the new one registers. A replica of a set of
+  more that stops leaves the Node registered for the next leader; a set
+  of one deletes it.
+- At start the engine opens every channel's selected flow and creates
+  every output's flow before it takes the connections from the state:
+  the flow of a disabled sender is there for that moment, and a
+  detached channel's flow is read but not mixed, as its gains apply
+  only after it is detached.
 - The listener is unauthenticated (no IS-10), and its activations
   re-route inputs and start and stop outputs.
 

@@ -17,6 +17,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -42,7 +44,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::app::App;
 use crate::config::{Config, Mxl};
 use crate::shape::Shape;
-use crate::state::{Answer, Command, Connection, Mixer, PortRef, Scheduled};
+use crate::state::{Activation, Answer, Command, Connection, Mixer, PortRef, Scheduled, tai_text};
 
 /// The principal and session activations are ordered under: shorter than
 /// any client session id, so no client shares it.
@@ -55,16 +57,21 @@ const RESENDS: usize = 3;
 const FOLLOW_TICK: Duration = Duration::from_millis(100);
 /// How long a scheduled activation's time is looked for while none is
 /// due.
-const FIRE_TICK: Duration = Duration::from_millis(5);
+const FIRE_TICK: Duration = Duration::from_millis(20);
+/// How long a scheduled activation that did not fire waits for the next
+/// try.
+const FIRE_RETRY: Duration = Duration::from_secs(1);
 /// The longest since a quorum acknowledged the leader for it to register
 /// the Node: a leader cut off from the others stops within it.
 const QUORUM_FRESH: u64 = 1_000;
 /// How often a registering leader checks it still leads.
 const LEAD_CHECK: Duration = Duration::from_millis(100);
-/// How long a forwarded Connection API request may take.
-const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
-/// The header a forwarded request carries, so it is served where it
-/// arrives.
+/// How much longer than its own work a forwarded request may take.
+const FORWARD_MARGIN: Duration = Duration::from_secs(5);
+/// The largest Connection API request body taken.
+const MAX_BODY: usize = 1 << 20;
+/// The header a forwarded request carries: a replica that does not lead
+/// answers it with 503 rather than forward it again or stage it itself.
 const FORWARDED: &str = "x-faderz-forwarded";
 /// How long before its apply timeout an activation stops waiting for room
 /// among the commands in flight.
@@ -84,6 +91,8 @@ pub struct Node {
     /// Per ordinal, the replica's peer address and the address its NMOS
     /// listener is reached at; empty for a set of one.
     peers: Vec<(String, String)>,
+    /// Each port's place by whether it is a sender and its IS-04 id.
+    ids: BTreeMap<(bool, String), usize>,
 }
 
 /// A port as [`actives`] reads it from the state.
@@ -190,6 +199,7 @@ impl Node {
             domain: r.domain,
         });
         let ports: Arc<Vec<Model>> = Arc::new(senders.chain(receivers).collect());
+        let ids = port_ids(&seed, &ports);
         let api = samplez_mxl::load(&mxl.library_path).map_err(|e| format!("nmos: {e}"))?;
         let paths = mxl.domains.iter().map(|d| (d.name.clone(), d.path.clone()));
         let conns = Arc::new(Conns {
@@ -203,6 +213,9 @@ impl Node {
                 instances: Mutex::default(),
             }),
             seen: Mutex::new(vec![0; model.senders.len() + model.receivers.len()]),
+            foreign: (0..model.senders.len() + model.receivers.len())
+                .map(|_| AtomicBool::new(false))
+                .collect(),
             instance: crate::app::uuid().map_err(|e| format!("nmos: {e}"))?,
         });
         let shown = replica
@@ -246,6 +259,7 @@ impl Node {
                 .as_ref()
                 .map_or(1, |s| usize::from(s.voters.replicas)),
             peers,
+            ids,
         })
     }
 
@@ -275,6 +289,140 @@ impl Node {
         }
     }
 
+    /// The port a Connection API path names, by its place among the
+    /// ports.
+    fn index_of(&self, path: &str) -> Option<usize> {
+        let (kind, id) = port_of(path)?;
+        self.ids.get(&(kind == "senders", id.to_owned())).copied()
+    }
+
+    /// The scheduled activation the state holds for the port at `index`.
+    fn scheduled(&self, index: usize) -> Option<Scheduled> {
+        let port = self.ports[index].port_ref();
+        let replica = self.replica.upgrade()?;
+        replica.store().with_state(|sm| {
+            (sm.product.scheduled().iter())
+                .find(|s| s.port == port)
+                .cloned()
+        })
+    }
+
+    /// Serves a staging request here, on the leader or the replica of a
+    /// set of one. A scheduled activation the state holds and samplez-nmos
+    /// does not, taken by another leader or before a restart, shows in
+    /// `/staged` and locks it (423) as one samplez-nmos holds would, and a
+    /// cancel orders [`Command::Unschedule`]: samplez-nmos hands a cancel
+    /// over only for an activation it holds itself.
+    async fn stage(&self, req: Request, next: Next) -> Response {
+        let path = req.uri().path().trim_end_matches('/').to_owned();
+        let method = req.method().clone();
+        let (parts, body) = req.into_parts();
+        let Ok(body) = axum::body::to_bytes(body, MAX_BODY).await else {
+            return refused(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "the request body is too large",
+            );
+        };
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        let single = self.index_of(&path);
+        // Each port the request names, and whether it cancels there.
+        let named: Vec<(usize, bool)> = match single {
+            Some(index) => vec![(index, cancels(&value))],
+            None => {
+                let senders = path.ends_with("/senders");
+                (value.as_array().into_iter().flatten())
+                    .filter_map(|item| {
+                        let id = item.get("id")?.as_str()?;
+                        let index = *self.ids.get(&(senders, id.to_owned()))?;
+                        Some((index, item.get("params").is_some_and(cancels)))
+                    })
+                    .collect()
+            }
+        };
+        let status = self.nmos.status();
+        let adopted = |index: usize| {
+            if status.ports[index].pending.is_some() {
+                None
+            } else {
+                self.scheduled(index)
+            }
+        };
+        if method == axum::http::Method::PATCH
+            && let Some(index) = single
+            && !cancels(&value)
+            && adopted(index).is_some()
+        {
+            return refused(StatusCode::LOCKED, "a scheduled activation is pending");
+        }
+        let req = Request::from_parts(parts, axum::body::Body::from(body));
+        let response = next.run(req).await;
+        if method == axum::http::Method::GET
+            && let Some(index) = single
+            && let Some(s) = adopted(index)
+        {
+            return with_json(response, |v| {
+                let at = tai_text(s.at);
+                v["activation"] = serde_json::json!({
+                    "mode": "activate_scheduled_absolute",
+                    "requested_time": at,
+                    "activation_time": at,
+                });
+                v["master_enable"] = s.active.master_enable.into();
+                let peer = match s.port {
+                    PortRef::Sender(_) => "receiver_id",
+                    PortRef::Receiver(_) => "sender_id",
+                };
+                v[peer] = s.active.peer.clone().into();
+                if let Some(leg) = v["transport_params"].get_mut(0) {
+                    leg["mxl_domain_id"] = s.active.domain.clone().into();
+                    leg["mxl_flow_id"] = s.active.flow.clone().into();
+                }
+            })
+            .await;
+        }
+        if method != axum::http::Method::GET && response.status().is_success() {
+            for (index, cancel) in named {
+                if cancel
+                    && self.scheduled(index).is_some()
+                    && let Err(Fail(e)) = self.conns.unschedule(index).await
+                {
+                    tracing::warn!(port = index, "nmos: the cancel was not ordered: {e}");
+                }
+            }
+        }
+        response
+    }
+
+    /// `/active` of a port the state last changed shows the activation
+    /// the state holds for it, not the one this replica last served.
+    async fn active_view(&self, path: &str, response: Response) -> Response {
+        let Some(index) = self.index_of(path) else {
+            return response;
+        };
+        if !response.status().is_success() || !self.conns.foreign[index].load(Relaxed) {
+            return response;
+        }
+        let connection = self.replica.upgrade().and_then(|r| {
+            r.store().with_state(|sm| match &self.ports[index] {
+                Model::Sender { output, .. } => sm.product.sender(output).cloned(),
+                Model::Receiver { channel, .. } => {
+                    sm.product.receiver(channel).and_then(|(c, _)| c.cloned())
+                }
+            })
+        });
+        let Some(a) = connection.and_then(|c| c.activation) else {
+            return response;
+        };
+        with_json(response, |v| {
+            v["activation"] = serde_json::json!({
+                "mode": a.mode,
+                "requested_time": a.requested,
+                "activation_time": a.time,
+            });
+        })
+        .await
+    }
+
     /// The NMOS address of the set's leader when another replica leads;
     /// `Err` while the set has none.
     fn leader_nmos(&self) -> Result<Option<String>, ()> {
@@ -301,8 +449,10 @@ impl Node {
 
     /// Orders [`Command::Fire`] for each scheduled activation whose time
     /// has come, while this replica leads; another leader fires those
-    /// still pending.
+    /// still pending. One that did not fire is tried again after
+    /// [`FIRE_RETRY`] and logged once.
     async fn fire(&self) {
+        let mut failed: BTreeMap<String, tokio::time::Instant> = BTreeMap::new();
         loop {
             let Some(replica) = self.replica.upgrade() else {
                 return;
@@ -319,63 +469,72 @@ impl Node {
                 Vec::new()
             };
             drop(replica);
+            failed.retain(|id, _| due.iter().any(|s| s.id == *id));
             for s in due {
-                if let Err(Fail(e)) = self.conns.fire(&s).await {
-                    tracing::warn!(
-                        schedule = s.id,
-                        "nmos: the scheduled activation did not fire: {e}"
-                    );
+                let now = tokio::time::Instant::now();
+                if failed.get(&s.id).is_some_and(|at| now < *at + FIRE_RETRY) {
+                    continue;
+                }
+                match self.conns.fire(&s).await {
+                    Ok(()) => {
+                        failed.remove(&s.id);
+                    }
+                    Err(Fail(e)) => {
+                        if failed.insert(s.id.clone(), now).is_none() {
+                            tracing::warn!(
+                                schedule = s.id,
+                                "nmos: the scheduled activation did not fire: {e}"
+                            );
+                        }
+                    }
                 }
             }
             tokio::time::sleep(FIRE_TICK).await;
         }
     }
 
-    /// Shows in `/active` each change of a port's connection in the
-    /// state that `/active` does not show yet: an activation another
-    /// replica took, or a switch between a channel's inputs a and b. A
-    /// change waits while an activation of this replica is being
-    /// applied on the port, so an earlier one of its own committing does
-    /// not overwrite a later one `/active` shows; the state's order
-    /// decides once it is applied. A port whose activation failed shows
-    /// the state's connection again, as every other replica does.
+    /// Keeps each port's `/active` on the state's connection: an
+    /// activation another replica took, a switch between a channel's
+    /// inputs a and b, an activation of this replica that failed or that
+    /// the state superseded or refused. A port is left alone while an
+    /// activation of this replica is being applied on it, so an earlier
+    /// one committing does not overwrite a later one `/active` shows,
+    /// and while the state holds a scheduled activation for it, which
+    /// this replica's `/active` may show from its time until it fires.
     async fn follow(&self) {
-        let Some(replica) = self.replica.upgrade() else {
-            return;
-        };
         let ports = &self.ports;
-        let (mut last, mut revision) = replica
-            .store()
-            .with_state(|sm| (actives(&sm.product, ports), sm.revision));
-        drop(replica);
-        let mut changed = vec![false; ports.len()];
+        let mut revision = 0;
         loop {
             let Some(replica) = self.replica.upgrade() else {
                 return;
             };
-            // Also when nothing is applied: a change waiting on an
-            // activation shows once that is done.
+            // Also when nothing is applied: a port left alone is looked
+            // at again.
             let _ = tokio::time::timeout(FOLLOW_TICK, replica.applied(revision + 1)).await;
-            let now;
-            (now, revision) = replica
-                .store()
-                .with_state(|sm| (actives(&sm.product, ports), sm.revision));
+            let (now, scheduled);
+            (now, scheduled, revision) = replica.store().with_state(|sm| {
+                let scheduled: Vec<PortRef> = sm
+                    .product
+                    .scheduled()
+                    .iter()
+                    .map(|s| s.port.clone())
+                    .collect();
+                (actives(&sm.product, ports), scheduled, sm.revision)
+            });
             drop(replica);
             let shown = self.nmos.status();
-            for (index, (active, before)) in now.iter().zip(&last).enumerate() {
-                changed[index] |= active != before;
+            for (index, active) in now.iter().enumerate() {
                 let port = &shown.ports[index];
-                let failed = matches!(port.applied, Applied::Failed(_));
-                if !(changed[index] || failed) || port.applied == Applied::Applying {
+                if port.active == *active
+                    || port.applied == Applied::Applying
+                    || scheduled.contains(&ports[index].port_ref())
+                {
                     continue;
                 }
-                changed[index] = false;
-                if port.active != *active {
-                    let generation = self.nmos.external_change(port.port, active.clone());
-                    self.conns.saw(index, generation);
-                }
+                let generation = self.nmos.external_change(port.port, active.clone());
+                self.conns.saw(index, generation);
+                self.conns.foreign[index].store(true, Relaxed);
             }
-            last = now;
         }
     }
 
@@ -494,13 +653,14 @@ fn active(c: &Connection) -> Active {
     }
 }
 
-fn connection(a: &Active) -> Connection {
+fn connection(a: &Active, activation: Option<Activation>) -> Connection {
     let text = |v: Option<Uuid>| v.map(|u| u.to_string());
     Connection {
         master_enable: a.master_enable,
         peer: text(a.peer),
         domain: text(a.domain),
         flow: text(a.flow),
+        activation,
     }
 }
 
@@ -525,6 +685,10 @@ struct Conns {
     /// Drawn at start: activations' command ids are unique across
     /// restarts.
     instance: String,
+    /// Per port, whether its `/active` was last written from the state
+    /// rather than by an activation this replica served: its
+    /// `activation` is then the state's.
+    foreign: Vec<AtomicBool>,
 }
 
 impl Conns {
@@ -643,17 +807,25 @@ impl Conns {
     /// applied.
     async fn order(&self, index: usize, active: &Active, generation: u64) -> Result<(), Fail> {
         let port = self.ports[index].port_ref();
+        let now = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
+        let immediate = Activation {
+            mode: "activate_immediate".into(),
+            requested: None,
+            time: tai_text(now),
+        };
         self.submit(|attempt| Command::Connect {
             id: format!("{}-{index}-{generation}-{attempt}", self.instance),
             port: port.clone(),
-            active: connection(active),
+            active: connection(active, Some(immediate.clone())),
         })
         .await
     }
 
-    /// Takes a scheduled activation for `at` into the state, or cancels
-    /// the port's one for `at` when `active` is what the port shows: the
-    /// call samplez-nmos makes for a cancel.
+    /// Takes a scheduled activation for `at` into the state. samplez-nmos
+    /// cancels one it applied by handing over, for the same `at`, the
+    /// connection the port shows: one that is the state's connection is
+    /// a cancel, of the port's scheduled activation when there is one
+    /// and of nothing otherwise, and never a schedule of its own.
     async fn schedule(
         &self,
         index: usize,
@@ -664,25 +836,44 @@ impl Conns {
         let port = self.ports[index].port_ref();
         let at = u64::try_from(at.as_nanos())
             .map_err(|_| Fail("activation time out of range".into()))?;
-        let pending = self.app.replica.store().with_state(|sm| {
-            (sm.product.scheduled().iter())
+        let (current, pending) = self.app.replica.store().with_state(|sm| {
+            let current = actives(&sm.product, &self.ports[index..=index]).remove(0);
+            let pending = (sm.product.scheduled().iter())
                 .find(|s| s.port == port)
-                .map(|s| s.at)
+                .map(|s| s.at);
+            (current, pending)
         });
         let id = |attempt| format!("{}-{index}-{generation}-{attempt}", self.instance);
-        if pending == Some(at) {
-            return self
-                .submit(|attempt| Command::Unschedule {
+        match scheduling(active, &current, pending, at) {
+            Scheduling::Nothing => Ok(()),
+            Scheduling::Cancel => {
+                self.submit(|attempt| Command::Unschedule {
                     id: id(attempt),
                     port: port.clone(),
                 })
-                .await;
+                .await
+            }
+            Scheduling::Take => {
+                self.submit(|attempt| Command::Schedule {
+                    id: id(attempt),
+                    port: port.clone(),
+                    active: connection(active, None),
+                    at,
+                })
+                .await
+            }
         }
-        self.submit(|attempt| Command::Schedule {
-            id: id(attempt),
+    }
+
+    /// Cancels the port's scheduled activation in the state, for a cancel
+    /// that reached the leader: samplez-nmos hands one over only when it
+    /// holds the activation itself.
+    async fn unschedule(&self, index: usize) -> Result<(), Fail> {
+        let port = self.ports[index].port_ref();
+        let id = crate::app::uuid().map_err(|e| Fail(e.to_string()))?;
+        self.submit(|attempt| Command::Unschedule {
+            id: format!("{id}-{attempt}"),
             port: port.clone(),
-            active: connection(active),
-            at,
         })
         .await
     }
@@ -728,6 +919,8 @@ impl Connections for Conns {
     ) -> BoxFuture<'_, Result<(), Fail>> {
         Box::pin(async move {
             let index = self.index(port);
+            // This replica writes the port's `/active` itself again.
+            self.foreign[index].store(false, Relaxed);
             if !self.saw(index, generation) {
                 return Ok(());
             }
@@ -739,42 +932,133 @@ impl Connections for Conns {
     }
 }
 
-/// Serves a Connection API request for staging where it arrives on the
-/// leader, and forwards it to the leader elsewhere; 503 while the set has
-/// none. Every other request is served where it arrives.
+/// What an apply samplez-nmos hands over for a scheduled time means.
+#[derive(Debug, PartialEq, Eq)]
+enum Scheduling {
+    Take,
+    Cancel,
+    Nothing,
+}
+
+/// An apply of `active` for `at`, the port's connection in the state being
+/// `current` and its scheduled activation in the state due at `pending`:
+/// samplez-nmos cancels one it applied by handing over, for the same
+/// time, the connection the port shows. One that carries the state's
+/// connection is a cancel of the port's scheduled activation for that
+/// time when there is one, of nothing otherwise, and never a schedule
+/// of its own; any other is a scheduled activation to take.
+fn scheduling(active: &Active, current: &Active, pending: Option<u64>, at: u64) -> Scheduling {
+    match (active == current, pending == Some(at)) {
+        (true, true) => Scheduling::Cancel,
+        (true, false) => Scheduling::Nothing,
+        (false, _) => Scheduling::Take,
+    }
+}
+
+/// Connection API requests on their way to samplez-nmos. `/staged` and
+/// `/bulk` are served by the leader, which the other replicas forward them
+/// to ([`Node::stage`]); 503 while the set has none, and for a request
+/// marked forwarded that reaches a replica not leading. A GET of
+/// `/active` of a port the state last changed shows the state's
+/// activation ([`Node::active_view`]). Everything else is served where it
+/// arrives.
 async fn forward(State(node): State<Arc<Node>>, req: Request, next: Next) -> Response {
-    let staging = {
-        let path = req.uri().path();
-        path.starts_with("/x-nmos/connection/")
-            && (path.contains("/staged") || path.contains("/bulk/"))
-    };
-    if node.voters == 1
-        || !staging
-        || req.method() == axum::http::Method::OPTIONS
-        || req.headers().contains_key(FORWARDED)
-    {
+    let path = req.uri().path().trim_end_matches('/').to_owned();
+    let connection = path.starts_with("/x-nmos/connection/");
+    let staging = connection && (path.ends_with("/staged") || path.contains("/bulk/"));
+    let active = connection && path.ends_with("/active");
+    if req.method() == axum::http::Method::OPTIONS || !(staging || active) {
         return next.run(req).await;
     }
+    if active {
+        let response = next.run(req).await;
+        return node.active_view(&path, response).await;
+    }
+    if node.voters == 1 {
+        return node.stage(req, next).await;
+    }
     match node.leader_nmos() {
-        Ok(None) => next.run(req).await,
+        Ok(None) => node.stage(req, next).await,
+        Ok(Some(_)) if req.headers().contains_key(FORWARDED) => refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "forwarded to a replica that does not lead; try again",
+        ),
         Ok(Some(leader)) => {
-            match tokio::time::timeout(FORWARD_TIMEOUT, proxy(&leader, req)).await {
-                Ok(Ok(response)) => response,
-                Ok(Err(e)) => refused(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("forwarding to the leader at {leader}: {e}"),
-                ),
-                Err(_) => refused(
-                    StatusCode::GATEWAY_TIMEOUT,
-                    &format!("the leader at {leader} did not answer"),
-                ),
-            }
+            let (parts, body) = req.into_parts();
+            let Ok(body) = axum::body::to_bytes(body, MAX_BODY).await else {
+                return refused(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "the request body is too large",
+                );
+            };
+            let limit = forward_timeout(&body);
+            relay(&leader, parts, body, limit).await
         }
         Err(()) => refused(
             StatusCode::SERVICE_UNAVAILABLE,
             "the set has no leader; try again",
         ),
     }
+}
+
+/// How long a forwarded request may take: the leader resolves each flow
+/// it stages, each within [`samplez_nmos::RESOLVE_TIMEOUT`], one item of a
+/// `/bulk` request after the other.
+fn forward_timeout(body: &[u8]) -> Duration {
+    let items = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.as_array().map(Vec::len))
+        .unwrap_or(1)
+        .max(1);
+    samplez_nmos::RESOLVE_TIMEOUT * u32::try_from(items).unwrap_or(u32::MAX) + FORWARD_MARGIN
+}
+
+/// Sends a request to the leader's NMOS listener at `leader` and passes
+/// its answer on: 502 when it cannot be reached, 504 when it does not
+/// answer within `limit`.
+async fn relay(
+    leader: &str,
+    parts: axum::http::request::Parts,
+    body: axum::body::Bytes,
+    limit: Duration,
+) -> Response {
+    match tokio::time::timeout(limit, proxy(leader, parts, body)).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => refused(
+            StatusCode::BAD_GATEWAY,
+            &format!("forwarding to the leader at {leader}: {e}"),
+        ),
+        Err(_) => refused(
+            StatusCode::GATEWAY_TIMEOUT,
+            &format!("the leader at {leader} did not answer"),
+        ),
+    }
+}
+
+/// A Connection API path's port: its kind and id.
+fn port_of(path: &str) -> Option<(&str, &str)> {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        [
+            "x-nmos",
+            "connection",
+            _,
+            "single",
+            kind @ ("senders" | "receivers"),
+            id,
+            ..,
+        ] => Some((kind, id)),
+        _ => None,
+    }
+}
+
+/// Whether a staging request's `activation` asks for a cancel: `mode`
+/// given and null.
+fn cancels(params: &serde_json::Value) -> bool {
+    params
+        .get("activation")
+        .and_then(|a| a.get("mode"))
+        .is_some_and(serde_json::Value::is_null)
 }
 
 fn refused(status: StatusCode, message: &str) -> Response {
@@ -794,11 +1078,11 @@ fn refused(status: StatusCode, message: &str) -> Response {
 
 /// Sends `req` to the NMOS listener at `addr` over HTTP/1.1 and returns
 /// its answer.
-async fn proxy(addr: &str, req: Request) -> Result<Response, String> {
-    let (parts, body) = req.into_parts();
-    let body = axum::body::to_bytes(body, 1 << 20)
-        .await
-        .map_err(|e| e.to_string())?;
+async fn proxy(
+    addr: &str,
+    parts: axum::http::request::Parts,
+    body: axum::body::Bytes,
+) -> Result<Response, String> {
     let target = parts.uri.path_and_query().map_or("/", |p| p.as_str());
     let mut head = format!(
         "{} {target} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n{FORWARDED}: 1\r\n\
@@ -880,6 +1164,43 @@ fn dechunk(mut rest: &[u8]) -> Option<Vec<u8>> {
         out.extend_from_slice(rest.get(..size)?);
         rest = rest.get(size + 2..)?;
     }
+}
+
+/// The namespace samplez-nmos derives resource ids under (UUIDv5 of the
+/// seed, then of `sender/<key>` or `receiver/<key>`); a test checks the
+/// ids against the Node API.
+const ID_NAMESPACE: Uuid = samplez_nmos::uuid::uuid!("3bd5c2df-88d0-4122-8009-349861a360c8");
+
+/// Each port's place by whether it is a sender and its IS-04 id.
+fn port_ids(seed: &str, ports: &[Model]) -> BTreeMap<(bool, String), usize> {
+    let base = Uuid::new_v5(&ID_NAMESPACE, seed.as_bytes());
+    (ports.iter().enumerate())
+        .map(|(index, p)| {
+            let (sender, path) = match p {
+                Model::Sender { output, .. } => (true, format!("sender/{output}")),
+                Model::Receiver { channel, .. } => (false, format!("receiver/{channel}")),
+            };
+            (
+                (sender, Uuid::new_v5(&base, path.as_bytes()).to_string()),
+                index,
+            )
+        })
+        .collect()
+}
+
+/// `response` with its JSON body changed by `change`; as it was when the
+/// body is no JSON.
+async fn with_json(response: Response, change: impl FnOnce(&mut serde_json::Value)) -> Response {
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
+        return refused(StatusCode::INTERNAL_SERVER_ERROR, "an unreadable response");
+    };
+    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    change(&mut v);
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, axum::body::Body::from(v.to_string()))
 }
 
 /// Channels, rate and sample format of an MXL flow definition.
@@ -1027,6 +1348,215 @@ mod tests {
         assert_eq!(parse_response(chunked).unwrap().status(), StatusCode::OK);
         assert!(dechunk(b"5\r\n[1").is_none());
         assert!(parse_response(b"garbage").is_err());
+    }
+
+    struct Nothing;
+
+    impl Connections for Nothing {
+        fn resolve(&self, _: Port, _: Uuid) -> BoxFuture<'_, Result<FlowSeen, Reject>> {
+            Box::pin(async { Ok(FlowSeen::Absent) })
+        }
+        fn lead(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn apply(
+            &self,
+            _: Port,
+            _: Active,
+            _: Option<Tai>,
+            _: u64,
+        ) -> BoxFuture<'_, Result<(), Fail>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// The ids staging requests are mapped to ports by are the ones the
+    /// Node API serves.
+    #[tokio::test]
+    async fn port_ids_are_the_node_apis() {
+        use tower::ServiceExt;
+        let domain = samplez_nmos::uuid::uuid!("6f1f1d1e-56f6-4c4c-8d32-9e7f4a3b2c10");
+        let flow = samplez_nmos::uuid::uuid!("0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a01");
+        let model = NodeModel {
+            label: "x".into(),
+            description: "x".into(),
+            senders: vec![SenderDesc {
+                key: "out-pgm".into(),
+                label: "PGM".into(),
+                channels: vec![ChannelDesc {
+                    label: "L".into(),
+                    symbol: Some("L".into()),
+                }],
+                group: "out-pgm".into(),
+                domain,
+                flow,
+            }],
+            receivers: vec![ReceiverDesc {
+                key: "ch1".into(),
+                label: "Mic".into(),
+                channels: ChannelCount::AtLeast(1),
+                group: "ch1".into(),
+                domain,
+                flow: None,
+            }],
+        };
+        let cfg = NmosConfig {
+            seed: "faderz".into(),
+            advertise_host: "127.0.0.1".into(),
+            advertise_port: 8081,
+            asset: Asset {
+                manufacturer: "m".into(),
+                product: "p".into(),
+                instance_id: "i".into(),
+                functions: vec!["Mixer".into()],
+            },
+            heartbeat: Duration::from_secs(5),
+            registries: Vec::new(),
+            dns_sd_domain: None,
+        };
+        let nmos = samplez_nmos::Nmos::new(
+            model,
+            cfg,
+            Arc::new(Nothing),
+            &samplez_nmos::NoStore,
+            SystemTai,
+        )
+        .unwrap();
+        let get = |path: &'static str| {
+            let router = nmos.router();
+            async move {
+                let req = Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let body = router.oneshot(req).await.unwrap().into_body();
+                let bytes = axum::body::to_bytes(body, MAX_BODY).await.unwrap();
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()[0]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            }
+        };
+        let ports = [
+            Model::Sender {
+                output: "out-pgm".into(),
+                domain,
+                flow,
+            },
+            Model::Receiver {
+                channel: "ch1".into(),
+                domain,
+            },
+        ];
+        let ids = port_ids("faderz", &ports);
+        assert_eq!(ids[&(true, get("/x-nmos/node/v1.3/senders/").await)], 0);
+        assert_eq!(ids[&(false, get("/x-nmos/node/v1.3/receivers/").await)], 1);
+    }
+
+    /// samplez-nmos's cancel, the port's current connection for the
+    /// scheduled time, is never taken as a schedule of its own, also
+    /// when the state's scheduled activation was cancelled already; and
+    /// another connection for the same time is a schedule.
+    #[test]
+    fn a_cancel_is_read_by_its_connection() {
+        let flow = |n: u8| Uuid::parse_str(&format!("0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a0{n}")).ok();
+        let on = |n| Active {
+            master_enable: true,
+            peer: None,
+            domain: None,
+            flow: flow(n),
+        };
+        assert_eq!(scheduling(&on(1), &on(1), Some(5), 5), Scheduling::Cancel);
+        assert_eq!(scheduling(&on(1), &on(1), None, 5), Scheduling::Nothing);
+        assert_eq!(scheduling(&on(1), &on(1), Some(6), 5), Scheduling::Nothing);
+        assert_eq!(scheduling(&on(2), &on(1), Some(5), 5), Scheduling::Take);
+        assert_eq!(scheduling(&on(2), &on(1), None, 5), Scheduling::Take);
+    }
+
+    #[test]
+    fn staging_paths_and_cancels_are_read() {
+        assert_eq!(
+            port_of("/x-nmos/connection/v1.2/single/receivers/abc/staged"),
+            Some(("receivers", "abc"))
+        );
+        assert_eq!(port_of("/x-nmos/connection/v1.2/bulk/receivers"), None);
+        assert!(cancels(
+            &serde_json::json!({ "activation": { "mode": null } })
+        ));
+        assert!(!cancels(
+            &serde_json::json!({ "activation": { "mode": "activate_immediate" } })
+        ));
+        assert!(!cancels(&serde_json::json!({ "master_enable": false })));
+        let one = samplez_nmos::RESOLVE_TIMEOUT + FORWARD_MARGIN;
+        assert_eq!(forward_timeout(b"{}"), one);
+        assert_eq!(
+            forward_timeout(b"[{},{},{}]"),
+            samplez_nmos::RESOLVE_TIMEOUT * 3 + FORWARD_MARGIN
+        );
+    }
+
+    fn parts() -> axum::http::request::Parts {
+        let req = Request::builder()
+            .method("PATCH")
+            .uri("/x-nmos/connection/v1.2/single/receivers/x/staged")
+            .body(())
+            .unwrap();
+        req.into_parts().0
+    }
+
+    /// A leader that cannot be reached is 502, one that does not answer
+    /// in time 504, and its answer otherwise passes through.
+    #[tokio::test]
+    async fn a_forwarded_request_fails_as_the_leader_does() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = closed.local_addr().unwrap().to_string();
+        drop(closed);
+        let r = relay(
+            &addr,
+            parts(),
+            axum::body::Bytes::new(),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
+
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = silent.local_addr().unwrap().to_string();
+        let held = tokio::spawn(async move {
+            let (tcp, _) = silent.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            drop(tcp);
+        });
+        let r = relay(
+            &addr,
+            parts(),
+            axum::body::Bytes::new(),
+            Duration::from_millis(200),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::GATEWAY_TIMEOUT);
+        held.abort();
+
+        let answering = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = answering.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (mut tcp, _) = answering.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let n = tcp.read(&mut buf).await.unwrap();
+            let head = String::from_utf8_lossy(&buf[..n]).to_string();
+            assert!(head.contains(&format!("{FORWARDED}: 1")), "{head}");
+            tcp.write_all(b"HTTP/1.1 423 Locked\r\ncontent-length: 2\r\n\r\n{}")
+                .await
+                .unwrap();
+        });
+        let r = relay(
+            &addr,
+            parts(),
+            axum::body::Bytes::from_static(b"{}"),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::LOCKED);
     }
 
     #[test]

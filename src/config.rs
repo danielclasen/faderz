@@ -941,6 +941,13 @@ impl Config {
                 set.voters.replicas
             ));
         }
+        if self.set.is_some() && nmos.peers.is_none() && listener.bind.is_loopback() {
+            return Err(format!(
+                "listeners.nmos.bind {}: the other replicas forward staging to it; \
+                 bind it where they reach it or name their addresses in nmos.peers",
+                listener.bind
+            ));
+        }
         if self.set.is_some() && nmos.peers.is_none() && listener.port == 0 {
             return Err("nmos.peers: required with listeners.nmos.port 0 in a set".into());
         }
@@ -1908,6 +1915,9 @@ mod tests {
         let (c, ..) = Config::parse(&config(on(json!({})), merged.clone(), set()), host).unwrap();
         assert_eq!(c.nmos_peers(), ["f-0.f:8081", "f-1.f:8081", "f-2.f:8081"]);
         let mut port0: Value = serde_json::from_str(&config(on(json!({})), merged, set())).unwrap();
+        let mut lo = port0.clone();
+        lo["listeners"]["nmos"]["bind"] = json!("127.0.0.1");
+        refused(lo.to_string(), "listeners.nmos.bind");
         port0["listeners"]["nmos"]["port"] = json!(0);
         port0["nmos"]["advertisePort"] = json!(8081);
         refused(port0.to_string(), "nmos.peers");

@@ -157,6 +157,25 @@ pub struct Connection {
     pub peer: Option<String>,
     pub domain: Option<String>,
     pub flow: Option<String>,
+    /// How it was activated, for `/active.activation` on every replica;
+    /// none for an activation taken before it was kept.
+    #[serde(default)]
+    pub activation: Option<Activation>,
+}
+
+/// An IS-05 activation's `mode`, `requested_time` and TAI
+/// `activation_time`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Activation {
+    pub mode: String,
+    pub requested: Option<String>,
+    pub time: String,
+}
+
+/// TAI nanoseconds as IS-05 writes a time, `<seconds>:<nanoseconds>`.
+pub fn tai_text(nanos: u64) -> String {
+    format!("{}:{}", nanos / 1_000_000_000, nanos % 1_000_000_000)
 }
 
 /// The IS-05 connections the state keeps: each port's last activation
@@ -762,7 +781,24 @@ impl Mixer {
         else {
             return Effect::Unchanged;
         };
-        self.connect(session, id, &s.port, &s.active, ctx)
+        // One that can no longer be activated never will: dropped on every
+        // replica alike. One ordered off the generation path is kept for
+        // the next try.
+        if let Err(answer) = self.check_connection(&s.port, &s.active) {
+            self.record(session, id, answer);
+            self.ports.scheduled.retain(|p| p.id != s.id);
+            return Effect::Changed(Edits::default());
+        }
+        let at = tai_text(s.at);
+        let active = Connection {
+            activation: Some(Activation {
+                mode: "activate_scheduled_absolute".into(),
+                requested: Some(at.clone()),
+                time: at,
+            }),
+            ..s.active
+        };
+        self.connect(session, id, &s.port, &active, ctx)
     }
 
     /// The scheduled activations, in the order they were taken.
@@ -4227,6 +4263,7 @@ mod tests {
 
     fn conn(enabled: bool, flow: Option<&str>) -> Connection {
         Connection {
+            activation: None,
             master_enable: enabled,
             peer: None,
             domain: Some(DOMAIN.into()),
@@ -4519,6 +4556,49 @@ mod tests {
         let mut back = wired();
         back.load(&m.save()).unwrap();
         assert_eq!(back.scheduled(), m.scheduled());
+    }
+
+    /// A scheduled activation that can no longer be activated, here
+    /// because the flow became one of the mixer's own, is dropped when it
+    /// fires rather than kept and tried again for ever.
+    #[test]
+    fn a_schedule_that_cannot_fire_is_dropped() {
+        let mut m = wired();
+        schedule(&mut m, "s1", receiver("ch1"), conn(true, Some(OWN)), 1_000);
+        let mut own = owning();
+        own.load(&m.save()).unwrap();
+        assert_eq!(own.scheduled().len(), 1);
+        assert!(matches!(
+            fire(&mut own, "f1", "s1", Some(true)),
+            Effect::Changed(_)
+        ));
+        assert!(own.scheduled().is_empty());
+        assert!(matches!(
+            own.answer(&rest_key(), "f1"),
+            Some(Answer::Invalid { .. })
+        ));
+        assert_eq!(own.targets().unwrap().flows[0].as_deref(), Some("a1"));
+        // A fired one carries its time as its activation.
+        schedule(
+            &mut m,
+            "s2",
+            receiver("ch1"),
+            conn(true, Some(F1)),
+            7_000_000_001,
+        );
+        fire(&mut m, "f2", "s2", Some(true));
+        let shown = m
+            .receiver("ch1")
+            .unwrap()
+            .0
+            .unwrap()
+            .activation
+            .clone()
+            .unwrap();
+        assert_eq!(
+            (shown.mode.as_str(), shown.time.as_str()),
+            ("activate_scheduled_absolute", "7:1")
+        );
     }
 
     /// Leg flows an activation named over a configuration that wired the
