@@ -135,6 +135,12 @@ pub struct Nmos {
     pub registry: Registry,
     #[serde(default)]
     pub asset: Asset,
+    /// Per ordinal, the `host:port` the other replicas of a set reach
+    /// that replica's NMOS listener at, to forward staging to the
+    /// leader; by default each `replica.peers` host on
+    /// `listeners.nmos.port`.
+    #[serde(default)]
+    pub peers: Option<Vec<String>>,
 }
 
 impl Default for Nmos {
@@ -147,6 +153,7 @@ impl Default for Nmos {
             heartbeat_s: default_heartbeat(),
             registry: Registry::default(),
             asset: Asset::default(),
+            peers: None,
         }
     }
 }
@@ -845,6 +852,37 @@ impl Config {
 }
 
 impl Config {
+    /// Every flow an output names, member and merged flows included: what
+    /// no input may read.
+    pub fn own_flows(&self) -> std::collections::BTreeSet<String> {
+        (self.mxl.iter())
+            .flat_map(|m| m.outputs.values())
+            .flat_map(|o| {
+                (o.flow.iter())
+                    .chain(o.flows.iter().flatten())
+                    .chain(o.merged_flow.iter())
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Per ordinal, where the replicas of a set reach each other's NMOS
+    /// listener ([`Nmos::peers`]); empty for a set of one.
+    pub fn nmos_peers(&self) -> Vec<String> {
+        let Some(set) = &self.set else {
+            return Vec::new();
+        };
+        match &self.nmos.peers {
+            Some(peers) => peers.clone(),
+            None => (set.peers.iter())
+                .map(|p| {
+                    let host = p.rsplit_once(':').map_or(p.as_str(), |(h, _)| h);
+                    format!("{host}:{}", self.listeners.nmos.port)
+                })
+                .collect(),
+        }
+    }
+
     /// The NMOS settings that cannot work: NMOS without an engine, without
     /// an advertised host or port, over TLS, with a registry not on
     /// plain HTTP or a heartbeat outside 1 to [`MAX_HEARTBEAT_S`] s, or
@@ -893,6 +931,18 @@ impl Config {
             return Err(format!(
                 "nmos.registry.url {url:?}: the registration client speaks plain HTTP only"
             ));
+        }
+        if let (Some(peers), Some(set)) = (&nmos.peers, &self.set)
+            && peers.len() != usize::from(set.voters.replicas)
+        {
+            return Err(format!(
+                "nmos.peers: names {} replicas, the set has {}",
+                peers.len(),
+                set.voters.replicas
+            ));
+        }
+        if self.set.is_some() && nmos.peers.is_none() && listener.port == 0 {
+            return Err("nmos.peers: required with listeners.nmos.port 0 in a set".into());
         }
         if !(1..=MAX_HEARTBEAT_S).contains(&nmos.heartbeat_s) {
             return Err(format!(
@@ -1070,7 +1120,8 @@ impl Config {
             .map(String::as_str)
             .collect();
         let mut written = std::collections::BTreeSet::new();
-        for flow in members.iter().flatten() {
+        let merged = mxl.outputs.values().filter_map(|o| o.merged_flow.as_ref());
+        for flow in members.iter().flatten().chain(merged) {
             if read.contains(flow.as_str()) || !written.insert(flow.as_str()) {
                 return Err(format!(
                     "mxl.outputs: flow {flow} is named by another output, replica or input"
@@ -1845,6 +1896,27 @@ mod tests {
         Config::parse(&config(on(json!({})), merged, set()), host).unwrap();
         // Without NMOS a set needs none.
         Config::parse(&config(json!({}), members(), set()), host).unwrap();
+        // A merged flow no input reads: a receiver would feed it back.
+        let mut fed = members();
+        fed["mergedFlow"] = json!(id(1));
+        refused(config(on(json!({})), fed, set()), "mxl.outputs");
+        // The NMOS addresses of the others, one per replica.
+        let mut merged = members();
+        merged["mergedFlow"] = json!(id(6));
+        let two = on(json!({ "peers": ["a:1", "b:1"] }));
+        refused(config(two, merged.clone(), set()), "nmos.peers");
+        let (c, ..) = Config::parse(&config(on(json!({})), merged.clone(), set()), host).unwrap();
+        assert_eq!(c.nmos_peers(), ["f-0.f:8081", "f-1.f:8081", "f-2.f:8081"]);
+        let mut port0: Value = serde_json::from_str(&config(on(json!({})), merged, set())).unwrap();
+        port0["listeners"]["nmos"]["port"] = json!(0);
+        port0["nmos"]["advertisePort"] = json!(8081);
+        refused(port0.to_string(), "nmos.peers");
+        // Every flow an output names is the mixer's own.
+        let mut own = members();
+        own["mergedFlow"] = json!(id(6));
+        let (c, ..) = Config::parse(&config(json!({}), own, set()), host).unwrap();
+        let want: std::collections::BTreeSet<String> = [4, 6, 7, 8].map(id).into();
+        assert_eq!(c.own_flows(), want);
         // A loopback listener with another advertised host is noted.
         let mut loopback: Value =
             serde_json::from_str(&config(on(json!({})), flow(), one())).unwrap();

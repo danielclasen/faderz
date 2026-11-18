@@ -283,6 +283,7 @@ variable; the flag wins over the variable, the variable over the file.
 | `nmos.registry.dnsSdDomain` | | unicast DNS-SD domain; absent, the resolver's search domains, then mDNS |
 | `nmos.heartbeatS` | `5` | 1 to 10: seconds between heartbeats |
 | `nmos.asset.manufacturer` | `danielclasen` | BCP-002-02 manufacturer tag |
+| `nmos.peers` | `replica.peers` hosts on `listeners.nmos.port` | `host:port` of each replica's NMOS listener by ordinal, which staging is forwarded to; in a set of more |
 
 Without an `mxl` section faderz runs no engine: the state is served,
 nothing is mixed and `/readyz` fails. In `proxy` mode faderz takes the
@@ -466,21 +467,31 @@ neither, or two that differ, stops faderz at start.
   input: an activation sets the flow of input a or b, whichever the
   channel selects, and switching between them in the console changes
   `/active`. `master_enable` false detaches the channel; it reads
-  nothing and is silent until activated again.
+  nothing and is silent until activated again. A flow any output of
+  the set writes or merges into is refused with 400.
 - A sender's flow is the output's (`mergedFlow` in a set of more), and
-  `master_enable` false stops the output and removes its flow;
-  `true` writes it again.
+  `master_enable` false stops the output and removes its flow on every
+  replica; `true` writes it again.
 - Activations go through the replicated log like any command, so every
   replica of a set routes alike and a restart keeps them. An
   activation takes effect once it is ordered and applied, no earlier
   than its activation time and later by at least one commit and the
-  engine's lead; faderz cannot place it on a given sample.
-- Only the replica leading the set registers the Node; a new leader
-  registers it again. Every replica serves the Node and Connection APIs
-  under the same ids, and each shows in `/active` what any replica
-  activated. `/staged` and scheduled activations are kept in memory by
-  the replica a request reached: other replicas do not see them, and a
-  restart drops them.
+  engine's lead; faderz cannot place it on a given sample. One that is
+  not applied shows the state's connection again in `/active`.
+- A scheduled activation is taken into the replicated state when it is
+  staged, and the replica leading at its time orders it, so it fires
+  after a leader change too; a cancel removes it from the state.
+- Every replica serves the Node and Connection APIs under the same ids,
+  and each shows in `/active` what is in the state. The other replicas
+  forward `/staged` and `/bulk` to the leader, at `nmos.peers` by
+  ordinal, so staging on one replica and activating on another work
+  together; while the set elects a leader they answer 503. Staged
+  parameters not yet activated, and a cancel sent to a new leader for
+  an activation scheduled before the change, are lost when the leader
+  changes.
+- Only the leader registers the Node, and only while a quorum of the
+  set acknowledges it. A replica of a set of more that stops leaves
+  the Node registered for the next leader; a set of one deletes it.
 - The listener is unauthenticated (no IS-10), and its activations
   re-route inputs and start and stop outputs.
 

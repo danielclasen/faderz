@@ -8,31 +8,41 @@
 //! in the replicated log, so every replica's engine routes alike and the
 //! connections survive restarts in the state; each replica's `/active`
 //! follows the state, so it shows what another replica activated and a
-//! switch between a channel's inputs a and b. Only the replica leading
-//! the set registers the Node. `/staged` and scheduled activations are
-//! held by the replica that took the request.
+//! switch between a channel's inputs a and b. A scheduled activation is a
+//! [`Command::Schedule`] when it is staged and a [`Command::Fire`] the
+//! leader orders at its time, so it survives a leader change. Only the
+//! leader registers the Node, and only while a quorum acknowledges it;
+//! the other replicas forward `/staged` and `/bulk` to it, so one replica
+//! holds the staged parameters.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+use axum::Router;
+use axum::extract::{Request, State};
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use openraft::ServerState;
 use samplez_mxl::{Instance, MxlApi};
 use samplez_nmos::uuid::Uuid;
 use samplez_nmos::{
     Active, Applied, Asset, BoxFuture, ChannelCount, ChannelDesc, Connections, Fail, FlowSeen,
     NmosConfig, NodeModel, Port, PortKey, ReceiverDesc, Reject, SenderDesc, Store, SystemTai, Tai,
+    TaiClock,
 };
 use samplez_replica::Replica;
 use samplez_replica::entry::SessionKey;
 use samplez_service::replica::Begin;
 use samplez_service::{Metrics, Owner, ReplicatedState, Role};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::app::App;
 use crate::config::{Config, Mxl};
 use crate::shape::Shape;
-use crate::state::{Answer, Command, Connection, Mixer, PortRef};
+use crate::state::{Answer, Command, Connection, Mixer, PortRef, Scheduled};
 
 /// The principal and session activations are ordered under: shorter than
 /// any client session id, so no client shares it.
@@ -43,6 +53,22 @@ const RESENDS: usize = 3;
 /// How often a port's change in the state that waited on an activation
 /// is looked at again.
 const FOLLOW_TICK: Duration = Duration::from_millis(100);
+/// How long a scheduled activation's time is looked for while none is
+/// due.
+const FIRE_TICK: Duration = Duration::from_millis(5);
+/// The longest since a quorum acknowledged the leader for it to register
+/// the Node: a leader cut off from the others stops within it.
+const QUORUM_FRESH: u64 = 1_000;
+/// How often a registering leader checks it still leads.
+const LEAD_CHECK: Duration = Duration::from_millis(100);
+/// How long a forwarded Connection API request may take.
+const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
+/// The header a forwarded request carries, so it is served where it
+/// arrives.
+const FORWARDED: &str = "x-faderz-forwarded";
+/// How long before its apply timeout an activation stops waiting for room
+/// among the commands in flight.
+const BUSY_MARGIN: Duration = Duration::from_secs(1);
 /// The file in a domain directory BCP-007-03 names its identity in.
 const DOMAIN_DEF: &str = "domain_def.json";
 
@@ -53,6 +79,11 @@ pub struct Node {
     /// Each port in the node's order, senders first.
     ports: Arc<Vec<Model>>,
     replica: Weak<Replica<Mixer>>,
+    /// The set's voters; 1 for a set of one.
+    voters: usize,
+    /// Per ordinal, the replica's peer address and the address its NMOS
+    /// listener is reached at; empty for a set of one.
+    peers: Vec<(String, String)>,
 }
 
 /// A port as [`actives`] reads it from the state.
@@ -166,6 +197,7 @@ impl Node {
             ports: ports.clone(),
             resolver: Arc::new(Resolver {
                 engine: engine.clone(),
+                own: config.own_flows(),
                 api,
                 paths: paths.collect(),
                 instances: Mutex::default(),
@@ -197,25 +229,105 @@ impl Node {
         let node = samplez_nmos::Nmos::new(model, cfg, conns.clone(), &store, SystemTai)
             .map_err(|e| e.to_string())?;
         node.register_metrics(metrics);
+        let peers = match &config.set {
+            Some(set) => {
+                let nmos_peers = config.nmos_peers();
+                set.peers.iter().cloned().zip(nmos_peers).collect()
+            }
+            None => Vec::new(),
+        };
         Ok(Node {
             nmos: node,
             conns,
             ports,
             replica: Arc::downgrade(replica),
+            voters: config
+                .set
+                .as_ref()
+                .map_or(1, |s| usize::from(s.voters.replicas)),
+            peers,
         })
     }
 
-    /// Keeps each port's `/active` on the state, and the Node registered
-    /// while this replica leads the set. Never returns while the replica
-    /// runs.
-    pub async fn run(&self) {
-        tokio::join!(self.follow(), self.register());
+    /// The Node and Connection APIs, with `/staged` and `/bulk` of the
+    /// Connection API forwarded to the leader of a set of more than one.
+    pub fn router(self: &Arc<Self>) -> Router {
+        self.nmos
+            .router()
+            .layer(axum::middleware::from_fn_with_state(self.clone(), forward))
     }
 
-    /// Deletes the Node from its registry when this replica leads.
+    /// Keeps each port's `/active` on the state, fires the scheduled
+    /// activations that are due while this replica leads, and keeps the
+    /// Node registered while it leads. Never returns while the replica
+    /// runs.
+    pub async fn run(&self) {
+        tokio::join!(self.follow(), self.fire(), self.register());
+    }
+
+    /// Deletes the Node from its registry when this replica is a set of
+    /// one. A replica of a set of more leaves the Node to the others: the
+    /// next leader registers it under the same ids, and a registry drops
+    /// it once no replica heartbeats.
     pub async fn unregister(&self) {
-        if self.replica.upgrade().is_some_and(|r| leading(&r)) {
+        if self.voters == 1 && self.replica.upgrade().is_some_and(|r| leading(&r)) {
             self.nmos.unregister().await;
+        }
+    }
+
+    /// The NMOS address of the set's leader when another replica leads;
+    /// `Err` while the set has none.
+    fn leader_nmos(&self) -> Result<Option<String>, ()> {
+        let Some(replica) = self.replica.upgrade() else {
+            return Err(());
+        };
+        let m = replica.raft().metrics().borrow().clone();
+        let Some(leader) = m.current_leader else {
+            return Err(());
+        };
+        if leader == replica.id() {
+            return Ok(None);
+        }
+        let node = m
+            .membership_config
+            .membership()
+            .get_node(&leader)
+            .ok_or(())?;
+        (self.peers.iter())
+            .find(|(peer, _)| *peer == node.addr)
+            .map(|(_, nmos)| Some(nmos.clone()))
+            .ok_or(())
+    }
+
+    /// Orders [`Command::Fire`] for each scheduled activation whose time
+    /// has come, while this replica leads; another leader fires those
+    /// still pending.
+    async fn fire(&self) {
+        loop {
+            let Some(replica) = self.replica.upgrade() else {
+                return;
+            };
+            let due: Vec<Scheduled> = if leading(&replica) {
+                let now = SystemTai.now().as_nanos();
+                replica.store().with_state(|sm| {
+                    (sm.product.scheduled().iter())
+                        .filter(|s| u128::from(s.at) <= now)
+                        .cloned()
+                        .collect()
+                })
+            } else {
+                Vec::new()
+            };
+            drop(replica);
+            for s in due {
+                if let Err(Fail(e)) = self.conns.fire(&s).await {
+                    tracing::warn!(
+                        schedule = s.id,
+                        "nmos: the scheduled activation did not fire: {e}"
+                    );
+                }
+            }
+            tokio::time::sleep(FIRE_TICK).await;
         }
     }
 
@@ -225,8 +337,8 @@ impl Node {
     /// change waits while an activation of this replica is being
     /// applied on the port, so an earlier one of its own committing does
     /// not overwrite a later one `/active` shows; the state's order
-    /// decides once it is applied. A port whose activation failed keeps
-    /// showing `master_enable` false until the state changes.
+    /// decides once it is applied. A port whose activation failed shows
+    /// the state's connection again, as every other replica does.
     async fn follow(&self) {
         let Some(replica) = self.replica.upgrade() else {
             return;
@@ -253,7 +365,8 @@ impl Node {
             for (index, (active, before)) in now.iter().zip(&last).enumerate() {
                 changed[index] |= active != before;
                 let port = &shown.ports[index];
-                if !changed[index] || port.applied == Applied::Applying {
+                let failed = matches!(port.applied, Applied::Failed(_));
+                if !(changed[index] || failed) || port.applied == Applied::Applying {
                     continue;
                 }
                 changed[index] = false;
@@ -275,12 +388,20 @@ impl Node {
         let mut metrics = replica.raft().metrics();
         let id = replica.id();
         drop(replica);
+        let alone = self.voters == 1;
+        // A leader cut off from the others keeps its state until it hears
+        // of a newer term; the quorum's acknowledgements stop at once.
         let leads = |m: &openraft::RaftMetrics<_, _>| {
-            m.state == ServerState::Leader && m.current_leader == Some(id)
+            m.state == ServerState::Leader
+                && m.current_leader == Some(id)
+                && (alone
+                    || m.millis_since_quorum_ack
+                        .is_some_and(|ms| ms < QUORUM_FRESH))
         };
         loop {
             if !leads(&metrics.borrow_and_update()) {
-                if metrics.changed().await.is_err() {
+                let changed = tokio::time::timeout(LEAD_CHECK, metrics.changed()).await;
+                if matches!(changed, Ok(Err(_))) {
                     return;
                 }
                 continue;
@@ -288,7 +409,8 @@ impl Node {
             tracing::info!("nmos: leading, registering the node");
             let lost = async {
                 loop {
-                    if metrics.changed().await.is_err() || !leads(&metrics.borrow_and_update()) {
+                    let changed = tokio::time::timeout(LEAD_CHECK, metrics.changed()).await;
+                    if matches!(changed, Ok(Err(_))) || !leads(&metrics.borrow_and_update()) {
                         return;
                     }
                 }
@@ -430,6 +552,8 @@ impl Conns {
 struct Resolver {
     /// For the check of a flow against the engine's outputs.
     engine: samplez::Config,
+    /// Every flow the set's outputs write or merge into, all replicas'.
+    own: BTreeSet<String>,
     api: Arc<MxlApi>,
     /// Each domain's directory by name.
     paths: BTreeMap<String, PathBuf>,
@@ -451,6 +575,11 @@ impl Resolver {
 
     /// What receiver `slot`'s domain holds as `flow`.
     fn seen_flow(&self, slot: usize, flow: &str) -> Result<FlowSeen, Reject> {
+        if self.own.contains(flow) {
+            return Err(Reject(format!(
+                "flow {flow} is written by this mixer's own outputs"
+            )));
+        }
         self.engine
             .check_input_flow(slot, flow)
             .map_err(|e| Reject(e.0))?;
@@ -466,10 +595,11 @@ impl Resolver {
 }
 
 impl Conns {
-    /// Orders `active` for the port at `index` and waits until it is
-    /// applied; a refusal for being ordered off the generation path is
-    /// sent again under a new id.
-    async fn order(&self, index: usize, active: &Active, generation: u64) -> Result<(), Fail> {
+    /// Orders `command(attempt)` and waits until it is applied; a refusal
+    /// for being ordered off the generation path is sent again under a
+    /// new id, and while the replica has no room for another command in
+    /// flight it waits, up to shortly before the apply timeout.
+    async fn submit(&self, command: impl Fn(usize) -> Command) -> Result<(), Fail> {
         let owner = Owner {
             principal: SESSION.into(),
             session: SESSION.into(),
@@ -477,19 +607,24 @@ impl Conns {
             connection: SESSION.into(),
         };
         let session = SessionKey::from(&owner);
+        let deadline = tokio::time::Instant::now()
+            + samplez_nmos::DEFAULT_APPLY_TIMEOUT.saturating_sub(BUSY_MARGIN);
         for attempt in 0..RESENDS {
-            let id = format!("{}-{index}-{generation}-{attempt}", self.instance);
-            let command = Command::Connect {
-                id: id.clone(),
-                port: self.ports[index].port_ref(),
-                active: connection(active),
-            };
+            let command = command(attempt);
+            let id = command.id().to_owned();
             let body = serde_json::to_vec(&command).expect("a command serializes");
-            let ack = match self.app.commands.begin(&owner, &id) {
-                Begin::Duplicate(ack) => ack,
-                Begin::Busy => return Err(Fail("too many commands in flight".into())),
-                Begin::New(pending) => (pending.submit(body.into()).await)
-                    .map_err(|e| Fail(format!("not applied: {e}")))?,
+            let ack = loop {
+                match self.app.commands.begin(&owner, &id) {
+                    Begin::Duplicate(ack) => break ack,
+                    Begin::Busy if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(FOLLOW_TICK).await;
+                    }
+                    Begin::Busy => return Err(Fail("too many commands in flight".into())),
+                    Begin::New(pending) => {
+                        break (pending.submit(body.clone().into()).await)
+                            .map_err(|e| Fail(format!("not applied: {e}")))?;
+                    }
+                }
             };
             match self.app.answer(&session, &ack) {
                 Some(Answer::Refused { .. }) if attempt + 1 < RESENDS => {}
@@ -502,6 +637,64 @@ impl Conns {
             }
         }
         unreachable!("the last attempt returns")
+    }
+
+    /// Orders `active` for the port at `index` and waits until it is
+    /// applied.
+    async fn order(&self, index: usize, active: &Active, generation: u64) -> Result<(), Fail> {
+        let port = self.ports[index].port_ref();
+        self.submit(|attempt| Command::Connect {
+            id: format!("{}-{index}-{generation}-{attempt}", self.instance),
+            port: port.clone(),
+            active: connection(active),
+        })
+        .await
+    }
+
+    /// Takes a scheduled activation for `at` into the state, or cancels
+    /// the port's one for `at` when `active` is what the port shows: the
+    /// call samplez-nmos makes for a cancel.
+    async fn schedule(
+        &self,
+        index: usize,
+        active: &Active,
+        at: Tai,
+        generation: u64,
+    ) -> Result<(), Fail> {
+        let port = self.ports[index].port_ref();
+        let at = u64::try_from(at.as_nanos())
+            .map_err(|_| Fail("activation time out of range".into()))?;
+        let pending = self.app.replica.store().with_state(|sm| {
+            (sm.product.scheduled().iter())
+                .find(|s| s.port == port)
+                .map(|s| s.at)
+        });
+        let id = |attempt| format!("{}-{index}-{generation}-{attempt}", self.instance);
+        if pending == Some(at) {
+            return self
+                .submit(|attempt| Command::Unschedule {
+                    id: id(attempt),
+                    port: port.clone(),
+                })
+                .await;
+        }
+        self.submit(|attempt| Command::Schedule {
+            id: id(attempt),
+            port: port.clone(),
+            active: connection(active),
+            at,
+        })
+        .await
+    }
+
+    /// Orders the firing of scheduled activation `s`, under ids every
+    /// replica derives alike, so a second leader firing it is a duplicate.
+    async fn fire(&self, s: &Scheduled) -> Result<(), Fail> {
+        self.submit(|attempt| Command::Fire {
+            id: format!("fire-{attempt}-{}", s.id),
+            schedule: s.id.clone(),
+        })
+        .await
     }
 }
 
@@ -520,17 +713,17 @@ impl Connections for Conns {
         })
     }
 
-    /// An activation takes effect once ordered and applied: faderz cannot
-    /// place it on a sample index ahead of time.
+    /// A scheduled activation is handed over when it is staged, so the
+    /// set takes it into its state at once ([`Conns::schedule`]).
     fn lead(&self) -> Duration {
-        Duration::ZERO
+        Duration::MAX
     }
 
     fn apply(
         &self,
         port: Port,
         active: Active,
-        _at: Option<Tai>,
+        at: Option<Tai>,
         generation: u64,
     ) -> BoxFuture<'_, Result<(), Fail>> {
         Box::pin(async move {
@@ -538,8 +731,154 @@ impl Connections for Conns {
             if !self.saw(index, generation) {
                 return Ok(());
             }
-            self.order(index, &active, generation).await
+            match at {
+                Some(at) => self.schedule(index, &active, at, generation).await,
+                None => self.order(index, &active, generation).await,
+            }
         })
+    }
+}
+
+/// Serves a Connection API request for staging where it arrives on the
+/// leader, and forwards it to the leader elsewhere; 503 while the set has
+/// none. Every other request is served where it arrives.
+async fn forward(State(node): State<Arc<Node>>, req: Request, next: Next) -> Response {
+    let staging = {
+        let path = req.uri().path();
+        path.starts_with("/x-nmos/connection/")
+            && (path.contains("/staged") || path.contains("/bulk/"))
+    };
+    if node.voters == 1
+        || !staging
+        || req.method() == axum::http::Method::OPTIONS
+        || req.headers().contains_key(FORWARDED)
+    {
+        return next.run(req).await;
+    }
+    match node.leader_nmos() {
+        Ok(None) => next.run(req).await,
+        Ok(Some(leader)) => {
+            match tokio::time::timeout(FORWARD_TIMEOUT, proxy(&leader, req)).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(e)) => refused(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("forwarding to the leader at {leader}: {e}"),
+                ),
+                Err(_) => refused(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    &format!("the leader at {leader} did not answer"),
+                ),
+            }
+        }
+        Err(()) => refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the set has no leader; try again",
+        ),
+    }
+}
+
+fn refused(status: StatusCode, message: &str) -> Response {
+    let body = serde_json::json!({ "code": status.as_u16(), "error": message, "debug": null });
+    let mut r = (status, body.to_string()).into_response();
+    let h = r.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    r
+}
+
+/// Sends `req` to the NMOS listener at `addr` over HTTP/1.1 and returns
+/// its answer.
+async fn proxy(addr: &str, req: Request) -> Result<Response, String> {
+    let (parts, body) = req.into_parts();
+    let body = axum::body::to_bytes(body, 1 << 20)
+        .await
+        .map_err(|e| e.to_string())?;
+    let target = parts.uri.path_and_query().map_or("/", |p| p.as_str());
+    let mut head = format!(
+        "{} {target} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n{FORWARDED}: 1\r\n\
+         Content-Length: {}\r\n",
+        parts.method,
+        body.len()
+    );
+    for name in [header::CONTENT_TYPE, header::ACCEPT, header::ORIGIN] {
+        if let Some(v) = parts.headers.get(&name).and_then(|v| v.to_str().ok()) {
+            head += &format!("{name}: {v}\r\n");
+        }
+    }
+    head += "\r\n";
+    let mut tcp = tokio::net::TcpStream::connect(addr)
+        .await
+        .map_err(|e| e.to_string())?;
+    tcp.write_all(head.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    tcp.write_all(&body).await.map_err(|e| e.to_string())?;
+    let mut answer = Vec::new();
+    tcp.read_to_end(&mut answer)
+        .await
+        .map_err(|e| e.to_string())?;
+    parse_response(&answer)
+}
+
+/// An HTTP/1.1 response read to its end, a chunked body decoded.
+fn parse_response(answer: &[u8]) -> Result<Response, String> {
+    let split = (answer.windows(4))
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or("no header end")?;
+    let head = std::str::from_utf8(&answer[..split]).map_err(|e| e.to_string())?;
+    let mut body = answer[split + 4..].to_vec();
+    let mut lines = head.split("\r\n");
+    let status = (lines.next().and_then(|l| l.split(' ').nth(1)))
+        .and_then(|c| c.parse::<u16>().ok())
+        .and_then(|c| StatusCode::from_u16(c).ok())
+        .ok_or("no status line")?;
+    let mut response = Response::builder().status(status);
+    let mut chunked = false;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
+        match name.as_str() {
+            "transfer-encoding" => chunked = value.eq_ignore_ascii_case("chunked"),
+            "connection" | "content-length" | "keep-alive" => {}
+            _ => {
+                let (Ok(n), Ok(v)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(value),
+                ) else {
+                    continue;
+                };
+                response = response.header(n, v);
+            }
+        }
+    }
+    if chunked {
+        body = dechunk(&body).ok_or("a malformed chunked body")?;
+    }
+    response
+        .body(axum::body::Body::from(body))
+        .map_err(|e| e.to_string())
+}
+
+fn dechunk(mut rest: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    loop {
+        let line = rest.windows(2).position(|w| w == b"\r\n")?;
+        let size = std::str::from_utf8(&rest[..line]).ok()?;
+        let size = usize::from_str_radix(size.split(';').next()?.trim(), 16).ok()?;
+        rest = &rest[line + 2..];
+        if size == 0 {
+            return Some(out);
+        }
+        out.extend_from_slice(rest.get(..size)?);
+        rest = rest.get(size + 2..)?;
     }
 }
 
@@ -669,6 +1008,25 @@ mod tests {
                 .contains("differs")
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_forwarded_answer_is_passed_on_whole() {
+        let plain = b"HTTP/1.1 423 Locked\r\ncontent-type: application/json\r\n\
+            access-control-allow-origin: *\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+        let r = parse_response(plain).unwrap();
+        assert_eq!(r.status(), StatusCode::LOCKED);
+        assert_eq!(r.headers()["access-control-allow-origin"], "*");
+        assert!(r.headers().get("connection").is_none());
+        let chunked = b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n\
+            3\r\n[1,\r\n2;x=y\r\n2]\r\n0\r\n\r\n";
+        assert_eq!(
+            dechunk(b"3\r\n[1,\r\n2\r\n2]\r\n0\r\n\r\n").unwrap(),
+            b"[1,2]"
+        );
+        assert_eq!(parse_response(chunked).unwrap().status(), StatusCode::OK);
+        assert!(dechunk(b"5\r\n[1").is_none());
+        assert!(parse_response(b"garbage").is_err());
     }
 
     #[test]

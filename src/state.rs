@@ -96,6 +96,47 @@ pub enum Command {
         port: PortRef,
         active: Connection,
     },
+    /// A scheduled IS-05 activation, taken when it is staged: the port's
+    /// only pending one, which [`Command::Fire`] applies at `at`.
+    Schedule {
+        id: String,
+        port: PortRef,
+        active: Connection,
+        /// TAI nanoseconds.
+        at: u64,
+    },
+    /// Cancels the port's scheduled activation.
+    Unschedule {
+        id: String,
+        port: PortRef,
+    },
+    /// Applies the scheduled activation `schedule` (its [`Command::Schedule`]
+    /// id) as a [`Command::Connect`], when the port still has it pending.
+    Fire {
+        id: String,
+        schedule: String,
+    },
+}
+
+impl Command {
+    /// The client's command id.
+    pub fn id(&self) -> &str {
+        match self {
+            Command::Control(c) => &c.id,
+            Command::Patch { id, .. }
+            | Command::StoreScene { id, .. }
+            | Command::DeleteScene { id, .. }
+            | Command::Recall { id, .. }
+            | Command::Tally { id, .. }
+            | Command::Register { id, .. }
+            | Command::PutConsole { id, .. }
+            | Command::RemoveConsole { id, .. }
+            | Command::Connect { id, .. }
+            | Command::Schedule { id, .. }
+            | Command::Unschedule { id, .. }
+            | Command::Fire { id, .. } => id,
+        }
+    }
 }
 
 /// An IS-05 port: the receiver of a channel or the sender of an output,
@@ -127,6 +168,22 @@ pub struct Ports {
     receivers: BTreeMap<String, Connection>,
     senders: BTreeMap<String, Connection>,
     legs: BTreeMap<String, Legs>,
+    /// The scheduled activations, one per port at most.
+    #[serde(default)]
+    scheduled: Vec<Scheduled>,
+}
+
+/// A scheduled activation the state holds until it is fired or
+/// cancelled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scheduled {
+    /// The id of its [`Command::Schedule`].
+    pub id: String,
+    pub port: PortRef,
+    pub active: Connection,
+    /// TAI nanoseconds.
+    pub at: u64,
 }
 
 /// A channel's flows of input a and b that activations named.
@@ -135,6 +192,10 @@ pub struct Ports {
 struct Legs {
     a: Option<String>,
     b: Option<String>,
+    /// The channel's configured flows of input a and b when an activation
+    /// named one: a configuration that wires others drops the legs.
+    #[serde(default)]
+    wired: Option<(String, Option<String>)>,
 }
 
 /// A console's descriptor: model `ConsoleStatus` without what the server
@@ -347,6 +408,9 @@ pub struct Mixer {
     ports: Ports,
     /// [`Mixer::wiring`] with the leg flows of [`Ports`].
     effective: Vec<Wiring>,
+    /// Every flow an output writes or the set merges its members into: no
+    /// receiver may read one.
+    own: BTreeSet<String>,
     /// The engine targets of the state, kept by every write; none
     /// without an engine. Derived from the state alone, so neither
     /// replicated nor saved.
@@ -417,8 +481,17 @@ impl Mixer {
 
     /// Builds [`Mixer::configured`]: the empty state every replica of a
     /// set opens and installs snapshots into.
-    pub fn factory(shape: Shape, declared: Vec<Console>, wiring: Vec<Wiring>) -> Factory<Mixer> {
-        Arc::new(move || Mixer::configured(shape.clone(), declared.clone(), wiring.clone()))
+    pub fn factory(
+        shape: Shape,
+        declared: Vec<Console>,
+        wiring: Vec<Wiring>,
+        own: BTreeSet<String>,
+    ) -> Factory<Mixer> {
+        Arc::new(move || {
+            let mut m = Mixer::configured(shape.clone(), declared.clone(), wiring.clone());
+            m.own.clone_from(&own);
+            m
+        })
     }
 
     /// The channel slots whose selected flow `written` changes, applied to
@@ -591,23 +664,15 @@ impl Mixer {
         active: &Connection,
         ctx: &Apply,
     ) -> Effect<Edits> {
-        let ids = [&active.peer, &active.domain, &active.flow];
-        if let Some(bad) = ids.into_iter().flatten().find(|v| !is_uuid(v)) {
-            let message = format!("{bad:?} is no lowercase UUID");
-            return self.refuse(session, id, Answer::Invalid { message });
+        if let Err(answer) = self.check_connection(port, active) {
+            return self.refuse(session, id, answer);
         }
         let shape = self.shape.clone().expect("configured");
         match port {
             PortRef::Receiver(channel) => {
-                let slot = shape.channels.iter().position(|c| c.id == *channel);
-                let Some(slot) = slot.filter(|_| !self.wiring.is_empty()) else {
-                    let message = format!("no receiver {channel}");
-                    return self.refuse(session, id, Answer::NotFound { message });
-                };
-                if active.master_enable && active.flow.is_none() {
-                    let message = "an enabled receiver needs a flow".to_owned();
-                    return self.refuse(session, id, Answer::Invalid { message });
-                }
+                let slot = (shape.channels.iter())
+                    .position(|c| c.id == *channel)
+                    .expect("checked");
                 if ctx.generation == Some(false)
                     && !self.connect_reroutes(channel, active).is_empty()
                 {
@@ -618,8 +683,11 @@ impl Mixer {
                 if let Some(flow) = &active.flow {
                     let b = self.state["channels"][channel]["input"] == "b"
                         && self.wiring[slot].b.is_some();
+                    let w = &self.wiring[slot];
+                    let wired = Some((w.a.clone(), w.b.clone()));
                     let legs = self.ports.legs.entry(channel.clone()).or_default();
                     *(if b { &mut legs.b } else { &mut legs.a }) = Some(flow.clone());
+                    legs.wired = wired;
                 }
                 self.ports.receivers.insert(channel.clone(), active.clone());
                 self.rewire();
@@ -635,14 +703,106 @@ impl Mixer {
                 }
             }
             PortRef::Sender(output) => {
-                if !shape.outputs.iter().any(|o| o.id == *output) {
-                    let message = format!("no sender {output}");
-                    return self.refuse(session, id, Answer::NotFound { message });
-                }
                 self.ports.senders.insert(output.clone(), active.clone());
             }
         }
+        // An activation supersedes one scheduled for the port.
+        self.ports.scheduled.retain(|s| s.port != *port);
         Effect::Changed(Edits::default())
+    }
+
+    /// Takes a scheduled activation: checked as [`Mixer::connect`] checks
+    /// it, but for the generation path, which [`Command::Fire`] takes.
+    fn schedule(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        port: &PortRef,
+        active: &Connection,
+        at: u64,
+    ) -> Effect<Edits> {
+        if let Err(answer) = self.check_connection(port, active) {
+            return self.refuse(session, id, answer);
+        }
+        self.ports.scheduled.retain(|s| s.port != *port);
+        self.ports.scheduled.push(Scheduled {
+            id: id.to_owned(),
+            port: port.clone(),
+            active: active.clone(),
+            at,
+        });
+        Effect::Changed(Edits::default())
+    }
+
+    fn unschedule(&mut self, port: &PortRef) -> Effect<Edits> {
+        let before = self.ports.scheduled.len();
+        self.ports.scheduled.retain(|s| s.port != *port);
+        if self.ports.scheduled.len() == before {
+            Effect::Unchanged
+        } else {
+            Effect::Changed(Edits::default())
+        }
+    }
+
+    /// Fires scheduled activation `schedule` when it is still pending;
+    /// refused off the generation path, it stays pending.
+    fn fire(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        schedule: &str,
+        ctx: &Apply,
+    ) -> Effect<Edits> {
+        let Some(s) = self
+            .ports
+            .scheduled
+            .iter()
+            .find(|s| s.id == schedule)
+            .cloned()
+        else {
+            return Effect::Unchanged;
+        };
+        self.connect(session, id, &s.port, &s.active, ctx)
+    }
+
+    /// The scheduled activations, in the order they were taken.
+    pub fn scheduled(&self) -> &[Scheduled] {
+        &self.ports.scheduled
+    }
+
+    /// Why `active` cannot be activated on `port`, as [`Mixer::connect`]
+    /// refuses it.
+    fn check_connection(&self, port: &PortRef, active: &Connection) -> Result<(), Answer> {
+        let ids = [&active.peer, &active.domain, &active.flow];
+        if let Some(bad) = ids.into_iter().flatten().find(|v| !is_uuid(v)) {
+            return Err(Answer::Invalid {
+                message: format!("{bad:?} is no lowercase UUID"),
+            });
+        }
+        let shape = self.shape();
+        match port {
+            PortRef::Receiver(channel) => {
+                if self.wiring.is_empty() || !shape.is_channel(channel) {
+                    let message = format!("no receiver {channel}");
+                    return Err(Answer::NotFound { message });
+                }
+                if active.master_enable && active.flow.is_none() {
+                    let message = "an enabled receiver needs a flow".to_owned();
+                    return Err(Answer::Invalid { message });
+                }
+                if let Some(flow) = active.flow.as_ref().filter(|f| self.own.contains(*f)) {
+                    let message = format!("flow {flow} is written by this mixer's own outputs");
+                    return Err(Answer::Invalid { message });
+                }
+            }
+            PortRef::Sender(output) => {
+                if !shape.outputs.iter().any(|o| o.id == *output) {
+                    let message = format!("no sender {output}");
+                    return Err(Answer::NotFound { message });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// A switch between input a and b among `changed` shows in the
@@ -1475,6 +1635,25 @@ impl Mixer {
         let mut ports = saved.ports;
         ports.receivers.retain(|id, _| shape.is_channel(id));
         ports.legs.retain(|id, _| shape.is_channel(id));
+        // Leg flows activated over a configuration that wired the channel
+        // otherwise are no longer what the operator configured.
+        let wired = |id: &String| {
+            let slot = shape.channels.iter().position(|c| c.id == *id)?;
+            self.wiring.get(slot).map(|w| (w.a.clone(), w.b.clone()))
+        };
+        let stale: Vec<String> = (ports.legs.iter())
+            .filter(|(id, l)| l.wired.is_some() && l.wired != wired(id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in stale {
+            ports.legs.remove(&id);
+            ports.receivers.remove(&id);
+        }
+        let own_port = |p: &PortRef| match p {
+            PortRef::Receiver(c) => shape.is_channel(c),
+            PortRef::Sender(o) => shape.outputs.iter().any(|x| x.id == *o),
+        };
+        ports.scheduled.retain(|s| own_port(&s.port));
         ports
             .senders
             .retain(|id, _| shape.outputs.iter().any(|o| o.id == *id));
@@ -1519,6 +1698,14 @@ impl Product for Mixer {
             Command::PutConsole { id, console } => self.put_console(&session, id, console),
             Command::RemoveConsole { id, console } => self.remove_console(&session, id, console),
             Command::Connect { id, port, active } => self.connect(&session, id, port, active, ctx),
+            Command::Schedule {
+                id,
+                port,
+                active,
+                at,
+            } => self.schedule(&session, id, port, active, *at),
+            Command::Unschedule { port, .. } => self.unschedule(port),
+            Command::Fire { id, schedule } => self.fire(&session, id, schedule, ctx),
         }
     }
 
@@ -1537,6 +1724,13 @@ impl Product for Mixer {
                 active,
                 ..
             }) => self.connect_reroutes(&channel, &active),
+            Ok(Command::Fire { schedule, .. }) => (self.ports.scheduled.iter())
+                .find(|s| s.id == schedule)
+                .and_then(|s| match &s.port {
+                    PortRef::Receiver(channel) => Some(self.connect_reroutes(channel, &s.active)),
+                    PortRef::Sender(_) => None,
+                })
+                .unwrap_or_default(),
             Ok(c) => self.rerouted(&self.writes_of(&c)),
             Err(_) => Vec::new(),
         }
@@ -1551,6 +1745,7 @@ impl Product for Mixer {
             "shape": self.shape,
             "consoles": self.declared,
             "wiring": self.wiring,
+            "own": self.own,
         });
         xxhash_rust::xxh3::xxh3_64(config.to_string().as_bytes())
     }
@@ -4199,5 +4394,175 @@ mod tests {
         let mut back = wired();
         back.load(&serde_json::to_vec(&v).unwrap()).unwrap();
         assert_eq!(back.targets(), wired().targets());
+    }
+
+    const OWN: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a0f";
+
+    /// [`wired`] whose outputs write or merge into [`OWN`].
+    fn owning() -> Mixer {
+        let m = wired();
+        let (shape, wiring) = (m.shape().clone(), m.wiring.clone());
+        Mixer::factory(shape, Vec::new(), wiring, BTreeSet::from([OWN.to_owned()]))()
+    }
+
+    /// No receiver reads a flow the mixer's outputs write or merge into,
+    /// whatever path the command came by: it would feed the mix back.
+    #[test]
+    fn a_receiver_is_never_connected_to_an_own_output() {
+        let mut m = owning();
+        connect(&mut m, "n1", receiver("ch1"), conn(true, Some(OWN)));
+        assert!(matches!(
+            m.answer(&rest_key(), "n1"),
+            Some(Answer::Invalid { .. })
+        ));
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some("a1"));
+        let s = Command::Schedule {
+            id: "n2".into(),
+            port: receiver("ch1"),
+            active: conn(true, Some(OWN)),
+            at: 1,
+        };
+        apply_as(&mut m, &s, Some(true));
+        assert!(matches!(
+            m.answer(&rest_key(), "n2"),
+            Some(Answer::Invalid { .. })
+        ));
+        assert!(m.scheduled().is_empty());
+        // The own flows are part of the configuration replicas compare.
+        assert_ne!(owning().config_hash(), wired().config_hash());
+    }
+
+    fn schedule(m: &mut Mixer, id: &str, port: PortRef, active: Connection, at: u64) {
+        let c = Command::Schedule {
+            id: id.into(),
+            port,
+            active,
+            at,
+        };
+        assert!(matches!(apply_as(m, &c, None), Effect::Changed(_)));
+    }
+
+    fn fire(m: &mut Mixer, id: &str, schedule: &str, generation: Option<bool>) -> Effect<Edits> {
+        let c = Command::Fire {
+            id: id.into(),
+            schedule: schedule.into(),
+        };
+        apply_as(m, &c, generation)
+    }
+
+    /// A scheduled activation is state from when it is staged, so any
+    /// leader fires it; it changes nothing until fired, fires once, is
+    /// refused off the generation path and kept for the next try, and a
+    /// cancel or a later activation of the port removes it.
+    #[test]
+    fn a_scheduled_activation_is_kept_until_fired_or_cancelled() {
+        let mut m = wired();
+        schedule(&mut m, "s1", receiver("ch1"), conn(true, Some(F1)), 1_000);
+        assert_eq!(m.scheduled().len(), 1);
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some("a1"));
+        let c = Command::Fire {
+            id: "f0".into(),
+            schedule: "s1".into(),
+        };
+        assert_eq!(
+            m.reroutes(&origin("rest"), &serde_json::to_vec(&c).unwrap()),
+            [0]
+        );
+        assert!(matches!(
+            fire(&mut m, "f0", "s1", Some(false)),
+            Effect::Unchanged
+        ));
+        assert_eq!(m.scheduled().len(), 1, "kept for the next try");
+        assert!(matches!(
+            fire(&mut m, "f1", "s1", Some(true)),
+            Effect::Changed(_)
+        ));
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some(F1));
+        assert!(m.scheduled().is_empty());
+        assert!(matches!(
+            fire(&mut m, "f2", "s1", Some(true)),
+            Effect::Unchanged
+        ));
+
+        // Cancelled, it never fires.
+        schedule(&mut m, "s2", receiver("ch1"), conn(true, Some(F2)), 2_000);
+        let cancel = Command::Unschedule {
+            id: "u1".into(),
+            port: receiver("ch1"),
+        };
+        assert!(matches!(
+            apply_as(&mut m, &cancel, None),
+            Effect::Changed(_)
+        ));
+        assert!(matches!(
+            fire(&mut m, "f3", "s2", Some(true)),
+            Effect::Unchanged
+        ));
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some(F1));
+
+        // An immediate activation supersedes it; a second schedule of
+        // the port replaces the first.
+        schedule(&mut m, "s3", receiver("ch1"), conn(true, Some(F2)), 3_000);
+        schedule(&mut m, "s4", receiver("ch1"), conn(false, None), 4_000);
+        assert_eq!(m.scheduled().len(), 1);
+        connect(&mut m, "n1", receiver("ch1"), conn(true, Some(F2)));
+        assert!(m.scheduled().is_empty());
+
+        // A snapshot carries what is still pending.
+        schedule(
+            &mut m,
+            "s5",
+            PortRef::Sender("out-pgm".into()),
+            conn(false, None),
+            5_000,
+        );
+        let mut back = wired();
+        back.load(&m.save()).unwrap();
+        assert_eq!(back.scheduled(), m.scheduled());
+    }
+
+    /// Leg flows an activation named over a configuration that wired the
+    /// channel otherwise are dropped with its receiver's connection: the
+    /// channel reads what is configured now.
+    #[test]
+    fn activated_legs_go_when_the_configured_flows_change() {
+        let mut m = wired();
+        connect(&mut m, "n1", receiver("ch1"), conn(true, Some(F1)));
+        connect(&mut m, "n2", receiver("ch2"), conn(true, Some(F2)));
+        let saved = m.save();
+        let mut shape = small();
+        shape["channels"][1]["altInput"] = json!(true);
+        let wire = |a: &str, b: Option<&str>, domain: &str| Wiring {
+            a: a.into(),
+            b: b.map(Into::into),
+            domain: domain.into(),
+        };
+        let mut rewired = Mixer::configured(
+            Shape::parse(&shape).unwrap(),
+            Vec::new(),
+            vec![
+                wire("x1", Some("b1"), "d"),
+                wire("a2", Some("b2"), "e"),
+                wire("a3", None, "d"),
+            ],
+        );
+        rewired.load(&saved).unwrap();
+        let flows = rewired.targets().unwrap().flows;
+        assert_eq!(flows[0].as_deref(), Some("x1"), "ch1's wiring changed");
+        assert_eq!(rewired.receiver("ch1").unwrap().0, None);
+        assert_eq!(flows[1].as_deref(), Some(F2), "ch2's wiring did not");
+    }
+
+    /// A disable that names a flow keeps it as the flow of the selected
+    /// input, so an enable without one reads it: IS-05 keeps the
+    /// transport parameters of a disabled port.
+    #[test]
+    fn a_disable_naming_a_flow_sets_the_selected_inputs_flow() {
+        let mut m = wired();
+        connect(&mut m, "n1", receiver("ch1"), conn(false, Some(F1)));
+        assert_eq!(m.targets().unwrap().flows[0], None);
+        connect(&mut m, "n2", receiver("ch1"), conn(true, Some(F1)));
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some(F1));
+        assert_eq!(m.engine_view().wiring[0].a, F1);
     }
 }

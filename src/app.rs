@@ -643,7 +643,7 @@ pub(crate) mod tests {
             "outputs": [],
         }))
         .unwrap();
-        let mixer = Mixer::factory(shape, Vec::new(), Vec::new());
+        let mixer = Mixer::factory(shape, Vec::new(), Vec::new(), Default::default());
         let replica = replica::start(&dir, mixer, Arc::new(replica::tai_samples))
             .await
             .unwrap();

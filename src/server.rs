@@ -85,6 +85,7 @@ impl Server {
             shape.clone(),
             config.consoles.clone(),
             config.wiring.clone(),
+            config.own_flows(),
         );
         let product = mixer().config_hash();
         let (state, peer, kube, write_timeout) = match &config.set {
@@ -227,7 +228,7 @@ impl Server {
         .ui(ui::router())
         .ws(move |socket, connect| ws::serve(ws_app.clone(), socket, connect));
         let service = match &node {
-            Some(node) => service.nmos(node.nmos.router()),
+            Some(node) => service.nmos(node.router()),
             None => service,
         };
         let bound = service
@@ -454,7 +455,12 @@ mod tests {
             },
         });
         let (config, shape, _) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
-        let mixer = Mixer::factory(shape, config.consoles.clone(), config.wiring.clone());
+        let mixer = Mixer::factory(
+            shape,
+            config.consoles.clone(),
+            config.wiring.clone(),
+            config.own_flows(),
+        );
         let replica = replica::start(&dir, mixer, Arc::new(replica::tai_samples))
             .await
             .unwrap();
