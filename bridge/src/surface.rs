@@ -88,13 +88,30 @@ struct Press {
     refused: Option<String>,
     /// Since when the key may have been let go unseen.
     suspect: Option<u64>,
+    /// Pressed on a bypassed group: the hold starts once the key has
+    /// been down for `LATCH_MS`, so that a tap sends nothing.
+    waiting: bool,
 }
 
 impl Press {
     /// Whether the press holds its group's `hold`: a hold key's press
-    /// the server did not refuse.
+    /// the server did not refuse, once its hold has started.
     fn holds(&self) -> bool {
-        self.action != KeyAction::Latch && self.refused.is_none()
+        self.action != KeyAction::Latch && self.refused.is_none() && !self.waiting
+    }
+
+    /// Takes the hold unless another session has it.
+    fn start(&mut self, engine: &mut Engine, now: u64) {
+        self.waiting = false;
+        let path = hold_path(&self.duck);
+        self.refused = engine
+            .owner(&path)
+            .filter(|o| !engine.mine(o))
+            .map(short_name);
+        if self.refused.is_none() {
+            engine.touch(&path, now);
+            engine.set(&path, json!(true), now);
+        }
     }
 }
 
@@ -437,33 +454,36 @@ impl Surface {
         if self.units[unit].presses.contains_key(&note) {
             return;
         }
-        let path = hold_path(&key.duck);
-        let mut refused = None;
         if key.action == KeyAction::Latch {
             Self::toggle_mode(&key.duck, engine, now);
-        } else {
-            refused = engine
-                .owner(&path)
-                .filter(|o| !engine.mine(o))
-                .map(short_name);
-            if refused.is_none() {
-                engine.touch(&path, now);
-                engine.set(&path, json!(true), now);
-            }
         }
-        let press = Press {
+        // A bypassed group is not ducked by a tap: the hold of a key
+        // that may still turn out to be one waits for the tap time.
+        let bypassed = engine.display(&format!("/ducks/{}/mode", key.duck)) == Some(&json!("off"));
+        let mut press = Press {
             duck: key.duck,
             action: key.action,
             since: now,
-            refused,
+            refused: None,
             suspect: None,
+            waiting: key.action == KeyAction::HoldOrLatch && bypassed,
         };
+        if key.action != KeyAction::Latch && !press.waiting {
+            press.start(engine, now);
+        }
         self.units[unit].presses.insert(note, press);
     }
 
     /// A duck key went up: a tap toggles the mode, whoever holds the
     /// hold, as the mode has no owner; then the hold is let go.
-    fn duck_up(&mut self, p: Press, engine: &mut Engine, now: u64) {
+    fn duck_up(&mut self, mut p: Press, engine: &mut Engine, now: u64) {
+        if p.waiting {
+            if now < p.since + LATCH_MS {
+                // A tap on a bypassed group: nothing was sent.
+                return;
+            }
+            p.start(engine, now);
+        }
         if p.action == KeyAction::HoldOrLatch && now < p.since + LATCH_MS {
             Self::toggle_mode(&p.duck, engine, now);
         }
@@ -613,6 +633,9 @@ impl Surface {
             }
         }
         for p in self.units.iter_mut().flat_map(|u| u.presses.values_mut()) {
+            if p.waiting && now >= p.since + LATCH_MS {
+                p.start(engine, now);
+            }
             let path = hold_path(&p.duck);
             if p.holds()
                 && !engine.touch_pending(&path)
@@ -1233,6 +1256,74 @@ mod tests {
             assert!(out.contains(&(0, cell)), "{strip}: {out:02x?}");
         }
         key(&mut s, &mut e, F1, false, 2001);
+        assert_eq!(values(&e.take_actions()), vec![]);
+        let out = s.render(&e, 2002);
+        assert!(out.contains(&(0, mcu::lcd(Device::Main, 56 + 14, "       "))));
+    }
+
+    /// A ducking engine whose group `comm` is bypassed.
+    fn bypassed() -> Engine {
+        let mut e = ducking();
+        delta(
+            &mut e,
+            6,
+            json!([{ "path": MODE, "value": "off" }]),
+            json!([]),
+        );
+        e
+    }
+
+    #[test]
+    fn a_tap_on_a_bypassed_group_sends_nothing_and_says_so() {
+        let mut e = bypassed();
+        let mut s = Surface::new(units(1), None);
+        key(&mut s, &mut e, F1, true, 0);
+        assert_eq!(values(&e.take_actions()), vec![]);
+        assert!(s.touching().is_empty());
+        let out = s.render(&e, 1);
+        assert!(
+            out.contains(&(0, mcu::lcd(Device::Main, 56 + 14, "ypassed"))),
+            "{out:02x?}"
+        );
+        s.tick(&mut e, LATCH_MS - 1);
+        key(&mut s, &mut e, F1, false, LATCH_MS - 1);
+        assert_eq!(values(&e.take_actions()), vec![], "no touch, hold or mode");
+        s.tick(&mut e, 2 * LATCH_MS);
+        assert_eq!(values(&e.take_actions()), vec![], "nothing starts later");
+    }
+
+    #[test]
+    fn a_long_press_on_a_bypassed_group_holds_from_the_tap_time() {
+        let mut e = bypassed();
+        let mut s = Surface::new(units(1), None);
+        key(&mut s, &mut e, F1, true, 0);
+        s.tick(&mut e, LATCH_MS - 1);
+        assert_eq!(values(&e.take_actions()), vec![]);
+        s.tick(&mut e, LATCH_MS);
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![
+                cmd("touch", HOLD, Value::Null),
+                cmd("set", HOLD, json!(true)),
+            ]
+        );
+        assert!(s.touching().contains(HOLD));
+        s.tick(&mut e, LATCH_MS + 1);
+        assert_eq!(values(&e.take_actions()), vec![], "started once");
+        key(&mut s, &mut e, F1, false, 1000);
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![cmd("release", HOLD, Value::Null)]
+        );
+    }
+
+    #[test]
+    fn a_bypassed_key_let_go_at_the_tap_time_holds_and_releases() {
+        // Let go at 299 ms is a tap, at 300 ms a press, as for any group.
+        let mut e = bypassed();
+        let mut s = Surface::new(units(1), None);
+        key(&mut s, &mut e, F1, true, 0);
+        key(&mut s, &mut e, F1, false, LATCH_MS);
         assert_eq!(
             values(&e.take_actions()),
             vec![
@@ -1241,8 +1332,27 @@ mod tests {
                 cmd("release", HOLD, Value::Null),
             ]
         );
-        let out = s.render(&e, 2002);
-        assert!(out.contains(&(0, mcu::lcd(Device::Main, 56 + 14, "       "))));
+    }
+
+    #[test]
+    fn a_bypass_set_while_a_key_is_down_does_not_drop_its_hold() {
+        let mut e = ducking();
+        let mut s = Surface::new(units(1), None);
+        key(&mut s, &mut e, F1, true, 0);
+        e.take_actions();
+        delta(
+            &mut e,
+            6,
+            json!([{ "path": MODE, "value": "off" }]),
+            json!([]),
+        );
+        s.tick(&mut e, 1000);
+        assert!(s.touching().contains(HOLD));
+        key(&mut s, &mut e, F1, false, 1100);
+        assert_eq!(
+            values(&e.take_actions()),
+            vec![cmd("release", HOLD, Value::Null)]
+        );
     }
 
     #[test]
