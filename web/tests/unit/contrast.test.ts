@@ -62,6 +62,9 @@ describe.each([
     expect(contrast('#ffffff', t['pgm']!)).toBeGreaterThanOrEqual(4.5);
     expect(contrast(t['afl-ink']!, t['afl']!)).toBeGreaterThanOrEqual(4.5);
   });
+  it.each(['well-mark', 'well-dim', 'well-duck'])('a mark of --%s shows on a well (3:1)', (mark) => {
+    expect(contrast(t[mark]!, t['well']!)).toBeGreaterThanOrEqual(3);
+  });
   it('a lit PAUSED loudness key carries readable ink', () => {
     expect(contrast(t['paused-ink']!, t['paused']!)).toBeGreaterThanOrEqual(4.5);
   });

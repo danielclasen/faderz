@@ -10,6 +10,11 @@
   --strip-alt: #11151a;
   --strip-sel: #1c2430;
   --well: #07090b;
+  /* Marks drawn on a well, dark in both themes: a level, an idle level
+     and a duck reduction, each at least 3:1 against it. */
+  --well-mark: #dfe5ec;
+  --well-dim: #8b96a4;
+  --well-duck: #f472b6;
   --line: #232a33;
   --line-strong: #323c48;
   --text: #dfe5ec;
@@ -84,6 +89,9 @@
   --strip-alt: #e6e9ee;
   --strip-sel: #fff4d6;
   --well: #12161b;
+  --well-mark: #dfe5ec;
+  --well-dim: #8b96a4;
+  --well-duck: #f472b6;
   --line: #c4cbd4;
   --line-strong: #a7b0bb;
   --text: #11151a;

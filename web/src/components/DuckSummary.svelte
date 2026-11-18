@@ -111,11 +111,11 @@
     display: block;
     height: 100%;
     transform-origin: left;
-    background: var(--text-dim);
+    background: var(--well-dim);
   }
   .bar i.on,
   .keybar i.on {
-    background: var(--duck);
+    background: var(--well-duck);
   }
   /* The threshold on the key's scale. */
   .keybar b {
@@ -124,7 +124,7 @@
     bottom: 0;
     width: 2px;
     margin-left: -1px;
-    background: var(--text);
+    background: var(--well-mark);
   }
   /* The reduction changes per meter frame: a block of fixed size with
      strict containment in its cell lays out nothing outside it, which a
