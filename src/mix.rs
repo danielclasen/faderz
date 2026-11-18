@@ -140,18 +140,25 @@ fn fold(from: usize, to: usize, i: usize, j: usize) -> f64 {
 }
 
 /// The output and meter channels' gains for each input channel:
-/// `[input][column]`.
+/// `[input][column]`. Each channel's gain at each tap and each element's
+/// fader, mute and polarity are taken once, then multiplied into every
+/// coefficient in the same order of operations as one coefficient at a
+/// time, so the bits are those.
 pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
-    let rows: usize = shape.channels.iter().map(|c| c.width).sum();
-    let mut m = vec![Vec::new(); rows];
+    let mix = Mix::new(shape, state);
+    let columns: usize = (shape.outputs.iter().map(|o| o.width))
+        .chain(shape.meter_columns().iter().map(|m| m.1))
+        .sum();
+    let mut m: Vec<Vec<f32>> = (0..mix.rows).map(|_| Vec::with_capacity(columns)).collect();
+    let mut g = Vec::with_capacity(mix.rows * 8);
     let outputs = shape.outputs.iter().map(|o| (o.source.as_str(), o.width));
     let meters = shape.meter_columns().into_iter().map(|(id, w, _)| (id, w));
     for (source, width) in outputs.chain(meters) {
-        let element = element(shape, state, source);
+        let ew = mix.element(source, &mut g);
         for leg in 0..width {
             for (row, r) in m.iter_mut().enumerate() {
-                let g = element.get(row).and_then(|g| g.get(leg)).copied();
-                r.push(g.unwrap_or(0.0) as f32);
+                let v = if leg < ew { g[row * ew + leg] } else { 0.0 };
+                r.push(v as f32);
             }
         }
     }
@@ -229,140 +236,241 @@ pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
         .collect()
 }
 
-/// The gains of element `id` from every input channel: `[input][leg]`.
-fn element(shape: &Shape, state: &Value, id: &str) -> Vec<Vec<f64>> {
-    let rows: usize = shape.channels.iter().map(|c| c.width).sum();
-    let width = width_of(shape, id);
-    let mut g = vec![vec![0.0; width]; rows];
-    // The row of each channel's first leg.
-    let mut row = 0;
-    for c in &shape.channels {
-        let feed = feed(shape, state, &c.id, id);
-        if let Some((tap, level, p)) = feed {
+/// One channel as the matrix reads it.
+struct Chan<'a> {
+    id: &'a str,
+    state: &'a Value,
+    routes: &'a Value,
+    sends: &'a Value,
+    /// Its pan, `pan.lr`.
+    pan: f64,
+    /// The row of its first leg.
+    row: usize,
+    width: usize,
+    /// Its gain at [`Tap::PostFader`] and [`Tap::Mix`] ([`channel`]).
+    post: f64,
+    mix: f64,
+}
+
+impl Chan<'_> {
+    fn at(&self, tap: Tap) -> f64 {
+        match tap {
+            Tap::Input | Tap::PreFader => 1.0,
+            Tap::PostFader => self.post,
+            Tap::Mix => self.mix,
+        }
+    }
+}
+
+/// What an element is, which says how a channel feeds it.
+enum Kind<'a> {
+    Channel,
+    Bus,
+    Aux,
+    /// Its bus and the channels it excludes.
+    MixMinus(&'a str, &'a Value),
+    Monitor,
+    Other,
+}
+
+/// The state's matrix, each channel's tap gains taken once.
+struct Mix<'a> {
+    shape: &'a Shape,
+    state: &'a Value,
+    rows: usize,
+    chans: Vec<Chan<'a>>,
+}
+
+impl<'a> Mix<'a> {
+    fn new(shape: &'a Shape, state: &'a Value) -> Mix<'a> {
+        let mut row = 0;
+        let chans = (shape.channels.iter())
+            .map(|c| {
+                let s = &state["channels"][&c.id];
+                let chan = Chan {
+                    id: &c.id,
+                    state: s,
+                    routes: &s["routes"],
+                    sends: &s["sends"],
+                    pan: num(&s["pan"]["lr"]),
+                    row,
+                    width: c.width,
+                    post: channel(state, &c.id, Tap::PostFader),
+                    mix: channel(state, &c.id, Tap::Mix),
+                };
+                row += c.width;
+                chan
+            })
+            .collect();
+        Mix {
+            shape,
+            state,
+            rows: row,
+            chans,
+        }
+    }
+
+    fn kind(&self, id: &str) -> Kind<'a> {
+        let shape = self.shape;
+        if shape.channels.iter().any(|c| c.id == id) {
+            Kind::Channel
+        } else if shape.buses.iter().any(|b| b.id == id) {
+            Kind::Bus
+        } else if shape.auxes.iter().any(|a| a.id == id) {
+            Kind::Aux
+        } else if let Some(m) = shape.mix_minus.iter().find(|m| m.id == id) {
+            Kind::MixMinus(&m.bus, &self.state["mixMinus"][id]["exclude"])
+        } else if shape.monitor_outputs.iter().any(|m| m.id == id) {
+            Kind::Monitor
+        } else {
+            Kind::Other
+        }
+    }
+
+    /// The gains of element `id` from every input channel into `g`, row
+    /// by row, `[input * width + leg]`; returns its width.
+    fn element(&self, id: &str, g: &mut Vec<f64>) -> usize {
+        let width = width_of(self.shape, id);
+        g.clear();
+        g.resize(self.rows * width, 0.0);
+        let kind = self.kind(id);
+        if let Kind::Monitor = kind {
+            self.monitor(width, g);
+            return width;
+        }
+        for c in &self.chans {
+            let Some((tap, level, p)) = feed(c, &kind, id) else {
+                continue;
+            };
+            let at = c.at(tap) * level;
             for i in 0..c.width {
-                let at = channel(state, &c.id, tap) * level;
-                for (j, out) in g[row + i].iter_mut().enumerate() {
+                let row = &mut g[(c.row + i) * width..][..width];
+                for (j, out) in row.iter_mut().enumerate() {
                     *out = at * pan(c.width, width, i, j, p);
                 }
             }
         }
-        row += c.width;
+        match kind {
+            Kind::Bus => scale(g, width, &self.state["buses"][id], true),
+            Kind::Aux => scale(g, width, &self.state["auxes"][id], true),
+            Kind::MixMinus(..) => scale(g, width, &self.state["mixMinus"][id], false),
+            _ => {}
+        }
+        width
     }
-    if let Some(b) = shape.buses.iter().find(|b| b.id == id) {
-        scale(&mut g, &state["buses"][&b.id], true);
-    } else if let Some(a) = shape.auxes.iter().find(|a| a.id == id) {
-        scale(&mut g, &state["auxes"][&a.id], true);
-    } else if shape.mix_minus.iter().any(|m| m.id == id) {
-        scale(&mut g, &state["mixMinus"][id], false);
-    } else if shape.monitor_outputs.iter().any(|m| m.id == id) {
-        return monitor(shape, state, width);
+
+    /// The monitor output: its source's legs onto the monitor's, folded
+    /// down by `downmix` when the source is wider, then level, dim, cut,
+    /// mono (the sum of the folded legs) and the speaker mutes and solos.
+    fn monitor(&self, width: usize, g: &mut [f64]) {
+        let m = &self.state["monitor"];
+        let source = m["source"].as_str().unwrap_or_default();
+        let mut src = Vec::new();
+        let from = self.element(source, &mut src);
+        let mut level = gain(num(&m["level"]));
+        if on(&m["dim"]) {
+            level *= gain(-num(&m["dimDepth"]));
+        }
+        if on(&m["cut"]) {
+            level = 0.0;
+        }
+        let lr = m["downmix"] == "lr";
+        let mono = on(&m["mono"]);
+        if mono {
+            level *= gain(-num(&m["monoCompensation"]));
+        }
+        // The source's legs onto monitor leg `j`, folded by the downmix:
+        // lr plays only the source's L and R legs.
+        let folded = |legs: &[f64], j: usize| -> f64 {
+            if lr && from > width {
+                legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
+            } else {
+                (0..from)
+                    .map(|i| legs[i] * pan(from, width, i, j, 0.0))
+                    .sum()
+            }
+        };
+        let solo = m["speakerSolo"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(on));
+        let leg_gain: Vec<f64> = (0..width)
+            .map(|j| {
+                let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
+                if audible { level } else { 0.0 }
+            })
+            .collect();
+        for row in 0..self.rows {
+            let legs = &src[row * from..][..from];
+            for (j, out) in g[row * width..][..width].iter_mut().enumerate() {
+                let v: f64 = if mono {
+                    (0..width).map(|k| folded(legs, k)).sum()
+                } else {
+                    folded(legs, j)
+                };
+                *out = v * leg_gain[j];
+            }
+        }
     }
-    g
 }
 
-/// How channel `channel` feeds element `id`: tap, level and pan, or
+/// How channel `c` feeds element `id` of `kind`: tap, level and pan, or
 /// `None` when it does not.
-fn feed(shape: &Shape, state: &Value, channel: &str, id: &str) -> Option<(Tap, f64, f64)> {
-    let c = &state["channels"][channel];
-    let pan = num(&c["pan"]["lr"]);
-    if channel == id {
-        let tap = match c["directOut"]["tap"].as_str() {
-            Some("input") => Tap::Input,
-            Some("postFader") => Tap::PostFader,
-            _ => Tap::PreFader,
-        };
-        return Some((tap, 1.0, 0.0));
+fn feed(c: &Chan<'_>, kind: &Kind<'_>, id: &str) -> Option<(Tap, f64, f64)> {
+    match kind {
+        Kind::Channel if c.id == id => {
+            let tap = match c.state["directOut"]["tap"].as_str() {
+                Some("input") => Tap::Input,
+                Some("postFader") => Tap::PostFader,
+                _ => Tap::PreFader,
+            };
+            Some((tap, 1.0, 0.0))
+        }
+        Kind::Bus => on(&c.routes[id]).then_some((Tap::Mix, 1.0, c.pan)),
+        Kind::Aux => {
+            let send = &c.sends[id];
+            if !on(&send["on"]) {
+                return None;
+            }
+            let tap = if on(&send["pre"]) {
+                Tap::PreFader
+            } else {
+                Tap::Mix
+            };
+            Some((tap, gain(num(&send["level"])), num(&send["pan"])))
+        }
+        Kind::MixMinus(bus, exclude) => {
+            let excluded = exclude
+                .as_array()
+                .is_some_and(|e| e.iter().any(|e| e == c.id));
+            (on(&c.routes[*bus]) && !excluded).then_some((Tap::Mix, 1.0, c.pan))
+        }
+        _ => None,
     }
-    if shape.buses.iter().any(|b| b.id == id) {
-        return on(&c["routes"][id]).then_some((Tap::Mix, 1.0, pan));
-    }
-    if shape.auxes.iter().any(|a| a.id == id) {
-        let s = &c["sends"][id];
-        let tap = if on(&s["pre"]) {
-            Tap::PreFader
-        } else {
-            Tap::Mix
-        };
-        return on(&s["on"]).then_some((tap, gain(num(&s["level"])), num(&s["pan"])));
-    }
-    let m = shape.mix_minus.iter().find(|m| m.id == id)?;
-    let excluded = state["mixMinus"][id]["exclude"]
-        .as_array()
-        .is_some_and(|e| e.iter().any(|e| e == channel));
-    (on(&c["routes"][&m.bus]) && !excluded).then_some((Tap::Mix, 1.0, pan))
 }
 
-/// Applies an element's fader, mute and, when it has one, polarity.
-fn scale(g: &mut [Vec<f64>], state: &Value, polarity: bool) {
+/// Applies an element's fader, mute and, when it has one, polarity to
+/// `g`, rows of `width` legs.
+fn scale(g: &mut [f64], width: usize, state: &Value, polarity: bool) {
     let level = if on(&state["mute"]) {
         0.0
     } else {
         gain(num(&state["fader"]))
     };
-    for row in g {
-        for (leg, v) in row.iter_mut().enumerate() {
+    let legs: Vec<f64> = (0..width)
+        .map(|leg| {
             let sign = if polarity && on(&state["polarity"][leg]) {
                 -1.0
             } else {
                 1.0
             };
-            *v *= sign * level;
-        }
-    }
-}
-
-/// The monitor output: its source's legs onto the monitor's, folded down
-/// by `downmix` when the source is wider, then level, dim, cut, mono (the
-/// sum of the folded legs) and the speaker mutes and solos.
-fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
-    let m = &state["monitor"];
-    let source = m["source"].as_str().unwrap_or_default();
-    let src = element(shape, state, source);
-    let from = width_of(shape, source);
-    let mut level = gain(num(&m["level"]));
-    if on(&m["dim"]) {
-        level *= gain(-num(&m["dimDepth"]));
-    }
-    if on(&m["cut"]) {
-        level = 0.0;
-    }
-    let lr = m["downmix"] == "lr";
-    let mono = on(&m["mono"]);
-    if mono {
-        level *= gain(-num(&m["monoCompensation"]));
-    }
-    // The source's legs onto monitor leg `j`, folded by the downmix: lr
-    // plays only the source's L and R legs.
-    let folded = |legs: &[f64], j: usize| -> f64 {
-        if lr && from > width {
-            legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
-        } else {
-            (0..from)
-                .map(|i| legs[i] * pan(from, width, i, j, 0.0))
-                .sum()
-        }
-    };
-    let leg_gain = |j: usize| {
-        let solo = m["speakerSolo"]
-            .as_array()
-            .is_some_and(|s| s.iter().any(on));
-        let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
-        if audible { level } else { 0.0 }
-    };
-    src.iter()
-        .map(|legs| {
-            (0..width)
-                .map(|j| {
-                    let v: f64 = if mono {
-                        (0..width).map(|k| folded(legs, k)).sum()
-                    } else {
-                        folded(legs, j)
-                    };
-                    v * leg_gain(j)
-                })
-                .collect()
+            sign * level
         })
-        .collect()
+        .collect();
+    for row in g.chunks_mut(width.max(1)) {
+        for (v, l) in row.iter_mut().zip(&legs) {
+            *v *= l;
+        }
+    }
 }
 
 fn width_of(shape: &Shape, id: &str) -> usize {
@@ -380,6 +488,170 @@ fn width_of(shape: &Shape, id: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    /// The matrix as it was computed one coefficient at a time, before
+    /// the per-channel and per-element factors were taken once: the
+    /// reference the single-replica engine path was sent.
+    mod before {
+        use super::super::{Tap, channel, gain, num, on, pan, width_of};
+        use crate::shape::Shape;
+        use serde_json::Value;
+
+        /// The output and meter channels' gains for each input channel:
+        /// `[input][column]`.
+        pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
+            let rows: usize = shape.channels.iter().map(|c| c.width).sum();
+            let mut m = vec![Vec::new(); rows];
+            let outputs = shape.outputs.iter().map(|o| (o.source.as_str(), o.width));
+            let meters = shape.meter_columns().into_iter().map(|(id, w, _)| (id, w));
+            for (source, width) in outputs.chain(meters) {
+                let element = element(shape, state, source);
+                for leg in 0..width {
+                    for (row, r) in m.iter_mut().enumerate() {
+                        let g = element.get(row).and_then(|g| g.get(leg)).copied();
+                        r.push(g.unwrap_or(0.0) as f32);
+                    }
+                }
+            }
+            m
+        }
+
+        /// The gains of element `id` from every input channel: `[input][leg]`.
+        fn element(shape: &Shape, state: &Value, id: &str) -> Vec<Vec<f64>> {
+            let rows: usize = shape.channels.iter().map(|c| c.width).sum();
+            let width = width_of(shape, id);
+            let mut g = vec![vec![0.0; width]; rows];
+            // The row of each channel's first leg.
+            let mut row = 0;
+            for c in &shape.channels {
+                let feed = feed(shape, state, &c.id, id);
+                if let Some((tap, level, p)) = feed {
+                    for i in 0..c.width {
+                        let at = channel(state, &c.id, tap) * level;
+                        for (j, out) in g[row + i].iter_mut().enumerate() {
+                            *out = at * pan(c.width, width, i, j, p);
+                        }
+                    }
+                }
+                row += c.width;
+            }
+            if let Some(b) = shape.buses.iter().find(|b| b.id == id) {
+                scale(&mut g, &state["buses"][&b.id], true);
+            } else if let Some(a) = shape.auxes.iter().find(|a| a.id == id) {
+                scale(&mut g, &state["auxes"][&a.id], true);
+            } else if shape.mix_minus.iter().any(|m| m.id == id) {
+                scale(&mut g, &state["mixMinus"][id], false);
+            } else if shape.monitor_outputs.iter().any(|m| m.id == id) {
+                return monitor(shape, state, width);
+            }
+            g
+        }
+
+        /// How channel `channel` feeds element `id`: tap, level and pan, or
+        /// `None` when it does not.
+        fn feed(shape: &Shape, state: &Value, channel: &str, id: &str) -> Option<(Tap, f64, f64)> {
+            let c = &state["channels"][channel];
+            let pan = num(&c["pan"]["lr"]);
+            if channel == id {
+                let tap = match c["directOut"]["tap"].as_str() {
+                    Some("input") => Tap::Input,
+                    Some("postFader") => Tap::PostFader,
+                    _ => Tap::PreFader,
+                };
+                return Some((tap, 1.0, 0.0));
+            }
+            if shape.buses.iter().any(|b| b.id == id) {
+                return on(&c["routes"][id]).then_some((Tap::Mix, 1.0, pan));
+            }
+            if shape.auxes.iter().any(|a| a.id == id) {
+                let s = &c["sends"][id];
+                let tap = if on(&s["pre"]) {
+                    Tap::PreFader
+                } else {
+                    Tap::Mix
+                };
+                return on(&s["on"]).then_some((tap, gain(num(&s["level"])), num(&s["pan"])));
+            }
+            let m = shape.mix_minus.iter().find(|m| m.id == id)?;
+            let excluded = state["mixMinus"][id]["exclude"]
+                .as_array()
+                .is_some_and(|e| e.iter().any(|e| e == channel));
+            (on(&c["routes"][&m.bus]) && !excluded).then_some((Tap::Mix, 1.0, pan))
+        }
+
+        /// Applies an element's fader, mute and, when it has one, polarity.
+        fn scale(g: &mut [Vec<f64>], state: &Value, polarity: bool) {
+            let level = if on(&state["mute"]) {
+                0.0
+            } else {
+                gain(num(&state["fader"]))
+            };
+            for row in g {
+                for (leg, v) in row.iter_mut().enumerate() {
+                    let sign = if polarity && on(&state["polarity"][leg]) {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    *v *= sign * level;
+                }
+            }
+        }
+
+        /// The monitor output: its source's legs onto the monitor's, folded down
+        /// by `downmix` when the source is wider, then level, dim, cut, mono (the
+        /// sum of the folded legs) and the speaker mutes and solos.
+        fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
+            let m = &state["monitor"];
+            let source = m["source"].as_str().unwrap_or_default();
+            let src = element(shape, state, source);
+            let from = width_of(shape, source);
+            let mut level = gain(num(&m["level"]));
+            if on(&m["dim"]) {
+                level *= gain(-num(&m["dimDepth"]));
+            }
+            if on(&m["cut"]) {
+                level = 0.0;
+            }
+            let lr = m["downmix"] == "lr";
+            let mono = on(&m["mono"]);
+            if mono {
+                level *= gain(-num(&m["monoCompensation"]));
+            }
+            // The source's legs onto monitor leg `j`, folded by the downmix: lr
+            // plays only the source's L and R legs.
+            let folded = |legs: &[f64], j: usize| -> f64 {
+                if lr && from > width {
+                    legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
+                } else {
+                    (0..from)
+                        .map(|i| legs[i] * pan(from, width, i, j, 0.0))
+                        .sum()
+                }
+            };
+            let leg_gain = |j: usize| {
+                let solo = m["speakerSolo"]
+                    .as_array()
+                    .is_some_and(|s| s.iter().any(on));
+                let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
+                if audible { level } else { 0.0 }
+            };
+            src.iter()
+                .map(|legs| {
+                    (0..width)
+                        .map(|j| {
+                            let v: f64 = if mono {
+                                (0..width).map(|k| folded(legs, k)).sum()
+                            } else {
+                                folded(legs, j)
+                            };
+                            v * leg_gain(j)
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+    }
     use super::*;
     use crate::shape::tests::small;
     use serde_json::json;
@@ -672,5 +944,101 @@ mod tests {
         let m = matrix(&shape, &s);
         assert_eq!(m[3][0], 0.0, "LFE");
         assert!(close(m[2][0], 2.0 * h) && close(m[0][1], 1.0));
+    }
+
+    /// The matrix taken from per-channel and per-element factors is the
+    /// one computed a coefficient at a time, bit for bit, over random
+    /// states touching every leaf it reads: what the engine was sent
+    /// before.
+    #[test]
+    fn the_factored_matrix_is_the_one_before_bit_for_bit() {
+        let shape = shape();
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let channels = ["ch1", "ch2", "st1"];
+        for _ in 0..400 {
+            let mut s = shape.initial_state();
+            for _ in 0..40 {
+                let ch = channels[next(3) as usize];
+                let db = json!(next(1200) as f64 / 10.0 - 100.0);
+                let flag = json!(next(2) == 0);
+                let (path, value) = match next(16) {
+                    0 => (format!("/channels/{ch}/fader"), db),
+                    1 => (format!("/channels/{ch}/mute"), flag),
+                    2 => (
+                        format!("/channels/{ch}/pan/lr"),
+                        json!(next(201) as f64 / 100.0 - 1.0),
+                    ),
+                    3 => (
+                        format!("/channels/{ch}/routes/{}", ["pgm", "cf"][next(2) as usize]),
+                        flag,
+                    ),
+                    4 => (format!("/channels/{ch}/sends/aux1/on"), flag),
+                    5 => (format!("/channels/{ch}/sends/aux1/level"), db),
+                    6 => (format!("/channels/{ch}/sends/aux1/pre"), flag),
+                    7 => (
+                        format!("/channels/{ch}/directOut/tap"),
+                        json!(["input", "preFader", "postFader"][next(3) as usize]),
+                    ),
+                    8 => (
+                        "/vcas/vca1/members".into(),
+                        json!(channels[..next(4) as usize]),
+                    ),
+                    9 => (
+                        "/vcas/vca1/offset".into(),
+                        json!(next(400) as f64 / 10.0 - 30.0),
+                    ),
+                    10 => ("/vcas/vca1/mute".into(), flag),
+                    11 => (
+                        format!(
+                            "/{}/fader",
+                            ["buses/pgm", "auxes/aux1", "mixMinus/mm1"][next(3) as usize]
+                        ),
+                        db,
+                    ),
+                    12 => (format!("/buses/pgm/polarity/{}", next(2)), flag),
+                    13 => (
+                        "/mixMinus/mm1/exclude".into(),
+                        json!(channels[..next(4) as usize]),
+                    ),
+                    14 => (
+                        format!("/afv/{ch}/{}", ["enabled", "open"][next(2) as usize]),
+                        flag,
+                    ),
+                    _ => match next(8) {
+                        0 => (
+                            "/monitor/source".into(),
+                            json!(["pgm", "cf", "aux1", "mm1"][next(4) as usize]),
+                        ),
+                        1 => ("/monitor/level".into(), db),
+                        2 => ("/monitor/dim".into(), flag),
+                        3 => ("/monitor/cut".into(), json!(next(8) == 0)),
+                        4 => ("/monitor/mono".into(), flag),
+                        5 => (
+                            "/monitor/downmix".into(),
+                            json!(["lr", "itu"][next(2) as usize]),
+                        ),
+                        6 => (format!("/monitor/speakerMute/{}", next(2)), flag),
+                        _ => (format!("/monitor/speakerSolo/{}", next(2)), flag),
+                    },
+                };
+                crate::state::set_at(&mut s, &path, value);
+            }
+            let bits = |m: Vec<Vec<f32>>| -> Vec<Vec<u32>> {
+                m.into_iter()
+                    .map(|r| r.into_iter().map(f32::to_bits).collect())
+                    .collect()
+            };
+            assert_eq!(
+                bits(matrix(&shape, &s)),
+                bits(before::matrix(&shape, &s)),
+                "{s}"
+            );
+        }
     }
 }
