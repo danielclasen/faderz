@@ -174,6 +174,30 @@
     width: 2px;
     background: var(--meter-tp);
   }
+  /* The threshold slider: 24 px tall to a mouse, 32 px to a finger, its
+     track and cap centred in it. */
+  .sens :global(.slider) {
+    height: 24px;
+  }
+  .sens :global(.slider .track),
+  .sens :global(.slider .fill) {
+    top: 10px;
+  }
+  .sens :global(.slider .thumb) {
+    top: 4px;
+  }
+  @media (pointer: coarse) {
+    .sens :global(.slider) {
+      height: 32px;
+    }
+    .sens :global(.slider .track),
+    .sens :global(.slider .fill) {
+      top: 14px;
+    }
+    .sens :global(.slider .thumb) {
+      top: 5px;
+    }
+  }
   .sens {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;

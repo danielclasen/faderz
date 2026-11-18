@@ -165,9 +165,12 @@
     letter-spacing: 0;
     font-size: 11px;
   }
+  /* Four characters of the value font, with none of the key's letter
+     spacing, so every state word fits its box whole. */
   .pstate {
     display: block;
     width: 4ch;
+    letter-spacing: 0;
     height: 14px;
     line-height: 14px;
     contain: strict;

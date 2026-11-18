@@ -33,6 +33,14 @@ const entry = (() => {
   return { color: prop('color'), background: prop('background') };
 })();
 
+/** The colour of the first rule of DuckView.svelte with exactly this selector. */
+function duckView(selector: string): string {
+  const src = readFileSync(new URL('../../src/components/DuckView.svelte', import.meta.url), 'utf8');
+  const at = src.indexOf(`\n  ${selector} {`);
+  const block = src.slice(at, src.indexOf('}', at));
+  return /\n\s*color:\s*([^;]+);/.exec(block)![1]!.trim();
+}
+
 /** A colour as written in a rule: a token of the theme or a literal. */
 function resolve(value: string, t: Record<string, string>): string {
   const token = /^var\(--([a-z0-9-]+)\)$/.exec(value);
@@ -67,6 +75,10 @@ describe.each([
     // The light theme gives every text field a white face (app.css), over the component's own.
     const field = theme === 'light' ? /:root\[data-theme='light'\] input\[type='text'\],[^{]*\{\s*background:\s*#([0-9a-f]{3})\b/.exec(css)![1]!.replace(/./g, '$&$&').replace(/^/, '#') : resolve(entry.background!, t);
     expect(contrast(resolve(entry.color!, t), field)).toBeGreaterThanOrEqual(4.5);
+  });
+  it.each(['thead th', '.setup th', '.idx'])('the Duck view labels of %s read on the page', (rule) => {
+    // Every cell of the Duck view table sits on --bg.
+    expect(contrast(resolve(duckView(rule), t), t['bg']!)).toBeGreaterThanOrEqual(4.5);
   });
   it('a lit duck key and lamp carry readable ink, and the key edge shows on the panels', () => {
     expect(contrast(t['duck-ink']!, t['duck']!)).toBeGreaterThanOrEqual(4.5);

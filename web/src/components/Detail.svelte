@@ -454,6 +454,9 @@
   .duck :global(.param) {
     grid-column: 1 / -1;
   }
+  .duck :global(.param .entry) {
+    height: 24px;
+  }
   /* Touch: the duck keys and the depth field at least 44 px tall. */
   @media (pointer: coarse) {
     .duck .key,

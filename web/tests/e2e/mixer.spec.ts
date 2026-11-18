@@ -1944,3 +1944,36 @@ test('works every duck group from the bank bar with the masters closed at 1280 a
   await page.setViewportSize({ width: 1600, height: 1000 });
   await expect(page.getByTestId('duck-pill-comm')).toBeHidden();
 });
+
+test('every state word of a bank-bar pill fits its box at 1024, 1180 and 1280 px in both themes', async ({ page, request }) => {
+  await live(page);
+  const pill = page.getByTestId('duck-pill-comm');
+  const word = pill.locator('.pstate');
+  const fits = () => word.evaluate((el) => el.scrollWidth <= el.clientWidth);
+  const found: string[] = [];
+  try {
+    for (const theme of ['dark', 'light']) {
+      for (const width of [1024, 1180, 1280]) {
+        await page.setViewportSize({ width, height: 820 });
+        for (const mode of ['auto', 'on', 'off'] as const) {
+          await patch(request, '/ducks/comm/mode', mode);
+          await expect(word).toHaveText({ auto: 'AUTO', on: 'ON', off: 'BYP' }[mode]);
+          if (!(await fits())) found.push(`${theme} ${width} ${mode}`);
+        }
+        await patch(request, '/ducks/comm/mode', 'auto');
+        await pill.hover();
+        await page.mouse.down();
+        await expect(word).toHaveText('HELD');
+        if (!(await fits())) found.push(`${theme} ${width} held`);
+        // Held past the latch time: momentary, no latch left behind.
+        await page.waitForTimeout(400);
+        await page.mouse.up();
+        await expect(word).toHaveText('AUTO');
+      }
+      if (theme === 'dark') await page.getByRole('button', { name: 'Switch to light theme' }).click();
+    }
+  } finally {
+    await patch(request, '/ducks/comm/mode', 'auto');
+  }
+  expect(found).toEqual([]);
+});

@@ -121,3 +121,50 @@ test('folds the detector up to 1280 px, so the channel rows are in view, and unf
   await page.getByRole('button', { name: 'Duck', exact: true }).click();
   await expect(page.getByRole('slider', { name: 'Hyst' }).first()).toBeVisible();
 });
+
+test('arms a preset from the keyboard, applies it on a second press, and a keyboard hold swallows no later click', async ({ page, request }) => {
+  const duck = async () => (await serverState(request)).state.ducks['comm']!;
+  await live(page);
+  await page.getByRole('button', { name: 'Duck', exact: true }).click();
+  const heavy = page.locator('[aria-label^="Commentary preset heavy"], [aria-label^="Confirm Commentary preset heavy"]');
+  const voice = page.locator('[aria-label^="Commentary preset voice"], [aria-label^="Confirm Commentary preset voice"]');
+  try {
+    await heavy.focus();
+    await page.keyboard.press('Enter');
+    await expect(heavy).toHaveText('APPLY');
+    await page.waitForTimeout(300);
+    expect((await duck()).attackMs).toBe(20);
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await duck()).attackMs).toBe(10);
+    await expect(heavy).toHaveText('HEAVY');
+    // A keyboard hold applies at once; the next mouse press on any preset still counts.
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(700);
+    await page.keyboard.up('Space');
+    await page.waitForTimeout(300);
+    await expect(heavy).toHaveText('HEAVY');
+    await voice.click();
+    await expect(voice).toHaveText('APPLY');
+    await voice.click();
+    await expect.poll(async () => (await duck()).keyLpf).toEqual({ enabled: true, freq: 4000 });
+  } finally {
+    for (const c of ['ch13', 'ch14', 'ch15', 'ch16']) await patch(request, `/ducks/comm/channels/${c}/depth`, 10);
+    await patch(request, '/ducks/comm/channels/st1/depth', 15);
+    await patch(request, '/ducks/comm/attackMs', 20);
+    await patch(request, '/ducks/comm/holdMs', 500);
+    await patch(request, '/ducks/comm/releaseMs', 1000);
+    await patch(request, '/ducks/comm/keyHpf/freq', 120);
+    await patch(request, '/ducks/comm/keyLpf/enabled', false);
+  }
+});
+
+test('gives a mouse depth fields and the tile threshold at least 24 px', async ({ page }) => {
+  await live(page);
+  expect((await page.getByRole('slider', { name: 'Commentary duck threshold' }).boundingBox())!.height).toBeGreaterThanOrEqual(24);
+  await page.getByTestId('duck-chip-ch1').click();
+  const section = page.locator('[data-section="duck"]');
+  expect((await section.getByRole('textbox', { name: 'Depth value, type to set' }).first().boundingBox())!.height).toBeGreaterThanOrEqual(24);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Duck', exact: true }).click();
+  expect((await page.getByRole('textbox', { name: /^Pres 1 depth under Commentary/ }).boundingBox())!.height).toBeGreaterThanOrEqual(24);
+});

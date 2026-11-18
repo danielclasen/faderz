@@ -73,7 +73,10 @@
   /** The armed preset, as `group:KEY`. */
   let armed = $state<string | null>(null);
   let armTimer: ReturnType<typeof setTimeout> | null = null;
-  /** A hold applied the preset: the click its release makes does nothing more. */
+  /**
+   * A hold applied the preset: the click or key release that ends that
+   * press does nothing more. Cleared at the start of the next press.
+   */
   let heldOut = false;
   function disarm(): void {
     armed = null;
@@ -84,12 +87,20 @@
     disarm();
     void patchState(mixer, `${g.name} preset ${p.key}`, p.changes(g));
   }
+  /**
+   * The hold action takes Space and Enter, so no click follows a key
+   * press: its release presses here, and a click the browser still makes
+   * from that release in the same task is not a second press.
+   */
+  let keyPress = false;
+  function keyed(g: DuckShape, p: (typeof PRESETS)[number]): void {
+    press(g, p);
+    keyPress = true;
+    setTimeout(() => (keyPress = false));
+  }
+  /** The end of a press that no hold applied: arms the preset, or applies an armed one. */
   function press(g: DuckShape, p: (typeof PRESETS)[number]): void {
-    if (heldOut) {
-      heldOut = false;
-      return;
-    }
-    if (mixer.locked) return;
+    if (heldOut || mixer.locked) return;
     if (armed === `${g.id}:${p.key}`) return apply(g, p);
     disarm();
     armed = `${g.id}:${p.key}`;
@@ -226,7 +237,10 @@
                             apply(g, p);
                           },
                         }}
-                        onclick={() => press(g, p)}
+                        onpointerdown={(e) => e.button === 0 && (heldOut = false)}
+                        onkeydown={(e) => (e.key === ' ' || e.key === 'Enter') && !e.repeat && (heldOut = false)}
+                        onkeyup={(e) => (e.key === ' ' || e.key === 'Enter') && keyed(g, p)}
+                        onclick={() => !keyPress && press(g, p)}
                         onblur={() => on && disarm()}>{on ? 'APPLY' : p.key}</button
                       >
                     {/each}
@@ -377,7 +391,7 @@
   thead th {
     position: sticky;
     z-index: 2;
-    color: var(--text-faint);
+    color: var(--text-dim);
     font-weight: 500;
     font-size: 11px;
     text-transform: uppercase;
@@ -449,7 +463,7 @@
   }
   .setup th {
     vertical-align: top;
-    color: var(--text-faint);
+    color: var(--text-dim);
     font-size: 11px;
     text-transform: uppercase;
   }
@@ -517,7 +531,7 @@
   .idx {
     display: inline-block;
     width: 22px;
-    color: var(--text-faint);
+    color: var(--text-dim);
     font-size: 10px;
   }
   tbody.members tr:nth-child(8n) td,
@@ -549,7 +563,8 @@
     background: var(--panel-2);
   }
   .settings .key,
-  .dests .key {
+  .dests .key,
+  .depth :global(input) {
     height: 24px;
   }
   /* An armed preset: lit, its word APPLY in the same width. */
