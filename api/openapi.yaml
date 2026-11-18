@@ -144,6 +144,22 @@ paths:
                     minItems: 1
                     items:
                       $ref: "./ws/model.schema.json#/$defs/ReplicaStatus"
+  /status:
+    get:
+      operationId: getStatus
+      summary: The serving replica's role, readiness and engine.
+      description: |
+        The replica as the replicated state sees it and, with an engine,
+        each channel's input and each output as the engine last reported
+        them, read once a second. `ready` is the replica's term of
+        `/readyz` on the ops listener.
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
   /scenes:
     post:
       operationId: createScene
@@ -658,6 +674,94 @@ components:
         redirect:
           description: In oidc mode with a provider that has an end-session endpoint, where the browser goes next to end its session there too.
           type: [string, "null"]
+    Status:
+      type: object
+      required: [replica, engine]
+      additionalProperties: false
+      properties:
+        replica:
+          type: object
+          required: [id, role, leader, inSync, ready, commitable, inContact, state]
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+            role:
+              description: The replica's role in the replicated state, such as leader, follower, candidate or learner.
+              type: string
+            leader:
+              description: The id of the replica that orders commands, when known.
+              type: [string, "null"]
+            inSync:
+              description: Every committed entry this replica knows of is applied.
+              type: boolean
+            ready:
+              description: Joined and caught up and, in a set with engines, committing its outputs or with no other replica in contact committing.
+              type: boolean
+            commitable:
+              description: The replica takes client writes.
+              type: boolean
+            inContact:
+              description: In contact with the set's other voters; null without contact (a set of one).
+              type: [boolean, "null"]
+            state:
+              description: The audio replica's state in contact; null without contact.
+              type: [string, "null"]
+              enum: [starting, committing, withdrawn, diverged, versionMismatch, resync, null]
+        engine:
+          description: Null without an engine.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [inputs, outputs]
+              additionalProperties: false
+              properties:
+                inputs:
+                  description: One per channel, in shape order.
+                  type: array
+                  items:
+                    type: object
+                    required: [channel, state, up, flowId, copiedBlocks, lateBlocks, tooLateBlocks]
+                    additionalProperties: false
+                    properties:
+                      channel:
+                        type: string
+                      state:
+                        description: attached while the engine reads it, pruned while its flow is polled for again, detached while it reads none.
+                        type: string
+                        enum: [attached, pruned, detached]
+                      up:
+                        description: The log has the input up.
+                        type: boolean
+                      flowId:
+                        type: string
+                      copiedBlocks:
+                        type: integer
+                        minimum: 0
+                      lateBlocks:
+                        type: integer
+                        minimum: 0
+                      tooLateBlocks:
+                        type: integer
+                        minimum: 0
+                outputs:
+                  description: One per output, in shape order.
+                  type: array
+                  items:
+                    type: object
+                    required: [output, enabled, realised, reason]
+                    additionalProperties: false
+                    properties:
+                      output:
+                        type: string
+                      enabled:
+                        type: boolean
+                      realised:
+                        description: The engine writes the output's flow.
+                        type: boolean
+                      reason:
+                        description: Why the output is not realised.
+                        type: [string, "null"]
     CommandResult:
       type: object
       required: [result, revision]

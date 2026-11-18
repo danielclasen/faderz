@@ -46,6 +46,9 @@ pub struct App {
     /// The engine's counters last read ([`App::count`]); none without an
     /// engine.
     counters: Mutex<Option<Value>>,
+    /// The engine's inputs and outputs last read ([`App::count`]); none
+    /// without an engine.
+    engine: Mutex<Option<Value>>,
 }
 
 /// A connection counted by [`App::connected`]; dropping it counts it
@@ -132,6 +135,7 @@ impl App {
             },
             requests: Mutex::default(),
             counters: Mutex::default(),
+            engine: Mutex::default(),
         })
     }
 
@@ -213,6 +217,32 @@ impl App {
         Some(m.to_string())
     }
 
+    /// The model `Status` of `GET /status`: this replica as the replicated
+    /// state sees it, its audio replica's state in contact, and the
+    /// engine's inputs and outputs as last read.
+    pub fn status(&self) -> Value {
+        let info = self.replica.replica();
+        let audio =
+            (self.replica.contact_metrics()).and_then(|m| Some((m.in_contact, m.replica?.state?)));
+        let state = audio.map(|(_, s)| {
+            let name = format!("{s:?}");
+            name[..1].to_lowercase() + &name[1..]
+        });
+        json!({
+            "replica": {
+                "id": self.name,
+                "role": info.role,
+                "leader": info.leader,
+                "inSync": info.in_sync,
+                "ready": info.ready,
+                "commitable": info.commitable,
+                "inContact": audio.map(|(c, _)| c),
+                "state": state,
+            },
+            "engine": self.engine.lock().expect("engine lock poisoned").clone(),
+        })
+    }
+
     /// Reads the engine's counters every [`COUNTERS_PERIOD`] and sends
     /// them to every connection, standby ones included, so a promoted
     /// standby has them at once; a connection not sent the last yet gets
@@ -223,6 +253,7 @@ impl App {
         loop {
             ticks.tick().await;
             *self.counters.lock().expect("counters lock poisoned") = Some(audio.counters());
+            *self.engine.lock().expect("engine lock poisoned") = Some(audio.status());
             if let Some(m) = self.counters_message() {
                 self.hub.publish(Frame::Counters(m.into()));
             }

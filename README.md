@@ -395,6 +395,7 @@ committed.
 | `GET /api/v1/state` | shape, live state, owners and the revision |
 | `PATCH /api/v1/state` | write one or more controls atomically |
 | `GET /api/v1/replicas` | the replica set as the serving replica sees it |
+| `GET /api/v1/status` | the serving replica's role, readiness and contact state, and its engine's inputs (state, flow, blocks copied, late and too late) and outputs |
 | `POST /api/v1/scenes`, `PUT` and `DELETE /api/v1/scenes/{id}` | store, overwrite or rename, and delete scenes |
 | `POST /api/v1/scenes/{id}/recall` | recall a scene |
 | `POST /api/v1/afv/tally`, `PUT /api/v1/afv/tally` | one source's tally change, or the full tally state |

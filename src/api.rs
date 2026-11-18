@@ -36,6 +36,7 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/state", get(get_state).patch(patch_state))
         .route("/replicas", get(replicas))
+        .route("/status", get(status))
         .route("/scenes", post(create_scene))
         .route("/scenes/{scene}", put(store_scene).delete(delete_scene))
         .route("/scenes/{scene}/recall", post(recall_scene))
@@ -160,6 +161,10 @@ async fn get_state(State(app): State<Arc<App>>) -> Response {
         })
     });
     Json(document).into_response()
+}
+
+async fn status(State(app): State<Arc<App>>) -> Response {
+    Json(app.status()).into_response()
 }
 
 async fn replicas(State(app): State<Arc<App>>) -> Response {

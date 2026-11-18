@@ -515,6 +515,38 @@ impl Audio {
         }
     }
 
+    /// The model `EngineStatus` of `GET /status`: per channel its input's
+    /// state in the engine, whether the log has it up, the flow it reads
+    /// and its blocks copied, late and too late; per output whether it is
+    /// enabled and realised, and why not.
+    pub fn status(&self) -> Value {
+        let status = self.engine.status();
+        let inputs: Vec<Value> = (status.inputs.iter())
+            .map(|i| {
+                json!({
+                    "channel": i.name,
+                    "state": format!("{:?}", i.state).to_lowercase(),
+                    "up": i.up,
+                    "flowId": i.flow_id,
+                    "copiedBlocks": i.counters.copied,
+                    "lateBlocks": i.counters.late,
+                    "tooLateBlocks": i.counters.too_late,
+                })
+            })
+            .collect();
+        let outputs: Vec<Value> = (status.outputs.iter())
+            .map(|o| {
+                json!({
+                    "output": o.name,
+                    "enabled": o.enabled,
+                    "realised": o.realised,
+                    "reason": o.reason,
+                })
+            })
+            .collect();
+        json!({ "inputs": inputs, "outputs": outputs })
+    }
+
     /// The model `Counters` of the `counters` message: the engine's counts
     /// of faults an operator acts on, the inputs' too-late blocks and the
     /// resends, totals since the engine started. None grows while the

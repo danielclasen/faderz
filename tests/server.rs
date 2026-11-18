@@ -646,6 +646,17 @@ async fn rest_answers_match_the_contract() {
         )
         .await;
     assert_eq!(s, 200);
+    // A set of one without an engine: no contact, no engine.
+    let (s, v) = rest
+        .call("GET", "/status", None, Some("/components/schemas/Status"))
+        .await;
+    assert_eq!(s, 200);
+    assert_eq!(v["replica"]["role"], "leader");
+    assert_eq!(v["replica"]["ready"], true);
+    assert_eq!(
+        (&v["replica"]["state"], &v["engine"]),
+        (&Value::Null, &Value::Null)
+    );
     let write =
         json!({ "commandId": id(), "changes": [{ "path": "/channels/ch1/fader", "value": -3 }] });
     let (s, r) = rest

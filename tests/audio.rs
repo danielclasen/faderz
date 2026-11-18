@@ -313,6 +313,38 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
         assert!(Instant::now() < deadline, "input health: {metrics}");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // The status names each channel's input and each output as the
+    // engine reports them, read once a second.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let engine = loop {
+        let (code, body) = get(server.api, "/api/v1/status").await;
+        assert_eq!(code, 200, "{body}");
+        let status: Value = serde_json::from_str(&body).unwrap();
+        let engine = status["engine"].clone();
+        if engine["inputs"][0]["copiedBlocks"].as_u64() > Some(0) {
+            break engine;
+        }
+        assert!(Instant::now() < deadline, "status: {status}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let inputs = engine["inputs"].as_array().unwrap();
+    let names: Vec<&str> = inputs
+        .iter()
+        .map(|i| i["channel"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["ch1", "ch2", "st1"]);
+    assert_eq!(
+        (&inputs[0]["state"], &inputs[0]["flowId"]),
+        (&json!("attached"), &json!(flows.ch1))
+    );
+    assert_eq!(inputs[1]["copiedBlocks"], 0, "ch2's input a has no flow");
+    assert_eq!(
+        engine["outputs"],
+        json!([
+            { "output": "out-pgm", "enabled": true, "realised": true, "reason": null },
+            { "output": "out-mm", "enabled": true, "realised": true, "reason": null },
+        ])
+    );
 
     // Hard left at 0 dB: cos 0 and sin 0 are exact.
     patch(
