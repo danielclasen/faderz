@@ -287,6 +287,9 @@ listener:
   on every replica: the leader orders no command while a replica reports
   another, and a replica of another one exits rather than install the
   set's snapshot. Changing it needs every replica stopped.
+- A snapshot carries its format, 2, which faderz 0.1.7 and earlier
+  cannot read. Rolling a set back to such an image needs the volumes
+  that image wrote, or empty volumes and a new set.
 - With an `mxl` section every replica runs an engine of its own
   (below); without one the set serves the state and mixes nothing.
 
@@ -296,7 +299,8 @@ Every replica reads the same input flows and writes its own member flow
 of each output: `mxl.outputs.<output>.flows` lists one flow per replica,
 by ordinal, and replica n writes the n-th. No two outputs or replicas
 name the same flow, and none names an input's. faderz writes no flow
-that merges the members.
+that merges the members; whatever merges them lists the member flows,
+so a change of `flows` changes that list in the same change.
 
 The engine follows the replicated log (samplez's replicated mode). Each
 log entry's engine entries are derived from the mixer state as the entry
@@ -306,13 +310,24 @@ engine the same entries at the same sample index. The engines hash the
 pages they compute and the set compares them; a replica whose pages
 differ is withdrawn and resynced from another replica's engine core.
 
+- A replica starts contact with the set, and its engine computes, once
+  it is a voter of a membership that is not changing and has applied
+  what the set committed. Until the set has formed, every replica must
+  be a voter and none a learner; the replica then writes `set-formed`
+  to `replica.dataDir` and from then on needs only to be a voter. While it
+  waits it logs why, and which replicas it waits for, at most every
+  30 s. Contact or the rollout failing to start exits faderz non-zero.
 - A replica starts with its engine idle and builds the engine's core
   from the state it applied once its clock is verified; it commits its
   outputs once its pages match the others'. A replica restarted on its
   volume catches up the same way.
 - An input the engine prunes is written to the log as down, and one
   readable again as up, so every replica silences and raises it at the
-  same index.
+  same index. Only the leader orders these entries: a report made
+  while following, or lost to an election, is appended again once the
+  replica leads while the log does not hold it, after the write timeout
+  and then at doubling intervals up to four times it; a later report on
+  the same input replaces it.
 - A command that switches an input is ordered alone and stamped later
   by the longest time a replica reports for building an input
   generation; the commands ordered after it take effect no earlier. One
@@ -384,9 +399,10 @@ ready and, in a set of one, the engine plays the state.
 - A set of one with an `mxl` section: both pass once the engine runs.
 - A set of one without an `mxl` section: both answer 503.
 - A set of more than one replica with an `mxl` section: `/healthz` passes
-  while the engine runs, with or without a core. `/readyz` passes once
-  the replica has joined and caught up and commits its outputs, or while
-  no other replica in contact with it commits; a withdrawn, diverged or
+  while the engine runs, with or without a core. `/readyz` fails until
+  the replica's contact runs ([Engines in a set](#engines-in-a-set)),
+  then passes once the replica has joined and caught up and commits its
+  outputs, or while no other replica in contact with it commits; a withdrawn, diverged or
   resyncing replica beside committing ones fails it.
 - A set of more than one replica without an `mxl` section: `/readyz`
   follows the replica alone and passes once it has joined and caught up,
