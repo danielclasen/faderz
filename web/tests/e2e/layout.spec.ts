@@ -5,6 +5,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { HEADERS, RawClient, debug, dragFader, live, patch, resetMock } from './support';
+import { TILE_W } from '../../src/lib/duck';
 
 interface Shift {
   value: number;
@@ -491,3 +492,22 @@ test('a notice gives its keys a finger-sized target on a touch screen and moves 
     other.close();
   }
 });
+
+// The summary beside three and four tiles of the 776 px masters of the
+// example shape: the width the tiles leave it, on the two groups the
+// mock has. Each group's outputs show whole on its first row.
+for (const tiles of [3, 4]) {
+  test(`the duck summary shows each group's outputs whole beside ${tiles} tiles`, { tag: '@mock' }, async ({ page }, info) => {
+    test.skip(info.project.name !== 'desktop', 'the summary shows with a fine pointer from 1400 px on');
+    await live(page);
+    const width = 776 - tiles * TILE_W;
+    await page.addStyleTag({ content: `.ducks .summary { flex: 0 0 ${width}px !important; }` });
+    await expect(page.getByTestId('duck-summary')).toBeVisible();
+    await expect.poll(() => page.getByTestId('duck-summary').evaluate((e) => Math.round(e.getBoundingClientRect().width))).toBe(width);
+    for (const id of ['comm', 'remote']) {
+      const into = page.getByTestId(`duck-summary-into-${id}`);
+      const cut = await into.evaluate((e) => e.scrollWidth > e.clientWidth);
+      expect(cut, `${id}: ${await into.textContent()}`).toBe(false);
+    }
+  });
+}

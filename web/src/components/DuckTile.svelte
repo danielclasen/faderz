@@ -6,7 +6,7 @@
   import { onMount } from 'svelte';
   import { fit } from '../lib/format';
   import { tip } from '../lib/tip';
-  import { LAMP_WIDTH, lampLit, lampText, liveDuck } from '../lib/duck';
+  import { LAMP_WIDTH, keyShare, lampLit, lampText, liveDuck } from '../lib/duck';
   import type { DuckMeter, DuckMode, DuckShape } from '../lib/contract/types';
   import { onAnimationFrame } from '../lib/meters/store';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -53,7 +53,7 @@
   const live = $derived<DuckMeter | null>(key === null && envelope === 0 && !engaged ? null : { key, envelope, engaged });
   const lit = $derived(lampLit(d, live));
   /** The key level on the threshold's scale, -60..0 dBFS, 0..1. */
-  const keyAt = $derived(key === null ? 0 : Math.min(1, Math.max(0, (key + 60) / 60)));
+  const keyAt = $derived(keyShare(key));
 </script>
 
 <section class="tile" aria-label={`Duck ${duck.name}`} data-duck={duck.id}>
@@ -72,7 +72,7 @@
   <DuckKey id={duck.id} name={duck.name} {shortcut} />
   <div class="keymeter" aria-hidden="true" data-testid={`duck-keymeter-${duck.id}`}>
     <i class="key" class:over={engaged} style:transform={`scaleX(${keyAt})`} data-testid={`duck-key-level-${duck.id}`}></i>
-    <span class="travel" style:transform={`translateX(${((d.threshold + 60) / 60) * 100}%)`}><i class="marker"></i></span>
+    <span class="travel" style:transform={`translateX(${keyShare(d.threshold) * 100}%)`}><i class="marker"></i></span>
   </div>
   <div class="sens">
     <span class="lbl">THR</span>

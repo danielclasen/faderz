@@ -272,21 +272,23 @@ export class DuckPress {
 /** Width of a duck tile in the masters band, px, and the gap after it. */
 export const TILE_W = 141;
 /**
- * The least width the band's summary takes, px: its condensed form, a
- * line per group with its name, outputs, reduction and key bar. From
- * SUMMARY_FULL_W on it adds the targets and the reduction bar.
+ * The least width the band's summary takes, px; narrower than
+ * SUMMARY_FULL_W it drops the reduction bar. Each group takes two rows,
+ * so the band's height holds SUMMARY_MAX_GROUPS of them.
  */
 export const SUMMARY_MIN_W = 180;
 export const SUMMARY_FULL_W = 300;
+export const SUMMARY_MAX_GROUPS = 4;
 
 /**
  * Whether the masters band shows its summary beside `groups` tiles in
  * `width` px: only with a fine pointer, outside the narrow layout where
- * the masters lie over the strips, and where the tiles leave it its
- * least width. Otherwise the band keeps its tiles alone.
+ * the masters lie over the strips, for at most SUMMARY_MAX_GROUPS, and
+ * where the tiles leave it its least width. Otherwise the band keeps its
+ * tiles alone.
  */
 export function summaryFits(width: number, groups: number, coarse: boolean, narrow: boolean): boolean {
-  return !coarse && !narrow && groups > 0 && width - groups * TILE_W >= SUMMARY_MIN_W;
+  return !coarse && !narrow && groups > 0 && groups <= SUMMARY_MAX_GROUPS && width - groups * TILE_W >= SUMMARY_MIN_W;
 }
 
 /** What a group lowers and where, by name: its destinations (buses, auxes, mix-minus outputs) and its targets, each in shape order. */
@@ -300,7 +302,7 @@ export function duckReach(shape: Shape, d: DuckState): { targets: string; into: 
 export const KEY_WIDTH = 5;
 
 /**
- * A group's key level in words and the line's description: dBFS with one
+ * A group's key level in a summary line's readings: dBFS with one
  * decimal, "-inf" at -100 and below as other level readouts
  * (format.ts), "--" while the group reports none.
  */

@@ -338,18 +338,20 @@ its envelope is above 0, how far its deepest target is lowered (DUCK
 -12.0), else DUCK HELD, DUCK ON, BYPASS or AUTO, with KEY while the key
 triggers it; it sets the threshold, and its key meter row shows the key
 level against it. More groups than fit one row of tiles scroll within
-it. Beside the masters with a fine pointer, where the tiles leave the
-band at least 180 px, the band's summary takes the rest of it: a line
-per group with its name, the buses, auxes and mix-minus outputs it
-lowers, the targets it lowers in them, its gain reduction as a bar on
-one scale for every group (0 to the deepest depth of any) and in dB,
-and its key as a bar against its threshold, KEY lit while the key
-triggers it. Narrower than 300 px the line keeps the name, the outputs,
-the reduction in dB and the key bar, coloured while the key triggers;
-the band keeps its height. In the example shape's masters, 776 px
-wide, that is the full line up to three groups, the condensed one at
-four and none from five. Under 1400 px, where the masters lie over the
-strips, and with a coarse pointer the band shows its tiles alone. A
+it. Beside the masters with a fine pointer, for up to four groups and
+where the tiles leave the band at least 180 px, the band's summary takes
+the rest of it: two rows per group, the first with its name, the buses,
+auxes and mix-minus outputs it lowers and its gain reduction in dB, the
+second with the targets it lowers in them, the reduction as a bar on one
+scale for every group (0 to the deepest depth of any), KEY lit while
+the key triggers it and the key as a bar against its threshold.
+Narrower than 300 px the outputs take the whole first row, the
+reduction moves to the second and its bar goes. A line's tooltip, on
+focus or hover, adds its readings of that moment. The band keeps its
+height. In the example shape's masters, 776 px wide, the summary shows
+beside up to four groups, and from five not at all. Under 1400 px,
+where the masters lie over the strips, and with a coarse pointer the
+band shows its tiles alone. A
 strip in a group carries a DK chip (KEY on a trigger), lit while
 a group that lowers it is held or latched in or lowers it now, when it
 reads the gain reduction in place of DK, or, on a trigger, while a

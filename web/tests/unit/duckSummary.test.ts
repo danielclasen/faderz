@@ -16,9 +16,12 @@ describe('the duck band summary', () => {
     expect(summaryFits(4000, 2, true, false)).toBe(false);
     expect(summaryFits(4000, 2, false, true)).toBe(false);
     expect(summaryFits(4000, 0, false, false)).toBe(false);
+    // Two rows a group: the band's height holds four.
+    expect(summaryFits(4000, 4, false, false)).toBe(true);
+    expect(summaryFits(4000, 5, false, false)).toBe(false);
   });
 
-  it('still shows, condensed, beside four tiles in the example shape\'s masters', () => {
+  it('still shows beside four tiles in the example shape\'s masters', () => {
     // The example shape's masters, and so the band, are 776 px wide.
     expect(summaryFits(776, 4, false, false)).toBe(true);
     expect(summaryFits(776, 5, false, false)).toBe(false);

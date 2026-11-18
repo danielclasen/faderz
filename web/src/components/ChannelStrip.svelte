@@ -14,7 +14,7 @@
   import { hold } from '../lib/hold';
   import { MediaQuery } from 'svelte/reactivity';
   import { pointer } from '../lib/state/pointer';
-  import { channelDucks, channelReduction, forced, liveDuck, reductionText } from '../lib/duck';
+  import { GR_WIDTH, channelDucks, channelReduction, forced, liveDuck, reductionText } from '../lib/duck';
   import { onAnimationFrame } from '../lib/meters/store';
 
   interface Props {
@@ -195,7 +195,7 @@
         title={`Duck: ${duckText}. Open it in the processing panel`}
         aria-label={`${channel.name} duck, ${duckText}`}
         data-testid={`duck-chip-${channel.id}`}
-        ><span class="gr fixed">{reduction > 0 ? reductionText(reduction) : ducks.triggers.length > 0 ? 'KEY ' : ' DK '}</span></button
+        ><span class="gr fixed">{reduction > 0 ? reductionText(reduction) : centre(ducks.triggers.length > 0 ? 'KEY' : 'DK', GR_WIDTH)}</span></button
       >
     {/if}
   </div>
@@ -510,16 +510,17 @@
     flex: 0 0 28px;
     height: 18px;
   }
-  /* Its text changes per meter frame while it lowers: one span of fixed
-     size and one font, whatever it reads, with strict containment, lays
-     out nothing outside it, and every reading is GR_WIDTH characters of
-     it, so the text starts at one place and never shifts. The chip itself takes no containment, which
-     would make it a stacking context and put the hit area of its
-     ::before under the rows next to it. The chip's colour and line, not
-     those of the strip's .fixed text. */
+  /* Its text changes per meter frame while it lowers: one span as high
+     as the chip and of one font, whatever it reads, with strict
+     containment, lays out nothing outside it, and every reading is
+     GR_WIDTH characters of it, so the text starts at one place and never
+     shifts. The chip itself takes no containment, which would make it a
+     stacking context and put the hit area of its ::before under the rows
+     next to it. The chip's colour and line, not those of the strip's
+     .fixed text. */
   .chip.duck .gr {
     display: block;
-    height: 18px;
+    height: 100%;
     color: inherit;
     line-height: inherit;
     contain: strict;
