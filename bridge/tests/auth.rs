@@ -4,9 +4,10 @@ mod idp;
 
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use faderz_bridge::auth::{self, DeviceCode, Failure, Session, Signed};
+use faderz_bridge::auth::{self, DeviceCode, Failure, Session, Signed, Tokens};
 use faderz_bridge::bridge::Credentials;
 use idp::{CLIENT, Idp, USER_CODE};
 
@@ -24,6 +25,7 @@ async fn session(idp: &Idp) -> (Session, std::path::PathBuf) {
         scope: "openid offline_access".into(),
         file: dir.join("tokens.json"),
         retry: Duration::from_millis(50),
+        writer: auth::store,
     };
     (session, dir)
 }
@@ -77,27 +79,145 @@ async fn a_refused_sign_in_fails_and_a_revoked_refresh_token_signs_in_again() {
 
 #[tokio::test]
 async fn the_access_token_is_refreshed_before_it_expires_and_the_bridge_told() {
-    let idp = Idp::start(4).await;
+    // Timestamps are whole seconds and keep_fresh sleeps whole seconds from a
+    // truncated clock, so the refresh lands up to a second after refresh_at.
+    // A life of 8 s refreshes 2 s before expiry, which that second does not
+    // eat.
+    let idp = Idp::start(8).await;
     idp.book().pending = Some(0);
-    let (s, dir) = session(&idp).await;
+    let (mut s, dir) = session(&idp).await;
+    // No disk in the timed part: a stalled fsync is not what is measured.
+    s.writer = |_, _| Ok(());
     let first = s.sign_in(&|_| {}).await.unwrap();
+    assert_eq!(first.expires_at - first.refresh_at(), 2);
     let signed = Signed::new(first.clone());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let keeper = signed.clone();
     let s2 = s.clone();
     tokio::spawn(async move { s2.keep_fresh(keeper, tx, &|_| {}).await });
-    tokio::time::timeout(Duration::from_secs(4), rx.recv())
+    tokio::time::timeout(Duration::from_secs(30), rx.recv())
         .await
         .expect("renewed in time")
         .unwrap();
     let now = auth::unix_now();
     assert!(
         now < first.expires_at,
+        "the bridge was told before the old token expired"
+    );
+    let renewed = signed.tokens();
+    assert!(
+        renewed.issued_at < first.expires_at,
         "renewed before the old token expired"
     );
     assert_ne!(signed.bearer(), Some(first.access_token));
-    assert_eq!(auth::load(&s.file).unwrap(), signed.tokens());
-    std::fs::remove_dir_all(dir).unwrap();
+    // Nothing was written, so there may be no directory.
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The tokens a fake disk was given, and how many writes it has seen.
+static WRITES: Mutex<Vec<Tokens>> = Mutex::new(Vec::new());
+static CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// A disk that stalls the first write for 3 s and then takes it. Writes
+/// go to memory so that the host's own disk cannot add to the timing.
+fn stalling_writer(_: &std::path::Path, t: &Tokens) -> std::io::Result<()> {
+    if CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    WRITES.lock().unwrap().push(t.clone());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_stalled_store_does_not_hold_back_the_new_token() {
+    let idp = Idp::start(8).await;
+    idp.book().pending = Some(0);
+    let (mut s, dir) = session(&idp).await;
+    s.writer = |_, _| Ok(());
+    let first = s.sign_in(&|_| {}).await.unwrap();
+    s.writer = stalling_writer;
+    let signed = Signed::new(first.clone());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let keeper = signed.clone();
+    let s2 = s.clone();
+    tokio::spawn(async move { s2.keep_fresh(keeper, tx, &|_| {}).await });
+    tokio::time::timeout(Duration::from_secs(30), rx.recv())
+        .await
+        .expect("renewed")
+        .unwrap();
+    // The write stalls for longer than the old token has left, and the
+    // bridge is told and holds the new token before that.
+    assert!(
+        auth::unix_now() < first.expires_at,
+        "the bridge was told before the old token expired"
+    );
+    assert!(
+        WRITES.lock().unwrap().is_empty(),
+        "the write is still stalled"
+    );
+    let renewed = signed.tokens();
+    assert_ne!(signed.bearer(), Some(first.access_token));
+    // Then it is written, and what is written is that renewal.
+    for _ in 0..600 {
+        if !WRITES.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(WRITES.lock().unwrap()[0], renewed);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+static LOG: Mutex<Vec<Tokens>> = Mutex::new(Vec::new());
+static REFUSALS: AtomicUsize = AtomicUsize::new(0);
+
+/// A disk that refuses the first write and then takes what it is given.
+fn refusing_writer(_: &std::path::Path, t: &Tokens) -> std::io::Result<()> {
+    if REFUSALS.fetch_add(1, Ordering::SeqCst) == 0 {
+        return Err(std::io::Error::other("disk refused"));
+    }
+    LOG.lock().unwrap().push(t.clone());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_refresh_during_a_retry_backoff_is_what_gets_written() {
+    let idp = Idp::start(4).await;
+    idp.book().pending = Some(0);
+    let (mut s, dir) = session(&idp).await;
+    s.writer = |_, _| Ok(());
+    let first = s.sign_in(&|_| {}).await.unwrap();
+    s.writer = refusing_writer;
+    // The first renewal's write is refused and tried again after 4 s; the
+    // next renewal comes about 3 s after the first, inside that wait.
+    s.retry = Duration::from_secs(4);
+    let signed = Signed::new(first);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let keeper = signed.clone();
+    let s2 = s.clone();
+    tokio::spawn(async move { s2.keep_fresh(keeper, tx, &|_| {}).await });
+    let wait = Duration::from_secs(30);
+    tokio::time::timeout(wait, rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let older = signed.tokens();
+    tokio::time::timeout(wait, rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let newest = signed.tokens();
+    assert_ne!(older, newest);
+    for _ in 0..600 {
+        if !LOG.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let log = LOG.lock().unwrap().clone();
+    assert_eq!(log.first(), Some(&newest), "the newest tokens are written");
+    assert!(!log.contains(&older), "the older tokens are never written");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]

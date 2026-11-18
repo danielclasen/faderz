@@ -355,6 +355,8 @@ pub struct Session {
     /// The first wait before a start-up request the provider failed is
     /// tried again; [`START_RETRY`] outside tests.
     pub retry: Duration,
+    /// Writes the tokens to [`Session::file`]; [`store`] outside tests.
+    pub writer: fn(&Path, &Tokens) -> std::io::Result<()>,
 }
 
 impl Session {
@@ -388,19 +390,24 @@ impl Session {
     }
 
     async fn device(&self, show: &(dyn Fn(&DeviceCode) + Sync)) -> Result<Tokens, String> {
-        let code = start(&self.http, &self.provider, &self.client_id, &self.scope)
-            .await
-            .map_err(|e| format!("starting the sign-in: {e}"))?;
-        show(&code);
-        let tokens = poll(&self.http, &self.provider, &self.client_id, &code)
-            .await
-            .map_err(|e| format!("signing in: {e}"))?;
+        let tokens = self.device_tokens(show).await?;
         self.keep(&tokens);
         Ok(tokens)
     }
 
+    /// A new sign-in, without storing its tokens.
+    async fn device_tokens(&self, show: &(dyn Fn(&DeviceCode) + Sync)) -> Result<Tokens, String> {
+        let code = start(&self.http, &self.provider, &self.client_id, &self.scope)
+            .await
+            .map_err(|e| format!("starting the sign-in: {e}"))?;
+        show(&code);
+        poll(&self.http, &self.provider, &self.client_id, &code)
+            .await
+            .map_err(|e| format!("signing in: {e}"))
+    }
+
     fn keep(&self, tokens: &Tokens) {
-        if let Err(e) = store(&self.file, tokens) {
+        if let Err(e) = (self.writer)(&self.file, tokens) {
             tracing::warn!("storing the tokens at {}: {e}", self.file.display());
         }
     }
@@ -414,6 +421,12 @@ impl Session {
         renewed: UnboundedSender<()>,
         show: &(dyn Fn(&DeviceCode) + Sync),
     ) {
+        // One task writes, so two writes never share the temporary file
+        // and an older set of tokens never lands after a newer one. It is
+        // dropped with the channel: tokens still unwritten when this
+        // returns are lost.
+        let (store, stored) = tokio::sync::watch::channel(signed.tokens());
+        tokio::spawn(self.clone().write_latest(stored));
         loop {
             let current = signed.tokens();
             let wait = current.refresh_at().saturating_sub(unix_now());
@@ -431,7 +444,7 @@ impl Session {
                 }
                 Err(Failure::Refused(e)) => {
                     tracing::warn!("the provider refused the refresh ({e}); sign in again");
-                    match self.device(show).await {
+                    match self.device_tokens(show).await {
                         Ok(t) => t,
                         Err(e) => {
                             tracing::error!("{e}");
@@ -441,10 +454,38 @@ impl Session {
                     }
                 }
             };
-            self.keep(&tokens);
-            signed.set(tokens);
+            // The new token goes live and the bridge is told before the
+            // tokens are written: a disk that stalls must not hold back a
+            // token the old one's expiry is waiting on.
+            signed.set(tokens.clone());
+            store.send_replace(tokens);
             if renewed.send(()).is_err() {
                 return;
+            }
+        }
+    }
+
+    /// Writes each value `tokens` takes, off the async task: the latest
+    /// one only, again with backoff after a failure, until the sender is
+    /// gone.
+    async fn write_latest(self, mut tokens: tokio::sync::watch::Receiver<Tokens>) {
+        while tokens.changed().await.is_ok() {
+            let mut failures = 0;
+            loop {
+                let latest = tokens.borrow_and_update().clone();
+                let (writer, file) = (self.writer, self.file.clone());
+                match tokio::task::spawn_blocking(move || writer(&file, &latest)).await {
+                    Ok(Ok(())) => break,
+                    Ok(Err(e)) => {
+                        tracing::warn!("storing the tokens at {}: {e}", self.file.display())
+                    }
+                    Err(e) => tracing::warn!("storing the tokens: {e}"),
+                }
+                if tokens.has_changed().is_err() {
+                    return;
+                }
+                tokio::time::sleep(backoff(self.retry, failures, START_RETRY_CAP)).await;
+                failures += 1;
             }
         }
     }

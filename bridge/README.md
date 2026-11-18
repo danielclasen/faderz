@@ -224,6 +224,12 @@ connection with it on the same session, makes it the primary and closes
 the old one, so the session's controls and lease are kept. A refresh the
 provider refuses starts a new sign-in, shown on stderr.
 
+A refreshed token is in use before it is written to `tokens.json`; a
+write that fails is retried with backoff. Tokens still being written when
+the bridge exits are lost, so the next start signs in with the previous
+refresh token. A provider that rotates refresh tokens has invalidated it,
+and the bridge then asks for a new sign-in.
+
 `issuer` is `https`, or `http` on a loopback address. `scopes` are
 requested in addition to `openid`.
 

@@ -117,6 +117,7 @@ fn start(path: &std::path::Path) -> Result<(), String> {
                     scope,
                     file: config.tokens_file(),
                     retry: auth::START_RETRY,
+                    writer: auth::store,
                 };
                 let lcd = ports
                     .first()
