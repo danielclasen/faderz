@@ -30,33 +30,34 @@
   );
 </script>
 
-<ul class="summary" aria-label="Duck groups now" data-testid="duck-summary">
+<div class="summary" role="group" aria-label="Duck groups now" data-testid="duck-summary">
   {#each groups as g, i (g.id)}
     {@const d = mixer.state!.ducks[g.id]!}
     {@const reach = duckReach(shape, d)}
     {@const depth = deepestDepth(d)}
     {@const gr = depth * (envelopes[i] ?? 0)}
     {@const text = `${g.name}: lowers ${reach.targets} in ${reach.into}`}
-    <li class="line" aria-label={text} data-testid={`duck-summary-${g.id}`}>
-      <span class="name" use:tip={g.name}>{g.name}</span>
-      <span class="reach" use:tip={text}>{reach.targets} <i>in</i> {reach.into}</span>
+    <!-- One tab stop per group: its tip carries the whole of a name or reach cut off. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="line" role="note" tabindex="0" aria-label={text} use:tip={text} data-testid={`duck-summary-${g.id}`}>
+      <span class="name">{g.name}</span>
+      <!-- One text node: a change of what a group lowers replaces it, moving nothing. -->
+      <span class="reach">{`${reach.targets} in ${reach.into}`}</span>
       <span class="bar" aria-hidden="true"><i class:on={gr > 0} style:transform={`scaleX(${reductionShare(gr, depth)})`}></i></span>
       <span class="fixed gr" class:on={gr > 0} data-testid={`duck-summary-gr-${g.id}`}>{gr > 0 ? reductionText(gr) : fit('0', GR_WIDTH)}</span>
       <span class="lbl">dB</span>
       <span class="lbl key-lbl">KEY</span>
       <span class="fixed level" data-testid={`duck-summary-key-${g.id}`}>{keyText(keys[i] ?? null)}</span>
-    </li>
+    </div>
   {/each}
-</ul>
+</div>
 
 <style>
   .summary {
     flex: 1 1 0;
     min-width: 0;
     height: var(--tile-h);
-    margin: 0;
     padding: 5px 8px;
-    list-style: none;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -83,10 +84,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-dim);
-  }
-  .reach i {
-    font-style: normal;
-    opacity: 0.8;
   }
   .bar {
     height: 8px;
