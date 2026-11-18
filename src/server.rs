@@ -71,10 +71,14 @@ impl Server {
         let estimate: Estimate = Arc::new(replica::tai_samples);
         let ops_state = Ops::default();
         let dir = &config.replica.data_dir;
+        let mixer = Mixer::factory(
+            shape.clone(),
+            config.consoles.clone(),
+            config.wiring.clone(),
+        );
         let (state, peer) = match &config.set {
             None => {
-                let state =
-                    replica::start(dir, shape.clone(), config.consoles.clone(), estimate).await?;
+                let state = replica::start(dir, mixer, estimate).await?;
                 (Arc::new(state), None)
             }
             Some(set) => {
@@ -103,7 +107,7 @@ impl Server {
                 };
                 let state = replica::start_set(
                     dir,
-                    Mixer::with_consoles(shape.clone(), config.consoles.clone()),
+                    mixer,
                     estimate,
                     set,
                     tls.clone(),
@@ -124,25 +128,21 @@ impl Server {
             config.auth.mode,
             ops_state.metrics(),
         );
-        let audio = match (&config.audio, &config.mxl) {
-            (Some(engine), Some(mxl)) => {
+        let audio = match &config.audio {
+            Some(engine) => {
                 let process = process.unwrap_or_else(|| samplez::rt::setup_process(&engine.rt));
-                let alt = shape
-                    .channels
-                    .iter()
-                    .map(|c| mxl.inputs[&c.id].alt_flow.clone());
                 let (live, revision) = audio::state_of(&state);
                 let audio = Audio::start(
                     engine.clone(),
                     process,
                     &shape,
-                    alt.collect(),
+                    config.wiring.clone(),
                     &live,
                     ops_state.clone(),
                 )?;
                 Some((Arc::new(audio), live, revision))
             }
-            _ => None,
+            None => None,
         };
         let service_config = ServiceConfig {
             listeners: config.listeners.clone(),

@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::contract::{check, contract};
+use crate::mix::Wiring;
 use crate::shape::{Shape, loudness_channels};
 use crate::state::Console;
 
@@ -59,6 +60,10 @@ pub struct Config {
     /// with a matrix of zeros: the matrix comes from the live state.
     #[serde(skip)]
     pub audio: Option<samplez::Config>,
+    /// Each channel's input a and b flows and their domain, from the
+    /// `mxl` section; empty without one.
+    #[serde(skip)]
+    pub wiring: Vec<Wiring>,
     /// The replica set [`Config::parse`] read from `replica`; none for a
     /// set of one.
     #[serde(skip)]
@@ -208,6 +213,18 @@ pub struct ReplicaConfig {
     /// (`podManagementPolicy: Parallel`): one at a time, each waiting to be
     /// ready, the first would wait for the others forever.
     pub marker: Option<String>,
+    /// The most a set's apply deadline may lead the engine's processed
+    /// index, ms, in [`MAX_APPLY_LEAD_MS`]: samplez-replica's
+    /// `maxApplyLeadMs`. A set runs no engine yet, so nothing reads it.
+    #[serde(default = "default_max_apply_lead_ms")]
+    pub max_apply_lead_ms: u64,
+}
+
+/// The values `replica.maxApplyLeadMs` takes.
+pub const MAX_APPLY_LEAD_MS: std::ops::RangeInclusive<u64> = 30..=120;
+
+fn default_max_apply_lead_ms() -> u64 {
+    50
 }
 
 impl Default for ReplicaConfig {
@@ -220,6 +237,7 @@ impl Default for ReplicaConfig {
             peers: Vec::new(),
             peer: None,
             marker: None,
+            max_apply_lead_ms: default_max_apply_lead_ms(),
         }
     }
 }
@@ -670,6 +688,23 @@ impl Config {
         }
         let mut config = config;
         config.audio = config.audio(&shape)?;
+        if let (Some(engine), Some(mxl)) = (&config.audio, &config.mxl) {
+            config.wiring = (shape.channels.iter().zip(&engine.inputs))
+                .map(|(c, input)| Wiring {
+                    a: input.flow_id.clone(),
+                    b: mxl.inputs[&c.id].alt_flow.clone(),
+                    domain: input.domain.clone(),
+                })
+                .collect();
+        }
+        if !MAX_APPLY_LEAD_MS.contains(&config.replica.max_apply_lead_ms) {
+            return Err(format!(
+                "replica.maxApplyLeadMs {}: not in {}..={}",
+                config.replica.max_apply_lead_ms,
+                MAX_APPLY_LEAD_MS.start(),
+                MAX_APPLY_LEAD_MS.end()
+            ));
+        }
         config.label_sources(&mut shape)?;
         let name = config.replica.name.clone().unwrap_or_else(host);
         check(&contract().id, &json!(name)).map_err(|e| {
@@ -682,12 +717,10 @@ impl Config {
                 .push(format!("{MARKER_ENV} ignored: replica.replicas is 1"));
         }
         config.set = config.replica.set(&name, env_marker)?;
-        // samplez 0.5.0's replicated engine takes one engine entry per log
-        // entry, and one mixer command sets many gains.
+        // A set derives engine targets from the state, but no replica of
+        // one hands them to an engine yet.
         if config.set.is_some() && config.mxl.is_some() {
-            return Err("mxl: a set of more than one replica runs no engine; \
-                        samplez's replicated engine takes one gain per log entry"
-                .into());
+            return Err("mxl: a set of more than one replica runs no engine yet".into());
         }
         Ok((config, shape, name))
     }
@@ -1373,5 +1406,73 @@ mod tests {
         Config::parse(&config(max - 3), || unreachable!()).unwrap();
         let e = Config::parse(&config(max - 2), || unreachable!()).unwrap_err();
         assert!(e.contains(&format!("at most {max}")), "{e}");
+    }
+
+    /// Each channel's wiring names its input a and b flows and the domain
+    /// the engine reads them in: the given one, or the only one there is.
+    #[test]
+    fn the_wiring_names_each_channels_flows_and_domain() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let config = |domains: Value, st1: Value| {
+            json!({
+                "replica": { "name": "r1" },
+                "shape": small(),
+                "mxl": {
+                    "domains": domains,
+                    "inputs": { "ch1": { "flow": id(1), "altFlow": id(5), "domain": "d" },
+                                "ch2": { "flow": id(2), "domain": "d" }, "st1": st1 },
+                    "outputs": { "out-pgm": { "flow": id(4), "domain": "d" } },
+                },
+            })
+            .to_string()
+        };
+        let d = json!({ "name": "d", "path": "/dev/shm/d" });
+        let e = json!({ "name": "e", "path": "/dev/shm/e" });
+        let two = config(json!([d, e]), json!({ "flow": id(3), "domain": "e" }));
+        let (c, ..) = Config::parse(&two, || unreachable!()).unwrap();
+        let wiring = |a: u8, b: Option<u8>, domain: &str| Wiring {
+            a: id(a),
+            b: b.map(id),
+            domain: domain.into(),
+        };
+        assert_eq!(
+            c.wiring,
+            [
+                wiring(1, Some(5), "d"),
+                wiring(2, None, "d"),
+                wiring(3, None, "e")
+            ]
+        );
+        let one = config(json!([d]), json!({ "flow": id(3) }));
+        let (c, ..) = Config::parse(&one, || unreachable!()).unwrap();
+        assert_eq!(c.wiring[2], wiring(3, None, "d"));
+        // Without an engine there is nothing to wire.
+        let none = json!({ "replica": { "name": "r1" }, "shape": small() }).to_string();
+        assert!(
+            Config::parse(&none, || unreachable!())
+                .unwrap()
+                .0
+                .wiring
+                .is_empty()
+        );
+    }
+
+    /// `replica.maxApplyLeadMs` is 50 unless set, and is taken from 30 to
+    /// 120 alone.
+    #[test]
+    fn the_apply_lead_cap_is_50_ms_and_bounded() {
+        let config = |replica: Value| json!({ "replica": replica, "shape": small() }).to_string();
+        let lead = |replica: Value| {
+            Config::parse(&config(replica), || unreachable!())
+                .map(|c| c.0.replica.max_apply_lead_ms)
+        };
+        assert_eq!(lead(json!({ "name": "r1" })), Ok(50));
+        for ms in [30, 80, 120] {
+            assert_eq!(lead(json!({ "name": "r1", "maxApplyLeadMs": ms })), Ok(ms));
+        }
+        for ms in [29, 121] {
+            let e = lead(json!({ "name": "r1", "maxApplyLeadMs": ms })).unwrap_err();
+            assert!(e.starts_with("replica.maxApplyLeadMs"), "{e}");
+        }
     }
 }

@@ -11,11 +11,17 @@
 //! the mix-minus exclusions, and the monitor's source, downmix, level,
 //! dim, cut, mono and speaker mutes and solos. Everything else in the
 //! state is the input's strip ([`crate::strip`]) or is kept and not
-//! applied.
+//! applied. [`targets`] adds the strips and each input's flow.
+//!
+//! Every value is computed with `libm`, not the host's math library, so
+//! replicas on other hosts derive the same bits from the same state.
 
+use samplez::Targets;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::shape::Shape;
+use crate::strip;
 
 /// A fader at this level or below is closed.
 const CLOSED_DB: f64 = -90.0;
@@ -27,7 +33,7 @@ pub fn gain(db: f64) -> f64 {
     if db <= CLOSED_DB {
         0.0
     } else {
-        10f64.powf(db / 20.0)
+        libm::pow(10.0, db / 20.0)
     }
 }
 
@@ -101,8 +107,8 @@ pub fn pan(from: usize, to: usize, i: usize, j: usize, pan: f64) -> f64 {
         (1, _) => {
             let theta = (pan.clamp(-1.0, 1.0) + 1.0) * std::f64::consts::FRAC_PI_4;
             match j {
-                0 => theta.cos(),
-                1 => theta.sin(),
+                0 => libm::cos(theta),
+                1 => libm::sin(theta),
                 _ => 0.0,
             }
         }
@@ -150,6 +156,47 @@ pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
         }
     }
     m
+}
+
+/// One channel's input as the MXL configuration wires it: the flow of
+/// input a, the flow of input b when the channel has one, and the domain
+/// both are in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Wiring {
+    pub a: String,
+    pub b: Option<String>,
+    pub domain: String,
+}
+
+/// The flow each channel's selected input reads: input b's when the
+/// state selects b and the channel has one, else input a's.
+pub fn selected(shape: &Shape, wiring: &[Wiring], state: &Value) -> Vec<String> {
+    shape
+        .channels
+        .iter()
+        .zip(wiring)
+        .map(
+            |(c, w)| match (state["channels"][&c.id]["input"].as_str(), &w.b) {
+                (Some("b"), Some(b)) => b.clone(),
+                _ => w.a.clone(),
+            },
+        )
+        .collect()
+}
+
+/// Everything the engine of `shape` plays from `state`: the gain matrix
+/// ([`matrix`]), each channel's strip ([`strip::params`]) and the flow
+/// its selected input reads ([`selected`]), one slot per channel.
+pub fn targets(shape: &Shape, wiring: &[Wiring], state: &Value) -> Targets {
+    Targets {
+        gains: matrix(shape, state),
+        flows: selected(shape, wiring, state),
+        strips: shape
+            .channels
+            .iter()
+            .map(|c| strip::params(&state["channels"][&c.id], c.width))
+            .collect(),
+    }
 }
 
 /// A channel's gains after its strip, the same on every leg.

@@ -2,20 +2,33 @@
 //! the configured shape, touch ownership, the last seq per session and
 //! control, scenes and consoles. Every replica applies the same commands
 //! in log order through [`Product`], so all of it is decided here and
-//! nowhere else.
+//! nowhere else, the engine targets included ([`Product::targets`]).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use samplez::Targets;
 use samplez_replica::entry::{Origin, SessionKey};
-use samplez_replica::state_machine::{Changed, Effect, Product};
+use samplez_replica::state_machine::{Apply, Changed, Effect, Factory, Product};
 use samplez_service::OwnerHandle;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::contract::{check, contract};
 use crate::duck;
+use crate::mix::{self, Wiring};
 use crate::shape::Shape;
+
+/// The version of how [`Mixer::targets`] derives engine targets from the
+/// state, in [`Mixer::config_hash`]: a change to the derivation that
+/// gives other targets for one state takes another version, so replicas
+/// deriving differently never form one set.
+pub const DERIVATION_VERSION: u32 = 1;
+
+/// The layout [`Product::save`] writes. A snapshot carries it beside
+/// the state, which binaries before it read from the top level: they
+/// refuse it as missing their fields rather than load part of it.
+const FORMAT: u32 = 2;
 
 /// A client's command as the replicated log carries it. `id` is the
 /// client's command id, under which a refusal or a stored scene is kept
@@ -195,7 +208,8 @@ pub enum Answer {
     /// The scene a `StoreScene` stored.
     Scene { scene: String },
     /// 409 with a message alone: a console connected to another session,
-    /// or a declared or connected one to remove.
+    /// a declared or connected one to remove, or inputs a command switches
+    /// that it may not ([`Product::apply`]).
     Refused { message: String },
     /// The console a `PutConsole` created.
     Created,
@@ -277,6 +291,15 @@ pub struct Mixer {
     consoles: Vec<Registered>,
     /// The configuration's consoles, which a loaded state is merged with.
     declared: Vec<Console>,
+    /// Each channel's input flows and domain; empty without an engine.
+    wiring: Vec<Wiring>,
+}
+
+/// A snapshot from [`FORMAT`] on.
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    format: u32,
+    mixer: Saved,
 }
 
 /// The state as snapshots carry it.
@@ -302,15 +325,102 @@ impl Mixer {
     /// A state with the `declared` consoles of the configuration, not
     /// connected yet.
     pub fn with_consoles(shape: Shape, declared: Vec<Console>) -> Mixer {
+        Mixer::configured(shape, declared, Vec::new())
+    }
+
+    /// [`Mixer::with_consoles`] whose channels' inputs are `wiring`, one
+    /// per channel: the state it derives engine targets from
+    /// ([`Product::targets`]).
+    pub fn configured(shape: Shape, declared: Vec<Console>, wiring: Vec<Wiring>) -> Mixer {
         let mut m = Mixer {
             state: shape.initial_state(),
             shape: Some(Arc::new(shape)),
             consoles: declared.iter().map(Mixer::declared_entry).collect(),
             declared,
+            wiring,
             ..Mixer::default()
         };
         m.state["consoles"] = m.console_list();
         m
+    }
+
+    /// Builds [`Mixer::configured`]: the empty state every replica of a
+    /// set opens and installs snapshots into.
+    pub fn factory(shape: Shape, declared: Vec<Console>, wiring: Vec<Wiring>) -> Factory<Mixer> {
+        Arc::new(move || Mixer::configured(shape.clone(), declared.clone(), wiring.clone()))
+    }
+
+    /// The channel slots whose selected flow `written` changes, applied to
+    /// the state as it is, ascending.
+    fn rerouted(&self, written: &[(String, Value)]) -> Vec<u32> {
+        let (Some(shape), false) = (self.shape.as_deref(), self.wiring.is_empty()) else {
+            return Vec::new();
+        };
+        let mut after = Map::new();
+        for (path, value) in written {
+            if let [group, id, leaf] = tokens(path).as_slice()
+                && group == "channels"
+                && leaf == "input"
+            {
+                after.insert(id.clone(), value.clone());
+            }
+        }
+        let flow = |w: &Wiring, input: Option<&Value>| match (input.and_then(Value::as_str), &w.b) {
+            (Some("b"), Some(b)) => b.clone(),
+            _ => w.a.clone(),
+        };
+        (shape.channels.iter().zip(&self.wiring).enumerate())
+            .filter(|(_, (c, w))| {
+                after.get(&c.id).is_some_and(|input| {
+                    flow(w, Some(input)) != flow(w, self.state["channels"][&c.id].get("input"))
+                })
+            })
+            .map(|(slot, _)| slot as u32)
+            .collect()
+    }
+
+    /// Why a command writing `written`, ordered as `ctx` says, is refused
+    /// for the inputs it re-routes: off the generation path, or across
+    /// more than one MXL domain, which one engine generation cannot
+    /// switch together. A command the writer did not classify
+    /// (`generation` `None`) is taken as it was before.
+    fn reroute_refusal(&self, ctx: &Apply, written: &[(String, Value)]) -> Option<Answer> {
+        let generation = ctx.generation?;
+        let slots = self.rerouted(written);
+        if slots.is_empty() {
+            return None;
+        }
+        if !generation {
+            let message =
+                "the command switches inputs and was not ordered to: send it again".into();
+            return Some(Answer::Refused { message });
+        }
+        let domains: BTreeSet<&str> = (slots.iter())
+            .map(|&s| self.wiring[s as usize].domain.as_str())
+            .collect();
+        (domains.len() > 1).then(|| Answer::Refused {
+            message: format!(
+                "the command switches inputs in more than one MXL domain ({})",
+                domains.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+        })
+    }
+
+    /// The leaves a command would write, applied to the state as it is,
+    /// for the writer's classification ([`Product::reroutes`]): those of a
+    /// set, a patch or a recall, the only commands that write an input
+    /// selection.
+    fn writes_of(&self, command: &Command) -> Vec<(String, Value)> {
+        match command {
+            Command::Control(c) if c.action == Action::Set => {
+                vec![(c.path.clone(), c.value.clone().unwrap_or(Value::Null))]
+            }
+            Command::Patch { changes, .. } => (changes.iter())
+                .map(|c| (c.path.clone(), c.value.clone()))
+                .collect(),
+            Command::Recall { scene, .. } => self.recall_writes(scene).unwrap_or_default(),
+            _ => Vec::new(),
+        }
     }
 
     fn declared_entry(console: &Console) -> Registered {
@@ -529,7 +639,7 @@ impl Mixer {
             .collect()
     }
 
-    fn control(&mut self, origin: &Origin, c: &Control) -> Effect<Edits> {
+    fn control(&mut self, origin: &Origin, c: &Control, ctx: &Apply) -> Effect<Edits> {
         let (id, action, kind, seq, path) = (
             c.id.as_str(),
             c.action,
@@ -611,6 +721,9 @@ impl Mixer {
                 if let Some((_, message)) = self.broken_duck(&written) {
                     return self.refuse(&session, id, Answer::Invalid { message });
                 }
+                if let Some(answer) = self.reroute_refusal(ctx, &written) {
+                    return self.refuse(&session, id, answer);
+                }
                 self.seen(&session, path, seq);
                 let values = self.write(written);
                 if values.is_empty() {
@@ -633,7 +746,13 @@ impl Mixer {
             .insert(path.to_owned(), seq);
     }
 
-    fn patch(&mut self, session: &SessionKey, id: &str, changes: &[Write]) -> Effect<Edits> {
+    fn patch(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        changes: &[Write],
+        ctx: &Apply,
+    ) -> Effect<Edits> {
         let conflicts: Vec<Value> = changes
             .iter()
             .filter_map(|c| Some(self.conflict(&c.path, self.owners.get(&c.path)?)))
@@ -657,6 +776,9 @@ impl Mixer {
             .collect();
         if let Some((_, message)) = self.broken_duck(&written) {
             return self.refuse(session, id, Answer::Invalid { message });
+        }
+        if let Some(answer) = self.reroute_refusal(ctx, &written) {
+            return self.refuse(session, id, answer);
         }
         changed(self.write(written))
     }
@@ -771,11 +893,28 @@ impl Mixer {
     /// Recalls `scene`: every stored leaf whose recall-safe group its
     /// element does not keep, owned controls included, and
     /// `sceneRecalled`.
-    fn recall(&mut self, session: &SessionKey, id: &str, scene: &str, at: &str) -> Effect<Edits> {
-        let Some(data) = self.scenes.get(scene) else {
+    fn recall(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        scene: &str,
+        at: &str,
+        ctx: &Apply,
+    ) -> Effect<Edits> {
+        let Some(mut written) = self.recall_writes(scene) else {
             let message = format!("unknown scene {scene}");
             return self.refuse(session, id, Answer::NotFound { message });
         };
+        if let Some(answer) = self.reroute_refusal(ctx, &written) {
+            return self.refuse(session, id, answer);
+        }
+        written.push(("/sceneRecalled".into(), json!({ "id": scene, "at": at })));
+        changed(self.write(written))
+    }
+
+    /// The leaves a recall of `scene` writes, none for an unknown scene.
+    fn recall_writes(&self, scene: &str) -> Option<Vec<(String, Value)>> {
+        let data = self.scenes.get(scene)?;
         let mut written: Vec<(String, Value)> = self
             .recalled(data)
             .into_iter()
@@ -797,8 +936,7 @@ impl Mixer {
             );
             written.retain(|(p, _)| duck::routing_of(p) != Some(group.as_str()));
         }
-        written.push(("/sceneRecalled".into(), json!({ "id": scene, "at": at })));
-        changed(self.write(written))
+        Some(written)
     }
 
     /// The leaves of the scene `data` a recall writes: those of the groups
@@ -1142,14 +1280,19 @@ impl Mixer {
 impl Product for Mixer {
     type Change = Edits;
 
-    fn apply(&mut self, origin: &Origin, command: &[u8]) -> Effect<Edits> {
+    const DRIVES_ENGINE: bool = true;
+
+    /// A command that switches an input is refused as [`Answer::Refused`]
+    /// when the writer ordered it off the generation path, or when it
+    /// switches inputs in more than one MXL domain.
+    fn apply(&mut self, origin: &Origin, command: &[u8], ctx: &Apply) -> Effect<Edits> {
         let Ok(command) = serde_json::from_slice::<Command>(command) else {
             return Effect::Unchanged;
         };
         let session = origin.key();
         match &command {
-            Command::Control(c) => self.control(origin, c),
-            Command::Patch { id, changes } => self.patch(&session, id, changes),
+            Command::Control(c) => self.control(origin, c, ctx),
+            Command::Patch { id, changes } => self.patch(&session, id, changes, ctx),
             Command::StoreScene {
                 id,
                 scene,
@@ -1157,7 +1300,7 @@ impl Product for Mixer {
                 at,
             } => self.store_scene(&session, id, scene.as_deref(), name.as_deref(), at),
             Command::DeleteScene { id, scene } => self.delete_scene(&session, id, scene),
-            Command::Recall { id, scene, at } => self.recall(&session, id, scene, at),
+            Command::Recall { id, scene, at } => self.recall(&session, id, scene, at, ctx),
             Command::Tally {
                 id,
                 sources,
@@ -1171,6 +1314,30 @@ impl Product for Mixer {
             Command::PutConsole { id, console } => self.put_console(&session, id, console),
             Command::RemoveConsole { id, console } => self.remove_console(&session, id, console),
         }
+    }
+
+    /// [`mix::targets`] of the state; none without an engine's wiring.
+    fn targets(&self) -> Option<Targets> {
+        let shape = self.shape.as_deref()?;
+        (!self.wiring.is_empty()).then(|| mix::targets(shape, &self.wiring, &self.state))
+    }
+
+    fn reroutes(&self, _origin: &Origin, command: &[u8]) -> Vec<u32> {
+        serde_json::from_slice::<Command>(command)
+            .map_or_else(|_| Vec::new(), |c| self.rerouted(&self.writes_of(&c)))
+    }
+
+    /// XXH3 over [`DERIVATION_VERSION`], the shape, the declared consoles
+    /// and the wiring: what [`Product::apply`], [`Product::load`] and
+    /// [`Product::targets`] read besides the state.
+    fn config_hash(&self) -> u64 {
+        let config = json!({
+            "derivation": DERIVATION_VERSION,
+            "shape": self.shape,
+            "consoles": self.declared,
+            "wiring": self.wiring,
+        });
+        xxhash_rust::xxh3::xxh3_64(config.to_string().as_bytes())
     }
 
     /// Releases every control `session` holds and disconnects its
@@ -1283,13 +1450,28 @@ impl Product for Mixer {
             scenes_created: self.scenes_created,
             consoles: self.consoles.clone(),
         };
-        serde_json::to_vec(&saved).expect("the state serializes")
+        let snapshot = Snapshot {
+            format: FORMAT,
+            mixer: saved,
+        };
+        serde_json::to_vec(&snapshot).expect("the state serializes")
     }
 
     /// A state with a configured shape keeps it ([`Mixer::reconcile`]); a
     /// [`Default`] one, as a snapshot install builds, takes the saved one.
+    /// A snapshot of another format than [`FORMAT`] is refused, one taken
+    /// before formats were kept is read as it was written.
     fn load(&mut self, saved: &[u8]) -> Result<(), String> {
-        let saved: Saved = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
+        let value: Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
+        let saved: Saved = match value.get("format") {
+            None => serde_json::from_value(value).map_err(|e| e.to_string())?,
+            Some(f) if *f == FORMAT => {
+                let snapshot: Snapshot =
+                    serde_json::from_value(value).map_err(|e| e.to_string())?;
+                snapshot.mixer
+            }
+            Some(f) => return Err(format!("snapshot format {f}: this binary reads {FORMAT}")),
+        };
         self.seqs = saved
             .seqs
             .iter()
@@ -1502,6 +1684,8 @@ fn recall_group(path: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::shape::tests::small;
+    use crate::strip;
+    use samplez_dsp::StripParam;
     use samplez_replica::entry::Command as Entry;
     use samplez_service::Role;
 
@@ -1535,6 +1719,7 @@ mod tests {
         m.apply(
             &origin(session),
             &control(Action::Set, &id, seq, path, Some(value)),
+            &Apply::default(),
         )
     }
 
@@ -1543,6 +1728,7 @@ mod tests {
         m.apply(
             &origin(session),
             &control(Action::Touch, &id, seq, path, None),
+            &Apply::default(),
         )
     }
 
@@ -1551,11 +1737,16 @@ mod tests {
         m.apply(
             &origin(session),
             &control(Action::Release, &id, seq, path, None),
+            &Apply::default(),
         )
     }
 
     fn rest(m: &mut Mixer, command: Command) -> Effect<Edits> {
-        m.apply(&origin("rest"), &serde_json::to_vec(&command).unwrap())
+        m.apply(
+            &origin("rest"),
+            &serde_json::to_vec(&command).unwrap(),
+            &Apply::default(),
+        )
     }
 
     fn patch(m: &mut Mixer, id: &str, changes: &[(&str, Value)]) -> Effect<Edits> {
@@ -2184,7 +2375,7 @@ mod tests {
             let named = paths(&m, command.clone());
             let mut applied = copy(&m);
             let bytes = serde_json::to_vec(&command).unwrap();
-            let effect = applied.apply(&origin("rest"), &bytes);
+            let effect = applied.apply(&origin("rest"), &bytes, &Apply::default());
             let Effect::Changed(edits) = effect else {
                 panic!("{command:?} changed nothing: {effect:?}");
             };
@@ -2264,6 +2455,7 @@ mod tests {
                 id: format!("{s}-1"),
                 at_index: None,
                 body: Vec::new(),
+                generation: None,
             })
             .collect();
         let e1 = values(&set(&mut m, "a", 1, "/channels/ch1/fader", json!(-3)));
@@ -2553,6 +2745,7 @@ mod tests {
         m.apply(
             &origin_of(principal, session),
             &serde_json::to_vec(&command).unwrap(),
+            &Apply::default(),
         )
     }
 
@@ -2572,7 +2765,11 @@ mod tests {
             console: console.clone(),
             bank_offset: bank,
         };
-        m.apply(&origin(session), &serde_json::to_vec(&command).unwrap())
+        m.apply(
+            &origin(session),
+            &serde_json::to_vec(&command).unwrap(),
+            &Apply::default(),
+        )
     }
 
     fn put(
@@ -3267,7 +3464,9 @@ mod tests {
         let mut v = small();
         v.as_object_mut().unwrap().remove("ducks");
         let old = Mixer::new(Shape::parse(&v).unwrap());
-        let mut saved: Value = serde_json::from_slice(&old.save()).unwrap();
+        // Taken before snapshots carried their format, too.
+        let mut snapshot: Value = serde_json::from_slice(&old.save()).unwrap();
+        let mut saved = snapshot["mixer"].take();
         saved["state"].as_object_mut().unwrap().remove("ducks");
         saved["shape"].as_object_mut().unwrap().remove("ducks");
         let mut installed = Mixer::default();
@@ -3276,5 +3475,288 @@ mod tests {
             .unwrap();
         assert_eq!(installed.state()["ducks"], json!({}));
         check(&contract().state, installed.state()).unwrap();
+    }
+
+    /// The small shape with input b on both mono channels, its channels
+    /// wired to flows `a<n>` and `b<n>`: ch1 and st1 in domain d, ch2 in
+    /// domain e.
+    fn wired() -> Mixer {
+        let mut shape = small();
+        shape["channels"][1]["altInput"] = json!(true);
+        let wire = |a: &str, b: Option<&str>, domain: &str| Wiring {
+            a: a.into(),
+            b: b.map(Into::into),
+            domain: domain.into(),
+        };
+        Mixer::configured(
+            Shape::parse(&shape).unwrap(),
+            Vec::new(),
+            vec![
+                wire("a1", Some("b1"), "d"),
+                wire("a2", Some("b2"), "e"),
+                wire("a3", None, "d"),
+            ],
+        )
+    }
+
+    fn ordered(generation: Option<bool>) -> Apply {
+        Apply { generation }
+    }
+
+    fn gain_bits(t: &Targets) -> Vec<Vec<u32>> {
+        let row = |r: &Vec<f32>| r.iter().map(|g| g.to_bits()).collect();
+        t.gains.iter().map(row).collect()
+    }
+
+    /// The targets of a busy state are what the engine of a set of one is
+    /// sent for it: the gain matrix, each channel's strip and the flow of
+    /// its selected input, bit for bit, also after a save and load.
+    #[test]
+    fn the_targets_are_what_the_engine_is_sent() {
+        let mut m = wired();
+        patch(
+            &mut m,
+            "p1",
+            &[
+                ("/vcas/vca1/members", json!(["ch1", "st1"])),
+                ("/vcas/vca1/offset", json!(-6)),
+                ("/channels/ch1/fader", json!(-10)),
+                ("/channels/ch1/sends/aux1/on", json!(true)),
+                ("/channels/ch1/sends/aux1/level", json!(-3)),
+                ("/channels/ch1/gate/enabled", json!(true)),
+                ("/channels/ch1/gate/threshold", json!(-40)),
+                ("/channels/st1/legTrim/1", json!(3)),
+            ],
+        );
+        let scene = store(&mut m, "s1", None, "Opening");
+        patch(
+            &mut m,
+            "p2",
+            &[
+                ("/channels/ch1/fader", json!(0)),
+                ("/channels/ch2/mute", json!(true)),
+                ("/channels/ch1/input", json!("b")),
+            ],
+        );
+        rest(
+            &mut m,
+            Command::Recall {
+                id: "r1".into(),
+                scene,
+                at: "2026-11-15T12:01:00.000Z".into(),
+            },
+        );
+        assert_eq!(at(&m, "/channels/ch1/fader"), &json!(-10), "recalled");
+        set(&mut m, "s", 1, "/channels/ch1/input", json!("b"));
+        let t = m.targets().unwrap();
+        let shape = m.shape();
+        let strips: Vec<Vec<StripParam>> = (shape.channels.iter())
+            .map(|c| strip::params(&m.state()["channels"][&c.id], c.width))
+            .collect();
+        assert_eq!(
+            gain_bits(&t),
+            gain_bits(&Targets {
+                gains: mix::matrix(shape, m.state()),
+                ..Targets::default()
+            })
+        );
+        assert_eq!(format!("{:?}", t.strips), format!("{strips:?}"));
+        assert_eq!(t.flows, ["b1", "a2", "a3"]);
+        // ch1 under the VCA, -10 - 6 dB, panned centre onto PGM left.
+        let pgm_left = (10f64.powf(-16.0 / 20.0) * std::f64::consts::FRAC_PI_4.cos()) as f32;
+        assert_eq!(t.gains[0][0].to_bits(), pgm_left.to_bits());
+        assert!(t.gains[1].iter().all(|g| *g == 0.0), "ch2 is muted");
+        let mut loaded = wired();
+        loaded.load(&m.save()).unwrap();
+        let back = loaded.targets().unwrap();
+        assert_eq!(gain_bits(&back), gain_bits(&t));
+        assert_eq!(format!("{back:?}"), format!("{t:?}"));
+    }
+
+    /// A mixer without an engine's wiring has no targets.
+    #[test]
+    fn no_wiring_no_targets() {
+        assert_eq!(mixer().targets(), None);
+        assert!(wired().targets().is_some());
+    }
+
+    fn input(ch: &str, value: &str) -> Command {
+        ctl(
+            Action::Set,
+            &format!("/channels/{ch}/input"),
+            Some(json!(value)),
+        )
+    }
+
+    /// The slots a command re-routes are those whose selected flow it
+    /// changes: not a selection it leaves as it is, nor input b of a
+    /// channel without one.
+    #[test]
+    fn a_command_reroutes_the_slots_whose_flow_it_changes() {
+        let mut m = wired();
+        let reroutes =
+            |m: &Mixer, c: &Command| m.reroutes(&origin("rest"), &serde_json::to_vec(c).unwrap());
+        assert_eq!(reroutes(&m, &input("ch1", "b")), [0]);
+        assert_eq!(reroutes(&m, &input("ch1", "a")), Vec::<u32>::new());
+        assert_eq!(reroutes(&m, &input("st1", "b")), Vec::<u32>::new());
+        let fader = ctl(Action::Set, "/channels/ch1/fader", Some(json!(-3)));
+        assert_eq!(reroutes(&m, &fader), Vec::<u32>::new());
+        let both = Command::Patch {
+            id: "p".into(),
+            changes: ["ch1", "ch2"]
+                .map(|ch| Write {
+                    path: format!("/channels/{ch}/input"),
+                    value: json!("b"),
+                })
+                .to_vec(),
+        };
+        assert_eq!(reroutes(&m, &both), [0, 1]);
+        // A recall re-routes the inputs it switches back.
+        let scene = store(&mut m, "s1", None, "A");
+        patch(&mut m, "p1", &[("/channels/ch2/input", json!("b"))]);
+        let recall = Command::Recall {
+            id: "r".into(),
+            scene,
+            at: "2026-11-15T12:00:00.000Z".into(),
+        };
+        assert_eq!(reroutes(&m, &recall), [1]);
+    }
+
+    fn apply_as(m: &mut Mixer, c: &Command, generation: Option<bool>) -> Effect<Edits> {
+        let bytes = serde_json::to_vec(c).unwrap();
+        m.apply(&origin("rest"), &bytes, &ordered(generation))
+    }
+
+    fn refused(m: &Mixer, id: &str) -> bool {
+        matches!(m.answer(&rest_key(), id), Some(Answer::Refused { .. }))
+    }
+
+    /// A command that switches an input applies on the generation path,
+    /// and is refused, changing nothing, off it; one the writer did not
+    /// classify applies as before.
+    #[test]
+    fn a_reroute_off_the_generation_path_is_refused() {
+        let off = ctl(Action::Set, "/channels/ch1/input", Some(json!("b")));
+        let mut m = wired();
+        assert!(matches!(
+            apply_as(&mut m, &off, Some(false)),
+            Effect::Unchanged
+        ));
+        assert!(refused(&m, "c"));
+        assert_eq!(at(&m, "/channels/ch1/input"), &json!("a"));
+        assert_eq!(m.targets().unwrap().flows[0], "a1");
+        for generation in [Some(true), None] {
+            let mut m = wired();
+            assert!(matches!(
+                apply_as(&mut m, &off, generation),
+                Effect::Changed(_)
+            ));
+            assert_eq!(m.targets().unwrap().flows[0], "b1");
+        }
+        // Commands that switch no input apply off it.
+        let mut m = wired();
+        let fader = ctl(Action::Set, "/channels/ch1/fader", Some(json!(-3)));
+        assert!(matches!(
+            apply_as(&mut m, &fader, Some(false)),
+            Effect::Changed(_)
+        ));
+    }
+
+    /// A recall that switches inputs in two domains is refused on the
+    /// generation path, on every replica alike: one engine generation
+    /// cannot switch both. In one domain it applies.
+    #[test]
+    fn a_recall_switching_inputs_in_two_domains_is_refused() {
+        let mut m = wired();
+        let scene = store(&mut m, "s1", None, "B");
+        patch(
+            &mut m,
+            "p1",
+            &[
+                ("/channels/ch1/input", json!("b")),
+                ("/channels/ch2/input", json!("b")),
+            ],
+        );
+        let two = Command::Recall {
+            id: "r2".into(),
+            scene: scene.clone(),
+            at: "2026-11-15T12:00:00.000Z".into(),
+        };
+        let mut other = wired();
+        other.load(&m.save()).unwrap();
+        for m in [&mut m, &mut other] {
+            assert!(matches!(apply_as(m, &two, Some(true)), Effect::Unchanged));
+            assert!(refused(m, "r2"));
+            assert_eq!(m.targets().unwrap().flows, ["b1", "b2", "a3"]);
+        }
+        // The writer's classification of it is both slots.
+        assert_eq!(
+            m.reroutes(&origin("rest"), &serde_json::to_vec(&two).unwrap()),
+            [0, 1]
+        );
+        // In one domain it applies.
+        patch(&mut m, "p2", &[("/channels/ch2/input", json!("a"))]);
+        let one = Command::Recall {
+            id: "r1".into(),
+            scene,
+            at: "2026-11-15T12:00:00.000Z".into(),
+        };
+        assert!(matches!(
+            apply_as(&mut m, &one, Some(true)),
+            Effect::Changed(_)
+        ));
+        assert_eq!(m.targets().unwrap().flows, ["a1", "a2", "a3"]);
+    }
+
+    /// The configuration hash follows the shape, the declared consoles,
+    /// each input's flows and domain, and the derivation version, and
+    /// not the state.
+    #[test]
+    fn the_config_hash_covers_the_configuration_alone() {
+        let mut m = wired();
+        let hash = m.config_hash();
+        assert_eq!(wired().config_hash(), hash);
+        set(&mut m, "s", 1, "/channels/ch1/fader", json!(-3));
+        assert_eq!(m.config_hash(), hash, "not the state");
+        let mut other = wired();
+        other.wiring[1].domain = "d".into();
+        assert_ne!(other.config_hash(), hash, "a domain");
+        let mut other = wired();
+        other.wiring[0].b = Some("b9".into());
+        assert_ne!(other.config_hash(), hash, "a flow");
+        let other = Mixer::configured(m.shape().clone(), vec![desk("x", "X")], m.wiring.clone());
+        assert_ne!(other.config_hash(), hash, "a declared console");
+        assert_ne!(mixer().config_hash(), hash, "the shape and wiring");
+        let config = json!({
+            "derivation": DERIVATION_VERSION + 1,
+            "shape": m.shape,
+            "consoles": m.declared,
+            "wiring": m.wiring,
+        });
+        assert_ne!(
+            xxhash_rust::xxh3::xxh3_64(config.to_string().as_bytes()),
+            hash
+        );
+    }
+
+    /// A snapshot carries its format: a binary that reads the earlier
+    /// layout refuses it, and one of another format is refused, while a
+    /// snapshot of the earlier layout still loads.
+    #[test]
+    fn a_snapshot_carries_its_format() {
+        let (m, _) = busy();
+        let saved = m.save();
+        assert!(
+            serde_json::from_slice::<Saved>(&saved).is_err(),
+            "earlier binaries refuse it"
+        );
+        let mut v: Value = serde_json::from_slice(&saved).unwrap();
+        v["format"] = json!(3);
+        let e = mixer().load(&serde_json::to_vec(&v).unwrap()).unwrap_err();
+        assert!(e.contains("format 3"), "{e}");
+        let earlier = serde_json::to_vec(&v["mixer"]).unwrap();
+        let mut back = mixer();
+        back.load(&earlier).unwrap();
+        assert_eq!(back.state(), m.state());
     }
 }

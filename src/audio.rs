@@ -41,7 +41,7 @@ pub struct Audio {
     engine: Engine,
     shape: Shape,
     /// Each channel's flows of input a and b.
-    flows: Vec<(String, Option<String>)>,
+    wiring: Vec<mix::Wiring>,
     /// The flow each channel's input read when the engine started.
     started_on: Vec<String>,
     block: u64,
@@ -98,17 +98,11 @@ impl Audio {
         mut config: samplez::Config,
         process: ProcessStatus,
         shape: &Shape,
-        alt_flows: Vec<Option<String>>,
+        wiring: Vec<mix::Wiring>,
         state: &Value,
         ops: Ops,
     ) -> Result<Audio, String> {
-        let flows: Vec<(String, Option<String>)> = config
-            .inputs
-            .iter()
-            .zip(alt_flows)
-            .map(|(i, b)| (i.flow_id.clone(), b))
-            .collect();
-        let started_on = selected(shape, &flows, state);
+        let started_on = mix::selected(shape, &wiring, state);
         for (input, flow) in config.inputs.iter_mut().zip(&started_on) {
             input.flow_id.clone_from(flow);
         }
@@ -119,7 +113,7 @@ impl Audio {
         Ok(Audio {
             engine,
             shape: shape.clone(),
-            flows,
+            wiring,
             started_on,
             block,
             ramp,
@@ -247,16 +241,17 @@ impl Audio {
         }
     }
 
-    /// Sends the engine every coefficient of `state`'s matrix that differs
-    /// from what it was sent, and a route for every channel whose selected
-    /// flow differs, all at `at` rounded up to a block. When the engine no
+    /// Sends the engine every strip parameter and coefficient of `state`'s
+    /// targets ([`mix::targets`]) that differs from what it was sent, and
+    /// a route for every channel whose selected flow differs, all at `at`
+    /// rounded up to a block. When the engine no
     /// longer takes that index, the rest of the diff goes at the earliest
     /// one it does; while it holds as many changes as it takes, the next
     /// waits. With `settle`, the gains wait for the strips' ramps.
     async fn apply(&self, state: &Value, sent: &mut Sent, at: u64, settle: bool) {
         let mut at = at.next_multiple_of(self.block);
-        for (slot, (c, sent)) in self.shape.channels.iter().zip(&mut sent.strips).enumerate() {
-            let next = strip::params(&state["channels"][&c.id], c.width);
+        let targets = mix::targets(&self.shape, &self.wiring, state);
+        for (slot, (sent, next)) in sent.strips.iter_mut().zip(targets.strips).enumerate() {
             for (p, n) in sent.iter_mut().zip(next) {
                 if *p != Some(n)
                     && self
@@ -271,8 +266,7 @@ impl Audio {
             at = (at + self.ramp).next_multiple_of(self.block);
         }
         *self.taps.lock().expect("taps lock poisoned") = mix::meter_taps(&self.shape, state);
-        let next = mix::matrix(&self.shape, state);
-        for (input, (row, new)) in sent.matrix.iter_mut().zip(next).enumerate() {
+        for (input, (row, new)) in sent.matrix.iter_mut().zip(targets.gains).enumerate() {
             for (output, (g, n)) in row.iter_mut().zip(new).enumerate() {
                 if *g != n
                     && self
@@ -283,10 +277,7 @@ impl Audio {
                 }
             }
         }
-        for (slot, flow) in selected(&self.shape, &self.flows, state)
-            .into_iter()
-            .enumerate()
-        {
+        for (slot, flow) in targets.flows.into_iter().enumerate() {
             while flow != sent.routed[slot] {
                 match self.engine.route(slot, &flow, at) {
                     Ok(_) => sent.routed[slot].clone_from(&flow),
@@ -553,21 +544,6 @@ impl Drops {
         self.episode = true;
         Act::Resend { log }
     }
-}
-
-/// The flow each channel's selected input reads.
-fn selected(shape: &Shape, flows: &[(String, Option<String>)], state: &Value) -> Vec<String> {
-    shape
-        .channels
-        .iter()
-        .zip(flows)
-        .map(
-            |(c, (a, b))| match (state["channels"][&c.id]["input"].as_str(), b) {
-                (Some("b"), Some(b)) => b.clone(),
-                _ => a.clone(),
-            },
-        )
-        .collect()
 }
 
 /// The state and revision `replica` holds now.

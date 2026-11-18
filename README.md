@@ -234,6 +234,7 @@ variable; the flag wins over the variable, the variable over the file.
 | `replica.peers` | | every replica's peer address, `host:port`, by ordinal |
 | `replica.peer` | | `{bind, port, tls}`: the peer listener of a set |
 | `replica.marker` | | the ConfigMap a set starts from; `FADERZ_REPLICA_MARKER` when the file sets none |
+| `replica.maxApplyLeadMs` | `50` | 30 to 120: the most a set's apply deadline leads the engine; a set runs no engine yet, so it has no effect |
 | `shape` | required | the mixer's shape, model `Shape` in `api/ws/model.schema.json` |
 | `consoles` | `[]` | consoles known before any registers: `id`, `name`, `protocol` (`mcu`), `transport` (`bridge`), `strips` (8) |
 | `mxl.libraryPath` | `/opt/mxl/lib/libmxl.so` | libmxl, loaded at start |

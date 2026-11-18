@@ -24,13 +24,13 @@ use samplez_replica::log_store::Store;
 use samplez_replica::membership::Slot;
 use samplez_replica::net::{Network, Pool};
 use samplez_replica::peer::{PeerClient, PeerReply, PeerRequest};
+use samplez_replica::state_machine::Factory;
 use samplez_replica::{Estimate, Replica, Settings, TypeConfig, raft_config};
 use samplez_service::PeerTls;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Set;
-use crate::shape::Shape;
-use crate::state::{Console, Mixer};
+use crate::state::Mixer;
 
 /// Samples per second: model `Shape.sampleRate` allows 48000 alone.
 pub const RATE: u64 = 48_000;
@@ -112,7 +112,7 @@ pub fn tai_samples() -> u64 {
     ts.tv_sec as u64 * RATE + ts.tv_nsec as u64 * RATE / 1_000_000_000
 }
 
-/// Opens the state in `dir` with the declared `consoles`, a set of one
+/// Opens the state in `dir`, an empty one built by `mixer`, a set of one
 /// voter, and waits until it leads, which a lone voter does once its
 /// election timeout passed.
 ///
@@ -122,8 +122,7 @@ pub fn tai_samples() -> u64 {
 /// lead within 10 s.
 pub async fn start(
     dir: &Path,
-    shape: Shape,
-    consoles: Vec<Console>,
+    mixer: Factory<Mixer>,
     estimate: Estimate,
 ) -> Result<Replica<Mixer>, String> {
     let identity = identity(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -141,7 +140,7 @@ pub async fn start(
         settings,
         raft_config("faderz"),
         &dir.join(STORE),
-        Mixer::with_consoles(shape, consoles),
+        mixer,
         Lone,
         Arc::new(Lone),
         estimate,
@@ -179,7 +178,7 @@ fn warn_dropped(replica: &Replica<Mixer>) {
     }
 }
 
-/// Opens the state in `dir`, `mixer` while it is empty, as replica
+/// Opens the state in `dir`, an empty one built by `mixer`, as replica
 /// `set.ordinal` of `set`: a volume holding a log goes on from it, an
 /// empty one starts or joins the set `markers` names, and the leader
 /// reconciles the voters with `set.voters`. Returns at once; the replica
@@ -194,7 +193,7 @@ fn warn_dropped(replica: &Replica<Mixer>) {
 /// log but no cluster id.
 pub async fn start_set(
     dir: &Path,
-    mixer: Mixer,
+    mixer: Factory<Mixer>,
     estimate: Estimate,
     set: &Set,
     tls: Arc<PeerTls>,
