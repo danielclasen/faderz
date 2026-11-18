@@ -194,6 +194,7 @@ export function recallGroup(path: string): RecallGroup | null {
   if (group === 'afv') return key === 'open' ? null : 'afv';
   if (group === 'mixMinus') return key === 'exclude' ? 'routing' : key === 'interrupt' ? null : (key as RecallGroup);
   if (group === 'vcas') return key === 'offset' ? 'fader' : key === 'members' ? 'routing' : key === 'solo' ? null : 'mute';
+  if (group === 'ducks') return duckRecallGroup(parsePointer(path).slice(2));
   switch (key) {
     case 'input': case 'trim': case 'legTrim': case 'polarity': case 'hpf': case 'delay': return 'input';
     case 'eq': return 'eq';
@@ -207,9 +208,27 @@ export function recallGroup(path: string): RecallGroup | null {
   }
 }
 
+/**
+ * Recall-safe group of a duck group's leaf, by its tokens below the
+ * group id (src/duck.rs recall_group): triggers, targets and destinations
+ * under routing, key tap, detector and depths under dynamics, mode and
+ * hold never recalled.
+ */
+function duckRecallGroup(key: string[]): RecallGroup | null {
+  if (key[0] === 'mode' || key[0] === 'hold') return null;
+  if (key[0] === 'destinations') return 'routing';
+  if (key[0] === 'channels') return key[2] === 'depth' ? 'dynamics' : 'routing';
+  return 'dynamics';
+}
+
+/** A duck group's momentary hold (src/duck.rs is_hold). */
+const DUCK_HOLD = /^\/ducks\/[^/]+\/hold$/;
+/** A duck group takes at most this many triggers (src/duck.rs MAX_TRIGGERS). */
+const MAX_DUCK_TRIGGERS = 8;
+
 interface StoredScene {
   scene: Scene;
-  data: Pick<State, 'channels' | 'buses' | 'auxes' | 'mixMinus' | 'vcas'> & { afv: Record<string, Omit<AfvBinding, 'open'>> };
+  data: Pick<State, 'channels' | 'buses' | 'auxes' | 'mixMinus' | 'vcas' | 'ducks'> & { afv: Record<string, Omit<AfvBinding, 'open'>> };
 }
 
 export interface ClusterOptions {
@@ -284,6 +303,9 @@ export class Cluster {
   private timers: Array<ReturnType<typeof setInterval>> = [];
   private readonly sources: SourceModel;
   private readonly automation: boolean;
+  /** The console's duck key script (scriptDucks), and the seq of its commands. */
+  private duckTimer: ReturnType<typeof setInterval> | null = null;
+  private duckSeq = Date.now();
 
   constructor(options: ClusterOptions = {}) {
     this.shape = exampleShape(options.channels);
@@ -339,12 +361,15 @@ export class Cluster {
       );
       this.timers.push(setInterval(() => this.consoleBank(), 30000));
       this.timers.push(setInterval(() => this.consoleMotion(), 25000));
+      this.scriptDucks(4000);
     }
   }
 
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+    if (this.duckTimer) clearInterval(this.duckTimer);
+    this.duckTimer = null;
     if (this.selectionsTimer) clearTimeout(this.selectionsTimer);
     if (this.presenceTimer) clearTimeout(this.presenceTimer);
     if (this.batchTimer) clearTimeout(this.batchTimer);
@@ -923,6 +948,10 @@ export class Cluster {
     }
     const invalid = this.checkValue(msg.path, msg.value);
     if (invalid) return fail(400, invalid);
+    // Held by nobody, a hold set true would outlast its client.
+    if (DUCK_HOLD.test(msg.path) && msg.value === true && holder === undefined) return fail(400, `${msg.path} is momentary: touch it before setting it true`);
+    const broken = this.brokenDuck([{ path: msg.path, value: msg.value }]);
+    if (broken) return fail(400, broken);
     this.lastSeq.set(seqKey, msg.seq);
     if (equal(current, msg.value)) return done('noop');
     const staged = this.stage({ changes: this.withSideEffects([{ path: msg.path, value: msg.value }]), origins: [origin] });
@@ -943,7 +972,11 @@ export class Cluster {
       if (known) throw new CommandError(404, known);
       const invalid = this.checkValue(c.path, c.value);
       if (invalid) throw new CommandError(400, invalid);
+      // No session holds a patch's controls to release them.
+      if (DUCK_HOLD.test(c.path) && c.value === true) throw new CommandError(400, `${c.path} is momentary: set it on the WebSocket`);
     }
+    const broken = this.brokenDuck(changes);
+    if (broken) throw new CommandError(400, broken);
     const effective = changes.filter((c) => !equal(getAt(this.state, c.path), c.value));
     if (effective.length === 0) {
       this.markApplied(commandId, 'noop');
@@ -985,7 +1018,27 @@ export class Cluster {
 
   private elementIds(): Set<string> {
     const s = this.shape;
-    return new Set([...s.channels, ...s.buses, ...s.auxes, ...s.mixMinus, ...s.vcas].map((e) => e.id));
+    return new Set([...s.channels, ...s.buses, ...s.auxes, ...s.mixMinus, ...s.vcas, ...(s.ducks ?? [])].map((e) => e.id));
+  }
+
+  /**
+   * The rule a duck group the changes write breaks on the state they
+   * leave, or null (src/duck.rs check): no channel triggers and targets
+   * one group, which would duck it under itself, and a group has at most
+   * MAX_DUCK_TRIGGERS triggers.
+   */
+  private brokenDuck(changes: Change[]): string | null {
+    const ids = new Set(changes.map((c) => parsePointer(c.path)).filter((p) => p[0] === 'ducks' && p[2] === 'channels').map((p) => p[1]!));
+    if (ids.size === 0) return null;
+    const next = structuredClone(this.state);
+    for (const c of changes) setAt(next as unknown as Record<string, unknown>, c.path, structuredClone(c.value));
+    for (const id of ids) {
+      const members = Object.entries(next.ducks[id]?.channels ?? {});
+      const both = members.find(([, m]) => m.trigger && m.target);
+      if (both) return `channel ${both[0]} cannot trigger and target duck ${id}`;
+      if (members.filter(([, m]) => m.trigger).length > MAX_DUCK_TRIGGERS) return `duck ${id} takes at most ${MAX_DUCK_TRIGGERS} triggers`;
+    }
+    return null;
   }
 
   /**
@@ -1130,6 +1183,8 @@ export class Cluster {
       auxes: s.auxes,
       mixMinus: s.mixMinus,
       vcas: s.vcas,
+      // Mode and hold are operated live and never recalled.
+      ducks: Object.fromEntries(Object.entries(s.ducks).map(([id, { mode: _mode, hold: _hold, ...d }]) => [id, d as State['ducks'][string]])),
       afv: Object.fromEntries(Object.entries(s.afv).map(([id, { open: _open, ...b }]) => [id, b])),
     };
   }
@@ -1331,9 +1386,11 @@ export class Cluster {
     if (gone.length > 0) this.broadcastSelections();
   }
 
-  /** Momentary controls (IFB interrupt) among released paths go back to false. */
+  /** Momentary controls (IFB interrupt, duck hold) among released paths go back to false. */
   private momentaryOff(paths: string[]): Change[] {
-    return paths.filter((p) => /^\/mixMinus\/[^/]+\/interrupt\/active$/.test(p) && getAt(this.state, p) === true).map((path) => ({ path, value: false }));
+    return paths
+      .filter((p) => (/^\/mixMinus\/[^/]+\/interrupt\/active$/.test(p) || DUCK_HOLD.test(p)) && getAt(this.state, p) === true)
+      .map((path) => ({ path, value: false }));
   }
 
   resetLoudness(ids: string[]): void {
@@ -1368,6 +1425,39 @@ export class Cluster {
     c.bankOffset = offset;
     this.stage({ changes: [{ path: '/consoles', value: consoles }] });
     return true;
+  }
+
+  /**
+   * A console operator works the duck keys, as the function keys of a
+   * surface do: every `ms` the hold of every duck group flips, held by the
+   * console session, whose lease the script keeps. 0 or less stops and
+   * releases what the script holds.
+   */
+  scriptDucks(ms: number): void {
+    if (this.duckTimer) clearInterval(this.duckTimer);
+    this.duckTimer = null;
+    const owner = CONSOLE_OWNER;
+    const paths = (this.shape.ducks ?? []).map((d) => pointer('ducks', d.id, 'hold'));
+    const mine = (path: string) => this.owners[path] !== undefined && sessionKey(this.owners[path]) === sessionKey(owner);
+    const send = (type: 'touch' | 'set' | 'release', path: string) =>
+      this.command(owner, type === 'set' ? { type, id: crypto.randomUUID(), seq: ++this.duckSeq, path, value: true } : { type, id: crypto.randomUUID(), seq: ++this.duckSeq, path }, 'console');
+    const release = () => {
+      for (const path of paths) if (mine(path)) send('release', path);
+    };
+    if (ms <= 0) {
+      release();
+      return;
+    }
+    const start = Date.now();
+    this.duckTimer = setInterval(() => {
+      this.leases.set(sessionKey(owner), Date.now());
+      if (Math.floor((Date.now() - start) / ms) % 2 === 0) return release();
+      for (const path of paths) {
+        if (this.owners[path] !== undefined) continue;
+        send('touch', path);
+        send('set', path);
+      }
+    }, HEARTBEAT_MS);
   }
 
   /** A console operator rides a fader on the surface's second strip. */

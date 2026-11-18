@@ -854,6 +854,73 @@ describe('IFB interrupt', () => {
   });
 });
 
+describe('duck groups', () => {
+  const HOLD = '/ducks/comm/hold';
+
+  it('refuses a hold set true without a touch, and by PATCH, as momentary', async () => {
+    const c = await new Client().open();
+    await c.hello();
+    expect(await c.answer(c.set(HOLD, true))).toMatchObject({ type: 'error', code: 400 });
+    expect((await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: HOLD, value: true }] })).status).toBe(400);
+    expect(cluster.state.ducks['comm']!.hold).toBe(false);
+  });
+
+  it('clears a hold when its owner releases it or its lease runs out, and refuses it to a second session naming the holder', async () => {
+    const a = await new Client().open();
+    await a.hello();
+    const b = await new Client().open();
+    await b.hello();
+    await a.answer(a.command('touch', HOLD));
+    await a.answer(a.set(HOLD, true));
+    expect(cluster.state.ducks['comm']!.hold).toBe(true);
+    expect(await b.answer(b.command('touch', HOLD))).toMatchObject({ type: 'error', code: 409, owner: { handle: cluster.owners[HOLD]!.handle } });
+    // Mode has no owner: the second session latches while the first holds.
+    await b.answer(b.set('/ducks/comm/mode', 'on'));
+    expect(cluster.state.ducks['comm']!.mode).toBe('on');
+    await a.answer(a.command('release', HOLD));
+    expect(cluster.state.ducks['comm']!.hold).toBe(false);
+    await b.answer(b.command('touch', HOLD));
+    await b.answer(b.set(HOLD, true));
+    await b.close();
+    cluster.expireLeases(Date.now() + LEASE_MS + 1);
+    expect(cluster.state.ducks['comm']!.hold).toBe(false);
+    expect(cluster.owners[HOLD]).toBeUndefined();
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/ducks/comm/mode', value: 'auto' }] });
+  });
+
+  it('refuses a channel that would trigger and target one group, and a ninth trigger, on the state the write leaves', async () => {
+    const patch = (changes: Array<{ path: string; value: unknown }>) => rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes });
+    expect((await patch([{ path: '/ducks/comm/channels/ch13/trigger', value: true }])).status).toBe(400);
+    // Swapped in one request it is fine.
+    const swap = [
+      { path: '/ducks/comm/channels/ch13/target', value: false },
+      { path: '/ducks/comm/channels/ch13/trigger', value: true },
+    ];
+    expect((await patch(swap)).status).toBe(200);
+    const more = ['ch3', 'ch4', 'ch5', 'ch6', 'ch7', 'ch8'].map((id) => ({ path: `/ducks/comm/channels/${id}/trigger`, value: true }));
+    expect((await patch(more.slice(0, 5))).status).toBe(200);
+    expect((await patch(more.slice(5))).status).toBe(400);
+    await patch([...more.slice(0, 5).map((c) => ({ ...c, value: false })), { path: '/ducks/comm/channels/ch13/trigger', value: false }, { path: '/ducks/comm/channels/ch13/target', value: true }]);
+  });
+
+  it('recalls the duck setup but never mode or hold', async () => {
+    const created = await rest('POST', '/scenes', { commandId: crypto.randomUUID(), name: 'Ducks' });
+    const id = (created.body!['scene'] as { id: string }).id;
+    await rest('PATCH', '/state', {
+      commandId: crypto.randomUUID(),
+      changes: [
+        { path: '/ducks/comm/threshold', value: -45 },
+        { path: '/ducks/comm/channels/ch13/target', value: false },
+        { path: '/ducks/comm/mode', value: 'off' },
+      ],
+    });
+    await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 });
+    expect(cluster.state.ducks['comm']).toMatchObject({ threshold: -30, mode: 'off', channels: { ch13: { target: true } } });
+    await rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path: '/ducks/comm/mode', value: 'auto' }] });
+    await rest('DELETE', `/scenes/${id}`);
+  });
+});
+
 describe('heartbeats', () => {
   it('pings every connection at the heartbeat period and answers a ping with pong', async () => {
     const c = await new Client().open();

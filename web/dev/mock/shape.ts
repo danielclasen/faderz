@@ -7,6 +7,7 @@ import type {
   ConsoleStatus,
   Eq,
   ElementShape,
+  DuckState,
   Shape,
   State,
 } from '../../src/lib/contract/types.ts';
@@ -89,7 +90,12 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
       { id: 'vca1', name: 'PRES' },
       { id: 'vca2', name: 'GUEST PANEL' },
     ],
-    ducks: [],
+    // Commentary from the presenters over the ambience and music, and a
+    // remote commentary from the phones.
+    ducks: [
+      { id: 'comm', name: 'Commentary' },
+      { id: 'remote', name: 'Remote comm' },
+    ],
     monitorOutputs,
     outputs,
   };
@@ -129,6 +135,42 @@ const FADERS: Record<string, number> = {
   ch11: -3, ch12: -90, ch13: -12, ch14: -14, ch15: -18, ch16: -90, ch17: -4, ch18: -4, ch19: -90,
   ch20: -90, ch21: -6, ch22: -90, ch23: -90, ch24: -90, st1: -12, st2: -90, st3: -90, st4: -8, sur1: -90,
 };
+
+/** Triggers and targets with their depth (dB) of the example's duck groups. */
+const DUCK_MEMBERS: Record<string, { triggers?: string[]; targets?: Record<string, number> }> = {
+  comm: { triggers: ['ch1', 'ch2'], targets: { ch13: 10, ch14: 10, ch15: 10, ch16: 10, st1: 15 } },
+  remote: { triggers: ['ch11', 'ch12'], targets: { ch13: 8, ch14: 8, st1: 12 } },
+};
+
+/**
+ * A duck group with the server's defaults (src/duck.rs): keyed pre-fader
+ * while the channel is open, the programme buses its destinations, and
+ * `members` where the shape has those channels.
+ */
+function duckState(shape: Shape, members: { triggers?: string[]; targets?: Record<string, number> }): DuckState {
+  return {
+    mode: 'auto',
+    hold: false,
+    keyTap: 'preFaderOpen',
+    threshold: -30,
+    hysteresis: 4,
+    keyHpf: { enabled: true, freq: 120 },
+    keyLpf: { enabled: false, freq: 4000 },
+    attackMs: 20,
+    holdMs: 500,
+    releaseMs: 1000,
+    channels: Object.fromEntries(
+      shape.channels.map((c) => {
+        const depth = members.targets?.[c.id];
+        return [c.id, { trigger: members.triggers?.includes(c.id) ?? false, target: depth !== undefined, depth: depth ?? 10 }];
+      }),
+    ),
+    destinations: Object.fromEntries([
+      ...shape.buses.map((b) => [b.id, b.kind === 'program'] as const),
+      ...[...shape.auxes, ...shape.mixMinus].map((e) => [e.id, false] as const),
+    ]),
+  };
+}
 
 export function initialState(shape: Shape): State {
   const channels: State['channels'] = {};
@@ -205,7 +247,7 @@ export function initialState(shape: Shape): State {
       vca1: { offset: 0, mute: false, members: existing(['ch1', 'ch2']), solo: 'off' },
       vca2: { offset: -2, mute: false, members: existing(['ch3', 'ch4', 'ch5', 'ch6']), solo: 'off' },
     },
-    ducks: {},
+    ducks: Object.fromEntries((shape.ducks ?? []).map((d) => [d.id, duckState(shape, DUCK_MEMBERS[d.id] ?? {})])),
     monitor: {
       source: 'pgm20',
       level: -10,

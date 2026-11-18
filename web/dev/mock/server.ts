@@ -417,6 +417,12 @@ export class MockServer {
       if (!c.bankConsole(bank[1]!, offset)) return send(404, { error: 'unknown console' });
       return send(200, { revision: c.revision });
     }
+    if (method === 'POST' && path === '/__mock/ducks/script') {
+      const ms = Number(url.searchParams.get('ms') ?? '0');
+      if (!Number.isInteger(ms) || ms < 0) return send(400, { error: 'ms must be a non-negative integer' });
+      c.scriptDucks(ms);
+      return send(200, { ok: true });
+    }
     if (method === 'POST' && path === '/__mock/skip-revision') {
       c.skipRevision();
       return send(200, { revision: c.revision });
