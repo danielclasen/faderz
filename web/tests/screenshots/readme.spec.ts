@@ -70,6 +70,25 @@ test('README screenshots', async ({ browser }) => {
   const y = top.y + top.height;
   await alex.screenshot({ path: `${OUT}/afv-tally.png`, clip: { x: 0, y, width: table.x + table.width + 16, height: 720 - y } });
 
+  // Sam latches Remote comm on and holds Commentary in.
+  await sam.getByTestId('duck-key-remote').click();
+  const duck = (await sam.getByTestId('duck-key-comm').boundingBox())!;
+  await sam.mouse.move(duck.x + duck.width / 2, duck.y + duck.height / 2);
+  await sam.mouse.down();
+  await view(alex, 'MIXER');
+  await expect(alex.getByTestId('duck-lamp-comm')).toHaveText('DUCK HELD');
+  await expect(alex.getByTestId('duck-lamp-remote')).toHaveText('DUCK ON');
+  await alex.waitForTimeout(1000);
+  const band = alex.getByRole('group', { name: 'Duck groups' });
+  await alex.screenshot({ path: `${OUT}/duck-tiles.png`, clip: await around(alex, [band, alex.locator('[data-master="pgm51"]')], 8) });
+
+  await view(alex, 'DUCK');
+  await alex.waitForTimeout(500);
+  const ducks = (await alex.getByRole('table', { name: 'Duck groups' }).boundingBox())!;
+  await alex.screenshot({ path: `${OUT}/duck-view.png`, clip: { x: 0, y, width: ducks.x + ducks.width + 16, height: 860 - y } });
+  await sam.mouse.up();
+  await sam.getByTestId('duck-key-remote').click();
+
   await view(alex, 'SCENES');
   await alex.waitForTimeout(500);
   await alex.screenshot({ path: `${OUT}/scenes.png`, clip: { x: 0, y: 0, width: 1160, height: 560 } });

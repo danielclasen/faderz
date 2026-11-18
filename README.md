@@ -61,8 +61,8 @@ the scene crossfade time.
 
 ## The console
 
-The web console has six views: MIXER, ROUTING, AUX / N-1, AFV, SCENES and
-SETUP. It runs in a desktop browser, on a tablet and on a phone, in a
+The web console has seven views: MIXER, ROUTING, AUX / N-1, AFV, DUCK,
+SCENES and SETUP. It runs in a desktop browser, on a tablet and on a phone, in a
 dark or a light theme. `web/README.md` documents it in detail: its
 connection handling, sign-in, keyboard control and tests.
 
@@ -82,6 +82,15 @@ The AFV view shows the tally the vision switcher reports and which
 channels follow which camera.
 
 ![The AFV view with CAM1 on programme and CAM2 on preview, and the channels following them](docs/screenshots/afv-tally.png)
+
+Duck groups lower ambience and music under commentary. The DUCK view
+sets up each group's triggers, targets with their depth, destinations
+and detector; a tile per group in the masters latches, holds, bypasses
+and sets the threshold on air.
+
+![The DUCK view with the Commentary and Remote comm groups: mode, detector, presets, destinations, and the trigger, target and depth of every channel](docs/screenshots/duck-view.png)
+
+![The duck tiles over the masters: Commentary held by an operator, Remote comm latched on](docs/screenshots/duck-tiles.png)
 
 Scenes are stored and recalled from the SCENES view; recall-safe groups
 keep chosen parameters of a channel out of every recall. The view's note
