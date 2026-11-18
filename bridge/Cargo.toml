@@ -8,9 +8,11 @@ repository = "https://github.com/danielclasen/faderz"
 description = "Connects Mackie Control surfaces to faderz"
 publish = false
 
-# The end-to-end tests against a faderz binary (FADERZ_BIN).
+# The end-to-end tests against a faderz binary (FADERZ_BIN); rtpmidid
+# adds those against rtpmidid (tests/rtpmidid).
 [features]
 e2e = []
+rtpmidid = ["e2e"]
 
 [[test]]
 name = "e2e"
@@ -35,3 +37,4 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 [dev-dependencies]
 axum = { version = "=0.8.9", default-features = false, features = ["form", "http1", "json", "tokio"] }
 ring = "=0.17.14"
+libc = "=0.2.191"

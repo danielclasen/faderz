@@ -1,7 +1,7 @@
-//! A software MCU surface on the far end of an in-process [`midi::pair`]:
-//! it sends what a hand on an X-Touch sends (touch, fader moves, key
-//! presses) and keeps what the bridge sets (motor positions, LEDs, the
-//! scribble strip), for tests without hardware.
+//! A software MCU surface on the far end of an in-process [`midi::pair`],
+//! or on a MIDI port: it sends what a hand on an X-Touch sends (touch,
+//! fader moves, key presses) and keeps what the bridge sets (motor
+//! positions, LEDs, the scribble strip), for tests without hardware.
 //!
 //! [`midi::pair`]: crate::midi::pair
 
@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::mcu::{self, Device, Key, Led};
-use crate::midi::{self, Port};
+use crate::midi::{self, Open, Port};
 
 pub struct Emulator {
     pub device: Device,
@@ -24,6 +24,7 @@ pub struct Emulator {
     pub lcd: [u8; 2 * mcu::LINE_CHARS],
     /// Every message the bridge sent, in order.
     pub received: Vec<Vec<u8>>,
+    _open: Open,
 }
 
 impl Emulator {
@@ -38,8 +39,25 @@ impl Emulator {
             leds: HashMap::new(),
             lcd: [b' '; 2 * mcu::LINE_CHARS],
             received: Vec::new(),
+            _open: None,
         };
         (emulator, port)
+    }
+
+    /// A surface on a MIDI port, as [`midi::open`] opens it: the port's
+    /// input is what the bridge sent, its output goes to the bridge.
+    pub fn over(device: Device, port: Port) -> Emulator {
+        let parts = port.into_parts();
+        Emulator {
+            device,
+            to_bridge: parts.output,
+            from_bridge: parts.input,
+            faders: [0; 9],
+            leds: HashMap::new(),
+            lcd: [b' '; 2 * mcu::LINE_CHARS],
+            received: Vec::new(),
+            _open: parts.open,
+        }
     }
 
     /// Sends one raw message, as recorded from a surface.

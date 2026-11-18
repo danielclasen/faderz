@@ -26,6 +26,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 mod idp;
+#[cfg(feature = "rtpmidid")]
+mod rtpmidid;
 
 const WAIT: Duration = Duration::from_secs(10);
 
