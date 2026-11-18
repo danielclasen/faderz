@@ -15,7 +15,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 
 use crate::engine::{Action, Engine, LinkId};
 use crate::midi::{Link, Port};
-use crate::surface::{Surface, UnitSpec};
+use crate::surface::{DuckKeys, Surface, UnitSpec};
 
 /// How often the surfaces are brought up to date at least: the motor pace.
 const FRAME_MS: u64 = crate::surface::MOTOR_INTERVAL_MS;
@@ -41,6 +41,8 @@ pub struct Options {
     pub credentials: Arc<dyn Credentials>,
     pub units: Vec<UnitSpec>,
     pub master: Option<String>,
+    /// Duck keys of their own instead of F1 to F8.
+    pub keys: Option<DuckKeys>,
     /// A message here says the credentials changed: the session moves to
     /// a connection opened with the new ones.
     pub renewed: Option<UnboundedReceiver<()>>,
@@ -168,7 +170,7 @@ pub async fn run(options: Options, ports: Vec<Port>, shutdown: impl Future<Outpu
         seq_base,
         Box::new(crate::session::uuid),
     );
-    let mut surface = Surface::new(options.units, options.master);
+    let mut surface = Surface::new(options.units, options.master).with_keys(options.keys);
     let tls = tls();
     let (net_tx, mut net_rx) = unbounded_channel::<Net>();
     let mut links: HashMap<LinkId, UnboundedSender<String>> = HashMap::new();

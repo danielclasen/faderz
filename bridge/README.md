@@ -63,6 +63,7 @@ info by default).
 | `auth` | `{"mode": "none"}` (default) for a faderz without authentication; `{"mode": "token", "token": ...}` or `{"mode": "token", "tokenFile": ...}` for a bearer token: faderz's static `auth.token`, or an access token of the OIDC provider; `{"mode": "device", ...}` to sign in at the OIDC provider (below). |
 | `units` | Left to right. `id` is the console id on the server (`^[a-z][a-z0-9-]{0,31}$`), `name` its display name, `model` `x-touch` (default) or `x-touch-extender`, `transport` `midi` (default) or `rtp-midi` (below). With `midi`, `midiIn` and `midiOut` are parts of the port names (`midiOut` defaults to `midiIn`). |
 | `master` | The control the X-Touch master fader drives. Default: the fader of the shape's program bus. |
+| `keys` | The X-Touch's duck keys by MIDI note, replacing F1 to F8 (below): `{"0": {"duck": "comm", "action": "hold"}}`. `duck` is a duck group's id; `action` is `holdOrLatch` (default), `hold` or `latch`. A note is a REC key (0 to 7), a function key (54 to 61) or another note below 104 the bridge does not map; `{}` leaves the X-Touch without duck keys. |
 
 The surfaces run in MC mode over USB (hold CH1 SELECT at power-on to
 choose it).
@@ -263,7 +264,9 @@ UI shows the bridge's controls as `<console> (<user>)`.
 | MUTE | Toggles `/channels/<id>/mute`; the LED shows the state |
 | SOLO | Toggles `/channels/<id>/solo` between `off` and `pfl`; the LED is on while it is not `off` |
 | SELECT | Selects the strip's channel (`select`); the LED shows the selection, and blinks while the strip's fader is held by another session |
-| REC | Read, no action |
+| REC | Read, no action, unless `keys` binds it to a duck group |
+| F1 to F8 (X-Touch) | The shape's duck groups in order, or what `keys` binds. Pressed, the key touches the group's `/ducks/<id>/hold` and sets it `true`; let go, it releases it, which sets it `false`. Let go within 300 ms, a tap, it first sets `/ducks/<id>/mode` to `on`, or to `auto` when it is `on`. A key bound with `hold` only holds, one bound with `latch` only toggles the mode on each press. The bridge sets no depth or timing: the group's settings apply as for any other cause |
+| F1 to F8 LEDs | On while the group's `hold` is `true` or its `mode` is `on`, blinking while its `mode` is `off` (bypassed), else off |
 | BANK left/right | Moves every unit by all their strips together; each unit's `bankOffset` follows |
 | CHANNEL left/right | Moves by one channel |
 | Master fader (X-Touch) | `master`, or the program bus's fader |
@@ -272,6 +275,14 @@ UI shows the bridge's controls as `<console> (<user>)`.
 A touch refused because another session holds the fader shows the
 holder; held for a second, it asks the holder to give the control up
 (`request`). Strips past the last channel are dark.
+
+A duck key pressed while another session holds the group's hold sends
+nothing: the duck is in already. While the key is down, line 2 of the
+scribble strip reads `<group name> held by <holder>`. After messages
+from a network surface went missing, a held duck key is let go after
+1.5 seconds, as a key cannot show that it is still down. The F-key LEDs
+show the manual state only; a duck its detector triggers does not light
+them.
 
 ## Connection
 
@@ -320,8 +331,8 @@ reverse-engineered MCU reference and are unverified on an X-Touch or
 X-Touch Extender:
 
 - the note, pitch bend and SysEx values (touch notes 104-112, key notes,
-  scribble strip SysEx `F0 00 00 66 14|15 12`), and that the Extender
-  answers device id 0x15;
+  function keys F1-F8 at notes 54-61, scribble strip SysEx
+  `F0 00 00 66 14|15 12`), and that the Extender answers device id 0x15;
 - that the surface needs no MCU host handshake;
 - the effective fader resolution (MCU carries 14 bits, the X-Touch is
   said to resolve 10) and whether the firmware sends pitch bend without

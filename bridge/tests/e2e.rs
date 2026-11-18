@@ -281,6 +281,7 @@ impl Bridge {
             credentials,
             units,
             master: None,
+            keys: None,
             renewed,
         };
         let (stop, stopped) = oneshot::channel::<()>();

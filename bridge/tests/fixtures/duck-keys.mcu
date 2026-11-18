@@ -1,0 +1,37 @@
+# F1 and F2 of an X-Touch in MC mode (notes 54 and 55, 0x36 and 0x37)
+# drive the shape's duck groups comm and comm-b in order. Several
+# commands on one ! line are separated by " ; ".
+
+# Both groups are in auto: the keys are dark.
++ 5
+< 90 36 00, 90 37 00
+# The LEDs follow the state: blinking while bypassed, on while latched.
+@ {"changes": [{"path": "/ducks/comm-b/mode", "value": "off"}]}
+< 90 37 01
+@ {"changes": [{"path": "/ducks/comm-b/mode", "value": "on"}]}
+< 90 37 7f
+# Held on a screen, comm-b stays in after its latch ends; a press of F2
+# is refused and line 2 of the scribble strip names the holder while the
+# key is down.
+@ {"changes": [{"path": "/ducks/comm-b/mode", "value": "auto"}, {"path": "/ducks/comm-b/hold", "value": true}], "owners": [{"path": "/ducks/comm-b/hold", "owner": {"principal": "ana", "handle": "aaaaaaaaaaaaaaaaaaaaaa", "kind": "ui", "connection": "c"}}]}
+< none-of 90
+> 90 37 7f
+! none
+< f0 00 00 66 14 12 38 43 6f 6d 6d 65 6e 74 f7, f0 00 00 66 14 12 4d 61 6e 61 20 20 20 20 f7
+> 90 37 00
+! none
+< f0 00 00 66 14 12 4d 2d 69 6e 66 20 20 20 f7
+@ {"changes": [{"path": "/ducks/comm-b/hold", "value": false}], "owners": [{"path": "/ducks/comm-b/hold", "owner": null}]}
+< 90 37 00
+# Held past a tap, F1 holds comm in while it is down.
+> 90 36 7f
+! touch /ducks/comm/hold ; set /ducks/comm/hold true
+< 90 36 7f
++ 400
+> 90 36 00
+! release /ducks/comm/hold
+# A tap latches it in: the hold, mode on, and the hold let go.
+> 90 36 7f
++ 100
+> 90 36 00
+! touch /ducks/comm/hold ; set /ducks/comm/hold true ; set /ducks/comm/mode "on" ; release /ducks/comm/hold

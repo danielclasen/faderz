@@ -16,8 +16,8 @@ fn hex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-/// A live engine on a shape of 20 channels named "Chan 1" to "Chan 20"
-/// and a program bus.
+/// A live engine on a shape of 20 channels named "Chan 1" to "Chan 20",
+/// a program bus and two duck groups.
 fn twenty() -> Engine {
     let channels: Vec<Value> = (1..=20)
         .map(|i| json!({ "id": format!("ch{i}"), "name": format!("Chan {i}") }))
@@ -30,11 +30,14 @@ fn twenty() -> Engine {
             )
         })
         .collect();
+    let duck = json!({ "mode": "auto", "hold": false });
     let snapshot = json!({
         "type": "snapshot", "replica": { "id": "r1", "role": "leader" },
         "you": {}, "epoch": "1", "revision": 1,
-        "shape": { "channels": channels, "buses": [{ "id": "pgm", "kind": "program" }] },
-        "state": { "channels": state, "buses": { "pgm": { "fader": 0 } }, "consoles": [] },
+        "shape": { "channels": channels, "buses": [{ "id": "pgm", "kind": "program" }],
+            "ducks": [{ "id": "comm", "name": "Commentary A" }, { "id": "comm-b", "name": "Commentary B" }] },
+        "state": { "channels": state, "buses": { "pgm": { "fader": 0 } }, "consoles": [],
+            "ducks": { "comm": duck, "comm-b": duck } },
         "owners": {},
     });
     let mut e = engine(1);
@@ -157,7 +160,7 @@ impl Replay {
                 let want: Vec<String> = if rest == "none" {
                     vec![]
                 } else {
-                    vec![rest.to_owned()]
+                    rest.split(" ; ").map(str::to_owned).collect()
                 };
                 assert_eq!(got, want, "{at}");
             }
@@ -202,6 +205,14 @@ fn a_fader_ride() {
 #[test]
 fn strip_keys_and_their_leds() {
     replay("keys.mcu", include_str!("../tests/fixtures/keys.mcu"));
+}
+
+#[test]
+fn duck_keys_and_their_leds() {
+    replay(
+        "duck-keys.mcu",
+        include_str!("../tests/fixtures/duck-keys.mcu"),
+    );
 }
 
 #[test]

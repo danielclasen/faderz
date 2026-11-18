@@ -150,6 +150,7 @@ fn start(path: &std::path::Path) -> Result<(), String> {
             credentials,
             units: config.unit_specs(),
             master: config.master.clone(),
+            keys: config.keys.clone(),
             renewed,
         };
         bridge::run(options, ports, async {
