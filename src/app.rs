@@ -222,9 +222,10 @@ impl App {
     /// engine's inputs and outputs as last read.
     pub fn status(&self) -> Value {
         let info = self.replica.replica();
-        let audio =
-            (self.replica.contact_metrics()).and_then(|m| Some((m.in_contact, m.replica?.state?)));
-        let state = audio.map(|(_, s)| {
+        let contact = self.replica.contact_metrics();
+        let in_contact = contact.as_ref().map(|m| m.in_contact);
+        // None for a replica without an engine, and until the first step.
+        let state = (contact.and_then(|m| m.replica?.state)).map(|s| {
             let name = format!("{s:?}");
             name[..1].to_lowercase() + &name[1..]
         });
@@ -236,7 +237,7 @@ impl App {
                 "inSync": info.in_sync,
                 "ready": info.ready,
                 "commitable": info.commitable,
-                "inContact": audio.map(|(c, _)| c),
+                "inContact": in_contact,
                 "state": state,
             },
             "engine": self.engine.lock().expect("engine lock poisoned").clone(),

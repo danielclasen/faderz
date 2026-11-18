@@ -705,7 +705,7 @@ components:
               description: In contact with the set's other voters; null without contact (a set of one).
               type: [boolean, "null"]
             state:
-              description: The audio replica's state in contact; null without contact.
+              description: The audio replica's state in contact; null without contact, without an engine, and until contact first decided it.
               type: [string, "null"]
               enum: [starting, committing, withdrawn, diverged, versionMismatch, resync, null]
         engine:
