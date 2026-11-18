@@ -195,7 +195,7 @@
         title={`Duck: ${duckText}. Open it in the processing panel`}
         aria-label={`${channel.name} duck, ${duckText}`}
         data-testid={`duck-chip-${channel.id}`}
-        >{#if reduction > 0}<span class="fixed gr">{reductionText(reduction)}</span>{:else}{ducks.triggers.length > 0 ? 'KEY' : 'DK'}{/if}</button
+        ><span class="gr fixed">{reduction > 0 ? reductionText(reduction) : ducks.triggers.length > 0 ? 'KEY' : 'DK'}</span></button
       >
     {/if}
   </div>
@@ -510,10 +510,18 @@
     flex: 0 0 28px;
     height: 18px;
   }
-  /* The chip's colour and line, not those of the strip's .fixed text. */
+  /* Its text changes per meter frame while it lowers: one span of fixed
+     size and one font, whatever it reads, with strict containment, lays
+     out nothing outside it. The chip itself takes no containment, which
+     would make it a stacking context and put the hit area of its
+     ::before under the rows next to it. The chip's colour and line, not
+     those of the strip's .fixed text. */
   .chip.duck .gr {
+    display: block;
+    height: 18px;
     color: inherit;
     line-height: inherit;
+    contain: strict;
   }
   /* Its 3 px above and below win over the hit areas of the rows next to it. */
   .chip.duck.member::before {
