@@ -121,23 +121,38 @@ fn apply(m: &mut Mixer, path: &str, value: Value) -> Effect<faderz::state::Edits
     )
 }
 
-/// The commands of a busy console, one entry each: faders, VCA offsets,
-/// sends, gates and input switches.
-fn command(n: usize) -> (String, Value) {
-    let ch = n % 64;
-    let db = -((n * 37 % 800) as f64) / 10.0;
-    match n % 5 {
-        0 => (format!("/channels/ch{ch}/fader"), json!(db)),
-        1 => (format!("/vcas/vca{}/offset", n % 8), json!(db / 4.0)),
-        2 => (
-            format!("/channels/ch{ch}/sends/aux{}/level", ch % 34),
-            json!(db),
-        ),
-        3 => (format!("/channels/ch{ch}/gate/threshold"), json!(db - 20.0)),
-        _ => (
-            format!("/channels/ch{ch}/input"),
-            json!(if n.is_multiple_of(2) { "a" } else { "b" }),
-        ),
+/// The ids a busy console's commands name.
+struct Ids {
+    channels: Vec<String>,
+    vcas: Vec<String>,
+    auxes: Vec<String>,
+}
+
+impl Ids {
+    fn of(shape: &Shape) -> Ids {
+        Ids {
+            channels: shape.channels.iter().map(|c| c.id.clone()).collect(),
+            vcas: shape.vcas.iter().map(|v| v.id.clone()).collect(),
+            auxes: shape.auxes.iter().map(|a| a.id.clone()).collect(),
+        }
+    }
+
+    /// The `n`th command of a busy console, one entry each: faders, VCA
+    /// offsets, sends, gates and input switches.
+    fn command(&self, n: usize) -> (String, Value) {
+        let ch = &self.channels[n % self.channels.len()];
+        let db = -((n * 37 % 800) as f64) / 10.0;
+        let pick = |ids: &[String]| ids.get(n % ids.len().max(1)).cloned();
+        match (n % 5, pick(&self.vcas), pick(&self.auxes)) {
+            (1, Some(vca), _) => (format!("/vcas/{vca}/offset"), json!(db / 4.0)),
+            (2, _, Some(aux)) => (format!("/channels/{ch}/sends/{aux}/level"), json!(db)),
+            (3, ..) => (format!("/channels/{ch}/gate/threshold"), json!(db - 20.0)),
+            (4, ..) => (
+                format!("/channels/{ch}/input"),
+                json!(if n.is_multiple_of(2) { "a" } else { "b" }),
+            ),
+            _ => (format!("/channels/{ch}/fader"), json!(db)),
+        }
     }
 }
 
@@ -153,7 +168,32 @@ fn quantile(sorted: &[Duration], q: f64) -> Duration {
 /// derivation that grew by an order, not the gate.
 #[test]
 fn targets_and_diff_at_the_largest_shape() {
-    let mut m = largest();
+    measure("largest", largest());
+}
+
+/// [`targets_and_diff_at_the_largest_shape`] at the shape in the file
+/// `FADERZ_COST_SHAPE` names, each channel wired to flows of its own in
+/// one domain; nothing without it.
+#[test]
+fn targets_and_diff_at_a_given_shape() {
+    let Ok(path) = std::env::var("FADERZ_COST_SHAPE") else {
+        return;
+    };
+    let text = std::fs::read_to_string(&path).unwrap();
+    let shape = Shape::parse(&serde_json::from_str(&text).unwrap()).unwrap();
+    let wiring = (shape.channels.iter())
+        .map(|c| Wiring {
+            a: format!("a-{}", c.id),
+            b: c.alt_input.then(|| format!("b-{}", c.id)),
+            domain: "d".into(),
+        })
+        .collect();
+    measure(&path, Mixer::configured(shape, Vec::new(), wiring));
+}
+
+fn measure(label: &str, mut m: Mixer) {
+    let ids = Ids::of(m.shape());
+    let command = |n| ids.command(n);
     let mut image = m.targets().unwrap();
     let mut took = Vec::new();
     let mut split = Vec::new();
@@ -183,7 +223,7 @@ fn targets_and_diff_at_the_largest_shape() {
     t.sort();
     d.sort();
     println!(
-        "targets p50 {:?} p99 {:?}; diff p50 {:?} p99 {:?}",
+        "{label}: targets p50 {:?} p99 {:?}; diff p50 {:?} p99 {:?}",
         quantile(&t, 0.5),
         quantile(&t, 0.99),
         quantile(&d, 0.5),
@@ -207,7 +247,7 @@ fn targets_and_diff_at_the_largest_shape() {
     catch_up.sort();
     applying.sort();
     println!(
-        "apply alone: p50 {:?} p99 {:?}",
+        "{label}: apply alone: p50 {:?} p99 {:?}",
         quantile(&applying, 0.5),
         quantile(&applying, 0.99)
     );
@@ -218,7 +258,7 @@ fn targets_and_diff_at_the_largest_shape() {
     );
     let catch = quantile(&catch_up, 0.99);
     println!(
-        "targets+diff over {} entries: p50 {p50:?} p99 {p99:?} max {max:?}; \
+        "{label}: targets+diff over {} entries: p50 {p50:?} p99 {p99:?} max {max:?}; \
          64 in a row: p99 {catch:?}; {entries} engine entries",
         took.len()
     );
