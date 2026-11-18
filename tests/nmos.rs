@@ -38,14 +38,6 @@ fn shape() -> Value {
     })
 }
 
-/// A random id of the form BCP-007-03 takes for MXL ids: version 4,
-/// RFC 4122 variant.
-fn mxl_id() -> String {
-    let mut id = new_id().into_bytes();
-    (id[14], id[19]) = (b'4', b'8');
-    String::from_utf8(id).unwrap()
-}
-
 struct Flows {
     ch1: String,
     ch2: String,

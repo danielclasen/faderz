@@ -59,6 +59,7 @@ jobs:
               cargo clippy --all-targets --locked -- -D warnings
               cargo test --locked
               cargo test --release --locked --test set_audio
+              cargo test --release --locked --test set_nmos
             '
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         name: Clean faderz out of the cache
