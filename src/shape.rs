@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::contract::{check, contract};
+use crate::duck;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -18,6 +19,9 @@ pub struct Shape {
     pub auxes: Vec<ElementShape>,
     pub mix_minus: Vec<MixMinusShape>,
     pub vcas: Vec<VcaShape>,
+    /// Absent in configurations without duck groups.
+    #[serde(default)]
+    pub ducks: Vec<DuckShape>,
     pub monitor_outputs: Vec<ElementShape>,
     pub outputs: Vec<OutputShape>,
 }
@@ -79,6 +83,13 @@ pub struct VcaShape {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DuckShape {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputShape {
     pub id: String,
     pub name: String,
@@ -111,8 +122,8 @@ fn layout_width(layout: &str) -> usize {
 impl Shape {
     /// Checks `value` against the contract's `Shape`, then what the schema
     /// cannot say: element ids are unique among channels, buses, auxes,
-    /// mix-minus outputs, VCAs and monitor outputs (recall-safe groups and
-    /// output sources name them alone) and among outputs; each width
+    /// mix-minus outputs, VCAs, duck groups and monitor outputs
+    /// (recall-safe groups and output sources name them alone) and among outputs; each width
     /// matches its layout; a mix-minus names a bus; an output names an
     /// element of its width; there is a bus, aux or mix-minus output for
     /// the monitor to listen to.
@@ -165,8 +176,8 @@ impl Shape {
         Ok(shape)
     }
 
-    /// Id, width and layout of every element but outputs; VCAs carry no
-    /// audio, so width 0 and no layout.
+    /// Id, width and layout of every element but outputs; VCAs and duck
+    /// groups carry no audio, so width 0 and no layout.
     fn elements(&self) -> impl Iterator<Item = (&str, usize, Option<&str>)> {
         let c = self
             .channels
@@ -186,7 +197,8 @@ impl Shape {
             .iter()
             .map(|e| (e.id.as_str(), e.width, Some(e.layout.as_str())));
         let v = self.vcas.iter().map(|e| (e.id.as_str(), 0, None));
-        c.chain(b).chain(a).chain(m).chain(v)
+        let d = self.ducks.iter().map(|e| (e.id.as_str(), 0, None));
+        c.chain(b).chain(a).chain(m).chain(v).chain(d)
     }
 
     /// Id, width and layout of each bus, aux, mix-minus and monitor
@@ -215,6 +227,7 @@ impl Shape {
             || self.auxes.iter().any(|e| e.id == id)
             || self.mix_minus.iter().any(|e| e.id == id)
             || self.vcas.iter().any(|e| e.id == id)
+            || self.ducks.iter().any(|e| e.id == id)
     }
 
     pub fn is_channel(&self, id: &str) -> bool {
@@ -232,8 +245,8 @@ impl Shape {
     /// The live state of an empty start: input channels closed, buses at
     /// 0 dB, nothing muted, every channel routed to every bus, sends off,
     /// processing off, the monitor on the first bus, EBU R 68 and R 128
-    /// metering with every loudness measurement running, no scenes and no
-    /// tally.
+    /// metering with every loudness measurement running, duck groups as
+    /// [`duck::initial_state`] sets them, no scenes and no tally.
     pub fn initial_state(&self) -> Value {
         let eq = || {
             json!({ "enabled": false, "bands": [
@@ -324,6 +337,7 @@ impl Shape {
             "vcas": by_id(self.vcas.iter().map(|v| (v.id.clone(), json!({
                 "offset": 0, "mute": false, "members": [], "solo": "off",
             }))).collect()),
+            "ducks": duck::initial_state(self),
             "monitor": {
                 "source": self.buses[0].id,
                 "level": -10,
@@ -386,6 +400,7 @@ pub(crate) mod tests {
             "auxes": [{ "id": "aux1", "name": "IFB 1", "width": 1, "layout": "mono" }],
             "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
             "vcas": [{ "id": "vca1", "name": "PRES" }],
+            "ducks": [{ "id": "comm", "name": "Commentary" }],
             "monitorOutputs": [{ "id": "mon", "name": "Monitor", "width": 2, "layout": "stereo" }],
             "outputs": [{ "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" }],
         })
@@ -418,6 +433,59 @@ pub(crate) mod tests {
         assert_eq!(state["loudness"]["pgm"], json!({ "running": true }));
     }
 
+    /// A duck group starts idle on the programme buses alone: the clean
+    /// feed, auxes and mix-minus outputs stay free of it, no channel keys
+    /// or is ducked, and the detector is at samplez-dsp's defaults.
+    #[test]
+    fn a_duck_group_starts_on_the_programme_buses_with_no_members() {
+        let state = Shape::parse(&small()).unwrap().initial_state();
+        let comm = &state["ducks"]["comm"];
+        assert_eq!(
+            comm["destinations"],
+            json!({ "pgm": true, "cf": false, "aux1": false, "mm1": false })
+        );
+        for channel in ["ch1", "ch2", "st1"] {
+            assert_eq!(
+                comm["channels"][channel],
+                json!({ "trigger": false, "target": false, "depth": 10 })
+            );
+        }
+        assert_eq!(
+            (&comm["mode"], &comm["hold"]),
+            (&json!("auto"), &json!(false))
+        );
+        assert_eq!(comm["keyTap"], "preFaderOpen");
+        assert_eq!(
+            [
+                &comm["threshold"],
+                &comm["hysteresis"],
+                &comm["attackMs"],
+                &comm["holdMs"],
+                &comm["releaseMs"]
+            ],
+            [
+                &json!(-30),
+                &json!(4),
+                &json!(20),
+                &json!(500),
+                &json!(1000)
+            ]
+        );
+        assert_eq!(comm["keyHpf"], json!({ "enabled": true, "freq": 120 }));
+        assert_eq!(comm["keyLpf"], json!({ "enabled": false, "freq": 4000 }));
+    }
+
+    /// A configuration without duck groups has none.
+    #[test]
+    fn duck_groups_are_optional() {
+        let mut v = small();
+        v.as_object_mut().unwrap().remove("ducks");
+        let shape = Shape::parse(&v).unwrap();
+        assert!(shape.ducks.is_empty());
+        assert_eq!(serde_json::to_value(&shape).unwrap()["ducks"], json!([]));
+        assert_eq!(shape.initial_state()["ducks"], json!({}));
+    }
+
     /// Each rule the schema cannot express refuses a shape breaking it.
     #[test]
     fn shapes_breaking_a_rule_are_refused() {
@@ -429,6 +497,14 @@ pub(crate) mod tests {
         };
         broken(|v| v["auxes"][0]["id"] = json!("ch1"), "used twice");
         broken(|v| v["vcas"][0]["id"] = json!("pgm"), "used twice");
+        broken(|v| v["ducks"][0]["id"] = json!("vca1"), "used twice");
+        broken(
+            |v| {
+                let nine = (1..=9).map(|n| json!({ "id": format!("d{n}"), "name": "D" }));
+                v["ducks"] = nine.collect();
+            },
+            "/ducks",
+        );
         broken(|v| v["channels"][0]["width"] = json!(2), "does not fit");
         broken(|v| v["mixMinus"][0]["bus"] = json!("aux1"), "names no bus");
         broken(

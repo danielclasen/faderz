@@ -8,13 +8,15 @@
 //! they share, and [`ui`] serves the web UI built into the binary.
 //! [`audio`] runs the samplez engine under the state: [`mix`] turns the
 //! state into its gain matrix, [`strip`] a channel's processing into its
-//! input's strip, and [`meters`] its meters into meter frames.
+//! input's strip, and [`meters`] its meters into meter frames. [`duck`]
+//! holds the rules of duck groups in the state.
 
 pub mod api;
 pub mod app;
 pub mod audio;
 pub mod config;
 pub mod contract;
+pub mod duck;
 pub mod meters;
 pub mod mix;
 pub mod replica;

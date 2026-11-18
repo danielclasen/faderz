@@ -71,6 +71,10 @@ export interface VcaShape {
   id: Id;
   name: string;
 }
+export interface DuckShape {
+  id: Id;
+  name: string;
+}
 export interface FrameRate {
   numerator: number;
   denominator: number;
@@ -83,6 +87,8 @@ export interface Shape {
   auxes: ElementShape[];
   mixMinus: MixMinusShape[];
   vcas: VcaShape[];
+  /** At most 8; absent means none. */
+  ducks?: DuckShape[];
   monitorOutputs: ElementShape[];
   outputs: OutputShape[];
 }
@@ -258,12 +264,45 @@ export interface Tone {
   /** Bus, aux and mix-minus ids that carry the tone. */
   targets: Id[];
 }
+export type DuckMode = 'auto' | 'on' | 'off';
+export type DuckKeyTap = 'preFader' | 'preFaderOpen' | 'postFader';
+export interface DuckChannel {
+  trigger: boolean;
+  target: boolean;
+  /** dB, 0..40. */
+  depth: number;
+}
+export interface DuckState {
+  mode: DuckMode;
+  /** Momentary: reset by the server when its owner releases it or the lease ends. */
+  hold: boolean;
+  keyTap: DuckKeyTap;
+  /** dBFS, -60..0. */
+  threshold: number;
+  /** dB, 0..12. */
+  hysteresis: number;
+  /** freq Hz, 20..500. */
+  keyHpf: { enabled: boolean; freq: number };
+  /** freq Hz, 1000..20000. */
+  keyLpf: { enabled: boolean; freq: number };
+  /** 1..500. */
+  attackMs: number;
+  /** 0..5000. */
+  holdMs: number;
+  /** 10..10000. */
+  releaseMs: number;
+  /** Keyed by channel id. */
+  channels: Record<Id, DuckChannel>;
+  /** Keyed by bus, aux and mix-minus id. */
+  destinations: Record<Id, boolean>;
+}
 export interface State {
   channels: Record<Id, ChannelState>;
   buses: Record<Id, BusState>;
   auxes: Record<Id, BusState>;
   mixMinus: Record<Id, MixMinusState>;
   vcas: Record<Id, VcaState>;
+  ducks: Record<Id, DuckState>;
   monitor: MonitorState;
   afv: Record<Id, AfvBinding>;
   tally: Record<string, TallyState>;

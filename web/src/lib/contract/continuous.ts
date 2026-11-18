@@ -11,6 +11,7 @@ export const CONTINUOUS_PATH_PATTERNS: readonly string[] = [
   `^/(channels|buses|auxes)/${ID}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup)|delay)$`,
   `^/(buses|auxes)/${ID}/limiter/ceiling$`,
   `^/vcas/${ID}/offset$`,
+  `^/ducks/${ID}/(threshold|hysteresis|key(Hpf|Lpf)/freq|attackMs|holdMs|releaseMs|channels/${ID}/depth)$`,
   '^/monitor/level$',
 ];
 

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::contract::{check, contract};
+use crate::duck;
 use crate::shape::Shape;
 
 /// A client's command as the replicated log carries it. `id` is the
@@ -517,7 +518,8 @@ impl Mixer {
         .collect()
     }
 
-    /// Momentary controls among `paths` (IFB interrupt) go back to off.
+    /// Momentary controls among `paths` (IFB interrupt, duck hold) go back
+    /// to off.
     fn momentary_off(&self, paths: &[String]) -> Vec<(String, Value)> {
         paths
             .iter()
@@ -600,8 +602,17 @@ impl Mixer {
                 if let Err(answer) = self.check_write(path, &value) {
                     return self.refuse(&session, id, answer);
                 }
+                // Held by nobody, a hold set true would outlast its client.
+                if duck::is_hold(path) && value == true && holder.is_none() {
+                    let message = format!("{path} is momentary: touch it before setting it true");
+                    return self.refuse(&session, id, Answer::Invalid { message });
+                }
+                let written = vec![(path.to_owned(), value)];
+                if let Some((_, message)) = self.broken_duck(&written) {
+                    return self.refuse(&session, id, Answer::Invalid { message });
+                }
                 self.seen(&session, path, seq);
-                let values = self.write(vec![(path.to_owned(), value)]);
+                let values = self.write(written);
                 if values.is_empty() {
                     return Effect::Unchanged;
                 }
@@ -634,9 +645,43 @@ impl Mixer {
             if let Err(answer) = self.check_write(&c.path, &c.value) {
                 return self.refuse(session, id, answer);
             }
+            // No session holds a patch's controls to release them.
+            if duck::is_hold(&c.path) && c.value == true {
+                let message = format!("{} is momentary: set it on the WebSocket", c.path);
+                return self.refuse(session, id, Answer::Invalid { message });
+            }
         }
-        let written = changes.iter().map(|c| (c.path.clone(), c.value.clone()));
-        changed(self.write(written.collect()))
+        let written: Vec<(String, Value)> = changes
+            .iter()
+            .map(|c| (c.path.clone(), c.value.clone()))
+            .collect();
+        if let Some((_, message)) = self.broken_duck(&written) {
+            return self.refuse(session, id, Answer::Invalid { message });
+        }
+        changed(self.write(written))
+    }
+
+    /// The first duck group whose triggers or targets `written` sets and
+    /// that breaks its rules ([`duck::check`]) on the state the writes
+    /// leave, with why.
+    fn broken_duck(&self, written: &[(String, Value)]) -> Option<(String, String)> {
+        let mut groups: Vec<&str> = written
+            .iter()
+            .filter_map(|(p, _)| duck::members_of(p))
+            .collect();
+        if groups.is_empty() {
+            return None;
+        }
+        groups.sort_unstable();
+        groups.dedup();
+        let mut after = json!({ "ducks": self.state["ducks"].clone() });
+        for (path, value) in written.iter().filter(|(p, _)| p.starts_with("/ducks/")) {
+            set_at(&mut after, path, value.clone());
+        }
+        groups.into_iter().find_map(|g| {
+            let e = duck::check(&after["ducks"], g).err()?;
+            Some((g.to_owned(), e))
+        })
     }
 
     fn scene_list(&self) -> Vec<Value> {
@@ -644,18 +689,26 @@ impl Mixer {
     }
 
     /// The part of the state a scene stores: everything an operator sets
-    /// on channels, buses, auxes, mix-minus outputs and VCAs, and the AFV
-    /// bindings without the stage tally drives.
+    /// on channels, buses, auxes, mix-minus outputs and VCAs, the AFV
+    /// bindings without the stage tally drives, and the duck groups
+    /// without their mode and hold.
     fn scene_data(&self) -> Value {
         let mut data = Map::new();
-        for group in ["channels", "buses", "auxes", "mixMinus", "vcas", "afv"] {
+        for group in [
+            "channels", "buses", "auxes", "mixMinus", "vcas", "afv", "ducks",
+        ] {
             data.insert(group.into(), self.state[group].clone());
         }
-        if let Some(afv) = data.get_mut("afv").and_then(Value::as_object_mut) {
-            for binding in afv.values_mut() {
-                binding.as_object_mut().map(|b| b.remove("open"));
+        let drop = |data: &mut Map<String, Value>, group: &str, keys: &[&str]| {
+            let elements = data.get_mut(group).and_then(Value::as_object_mut);
+            for element in elements.into_iter().flat_map(|e| e.values_mut()) {
+                for key in keys {
+                    element.as_object_mut().map(|e| e.remove(*key));
+                }
             }
-        }
+        };
+        drop(&mut data, "afv", &["open"]);
+        drop(&mut data, "ducks", &["mode", "hold"]);
         Value::Object(data)
     }
 
@@ -732,6 +785,11 @@ impl Mixer {
                     && self.check_references(path, v).is_ok()
             })
             .collect();
+        // With a channel added since the scene was stored, a group's
+        // triggers can pass the limit: that group keeps its members.
+        while let Some((group, _)) = self.broken_duck(&written) {
+            written.retain(|(p, _)| duck::members_of(p) != Some(group.as_str()));
+        }
         written.push(("/sceneRecalled".into(), json!({ "id": scene, "at": at })));
         changed(self.write(written))
     }
@@ -1242,6 +1300,10 @@ impl Product for Mixer {
         } else {
             self.shape = Some(Arc::new(saved.shape));
             self.state = saved.state;
+            // Taken before duck groups were kept: its shape has none.
+            if self.state.get("ducks").is_none() {
+                self.state["ducks"] = json!({});
+            }
             self.owners = saved.owners.into_iter().collect();
             self.dropped = Vec::new();
             self.consoles = saved.consoles;
@@ -1294,9 +1356,10 @@ pub fn unplayed(path: &str) -> bool {
     )
 }
 
-/// An IFB interrupt, which goes back to off when released.
+/// An IFB interrupt or a duck hold, which goes back to off when
+/// released.
 fn momentary(path: &str) -> bool {
-    path.starts_with("/mixMinus/") && path.ends_with("/interrupt/active")
+    path.starts_with("/mixMinus/") && path.ends_with("/interrupt/active") || duck::is_hold(path)
 }
 
 /// A command's effect from the leaves it changed, none of them owners.
@@ -1400,6 +1463,7 @@ fn recall_group(path: &str) -> Option<&'static str> {
     let key = tokens.get(2).map(String::as_str);
     match group {
         "afv" => (key != Some("open")).then_some("afv"),
+        "ducks" => duck::recall_group(tokens.get(2..)?),
         "mixMinus" => match key? {
             "exclude" => Some("routing"),
             "interrupt" => None,
@@ -2012,7 +2076,17 @@ mod tests {
         if let Command::Control(c) = &mut release {
             c.seq = 3;
         }
+        let mut unhold = ctl(Action::Release, "/ducks/comm/hold", None);
+        if let Command::Control(c) = &mut unhold {
+            c.seq = 3;
+        }
         vec![
+            ctl(
+                Action::Set,
+                "/ducks/comm/channels/ch1/depth",
+                Some(json!(20)),
+            ),
+            unhold,
             ctl(Action::Set, "/channels/ch1/fader", Some(json!(-3))),
             ctl(Action::Set, "/afv/ch1/enabled", Some(json!(false))),
             ctl(
@@ -2082,6 +2156,8 @@ mod tests {
         let talk = "/mixMinus/mm1/interrupt/active";
         touch(&mut m, "rest", 1, talk);
         set(&mut m, "rest", 2, talk, json!(true));
+        touch(&mut m, "rest", 1, "/ducks/comm/hold");
+        set(&mut m, "rest", 2, "/ducks/comm/hold", json!(true));
         (m, scene)
     }
 
@@ -2270,6 +2346,7 @@ mod tests {
                 ("/channels/st1/legTrim/1", json!(2)),
                 ("/channels/ch1/fader", json!(-1)),
                 ("/vcas/vca1/members", json!(["ch1", "ch2"])),
+                ("/ducks/comm/channels/ch2/depth", json!(20)),
             ],
         );
         touch(&mut m, "a", 1, "/channels/ch2/fader");
@@ -2293,6 +2370,10 @@ mod tests {
         );
         assert!(
             dropped.contains(&"/vcas/vca1/members".to_owned()),
+            "{dropped:?}"
+        );
+        assert!(
+            dropped.contains(&"/ducks/comm/channels/ch2/depth".to_owned()),
             "{dropped:?}"
         );
         check(&contract().state, back.state()).unwrap();
@@ -2813,5 +2894,340 @@ mod tests {
             ("alice", "surface", "console"),
         );
         refused(("alice", "screen", "ui"), ("alice", "other", "ui"));
+    }
+    /// The small shape with six more mono channels: nine in all.
+    fn nine_channels() -> Mixer {
+        let mut v = small();
+        let more = (4..=9).map(|n| {
+            json!({ "id": format!("ch{n}"), "name": "C", "width": 1, "layout": "mono", "altInput": false })
+        });
+        v["channels"].as_array_mut().unwrap().extend(more);
+        Mixer::new(Shape::parse(&v).unwrap())
+    }
+
+    fn invalid(m: &Mixer, session: &str, id: &str) -> String {
+        match m.answer(&origin(session).key(), id) {
+            Some(Answer::Invalid { message }) => message.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Every leaf of a duck group is a control with its range; ids it
+    /// does not have are not found.
+    #[test]
+    fn duck_writes_take_their_ranges_and_the_shapes_ids() {
+        let m = mixer();
+        let ok = |path: &str, value: Value| m.check_write(path, &value).unwrap();
+        let refused = |path: &str, value: Value| m.check_write(path, &value).unwrap_err();
+        ok("/ducks/comm/mode", json!("off"));
+        ok("/ducks/comm/keyTap", json!("postFader"));
+        ok("/ducks/comm/threshold", json!(-60));
+        ok("/ducks/comm/keyLpf/freq", json!(20000));
+        ok("/ducks/comm/channels/st1/depth", json!(40));
+        ok("/ducks/comm/destinations/mm1", json!(true));
+        ok("/recallSafe/comm", json!(["routing"]));
+        for (path, value) in [
+            ("/ducks/comm/mode", json!("bypass")),
+            ("/ducks/comm/threshold", json!(-61)),
+            ("/ducks/comm/hysteresis", json!(13)),
+            ("/ducks/comm/keyHpf/freq", json!(501)),
+            ("/ducks/comm/keyLpf/freq", json!(999)),
+            ("/ducks/comm/attackMs", json!(0.5)),
+            ("/ducks/comm/holdMs", json!(5001)),
+            ("/ducks/comm/releaseMs", json!(9)),
+            ("/ducks/comm/channels/ch1/depth", json!(41)),
+            ("/ducks/comm/channels/ch1/trigger", json!(1)),
+        ] {
+            let e = refused(path, value.clone());
+            assert!(matches!(e, Answer::Invalid { .. }), "{path} {value}: {e:?}");
+        }
+        for path in [
+            "/ducks/nope/mode",
+            "/ducks/comm/channels/ch9/trigger",
+            "/ducks/comm/destinations/mon",
+            "/ducks/comm/channels",
+        ] {
+            let e = refused(path, json!(true));
+            assert!(matches!(e, Answer::NotFound { .. }), "{path}: {e:?}");
+        }
+    }
+
+    /// A channel is never trigger and target of one group, whichever is
+    /// written first or in one patch; the rule reads the state the writes
+    /// leave, so a patch swapping both is taken.
+    #[test]
+    fn a_channel_is_not_trigger_and_target_of_one_group() {
+        let mut m = mixer();
+        let trigger = "/ducks/comm/channels/ch1/trigger";
+        let target = "/ducks/comm/channels/ch1/target";
+        values(&set(&mut m, "a", 1, trigger, json!(true)));
+        assert_eq!(set(&mut m, "a", 1, target, json!(true)), Effect::Unchanged);
+        let e = invalid(&m, "a", "a-1");
+        assert!(e.contains("trigger and target"), "{e}");
+        assert_eq!(*at(&m, target), json!(false));
+        assert_eq!(
+            patch(&mut m, "p1", &[(target, json!(true))]),
+            Effect::Unchanged
+        );
+        assert!(matches!(
+            m.answer(&rest_key(), "p1"),
+            Some(Answer::Invalid { .. })
+        ));
+        values(&patch(
+            &mut m,
+            "p2",
+            &[(trigger, json!(false)), (target, json!(true))],
+        ));
+        assert_eq!(
+            (at(&m, trigger), at(&m, target)),
+            (&json!(false), &json!(true))
+        );
+        // Another channel triggers the same group.
+        values(&set(
+            &mut m,
+            "a",
+            2,
+            "/ducks/comm/channels/ch2/trigger",
+            json!(true),
+        ));
+    }
+
+    /// A group keys from at most eight triggers; the ninth is refused, by
+    /// a set or a patch, and a patch carrying it applies nothing.
+    #[test]
+    fn a_ninth_trigger_is_refused() {
+        let mut m = nine_channels();
+        let ids = ["ch1", "ch2", "st1", "ch4", "ch5", "ch6", "ch7", "ch8"];
+        let path = |c: &str| format!("/ducks/comm/channels/{c}/trigger");
+        let eight: Vec<(String, Value)> = ids.iter().map(|c| (path(c), json!(true))).collect();
+        let eight: Vec<(&str, Value)> =
+            eight.iter().map(|(p, v)| (p.as_str(), v.clone())).collect();
+        values(&patch(&mut m, "p1", &eight));
+        assert_eq!(
+            set(&mut m, "a", 1, &path("ch9"), json!(true)),
+            Effect::Unchanged
+        );
+        let e = invalid(&m, "a", "a-1");
+        assert!(e.contains("at most 8 triggers"), "{e}");
+        let (ch1, ch9) = (path("ch1"), path("ch9"));
+        let ninth = [
+            (ch9.as_str(), json!(true)),
+            ("/ducks/comm/threshold", json!(-40)),
+        ];
+        assert_eq!(patch(&mut m, "p2", &ninth), Effect::Unchanged);
+        assert_eq!(
+            *at(&m, "/ducks/comm/threshold"),
+            json!(-30),
+            "nothing applied"
+        );
+        let swap = [(ch1.as_str(), json!(false)), (ch9.as_str(), json!(true))];
+        values(&patch(&mut m, "p3", &swap));
+    }
+
+    /// The hold is momentary: only the session holding it sets it true,
+    /// a second operator is refused with the holder named, and it goes
+    /// back to false on release or when the lease ends. A patch, which
+    /// no session holds, cannot set it.
+    #[test]
+    fn a_duck_hold_is_momentary() {
+        let mut m = mixer();
+        let hold = "/ducks/comm/hold";
+        assert_eq!(set(&mut m, "a", 1, hold, json!(true)), Effect::Unchanged);
+        assert!(invalid(&m, "a", "a-1").contains("momentary"));
+        assert_eq!(
+            patch(&mut m, "p1", &[(hold, json!(true))]),
+            Effect::Unchanged
+        );
+        assert!(matches!(
+            m.answer(&rest_key(), "p1"),
+            Some(Answer::Invalid { .. })
+        ));
+        touch(&mut m, "a", 2, hold);
+        values(&set(&mut m, "a", 3, hold, json!(true)));
+        assert_eq!(touch(&mut m, "b", 1, hold), Effect::Unchanged);
+        let Some(Answer::Conflict { conflicts }) = m.answer(&origin("b").key(), "b-t1") else {
+            panic!()
+        };
+        assert_eq!(conflicts[0]["owner"]["handle"], handle("a"));
+        assert_eq!(conflicts[0]["current"], json!(true));
+        let Effect::Changed(e) = release(&mut m, "a", 4, hold) else {
+            panic!()
+        };
+        assert_eq!(e.values, vec![(hold.to_owned(), json!(false))]);
+        touch(&mut m, "b", 2, hold);
+        set(&mut m, "b", 3, hold, json!(true));
+        let Effect::Changed(e) = m.expire(&origin("b").key()) else {
+            panic!()
+        };
+        assert_eq!(e.values, vec![(hold.to_owned(), json!(false))]);
+        assert_eq!(*at(&m, hold), json!(false));
+    }
+
+    /// A scene stores the duck setup without mode and hold; a recall
+    /// writes membership and destinations under routing and the detector
+    /// and depths under dynamics, honours recall-safe, and never touches
+    /// mode or hold.
+    #[test]
+    fn a_recall_restores_the_duck_setup_but_never_mode_or_hold() {
+        let mut m = mixer();
+        patch(
+            &mut m,
+            "p1",
+            &[
+                ("/ducks/comm/channels/ch1/trigger", json!(true)),
+                ("/ducks/comm/channels/st1/target", json!(true)),
+                ("/ducks/comm/channels/st1/depth", json!(15)),
+                ("/ducks/comm/destinations/aux1", json!(true)),
+                ("/ducks/comm/threshold", json!(-40)),
+                ("/ducks/comm/mode", json!("on")),
+            ],
+        );
+        let scene = store(&mut m, "s1", None, "Commentary");
+        let stored = &m.scenes[&scene]["ducks"]["comm"];
+        assert!(
+            stored.get("mode").is_none() && stored.get("hold").is_none(),
+            "{stored}"
+        );
+        patch(
+            &mut m,
+            "p2",
+            &[
+                ("/ducks/comm/channels/ch1/trigger", json!(false)),
+                ("/ducks/comm/channels/st1/target", json!(false)),
+                ("/ducks/comm/channels/st1/depth", json!(6)),
+                ("/ducks/comm/destinations/aux1", json!(false)),
+                ("/ducks/comm/threshold", json!(-20)),
+                ("/ducks/comm/mode", json!("off")),
+            ],
+        );
+        touch(&mut m, "a", 1, "/ducks/comm/hold");
+        set(&mut m, "a", 2, "/ducks/comm/hold", json!(true));
+        let recall = |m: &mut Mixer, id: &str| {
+            values(&rest(
+                m,
+                Command::Recall {
+                    id: id.into(),
+                    scene: scene.clone(),
+                    at: "2026-11-15T12:01:00.000Z".into(),
+                },
+            ))
+        };
+        let v = recall(&mut m, "r1");
+        for (path, value) in [
+            ("/ducks/comm/channels/ch1/trigger", json!(true)),
+            ("/ducks/comm/channels/st1/target", json!(true)),
+            ("/ducks/comm/channels/st1/depth", json!(15)),
+            ("/ducks/comm/destinations/aux1", json!(true)),
+            ("/ducks/comm/threshold", json!(-40)),
+        ] {
+            assert!(v.contains(&(path.to_owned(), value)), "{path}: {v:?}");
+        }
+        assert_eq!(*at(&m, "/ducks/comm/mode"), json!("off"));
+        assert_eq!(*at(&m, "/ducks/comm/hold"), json!(true));
+
+        patch(
+            &mut m,
+            "p3",
+            &[
+                ("/ducks/comm/channels/ch1/trigger", json!(false)),
+                ("/ducks/comm/channels/st1/depth", json!(6)),
+                ("/ducks/comm/threshold", json!(-20)),
+                ("/recallSafe/comm", json!(["dynamics"])),
+            ],
+        );
+        let v = recall(&mut m, "r2");
+        assert!(v.contains(&("/ducks/comm/channels/ch1/trigger".into(), json!(true))));
+        assert_eq!(*at(&m, "/ducks/comm/threshold"), json!(-20), "recall-safe");
+        assert_eq!(
+            *at(&m, "/ducks/comm/channels/st1/depth"),
+            json!(6),
+            "recall-safe"
+        );
+    }
+
+    /// A recall that would bring a group past eight triggers, with eight
+    /// in the scene and a channel the scene does not know triggering,
+    /// leaves that group's
+    /// members as they are and recalls the rest.
+    #[test]
+    fn a_recall_keeps_the_members_of_a_group_it_would_overfill() {
+        let mut m = nine_channels();
+        let scene = store(&mut m, "s1", None, "Opening");
+        let data = m.scenes.get_mut(&scene).unwrap();
+        let channels = data["ducks"]["comm"]["channels"].as_object_mut().unwrap();
+        channels.remove("ch9");
+        for c in channels.values_mut() {
+            c["trigger"] = json!(true);
+        }
+        data["ducks"]["comm"]["channels"]["ch1"]["depth"] = json!(30);
+        data["ducks"]["comm"]["threshold"] = json!(-45);
+        values(&set(
+            &mut m,
+            "a",
+            1,
+            "/ducks/comm/channels/ch9/trigger",
+            json!(true),
+        ));
+        let v = values(&rest(
+            &mut m,
+            Command::Recall {
+                id: "r".into(),
+                scene,
+                at: "2026-11-15T12:01:00.000Z".into(),
+            },
+        ));
+        assert!(!v.iter().any(|(p, _)| p.ends_with("/trigger")), "{v:?}");
+        assert!(v.contains(&("/ducks/comm/channels/ch1/depth".into(), json!(30))));
+        assert!(v.contains(&("/ducks/comm/threshold".into(), json!(-45))));
+        duck::check(&m.state()["ducks"], "comm").unwrap();
+    }
+
+    /// A duck write names its leaf, a hold release the hold, and a recall
+    /// the setup but not mode or hold.
+    #[test]
+    fn duck_commands_name_their_leaves() {
+        let m = mixer();
+        let depth = "/ducks/comm/channels/ch1/depth";
+        assert_eq!(paths(&m, ctl(Action::Set, depth, Some(json!(12)))), [depth]);
+        let hold = "/ducks/comm/hold";
+        assert_eq!(paths(&m, ctl(Action::Release, hold, None)), [hold]);
+        assert!(paths(&m, ctl(Action::Release, "/ducks/comm/mode", None)).is_empty());
+        let recall = Command::Recall {
+            id: "r".into(),
+            scene: "s1".into(),
+            at: "2026-11-15T12:01:00.000Z".into(),
+        };
+        let p = paths(&m, recall);
+        for leaf in [
+            "/ducks/comm/channels/ch1/trigger",
+            "/ducks/comm/channels/st1/target",
+            depth,
+            "/ducks/comm/destinations/pgm",
+            "/ducks/comm/keyHpf/freq",
+            "/ducks/comm/keyTap",
+            "/ducks/comm/releaseMs",
+        ] {
+            assert!(p.contains(&leaf.to_owned()), "{leaf}: {p:?}");
+        }
+        for not in ["/ducks/comm/mode", hold] {
+            assert!(!p.contains(&not.to_owned()), "{not}");
+        }
+    }
+
+    /// A snapshot taken before duck groups were kept installs with none.
+    #[test]
+    fn a_snapshot_without_duck_groups_installs_with_none() {
+        let mut v = small();
+        v.as_object_mut().unwrap().remove("ducks");
+        let old = Mixer::new(Shape::parse(&v).unwrap());
+        let mut saved: Value = serde_json::from_slice(&old.save()).unwrap();
+        saved["state"].as_object_mut().unwrap().remove("ducks");
+        saved["shape"].as_object_mut().unwrap().remove("ducks");
+        let mut installed = Mixer::default();
+        installed
+            .load(&serde_json::to_vec(&saved).unwrap())
+            .unwrap();
+        assert_eq!(installed.state()["ducks"], json!({}));
+        check(&contract().state, installed.state()).unwrap();
     }
 }

@@ -56,8 +56,8 @@ audio in this version: channel delay, PFL and AFL listening, VCA solo,
 front/rear pan, divergence and LFE send, the stereo image setting of a
 channel and of the monitor, the monitor's talkback dim, bus and aux
 processing (EQ, dynamics, limiter, delay), the line-up tone, mix-minus
-talkback interrupts, the AFV rise, hold and fall times, and the scene
-crossfade time.
+talkback interrupts, the AFV rise, hold and fall times, duck groups, and
+the scene crossfade time.
 
 ## The console
 

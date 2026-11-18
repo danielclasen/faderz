@@ -89,6 +89,7 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
       { id: 'vca1', name: 'PRES' },
       { id: 'vca2', name: 'GUEST PANEL' },
     ],
+    ducks: [],
     monitorOutputs,
     outputs,
   };
@@ -204,6 +205,7 @@ export function initialState(shape: Shape): State {
       vca1: { offset: 0, mute: false, members: existing(['ch1', 'ch2']), solo: 'off' },
       vca2: { offset: -2, mute: false, members: existing(['ch3', 'ch4', 'ch5', 'ch6']), solo: 'off' },
     },
+    ducks: {},
     monitor: {
       source: 'pgm20',
       level: -10,

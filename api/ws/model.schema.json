@@ -366,7 +366,7 @@
       ]
     },
     "RecallGroup": {
-      "description": "Parameter group protected from scene recall. input covers the A/B input select, trim, leg trim, polarity, HPF and delay; dynamics covers gate and compressor; routing covers bus assignment, the direct out tap, mix-minus excludes and VCA membership. The meter tap is not recalled.",
+      "description": "Parameter group protected from scene recall. input covers the A/B input select, trim, leg trim, polarity, HPF and delay; dynamics covers gate and compressor; routing covers bus assignment, the direct out tap, mix-minus excludes, VCA membership and the triggers, targets and destinations of a duck group; dynamics also covers a duck group's key tap, detector settings and target depths. The meter tap is not recalled.",
       "type": "string",
       "enum": [
         "input",
@@ -536,6 +536,25 @@
         }
       }
     },
+    "DuckShape": {
+      "description": "Duck group: while its triggers carry signal (or a manual control holds it in), its targets are lowered by their depth in the destinations it applies to.",
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        }
+      }
+    },
     "OutputShape": {
       "description": "Output flow carrying a bus, aux, mix-minus or monitor output, or the direct out of a channel.",
       "type": "object",
@@ -633,6 +652,14 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/OutputShape"
+          }
+        },
+        "ducks": {
+          "description": "Duck groups, at most 8. Absent means none.",
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/DuckShape"
           }
         }
       }
@@ -1203,6 +1230,190 @@
       "minimum": -90,
       "maximum": 0
     },
+    "DuckMode": {
+      "description": "auto ducks while the key reaches the threshold, on holds the duck in, off bypasses it: no duck whatever the key, released at once.",
+      "type": "string",
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ]
+    },
+    "DuckKeyTap": {
+      "description": "Where a trigger channel is keyed: preFader after its processing whatever the fader; preFaderOpen the same, but only while the channel reaches a bus (fader open, not muted, no VCA mute); postFader after fader, mute and VCAs.",
+      "type": "string",
+      "enum": [
+        "preFader",
+        "preFaderOpen",
+        "postFader"
+      ]
+    },
+    "DuckThreshold": {
+      "description": "dBFS",
+      "type": "number",
+      "minimum": -60,
+      "maximum": 0
+    },
+    "DuckHysteresis": {
+      "description": "dB below the threshold a held duck still re-triggers on.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 12
+    },
+    "DuckKeyLpfFreq": {
+      "description": "Hz",
+      "type": "number",
+      "minimum": 1000,
+      "maximum": 20000
+    },
+    "DuckAttackMs": {
+      "description": "Time from no duck to full depth.",
+      "type": "number",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "DuckHoldMs": {
+      "description": "Time a duck stays in after the key last triggered or a manual hold ends.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 5000
+    },
+    "DuckReleaseMs": {
+      "description": "Time from full depth to no duck.",
+      "type": "number",
+      "minimum": 10,
+      "maximum": 10000
+    },
+    "DuckDepth": {
+      "description": "dB a target is lowered by at full duck.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 40
+    },
+    "DuckKeyHpf": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "freq"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "freq": {
+          "$ref": "#/$defs/HpfFreq"
+        }
+      }
+    },
+    "DuckKeyLpf": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "freq"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "freq": {
+          "$ref": "#/$defs/DuckKeyLpfFreq"
+        }
+      }
+    },
+    "DuckChannel": {
+      "description": "A channel's part in a duck group. A channel is never trigger and target of the same group.",
+      "type": "object",
+      "required": [
+        "trigger",
+        "target",
+        "depth"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "trigger": {
+          "type": "boolean"
+        },
+        "target": {
+          "type": "boolean"
+        },
+        "depth": {
+          "$ref": "#/$defs/DuckDepth"
+        }
+      }
+    },
+    "DuckState": {
+      "description": "A duck group, keyed by its id. Every channel and every bus, aux and mix-minus output has an entry. At most 8 triggers. A scene stores and recalls everything but mode and hold. hold is momentary: it is written true only by the session that touched it, and goes back to false when that session releases it or its lease ends. A hold, then mode on, ducks; mode off bypasses; else the key decides.",
+      "type": "object",
+      "required": [
+        "mode",
+        "hold",
+        "keyTap",
+        "threshold",
+        "hysteresis",
+        "keyHpf",
+        "keyLpf",
+        "attackMs",
+        "holdMs",
+        "releaseMs",
+        "channels",
+        "destinations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/DuckMode"
+        },
+        "hold": {
+          "type": "boolean"
+        },
+        "keyTap": {
+          "$ref": "#/$defs/DuckKeyTap"
+        },
+        "threshold": {
+          "$ref": "#/$defs/DuckThreshold"
+        },
+        "hysteresis": {
+          "$ref": "#/$defs/DuckHysteresis"
+        },
+        "keyHpf": {
+          "$ref": "#/$defs/DuckKeyHpf"
+        },
+        "keyLpf": {
+          "$ref": "#/$defs/DuckKeyLpf"
+        },
+        "attackMs": {
+          "$ref": "#/$defs/DuckAttackMs"
+        },
+        "holdMs": {
+          "$ref": "#/$defs/DuckHoldMs"
+        },
+        "releaseMs": {
+          "$ref": "#/$defs/DuckReleaseMs"
+        },
+        "channels": {
+          "description": "Keyed by channel id.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Id"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/DuckChannel"
+          }
+        },
+        "destinations": {
+          "description": "Keyed by bus, aux and mix-minus id: whether the duck lowers the targets in it. Initially the buses of kind program.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Id"
+          },
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "Scene": {
       "type": "object",
       "required": [
@@ -1327,6 +1538,7 @@
         "auxes",
         "mixMinus",
         "vcas",
+        "ducks",
         "monitor",
         "afv",
         "tally",
@@ -1385,6 +1597,16 @@
             "$ref": "#/$defs/VcaState"
           }
         },
+        "ducks": {
+          "description": "Duck groups keyed by the ids of the shape's ducks.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Id"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/DuckState"
+          }
+        },
         "monitor": {
           "$ref": "#/$defs/MonitorState"
         },
@@ -1409,7 +1631,7 @@
           }
         },
         "recallSafe": {
-          "description": "Recall-safe parameter groups keyed by channel, bus, aux, mix-minus or VCA id. An absent id has none.",
+          "description": "Recall-safe parameter groups keyed by channel, bus, aux, mix-minus, VCA or duck group id. An absent id has none.",
           "type": "object",
           "propertyNames": {
             "$ref": "#/$defs/Id"
@@ -1510,6 +1732,9 @@
           "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/(offset|mute|members|solo)$"
         },
         {
+          "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/(mode|hold|keyTap|threshold|hysteresis|key(Hpf|Lpf)/(enabled|freq)|attackMs|holdMs|releaseMs|channels/[a-z][a-z0-9-]{0,31}/(trigger|target|depth)|destinations/[a-z][a-z0-9-]{0,31})$"
+        },
+        {
           "pattern": "^/monitor/(source|level|dim|cut|mono|talkbackDim|dimDepth|monoCompensation|downmix|image|speakerMute/[0-7]|speakerSolo/[0-7])$"
         },
         {
@@ -1547,6 +1772,9 @@
         },
         {
           "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/offset$"
+        },
+        {
+          "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/(threshold|hysteresis|key(Hpf|Lpf)/freq|attackMs|holdMs|releaseMs|channels/[a-z][a-z0-9-]{0,31}/depth)$"
         },
         {
           "pattern": "^/monitor/level$"
@@ -2461,6 +2689,193 @@
             "properties": {
               "value": {
                 "$ref": "#/$defs/SceneRecalled"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/mode$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckMode"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/(hold|channels/[a-z][a-z0-9-]{0,31}/(trigger|target)|destinations/[a-z][a-z0-9-]{0,31})$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/keyTap$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckKeyTap"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/threshold$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckThreshold"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/hysteresis$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckHysteresis"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/keyHpf/freq$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/HpfFreq"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/keyLpf/freq$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckKeyLpfFreq"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/attackMs$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckAttackMs"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/holdMs$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckHoldMs"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/releaseMs$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckReleaseMs"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/ducks/[a-z][a-z0-9-]{0,31}/channels/[a-z][a-z0-9-]{0,31}/depth$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/DuckDepth"
               }
             }
           }
