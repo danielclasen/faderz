@@ -1231,7 +1231,7 @@
       "maximum": 0
     },
     "DuckMode": {
-      "description": "auto ducks while the key reaches the threshold, on holds the duck in, off bypasses it: no duck whatever the key, released at once.",
+      "description": "auto ducks while the key reaches the threshold, on holds the duck in, off bypasses the key: no duck whatever the key, a keyed duck released at once. A hold ducks in every mode, off included.",
       "type": "string",
       "enum": [
         "auto",
@@ -1273,7 +1273,7 @@
       "maximum": 500
     },
     "DuckHoldMs": {
-      "description": "Time a duck stays in after the key last triggered, a manual hold ends or mode on is set back; mode off releases at once.",
+      "description": "Time a duck stays in after the key last triggered, a hold ends or mode on is set back. In mode off it does not apply: a duck releases at once, also when a hold ends.",
       "type": "number",
       "minimum": 0,
       "maximum": 5000
@@ -1344,7 +1344,7 @@
       }
     },
     "DuckState": {
-      "description": "A duck group, keyed by its id. Every channel and every bus, aux and mix-minus output has an entry. At most 8 triggers. A scene stores and recalls everything but mode and hold. hold is momentary: it is written true only by the session that touched it, and goes back to false when that session releases it or its lease ends. A hold, then mode on, ducks; mode off bypasses; else the key decides.",
+      "description": "A duck group, keyed by its id. Every channel and every bus, aux and mix-minus output has an entry. At most 8 triggers. A scene stores and recalls everything but mode and hold. hold is momentary: it is written true only by the session that touched it, and goes back to false when that session releases it or its lease ends. A hold ducks in every mode; else mode on ducks, mode off bypasses the key, and auto lets the key decide.",
       "type": "object",
       "required": [
         "mode",
