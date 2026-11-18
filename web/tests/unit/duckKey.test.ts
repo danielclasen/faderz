@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import DuckKey from '../../src/components/DuckKey.svelte';
-import { DuckPress, LATCH_MS } from '../../src/lib/duck';
+import DuckShortcuts from '../../src/components/DuckShortcuts.svelte';
+import { DuckPress, LATCH_MS, groupRefusals, targetRefusal, triggerRefusal } from '../../src/lib/duck';
 import { INITIAL_STATUS, MixerStore, mixerContext } from '../../src/lib/state/mixer.svelte';
 import type { Owner } from '../../src/lib/contract/types';
 import type { ToWorker } from '../../src/lib/sync/messages';
@@ -122,6 +123,66 @@ describe('DuckPress', () => {
     expect(posted).toEqual([...HELD, { type: 'release', path: HOLD }]);
   });
 
+  it('a bypassed group: re-checks the holder when the deferred hold starts, and holds nothing another session took meanwhile', () => {
+    vi.useFakeTimers();
+    try {
+      const { s, posted, key } = press([[MODE, 'off']]);
+      key.press(0);
+      s.apply({ type: 'patch', input: 1, changes: [[HOLD, true]], owners: [[HOLD, OTHER]], status: LIVE });
+      vi.advanceTimersByTime(LATCH_MS);
+      expect(posted).toEqual([]);
+      expect(s.notices.map((n) => n.kind)).toEqual(['conflict']);
+      key.lift(2 * LATCH_MS);
+      expect(posted).toEqual([]);
+      expect(s.value(HOLD)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a bypassed group: a press that lasted LATCH_MS holds and lets go even when the deferred start has not run', () => {
+    vi.useFakeTimers();
+    try {
+      const { posted, key } = press([[MODE, 'off']]);
+      key.press(0);
+      // A busy page: the timer has not fired by the release.
+      key.lift(LATCH_MS);
+      expect(posted).toEqual([...HELD, ...ENDED]);
+      vi.runAllTimers();
+      expect(posted).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears no hold another session holds by the end of the press, and only releases', () => {
+    const { s, posted, key } = press();
+    key.press(0);
+    // Given up on request meanwhile, and taken by another session.
+    s.apply({ type: 'patch', input: 1, changes: [[HOLD, true]], owners: [[HOLD, OTHER]], status: LIVE });
+    key.lift(LATCH_MS);
+    expect(posted).toEqual([...HELD, { type: 'release', path: HOLD }]);
+    expect(s.value(HOLD)).toBe(true);
+  });
+
+  it('keeps the hold until the last of two keys of the group lets go', () => {
+    const { s, posted } = press();
+    const tile = new DuckPress(s, 'comm', () => 'Commentary');
+    const pill = new DuckPress(s, 'comm', () => 'Commentary');
+    tile.press(0);
+    pill.press(10);
+    expect(posted).toEqual(HELD);
+    tile.lift(LATCH_MS);
+    expect(posted).toEqual(HELD);
+    pill.lift(10 + LATCH_MS);
+    expect(posted).toEqual([...HELD, ...ENDED]);
+    // And a new press holds again from the start.
+    posted.length = 0;
+    tile.press(1000);
+    expect(posted).toEqual(HELD);
+    tile.abort();
+  });
+
   it('does nothing while writes are locked', () => {
     const { s, posted, key } = press();
     s.deskLock = true;
@@ -225,7 +286,12 @@ describe('DUCK key', () => {
   });
 
   it('holds with Shift+D+its digit while the digit is down, never latches with it, and not while typing', () => {
-    const { posted, c } = key();
+    const t = store();
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const target = document.body.appendChild(document.createElement('div'));
+    const c = mount(DuckShortcuts, { target, props: {}, context: mixerContext(t.s) });
+    flushSync();
+    const posted = t.posted;
     now = 0;
     keyboard(window, 'keydown', { key: 'D', code: 'KeyD', shiftKey: true });
     keyboard(window, 'keydown', { key: '!', code: 'Digit1', shiftKey: true });
@@ -234,9 +300,16 @@ describe('DUCK key', () => {
     now = 10;
     keyboard(window, 'keyup', { key: '!', code: 'Digit1', shiftKey: true });
     expect(posted).toEqual([...HELD, ...ENDED]);
-    // Another digit is another group's.
+    // Another digit is another group's, a digit with no group nobody's.
     posted.length = 0;
     keyboard(window, 'keydown', { key: '@', code: 'Digit2', shiftKey: true });
+    expect(posted).toEqual([
+      { type: 'touch', path: '/ducks/remote/hold' },
+      { type: 'set', path: '/ducks/remote/hold', value: true },
+    ]);
+    keyboard(window, 'keyup', { key: '@', code: 'Digit2', shiftKey: true });
+    posted.length = 0;
+    keyboard(window, 'keydown', { key: '#', code: 'Digit3', shiftKey: true });
     expect(posted).toEqual([]);
     // Letting go of D ends the press.
     keyboard(window, 'keydown', { key: '!', code: 'Digit1', shiftKey: true });
@@ -250,5 +323,32 @@ describe('DUCK key', () => {
     keyboard(input, 'keydown', { key: '!', code: 'Digit1', shiftKey: true });
     expect(posted).toEqual([]);
     unmount(c);
+  });
+});
+
+describe('groupRefusals', () => {
+  it('says what triggerRefusal and targetRefusal say for every channel, from one count of the triggers', () => {
+    const shape = exampleShape();
+    const state = initialState(shape);
+    // A full group: eight triggers.
+    for (const id of ['ch3', 'ch4', 'ch5', 'ch6', 'ch7', 'ch8']) state.ducks['comm']!.channels[id]!.trigger = true;
+    let reads = 0;
+    const channels = state.ducks['comm']!.channels;
+    state.ducks['comm']!.channels = new Proxy(channels, {
+      get(t, k) {
+        reads++;
+        return t[k as string];
+      },
+    });
+    const got = groupRefusals(shape, state, 'comm');
+    // One read per channel to count, one to judge: no read per pair of channels.
+    expect(reads).toBeLessThanOrEqual(2 * shape.channels.length);
+    state.ducks['comm']!.channels = channels;
+    for (const c of shape.channels) {
+      expect(got.get(c.id)).toEqual({ trigger: triggerRefusal(shape, state, 'comm', c.id), target: targetRefusal(shape, state, 'comm', c.id) });
+    }
+    expect(got.get('ch9')!.trigger).toBe('Commentary takes at most 8 triggers');
+    expect(got.get('ch13')!.trigger).toMatch(/is a target of Commentary/);
+    expect(got.get('ch1')!.target).toMatch(/triggers Commentary/);
   });
 });

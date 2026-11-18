@@ -7,6 +7,7 @@
   import AuxView from './components/AuxView.svelte';
   import AfvView from './components/AfvView.svelte';
   import DuckView from './components/DuckView.svelte';
+  import DuckShortcuts from './components/DuckShortcuts.svelte';
   import ScenesView from './components/ScenesView.svelte';
   import SetupView from './components/SetupView.svelte';
   import StatusArea from './components/StatusArea.svelte';
@@ -149,6 +150,7 @@
   </main>
 
 
+  {#if mixer.shape && mixer.state}<DuckShortcuts />{/if}
   <StatusBar />
   <TouchInfo />
   <SignIn />

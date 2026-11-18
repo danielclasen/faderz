@@ -6,9 +6,8 @@
   // capture, focus leaving the key, the page going hidden or away and the
   // key leaving the screen end the hold and change no mode. While the
   // group is held its face names the holder instead of DUCK.
-  // With `shortcut` n, Shift+D+n on the keyboard holds it while the digit
-  // is down, and never latches: a slip of three keys leaves nothing on.
-  // Letting go of Shift or D ends that press.
+  // `shortcut` n names the Shift+D+n shortcut of the group
+  // (DuckShortcuts.svelte) in the key's label.
   // `pill` is the compact form in the bank bar: the group's name and
   // what it does, on one key that presses the same way.
   import { pendingWrite } from '../lib/pending';
@@ -56,38 +55,13 @@
     else if (!on) key.lift(performance.now());
   }
 
-  /** Shift and D are down, for the shortcut. */
-  let chord = false;
-  /** The shortcut pressed the key: its digit is down. */
-  let byShortcut = false;
-  const typing = (e: KeyboardEvent) => e.target instanceof HTMLElement && !!e.target.closest('input, select, textarea, [contenteditable="true"]');
-  function shortcutDown(e: KeyboardEvent): void {
-    if (shortcut === undefined || e.altKey || e.ctrlKey || e.metaKey || typing(e)) return;
-    if (e.code === 'KeyD') chord = e.shiftKey;
-    if (!chord || !e.shiftKey || e.code !== `Digit${shortcut}`) return;
-    e.preventDefault();
-    if (e.repeat || byShortcut) return;
-    byShortcut = true;
-    key.press(performance.now());
-  }
-  function shortcutUp(e: KeyboardEvent): void {
-    if (e.code === 'KeyD' || e.key === 'Shift') chord = false;
-    if (!byShortcut || (e.code !== `Digit${shortcut}` && e.code !== 'KeyD' && e.key !== 'Shift')) return;
-    byShortcut = false;
-    key.lift(performance.now(), false);
-  }
-  function blurred(): void {
-    chord = false;
-    byShortcut = false;
-    key.abort();
-  }
   // The key leaves the screen: a hold ends with it. A teardown reads state
   // as it was before the update that unmounts the key, so the hold is
   // ended once that update is done (DuckPress checks the shape).
   $effect(() => () => queueMicrotask(() => key.abort()));
 </script>
 
-<svelte:window onkeydown={shortcutDown} onkeyup={shortcutUp} onblur={blurred} onpagehide={() => key.abort()} />
+<svelte:window onpagehide={() => key.abort()} />
 <svelte:document onvisibilitychange={() => document.visibilityState === 'hidden' && key.abort()} />
 
 <button

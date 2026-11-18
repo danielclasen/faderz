@@ -318,7 +318,8 @@ bar between 1024 and 1399 px, where the masters lie over the strips,
 by pointer, Space or Enter: the press holds the duck in at once, and
 held longer than 0.3 s it is momentary; a shorter tap latches mode on,
 or sets a latched group back to auto. Shift+D+n holds the n-th group
-while the digit is down and never latches. A cancelled touch, a lost
+while the digit is down, in every view, and never latches; with a key
+of the group held as well, the hold ends when the last one lets go. A cancelled touch, a lost
 pointer, focus leaving the key, the page going hidden or away, or
 leaving the view ends a hold and changes no mode; the latch stays, on
 every screen, until mode is set again. While another session holds a

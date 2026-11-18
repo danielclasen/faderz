@@ -168,3 +168,40 @@ test('gives a mouse depth fields and the tile threshold at least 24 px', async (
   await page.getByRole('button', { name: 'Duck', exact: true }).click();
   expect((await page.getByRole('textbox', { name: /^Pres 1 depth under Commentary/ }).boundingBox())!.height).toBeGreaterThanOrEqual(24);
 });
+
+test('holds a duck group with Shift+D+n in a view without its tile', async ({ page, request }) => {
+  const hold = async () => (await serverState(request)).state.ducks['remote']!.hold;
+  await live(page);
+  for (const name of ['Duck', 'Scenes']) {
+    await page.getByRole('button', { name, exact: true }).click();
+    await page.locator('body').focus();
+    await page.keyboard.down('Shift');
+    await page.keyboard.down('KeyD');
+    await page.keyboard.down('Digit2');
+    await expect.poll(hold).toBe(true);
+    await page.waitForTimeout(400);
+    await page.keyboard.up('Digit2');
+    await page.keyboard.up('KeyD');
+    await page.keyboard.up('Shift');
+    await expect.poll(hold).toBe(false);
+    expect((await serverState(request)).state.ducks['remote']!.mode).toBe('auto');
+  }
+});
+
+test('keeps one tab stop in the Duck view grid when the groups shown change', async ({ page }) => {
+  await live(page);
+  await page.getByRole('button', { name: 'Duck', exact: true }).click();
+  // The tab stop on the second group's column ...
+  await page.getByRole('switch', { name: 'Pres 1 triggers Remote comm' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('switch', { name: 'Pres 1 is lowered by Remote comm' })).toBeFocused();
+  // ... and a phone shows only the first group.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('combobox', { name: 'Duck group' })).toBeVisible();
+  await expect(page.locator('tbody.members [tabindex="0"]')).toHaveCount(1);
+  await page.getByRole('combobox', { name: 'Duck group' }).focus();
+  await page.keyboard.press('Tab');
+  // Through the detector and destination keys, Tab reaches the grid.
+  for (let i = 0; i < 40 && !(await page.evaluate(() => !!document.activeElement?.closest('tbody.members'))); i++) await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => !!document.activeElement?.closest('tbody.members'))).toBe(true);
+});

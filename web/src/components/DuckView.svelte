@@ -9,7 +9,7 @@
   import { MediaQuery } from 'svelte/reactivity';
   import { pendingWrite } from '../lib/pending';
   import { fit } from '../lib/format';
-  import { LAMP_WIDTH, forced, lampText, targetRefusal, triggerRefusal } from '../lib/duck';
+  import { LAMP_WIDTH, forced, groupRefusals, lampText, targetRefusal, triggerRefusal } from '../lib/duck';
   import type { Change, DuckKeyTap, DuckShape } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { patchState } from '../lib/state/actions';
@@ -134,7 +134,11 @@
     focus = { r: nr, c: nc };
     grid?.querySelector<HTMLElement>(`[data-cell="${nr}-${nc}"] :is(button, input)`)?.focus();
   }
-  const stop = (r: number, c: number) => (focus.r === r && focus.c === c ? 0 : -1);
+  /** The focus kept within the grid shown, so one cell is always the tab stop when the groups shown change. */
+  const at = $derived({ r: Math.min(focus.r, Math.max(0, shape.channels.length - 1)), c: Math.min(focus.c, Math.max(0, shown.length * CELLS - 1)) });
+  const stop = (r: number, c: number) => (at.r === r && at.c === c ? 0 : -1);
+  /** Why a cell's switch is refused, per shown group, counted once per group. */
+  const refusals = $derived(new Map(shown.map((g) => [g.id, groupRefusals(shape, mixer.state!, g.id)])));
 </script>
 
 <div class="view">
@@ -270,8 +274,8 @@
               <th scope="row"><span class="num idx">{r + 1}</span>{ch.name}</th>
               {#each shown as g, gi (g.id)}
                 {@const m = mixer.state!.ducks[g.id]!.channels[ch.id]!}
-                {@const trig = triggerRefusal(shape, mixer.state!, g.id, ch.id)}
-                {@const tgt = targetRefusal(shape, mixer.state!, g.id, ch.id)}
+                {@const trig = refusals.get(g.id)?.get(ch.id)?.trigger ?? null}
+                {@const tgt = refusals.get(g.id)?.get(ch.id)?.target ?? null}
                 <td class="first" data-cell={`${r}-${gi * CELLS}`}>
                   <button
                     {@attach pendingWrite(mixer, duckPath(g.id, 'channels', ch.id, 'trigger'))}

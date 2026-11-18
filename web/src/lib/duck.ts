@@ -63,6 +63,27 @@ export function targetRefusal(shape: Shape, state: State, id: string, channel: s
   return `${ch} triggers ${name}: a channel cannot be lowered by the group it keys`;
 }
 
+/**
+ * Why each channel cannot be made a trigger or a target of group `id`
+ * now, by channel id, as triggerRefusal and targetRefusal say it: the
+ * whole grid of a group from one count of its triggers, not one per cell.
+ */
+export function groupRefusals(shape: Shape, state: State, id: string): Map<string, { trigger: string | null; target: string | null }> {
+  const out = new Map<string, { trigger: string | null; target: string | null }>();
+  const d = state.ducks[id];
+  if (!d) return out;
+  const name = (shape.ducks ?? []).find((g) => g.id === id)?.name ?? id;
+  const members = shape.channels.map((c) => ({ c, m: d.channels[c.id] }));
+  const full = members.filter(({ m }) => m?.trigger).length >= MAX_TRIGGERS;
+  for (const { c, m } of members) {
+    out.set(c.id, {
+      trigger: !m || m.trigger ? null : m.target ? `${c.name} is a target of ${name}: a channel cannot trigger the group that lowers it` : full ? `${name} takes at most ${MAX_TRIGGERS} triggers` : null,
+      target: !m || m.target || !m.trigger ? null : `${c.name} triggers ${name}: a channel cannot be lowered by the group it keys`,
+    });
+  }
+  return out;
+}
+
 /** Triggers a group takes at most (src/duck.rs MAX_TRIGGERS). */
 export const MAX_TRIGGERS = 8;
 
@@ -81,11 +102,19 @@ export const MAX_TRIGGERS = 8;
  * While nothing commits no hold starts, as a hold sent late could
  * outlast the press.
  */
+/**
+ * Presses holding each group's hold now, per store: the tile, its pill and
+ * the shortcut are separate keys of one hold, which ends when the last of
+ * them lets go.
+ */
+const holders = new WeakMap<MixerStore, Map<string, number>>();
+
 export class DuckPress {
   private pressing = false;
   private holding = false;
   private pressedAt = 0;
-  /** The deferred start of a bypassed group's hold. */
+  /** The start of a bypassed group's hold is deferred to LATCH_MS into the press. */
+  private deferred = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -99,36 +128,55 @@ export class DuckPress {
     return this.holding;
   }
 
+  private get count(): Map<string, number> {
+    let m = holders.get(this.mixer);
+    if (!m) holders.set(this.mixer, (m = new Map()));
+    return m;
+  }
+
   press(now: number): void {
     if (this.pressing || this.mixer.locked) return;
     this.pressing = true;
     this.pressedAt = now;
-    const hold = duckPath(this.id, 'hold');
-    if (this.mixer.refuseIfHeld(hold) || this.mixer.notCommitting) return;
-    if (this.mixer.value<DuckMode>(duckPath(this.id, 'mode')) !== 'off') return this.start();
+    this.deferred = false;
+    if (this.mixer.value<DuckMode>(duckPath(this.id, 'mode')) !== 'off') return void this.start();
+    this.deferred = true;
     this.timer = setTimeout(() => {
       this.timer = null;
-      if (this.pressing && !this.mixer.notCommitting) this.start();
+      if (this.pressing) this.start();
     }, LATCH_MS);
   }
 
-  private start(): void {
+  /**
+   * Holds the duck in, unless writes are locked, nothing commits or
+   * another session holds it, which the notice then names. Another key of
+   * this screen already holding it only counts this one in.
+   */
+  private start(): boolean {
     const hold = duckPath(this.id, 'hold');
+    if (this.mixer.locked || this.mixer.notCommitting || this.mixer.refuseIfHeld(hold)) return false;
+    const n = this.count.get(this.id) ?? 0;
+    this.count.set(this.id, n + 1);
     this.holding = true;
+    if (n > 0) return true;
     this.mixer.touch(hold);
     this.mixer.set(hold, true);
+    return true;
   }
 
   /**
    * The press ended where it was made: a short one toggles the latch,
    * unless `latch` is false, as for the keyboard shortcut, which only
-   * ever holds.
+   * ever holds. A bypassed group's press that lasted LATCH_MS holds and
+   * lets go, even if a busy page has not run its deferred start yet.
    */
   lift(now: number, latch = true): void {
     if (!this.pressing) return;
     this.pressing = false;
     this.cancel();
-    if (latch && now - this.pressedAt < LATCH_MS) {
+    const short = now - this.pressedAt < LATCH_MS;
+    if (this.deferred && !short && !this.holding) this.start();
+    if (latch && short) {
       const path = duckPath(this.id, 'mode');
       const mode = this.mixer.value<DuckMode>(path);
       if (mode === 'off') this.mixer.notify('info', `${this.name()} is bypassed: choose AUTO or ON to arm it`, path);
@@ -153,10 +201,14 @@ export class DuckPress {
   private end(): void {
     if (!this.holding) return;
     this.holding = false;
+    const n = (this.count.get(this.id) ?? 1) - 1;
+    if (n > 0) return void this.count.set(this.id, n);
+    this.count.delete(this.id);
     const hold = duckPath(this.id, 'hold');
     // The server clears a hold its owner releases; while nothing commits
-    // only the release goes, so the screen never shows it ended early.
-    if (!this.mixer.notCommitting && this.mixer.shape?.ducks?.some((d) => d.id === this.id)) this.mixer.set(hold, false);
+    // only the release goes, so the screen never shows it ended early. A
+    // hold another session has taken since is not this one's to clear.
+    if (!this.mixer.notCommitting && !this.mixer.ownedByOther(hold) && this.mixer.shape?.ducks?.some((d) => d.id === this.id)) this.mixer.set(hold, false);
     this.mixer.release(hold);
   }
 }
