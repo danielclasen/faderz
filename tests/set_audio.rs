@@ -517,9 +517,10 @@ fn steady(nodes: &[Option<Node>], n: usize) {
     assert!(steady, "replica {n} did not commit: {}", states(nodes));
 }
 
-/// Two replicas of the three form no set: neither starts contact, so
-/// neither is ready, until the third is a voter too. Every replica of the
-/// set then writes the same audio through a session of faders, trims,
+/// Contact runs from each replica's start. The set forms with the first
+/// replica alone and grows by two voters at once: with two of the three
+/// running the first commits alone and the second stays a learner, and
+/// once the third starts all three are voters and commit. Every replica of the set then writes the same audio through a session of faders, trims,
 /// mutes, routes and input switches, with a duck group keyed by one
 /// channel's fader lowering the other. A follower killed meanwhile misses
 /// commands, input switches among them; started again on its volume it
@@ -543,28 +544,47 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     for n in 0..2 {
         nodes[n] = Some(set.start(n, listeners[n].take()));
     }
-    // Joined and caught up, on the replica's terms; the third is not a
-    // voter yet, so neither starts contact or is ready.
-    let joined = until(30, || {
-        (0..2).all(|n| node(&nodes, n).ops("/healthz").1["replica"]["ready"] == true)
-    });
-    assert!(joined, "two replicas did not join: {}", states(&nodes));
+    let membership = |nodes: &[Option<Node>]| {
+        let raft = node(nodes, 0)
+            .server
+            .app
+            .replica
+            .raft()
+            .metrics()
+            .borrow()
+            .clone();
+        let m = raft.membership_config.membership().clone();
+        (m.voter_ids().count(), m.learner_ids().count())
+    };
+    // The set forms with the first replica alone, and grows by two
+    // voters at once, never to an even count: with two of three running,
+    // the first commits as a set of one and the second stays a learner.
+    steady(&nodes, 0);
+    let learner = until(30, || membership(&nodes) == (1, 1));
+    assert!(
+        learner,
+        "the second replica is no learner: {}",
+        states(&nodes)
+    );
+    // samplez at 0.7 judges a replica serving whenever its set has one
+    // voter, a learner included; from 0.8 a learner is not ready.
+    let learner_judged = samplez::ENGINE_VERSION != "0.7.0";
     for _ in 0..10 {
-        for n in 0..2 {
-            let node = node(&nodes, n);
-            assert_eq!(
-                node.ops("/readyz").0,
-                503,
-                "replica {n}: {}",
-                states(&nodes)
-            );
-            assert!(node.server.app.replica.contact_metrics().is_none());
+        assert_eq!(membership(&nodes), (1, 1), "{}", states(&nodes));
+        if learner_judged {
+            assert_eq!(node(&nodes, 1).ops("/readyz").0, 503, "{}", states(&nodes));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     nodes[2] = Some(set.start(2, listeners[2].take()));
     let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
     let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
+    let three = until(60, || membership(&nodes) == (REPLICAS, 0));
+    assert!(
+        three,
+        "the set did not grow to three voters: {}",
+        states(&nodes)
+    );
     for n in 0..REPLICAS {
         steady(&nodes, n);
     }

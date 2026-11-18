@@ -2,20 +2,15 @@
 //! beside them.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
-
-use openraft::{BasicNode, Membership};
 
 use samplez::rt::ProcessStatus;
 use samplez_replica::bootstrap::{Kube, Markers};
 use samplez_replica::contact::SystemClocks;
-use samplez_replica::entry::NodeId;
 use samplez_replica::rollout::{self, Fixed};
 use samplez_replica::state_machine::Product as _;
 use samplez_replica::{Estimate, Replica};
-use samplez_service::replica::ReadIndex;
 use samplez_service::{Ops, PeerTls, ReplicatedState, Service, ServiceConfig};
 use tokio::task::JoinHandle;
 
@@ -148,7 +143,7 @@ impl Server {
             ops_state.metrics(),
         );
         // A set's replica starts contact, and with it its engine, once
-        // the set lets it (Contact::begin).
+        // its listeners serve (Contact::begin).
         let mut contact = None;
         let audio = match &config.audio {
             Some(engine) => {
@@ -178,14 +173,11 @@ impl Server {
                         let fixed = Fixed::new(key, set.revision.clone());
                         let follow = (kube.zip(set.statefulset.clone()))
                             .map(|(kube, statefulset)| (kube, statefulset, fixed.clone()));
-                        let voters = usize::from(set.voters.replicas);
                         contact = Some(Contact {
                             timing: started.timing,
                             audio: Some(bridge),
                             rollout: fixed,
                             follow,
-                            voters: set.peers.iter().take(voters).cloned().collect(),
-                            formed: config.replica.data_dir.join(FORMED),
                         });
                         audio::report_inputs(
                             started.reports,
@@ -289,7 +281,7 @@ impl Server {
                 e = peers => e,
                 e = async {
                     match contact {
-                        Some(contact) => match contact.begin(contact_replica).await {
+                        Some(contact) => match contact.begin(&contact_replica) {
                             Ok(()) => {
                                 contact_ops.set_engine_started(true);
                                 std::future::pending().await
@@ -367,56 +359,20 @@ struct Contact {
     audio: Option<Arc<dyn samplez_replica::contact::Audio>>,
     rollout: Arc<Fixed>,
     follow: Option<(Arc<Kube>, String, Arc<Fixed>)>,
-    /// The peer addresses of the set's audio replicas.
-    voters: Vec<String>,
-    /// The file that says this replica saw its set formed ([`FORMED`]).
-    formed: PathBuf,
 }
 
 impl Contact {
-    /// Starts contact, and the replica's engine with it, once [`gate`]
-    /// lets it and the replica has applied what the set committed, then
-    /// follows the StatefulSet's rollout. A restarted replica catches up
-    /// first: entries it applies while it catches up would be late, and
-    /// held unresolved by the engine with nothing to decide them. Until
-    /// then the engine computes and commits nothing. Returns once contact
-    /// runs, or with the replica gone.
+    /// Starts contact, and the replica's engine with it, then follows the
+    /// StatefulSet's rollout. A replica starts contact as it starts,
+    /// whether a voter, a learner or catching up: samplez promotes a
+    /// learner on the reports contact sends, and rebuilds the engine of a
+    /// replica that took entries past their deadlines from the state it
+    /// applied. Nothing with the replica gone.
     ///
     /// # Errors
     ///
-    /// When contact or the rollout does not start, or the formed file
-    /// cannot be written.
-    async fn begin(self, replica: Weak<Replica<Mixer>>) -> Result<(), String> {
-        let formed = self.formed.exists();
-        let mut tick = tokio::time::interval(CONTACT_WAIT);
-        let mut told: Option<(Wait, tokio::time::Instant)> = None;
-        loop {
-            tick.tick().await;
-            let Some(replica) = replica.upgrade() else {
-                return Ok(());
-            };
-            let membership = replica.raft().metrics().borrow().membership_config.clone();
-            let gated = match gate(membership.membership(), replica.id(), formed, &self.voters) {
-                Ok(()) => match replica.read_index().await {
-                    ReadIndex::Confirmed(revision) if replica.revision() >= revision => Ok(()),
-                    _ => Err(Wait::CatchingUp),
-                },
-                Err(wait) => Err(wait),
-            };
-            let Err(wait) = gated else {
-                break;
-            };
-            let repeat = told
-                .as_ref()
-                .is_some_and(|(w, at)| *w == wait && at.elapsed() < WAIT_TOLD);
-            if !repeat {
-                tracing::warn!("contact waits: {wait}");
-                told = Some((wait, tokio::time::Instant::now()));
-            }
-        }
-        if !formed {
-            write_formed(&self.formed).map_err(|e| format!("{}: {e}", self.formed.display()))?;
-        }
+    /// When contact or the rollout does not start.
+    fn begin(self, replica: &Weak<Replica<Mixer>>) -> Result<(), String> {
         let Some(replica) = replica.upgrade() else {
             return Ok(());
         };
@@ -429,91 +385,6 @@ impl Contact {
     }
 }
 
-/// The file in a set's replica's data directory that says the replica
-/// saw its set formed: every audio replica a voter, no learner.
-pub const FORMED: &str = "set-formed";
-
-fn write_formed(path: &std::path::Path) -> std::io::Result<()> {
-    std::fs::File::create(path)?.sync_all()?;
-    if let Some(dir) = path.parent() {
-        std::fs::File::open(dir)?.sync_all()?;
-    }
-    Ok(())
-}
-
-/// Why a set's replica does not start contact yet.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Wait {
-    /// A joint configuration: the membership is changing.
-    Joint,
-    /// Not a voter: joining, or a learner.
-    NotVoter,
-    /// Before the set formed: these audio replicas are not voters yet.
-    Voters(Vec<String>),
-    /// Before the set formed: these replicas are learners.
-    Learners(Vec<NodeId>),
-    /// Applying what the set committed.
-    CatchingUp,
-}
-
-impl std::fmt::Display for Wait {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Wait::Joint => write!(f, "the membership is changing"),
-            Wait::NotVoter => write!(f, "this replica is not a voter"),
-            Wait::Voters(missing) => write!(f, "the set forms; not voters yet: {missing:?}"),
-            Wait::Learners(ids) => write!(f, "the set forms; learners: {ids:?}"),
-            Wait::CatchingUp => write!(f, "applying what the set committed"),
-        }
-    }
-}
-
-/// Whether replica `me` may start contact in `membership`: as a voter of
-/// a single configuration and, until the set formed, of one whose voters
-/// are every audio replica, `voters` by peer address, and with no
-/// learner. A leader running contact promotes a learner only on the
-/// learner's own reports, which a learner does not send, so a set forms
-/// before contact starts. Once it formed, another replica a learner or
-/// down holds no voter back: a voter restarting, as a rollout restarts
-/// each, starts again.
-fn gate(
-    membership: &Membership<NodeId, BasicNode>,
-    me: NodeId,
-    formed: bool,
-    voters: &[String],
-) -> Result<(), Wait> {
-    if membership.get_joint_config().len() > 1 {
-        return Err(Wait::Joint);
-    }
-    if !membership.voter_ids().any(|id| id == me) {
-        return Err(Wait::NotVoter);
-    }
-    if formed {
-        return Ok(());
-    }
-    let addrs: Vec<&str> = (membership.voter_ids())
-        .filter_map(|id| membership.get_node(&id))
-        .map(|node| node.addr.as_str())
-        .collect();
-    let missing: Vec<String> = (voters.iter())
-        .filter(|addr| !addrs.contains(&addr.as_str()))
-        .cloned()
-        .collect();
-    if !missing.is_empty() {
-        return Err(Wait::Voters(missing));
-    }
-    let learners: Vec<NodeId> = membership.learner_ids().collect();
-    if !learners.is_empty() {
-        return Err(Wait::Learners(learners));
-    }
-    Ok(())
-}
-
-/// How often a set's replica checks whether it may start contact.
-const CONTACT_WAIT: Duration = Duration::from_millis(100);
-/// How often a replica waiting for the same reason says so again.
-const WAIT_TOLD: Duration = Duration::from_secs(30);
-
 /// Why the serving task ended: its error, or its panic. A panic would
 /// otherwise leave the process running with no listeners.
 pub fn ended(r: Result<String, tokio::task::JoinError>) -> String {
@@ -522,79 +393,9 @@ pub fn ended(r: Result<String, tokio::task::JoinError>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
 
     use super::*;
-
-    const A: &str = "faderz-0:7400";
-    const B: &str = "faderz-1:7400";
-    const C: &str = "faderz-2:7400";
-
-    /// Voters 1, 2, 3 at A, B, C, `learners` beside them, and a second
-    /// configuration while `joint`.
-    fn membership(voters: &[u64], learners: &[u64], joint: bool) -> Membership<NodeId, BasicNode> {
-        let addr = |id: u64| [A, B, C, "faderz-3:7400"][id as usize - 1];
-        let nodes: BTreeMap<NodeId, BasicNode> = (voters.iter().chain(learners))
-            .map(|&id| (id, BasicNode::new(addr(id))))
-            .collect();
-        let mut configs = vec![voters.iter().copied().collect::<BTreeSet<_>>()];
-        if joint {
-            configs.push(voters.iter().copied().take(1).collect());
-        }
-        Membership::new(configs, nodes)
-    }
-
-    /// Before the set formed, a voter waits for every audio replica to be
-    /// a voter and for no learner; a learner and a replica of a changing
-    /// membership wait always.
-    #[test]
-    fn at_formation_contact_waits_for_every_voter() {
-        let all = [A.to_owned(), B.to_owned(), C.to_owned()];
-        assert_eq!(
-            gate(&membership(&[1, 2, 3], &[], false), 1, false, &all),
-            Ok(())
-        );
-        assert_eq!(
-            gate(&membership(&[1, 2], &[], false), 1, false, &all),
-            Err(Wait::Voters(vec![C.to_owned()]))
-        );
-        assert_eq!(
-            gate(&membership(&[1, 2, 3], &[4], false), 1, false, &all),
-            Err(Wait::Learners(vec![4]))
-        );
-        assert_eq!(
-            gate(&membership(&[1, 2], &[3], false), 3, false, &all),
-            Err(Wait::NotVoter)
-        );
-        assert_eq!(
-            gate(&membership(&[1, 2, 3], &[], true), 1, false, &all),
-            Err(Wait::Joint)
-        );
-    }
-
-    /// Once the set formed, a voter starts with another replica down or a
-    /// learner, as a rollout restarts each voter in turn; a learner and a
-    /// replica of a changing membership still wait.
-    #[test]
-    fn once_formed_contact_needs_only_a_voter() {
-        let all = [A.to_owned(), B.to_owned(), C.to_owned()];
-        assert_eq!(
-            gate(&membership(&[1, 2], &[], false), 1, true, &all),
-            Ok(())
-        );
-        assert_eq!(
-            gate(&membership(&[1, 2], &[3], false), 1, true, &all),
-            Ok(())
-        );
-        assert_eq!(
-            gate(&membership(&[1, 2], &[3], false), 3, true, &all),
-            Err(Wait::NotVoter)
-        );
-        assert_eq!(
-            gate(&membership(&[1, 2, 3], &[], true), 1, true, &all),
-            Err(Wait::Joint)
-        );
-    }
 
     /// A replica of a set of one, voter at `local`, in a directory removed
     /// afterwards.
@@ -625,34 +426,23 @@ mod tests {
         (Arc::new(replica), dir)
     }
 
-    fn contact(dir: &std::path::Path, voters: &[&str]) -> Contact {
+    fn contact() -> Contact {
         Contact {
             timing: samplez_replica::contact::Timing::defaults(replica::BLOCK),
             audio: None,
             rollout: Fixed::new(rollout::key(b"faderz"), None),
             follow: None,
-            voters: voters.iter().map(|&v| v.to_owned()).collect(),
-            formed: dir.join(FORMED),
         }
     }
 
-    /// A replica whose set has not formed does not start contact, so its
-    /// engine is not started and it is not ready; once it formed, it is
-    /// written to the volume.
+    /// Contact starts as soon as it is begun, with no wait on the set, and
+    /// with the replica gone begins nothing.
     #[tokio::test]
-    async fn contact_waits_for_the_set_and_notes_it_formed() {
-        let (replica, dir) = lone("wait").await;
-        let waiting = contact(&dir, &["local", B]).begin(Arc::downgrade(&replica));
-        let waited = tokio::time::timeout(Duration::from_secs(1), waiting).await;
-        assert!(waited.is_err(), "contact started: {waited:?}");
-        assert!(replica.contact_metrics().is_none());
-        assert!(!dir.join(FORMED).exists());
-        contact(&dir, &["local"])
-            .begin(Arc::downgrade(&replica))
-            .await
-            .unwrap();
-        assert!(replica.contact_metrics().is_some());
-        assert!(dir.join(FORMED).exists());
+    async fn contact_starts_with_the_replica() {
+        let (replica, dir) = lone("start").await;
+        contact().begin(&Arc::downgrade(&replica)).unwrap();
+        assert!(replica.contact_metrics().is_some(), "contact runs");
+        contact().begin(&Weak::new()).unwrap();
         replica.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -666,10 +456,7 @@ mod tests {
         replica
             .contact(timing, Arc::new(SystemClocks), None)
             .unwrap();
-        let e = contact(&dir, &["local"])
-            .begin(Arc::downgrade(&replica))
-            .await
-            .unwrap_err();
+        let e = contact().begin(&Arc::downgrade(&replica)).unwrap_err();
         assert!(e.contains("contact runs already"), "{e}");
         replica.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
