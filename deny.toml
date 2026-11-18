@@ -37,7 +37,7 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 [bans]
 multiple-versions = "allow"
 # Every dependency names its version: registry ones and the samplez git
-# ones, pinned by rev, with `=`.
+# ones, pinned by tag, with `=`.
 wildcards = "deny"
 
 [sources]
