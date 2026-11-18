@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/danielclasen/faderz/compare/v0.1.9...v0.2.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **replica:** snapshots carry a format (2) beside the state. Earlier binaries refuse them; this one still loads snapshots they wrote.
+
+### Features
+
+* **replica:** run the engine in a replicated set ([#55](https://github.com/danielclasen/faderz/issues/55)) ([8503909](https://github.com/danielclasen/faderz/commit/85039090048424143d67def302bc4f22d0856048))
+
 ## [0.1.9](https://github.com/danielclasen/faderz/compare/v0.1.8...v0.1.9) (2026-11-18)
 
 

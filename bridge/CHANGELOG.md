@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.3...faderz-bridge-v0.1.4) (2026-11-18)
+
+
+### Bug Fixes
+
+* **bridge:** put the renewed token in use before it is stored ([#60](https://github.com/danielclasen/faderz/issues/60)) ([deb9aaf](https://github.com/danielclasen/faderz/commit/deb9aaf68f893468a41ae135ab4ca305acd4ce1d))
+
 ## [0.1.3](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.2...faderz-bridge-v0.1.3) (2026-11-18)
 
 
