@@ -6,7 +6,7 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -181,12 +181,12 @@ impl Node {
 
 /// What each replica committed to its member flow of the programme
 /// output, read 80 ms behind libmxl's clock every 20 ms: per block index,
-/// an XXH3 of the block's samples, for every block its engine reports
-/// committed whole. A block it withheld is never written, so the flow
+/// an XXH3 of the block's samples and their sum of squares, for every
+/// block its engine reports committed whole. A block it withheld is never written, so the flow
 /// holds an older lap's samples there. A replica's flow is gone while it
 /// is down, and read again once it is back.
 struct Outputs {
-    blocks: Mutex<Vec<BTreeMap<u64, u64>>>,
+    blocks: Mutex<Vec<BTreeMap<u64, (u64, f64)>>>,
     engines: Mutex<Vec<Weak<Audio>>>,
     stop: AtomicBool,
 }
@@ -232,7 +232,8 @@ impl Outputs {
                             let bytes: Vec<u8> =
                                 buf.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect();
                             let hash = xxhash_rust::xxh3::xxh3_64(&bytes);
-                            out.blocks.lock().unwrap()[n].insert(k, hash);
+                            let energy = buf.iter().map(|&v| f64::from(v) * f64::from(v)).sum();
+                            out.blocks.lock().unwrap()[n].insert(k, (hash, energy));
                             copied = true;
                         }
                     }
@@ -249,13 +250,16 @@ impl Outputs {
     }
 
     /// Blocks replicas `a` and `b` both wrote at or after block `from`:
-    /// how many, the indices where they differ, and how many distinct
-    /// blocks there were.
+    /// how many, the indices where they differ, how many distinct blocks
+    /// there were, and the levels `a` wrote ([`levels`]).
     fn compare(&self, a: usize, b: usize, from: u64) -> Comparison {
         let blocks = self.blocks.lock().unwrap();
-        let mut c = Comparison::default();
-        for (k, ha) in blocks[a].range(from..) {
-            let Some(hb) = blocks[b].get(k) else {
+        let mut c = Comparison {
+            levels: levels(&blocks[a], from),
+            ..Comparison::default()
+        };
+        for (k, (ha, _)) in blocks[a].range(from..) {
+            let Some((hb, _)) = blocks[b].get(k) else {
                 continue;
             };
             c.compared += 1;
@@ -303,7 +307,51 @@ fn attach(domain: &Path, flow: &str) -> Option<Generation> {
 struct Comparison {
     compared: usize,
     differing: Vec<u64>,
-    distinct: std::collections::BTreeSet<u64>,
+    distinct: BTreeSet<u64>,
+    levels: BTreeSet<i64>,
+}
+
+/// Blocks per window of [`levels`]: 50 ms, a whole number of periods of
+/// every source sine, so a window's energy is the same while no command
+/// changes the mix.
+const WINDOW: u64 = 50;
+
+/// The levels of the whole windows of `blocks` at or after block `from`:
+/// each window's energy in thousandths of a decade, `i64::MIN` for a
+/// silent one. One level is a mix no command changed.
+fn levels(blocks: &BTreeMap<u64, (u64, f64)>, from: u64) -> BTreeSet<i64> {
+    let mut windows: BTreeMap<u64, (u64, f64)> = BTreeMap::new();
+    for (k, (_, energy)) in blocks.range(from..) {
+        let w = windows.entry(k / WINDOW).or_default();
+        *w = (w.0 + 1, w.1 + energy);
+    }
+    (windows.values())
+        .filter(|(count, _)| *count == WINDOW)
+        .map(|&(_, energy)| {
+            if energy > 1e-9 {
+                (energy.log10() * 1000.0).round() as i64
+            } else {
+                i64::MIN
+            }
+        })
+        .collect()
+}
+
+/// A mix no command changed has one level, silence included; commands
+/// that change gains add others.
+#[test]
+fn a_mix_no_command_changed_has_one_level() {
+    let window = |from: u64, energy: f64| (from..from + WINDOW).map(move |k| (k, (k, energy)));
+    let steady: BTreeMap<u64, (u64, f64)> = (0..4).flat_map(|w| window(w * WINDOW, 0.01)).collect();
+    assert_eq!(levels(&steady, 0).len(), 1);
+    let silent: BTreeMap<u64, (u64, f64)> = (0..4).flat_map(|w| window(w * WINDOW, 0.0)).collect();
+    assert_eq!(levels(&silent, 0), BTreeSet::from([i64::MIN]));
+    let mixed: BTreeMap<u64, (u64, f64)> = (0..4)
+        .flat_map(|w| window(w * WINDOW, 0.01 / (1 + w) as f64))
+        .collect();
+    assert_eq!(levels(&mixed, 0).len(), 4);
+    // A partial window counts for nothing.
+    assert_eq!(levels(&mixed, 10).len(), 3);
 }
 
 fn until(secs: u64, mut f: impl FnMut() -> bool) -> bool {
@@ -389,15 +437,17 @@ fn committing(node: &Node) -> bool {
     node.state() == Some(ReplicaState::Committing)
 }
 
-/// Compares every pair of replicas from block `from` on until each pair
-/// committed at least `least` blocks alike, within 60 s: no block differs,
-/// and they are not all alike.
+/// Compares every pair of the running replicas from block `from` on
+/// until each pair committed at least `least` blocks alike, within 60 s:
+/// no block differs, they are not all alike, and the commands sent since
+/// `from` changed the mix, which is not silent.
 fn agree(nodes: &[Option<Node>], outputs: &Outputs, from: u64, least: usize) {
+    let running: Vec<usize> = (0..REPLICAS).filter(|&n| nodes[n].is_some()).collect();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let mut short = None;
-        for a in 0..REPLICAS {
-            for b in a + 1..REPLICAS {
+        for (i, &a) in running.iter().enumerate() {
+            for &b in &running[i + 1..] {
                 let c = outputs.compare(a, b, from);
                 assert!(c.differing.is_empty(), "replicas {a} and {b}: {c:?}");
                 if c.compared < least {
@@ -406,6 +456,11 @@ fn agree(nodes: &[Option<Node>], outputs: &Outputs, from: u64, least: usize) {
                 }
                 // The sines repeat every 50 ms; gains and routes add more.
                 assert!(c.distinct.len() > 20, "a constant output: {c:?}");
+                assert!(c.levels.len() >= 4, "no command changed the mix: {c:?}");
+                assert!(
+                    c.levels.last().is_some_and(|&l| l > -3_000),
+                    "a silent mix: {c:?}"
+                );
             }
         }
         let Some((a, b, c)) = short else {
@@ -438,11 +493,14 @@ fn steady(nodes: &[Option<Node>], n: usize) {
     assert!(steady, "replica {n} did not commit: {}", states(nodes));
 }
 
-/// Every replica of the set writes the same audio through a session of
-/// faders, trims, mutes, routes and input switches. A follower killed
-/// meanwhile misses commands, input switches among them; started again
-/// on its volume it catches up, commits again and writes what the
-/// others write.
+/// Two replicas of the three form no set: neither starts contact, so
+/// neither is ready, until the third is a voter too. Every replica of the
+/// set then writes the same audio through a session of faders, trims,
+/// mutes, routes and input switches. A follower killed meanwhile misses
+/// commands, input switches among them; started again on its volume it
+/// catches up, commits again and writes what the others write. The leader
+/// killed, the other two elect another and go on writing alike; it comes
+/// back the same way.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -454,11 +512,32 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
         .with_max_level(tracing::Level::WARN)
         .try_init();
     let (set, listeners) = Set::new("audio");
-    let mut nodes: Vec<Option<Node>> = listeners
-        .into_iter()
-        .enumerate()
-        .map(|(n, l)| Some(set.start(n, Some(l))))
-        .collect();
+    let mut listeners: Vec<Option<std::net::TcpListener>> =
+        listeners.into_iter().map(Some).collect();
+    let mut nodes: Vec<Option<Node>> = (0..REPLICAS).map(|_| None).collect();
+    for n in 0..2 {
+        nodes[n] = Some(set.start(n, listeners[n].take()));
+    }
+    // Joined and caught up, on the replica's terms; the third is not a
+    // voter yet, so neither starts contact or is ready.
+    let joined = until(30, || {
+        (0..2).all(|n| node(&nodes, n).ops("/healthz").1["replica"]["ready"] == true)
+    });
+    assert!(joined, "two replicas did not join: {}", states(&nodes));
+    for _ in 0..10 {
+        for n in 0..2 {
+            let node = node(&nodes, n);
+            assert_eq!(
+                node.ops("/readyz").0,
+                503,
+                "replica {n}: {}",
+                states(&nodes)
+            );
+            assert!(node.server.app.replica.contact_metrics().is_none());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    nodes[2] = Some(set.start(2, listeners[2].take()));
     let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
     let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
     for n in 0..REPLICAS {
@@ -496,6 +575,30 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     steady(&nodes, killed);
     let from = Outputs::now() + 1;
     for i in 70..98 {
+        write(&nodes, i, &command(i));
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    agree(&nodes, &outputs, from, 300);
+
+    // The leader is killed; the other two elect another and go on.
+    let leader = node(&nodes, 0).ops("/healthz").1["replica"]["leader"].clone();
+    let killed = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).ops("/healthz").1["replica"]["id"] == leader)
+        .expect("a leader");
+    nodes[killed].take().unwrap().kill();
+    let from = Outputs::now() + 1;
+    for i in 98..126 {
+        write(&nodes, i, &command(i));
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    agree(&nodes, &outputs, from, 300);
+    nodes[killed] = Some(set.start(killed, None));
+    outputs.restarted(killed, node(&nodes, killed).engine());
+    steady(&nodes, killed);
+    let from = Outputs::now() + 1;
+    for i in 126..154 {
         write(&nodes, i, &command(i));
         std::thread::sleep(Duration::from_millis(40));
     }
