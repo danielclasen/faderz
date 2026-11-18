@@ -41,7 +41,7 @@ built into the binary and the control-surface bridge both speak.
   number of voters with a WebSocket standby on another replica and
   failover between them
 - Hardware control surfaces through `faderz-bridge` (Mackie Control over
-  USB-MIDI)
+  USB-MIDI or RTP-MIDI)
 - `/healthz`, `/readyz` and Prometheus `/metrics`; a container image and
   a release binary
 
@@ -340,8 +340,8 @@ channel input, `faderz_input_attached`,
 ## Control surfaces
 
 `faderz-bridge` in `bridge/` drives Mackie Control surfaces, an X-Touch
-and X-Touch Extenders, over USB-MIDI, and connects to faderz as a
-console client: fader touch and moves, motors, mute, solo, select, bank
+and X-Touch Extenders, over USB-MIDI or over the network by RTP-MIDI,
+and connects to faderz as a console client: fader touch and moves, motors, mute, solo, select, bank
 and the scribble strips. It signs in with a token or by the OAuth 2.0
 device grant. Its mapping follows the MCU reference and has not been
 verified on hardware. Releases publish it as a binary and as
