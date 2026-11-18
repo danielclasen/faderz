@@ -27,8 +27,12 @@ pub const DERIVATION_VERSION: u32 = 2;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
-/// refuse it as missing their fields rather than load part of it.
-const FORMAT: u32 = 2;
+/// refuse it as missing their fields rather than load part of it. 3
+/// adds the IS-05 connections ([`Ports`]), which a binary reading 2
+/// would drop.
+const FORMAT: u32 = 3;
+/// The layout before [`Ports`], read as one without connections.
+const FORMAT_WITHOUT_PORTS: u32 = 2;
 
 /// A client's command as the replicated log carries it. `id` is the
 /// client's command id, under which a refusal or a stored scene is kept
@@ -85,6 +89,52 @@ pub enum Command {
         id: String,
         console: String,
     },
+    /// An IS-05 activation of a channel's receiver or an output's sender,
+    /// as its `/active` shows it ([`crate::nmos`]).
+    Connect {
+        id: String,
+        port: PortRef,
+        active: Connection,
+    },
+}
+
+/// An IS-05 port: the receiver of a channel or the sender of an output,
+/// by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortRef {
+    Receiver(String),
+    Sender(String),
+}
+
+/// An IS-05 port's `/active`, ids as lowercase UUID text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Connection {
+    pub master_enable: bool,
+    /// `sender_id` of a receiver, `receiver_id` of a sender.
+    pub peer: Option<String>,
+    pub domain: Option<String>,
+    pub flow: Option<String>,
+}
+
+/// The IS-05 connections the state keeps: each port's last activation
+/// and each channel's leg flows the activations named in place of the
+/// configured ones. A port without an activation is as configured.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ports {
+    receivers: BTreeMap<String, Connection>,
+    senders: BTreeMap<String, Connection>,
+    legs: BTreeMap<String, Legs>,
+}
+
+/// A channel's flows of input a and b that activations named.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Legs {
+    a: Option<String>,
+    b: Option<String>,
 }
 
 /// A console's descriptor: model `ConsoleStatus` without what the server
@@ -293,6 +343,10 @@ pub struct Mixer {
     declared: Vec<Console>,
     /// Each channel's input flows and domain; empty without an engine.
     wiring: Vec<Wiring>,
+    /// The IS-05 connections.
+    ports: Ports,
+    /// [`Mixer::wiring`] with the leg flows of [`Ports`].
+    effective: Vec<Wiring>,
     /// The engine targets of the state, kept by every write; none
     /// without an engine. Derived from the state alone, so neither
     /// replicated nor saved.
@@ -319,6 +373,9 @@ struct Saved {
     /// Absent in snapshots taken before consoles were kept.
     #[serde(default)]
     consoles: Vec<Registered>,
+    /// Absent before [`FORMAT`] 3.
+    #[serde(default)]
+    ports: Ports,
 }
 
 impl Mixer {
@@ -341,6 +398,7 @@ impl Mixer {
             shape: Some(Arc::new(shape)),
             consoles: declared.iter().map(Mixer::declared_entry).collect(),
             declared,
+            effective: wiring.clone(),
             wiring,
             ..Mixer::default()
         };
@@ -352,7 +410,7 @@ impl Mixer {
     /// Derives the engine targets of the whole state again.
     fn derive(&mut self) {
         self.derived = match (self.shape.as_deref(), self.wiring.is_empty()) {
-            (Some(shape), false) => Some(mix::Derived::new(shape, &self.wiring, &self.state)),
+            (Some(shape), false) => Some(mix::Derived::new(shape, &self.effective, &self.state)),
             _ => None,
         };
     }
@@ -382,7 +440,7 @@ impl Mixer {
             (Some("b"), Some(b)) => b.clone(),
             _ => w.a.clone(),
         };
-        (shape.channels.iter().zip(&self.wiring).enumerate())
+        (shape.channels.iter().zip(&self.effective).enumerate())
             .filter(|(_, (c, w))| {
                 after.get(&c.id).is_some_and(|input| {
                     flow(w, Some(input)) != flow(w, self.state["channels"][&c.id].get("input"))
@@ -409,7 +467,7 @@ impl Mixer {
             return Some(Answer::Refused { message });
         }
         let domains: BTreeSet<&str> = (slots.iter())
-            .map(|&s| self.wiring[s as usize].domain.as_str())
+            .map(|&s| self.effective[s as usize].domain.as_str())
             .collect();
         (domains.len() > 1).then(|| Answer::Refused {
             message: format!(
@@ -417,6 +475,192 @@ impl Mixer {
                 domains.into_iter().collect::<Vec<_>>().join(", ")
             ),
         })
+    }
+
+    /// [`Mixer::wiring`] with the leg flows activations named.
+    fn rewire(&mut self) {
+        let Some(shape) = self.shape.clone() else {
+            return;
+        };
+        self.effective = (shape.channels.iter().zip(&self.wiring))
+            .map(|(c, w)| {
+                let mut w = w.clone();
+                if let Some(legs) = self.ports.legs.get(&c.id) {
+                    if let Some(a) = &legs.a {
+                        w.a.clone_from(a);
+                    }
+                    if let (Some(b), Some(_)) = (&legs.b, &w.b) {
+                        w.b = Some(b.clone());
+                    }
+                }
+                w
+            })
+            .collect();
+    }
+
+    /// Detaches the channels whose receiver is disabled and sets each
+    /// output's enable, in `t` as derived from the state.
+    fn overlay(&self, t: &mut Targets) {
+        let shape = self.shape();
+        for (flow, c) in t.flows.iter_mut().zip(&shape.channels) {
+            if self
+                .ports
+                .receivers
+                .get(&c.id)
+                .is_some_and(|r| !r.master_enable)
+            {
+                *flow = None;
+            }
+        }
+        t.outputs = (shape.outputs.iter())
+            .map(|o| {
+                self.ports
+                    .senders
+                    .get(&o.id)
+                    .is_none_or(|s| s.master_enable)
+            })
+            .collect();
+    }
+
+    /// What the engine reads and writes beside the state: the flows with
+    /// the activations' leg flows, the detached channels and each
+    /// output's enable ([`Product::targets`] without deriving them).
+    pub fn engine_view(&self) -> mix::EngineView {
+        let mut t = Targets {
+            flows: vec![Some(String::new()); self.effective.len()],
+            ..Targets::default()
+        };
+        self.overlay(&mut t);
+        mix::EngineView {
+            wiring: self.effective.clone(),
+            detached: t.flows.iter().map(Option::is_none).collect(),
+            outputs: t.outputs,
+        }
+    }
+
+    /// Channel `id`'s receiver: its last activation, none before the
+    /// first, and the flow its selected input reads; none for a channel
+    /// the engine does not read.
+    pub fn receiver(&self, id: &str) -> Option<(Option<&Connection>, &str)> {
+        let slot = self.shape().channels.iter().position(|c| c.id == id)?;
+        let w = self.effective.get(slot)?;
+        Some((self.ports.receivers.get(id), mix::flow(&self.state, id, w)))
+    }
+
+    /// Output `id`'s sender's last activation, none before the first.
+    pub fn sender(&self, id: &str) -> Option<&Connection> {
+        self.ports.senders.get(id)
+    }
+
+    /// The flow slot `slot` reads, none for a detached one.
+    fn target_flow(&self, slot: usize) -> Option<String> {
+        let c = &self.shape().channels[slot];
+        let detached = self
+            .ports
+            .receivers
+            .get(&c.id)
+            .is_some_and(|r| !r.master_enable);
+        (!detached).then(|| mix::flow(&self.state, &c.id, &self.effective[slot]).to_owned())
+    }
+
+    /// The slot of channel `channel` when activating its receiver as
+    /// `active` changes the flow it reads.
+    fn connect_reroutes(&self, channel: &str, active: &Connection) -> Vec<u32> {
+        let Some(slot) = (self.shape.as_deref())
+            .filter(|_| !self.wiring.is_empty())
+            .and_then(|s| s.channels.iter().position(|c| c.id == channel))
+        else {
+            return Vec::new();
+        };
+        let after = active.flow.clone().filter(|_| active.master_enable);
+        if after == self.target_flow(slot) {
+            Vec::new()
+        } else {
+            vec![slot as u32]
+        }
+    }
+
+    /// Activates a port as `active`: a receiver's flow becomes the flow of
+    /// its channel's selected input, and a disabled receiver detaches its
+    /// channel; a sender's enable starts or stops its output.
+    fn connect(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        port: &PortRef,
+        active: &Connection,
+        ctx: &Apply,
+    ) -> Effect<Edits> {
+        let ids = [&active.peer, &active.domain, &active.flow];
+        if let Some(bad) = ids.into_iter().flatten().find(|v| !is_uuid(v)) {
+            let message = format!("{bad:?} is no lowercase UUID");
+            return self.refuse(session, id, Answer::Invalid { message });
+        }
+        let shape = self.shape.clone().expect("configured");
+        match port {
+            PortRef::Receiver(channel) => {
+                let slot = shape.channels.iter().position(|c| c.id == *channel);
+                let Some(slot) = slot.filter(|_| !self.wiring.is_empty()) else {
+                    let message = format!("no receiver {channel}");
+                    return self.refuse(session, id, Answer::NotFound { message });
+                };
+                if active.master_enable && active.flow.is_none() {
+                    let message = "an enabled receiver needs a flow".to_owned();
+                    return self.refuse(session, id, Answer::Invalid { message });
+                }
+                if ctx.generation == Some(false)
+                    && !self.connect_reroutes(channel, active).is_empty()
+                {
+                    let message =
+                        "the command switches inputs and was not ordered to: send it again".into();
+                    return self.refuse(session, id, Answer::Refused { message });
+                }
+                if let Some(flow) = &active.flow {
+                    let b = self.state["channels"][channel]["input"] == "b"
+                        && self.wiring[slot].b.is_some();
+                    let legs = self.ports.legs.entry(channel.clone()).or_default();
+                    *(if b { &mut legs.b } else { &mut legs.a }) = Some(flow.clone());
+                }
+                self.ports.receivers.insert(channel.clone(), active.clone());
+                self.rewire();
+                if let Some(d) = &mut self.derived {
+                    let path = format!("/channels/{}/input", escape(channel));
+                    d.update(
+                        &shape,
+                        &self.effective,
+                        &self.state,
+                        &Value::Null,
+                        [path.as_str()],
+                    );
+                }
+            }
+            PortRef::Sender(output) => {
+                if !shape.outputs.iter().any(|o| o.id == *output) {
+                    let message = format!("no sender {output}");
+                    return self.refuse(session, id, Answer::NotFound { message });
+                }
+                self.ports.senders.insert(output.clone(), active.clone());
+            }
+        }
+        Effect::Changed(Edits::default())
+    }
+
+    /// A switch between input a and b among `changed` shows in the
+    /// channel's receiver: its flow becomes the newly selected input's.
+    fn follow_switches(&mut self, changed: &[(String, Value)]) {
+        for (path, _) in changed {
+            if let [group, channel, leaf] = tokens(path).as_slice()
+                && group == "channels"
+                && leaf == "input"
+                && let Some(slot) = self.shape().channels.iter().position(|c| c.id == *channel)
+                && let Some(w) = self.effective.get(slot)
+            {
+                let flow = mix::flow(&self.state, channel, w).to_owned();
+                if let Some(r) = self.ports.receivers.get_mut(channel) {
+                    r.flow = Some(flow);
+                }
+            }
+        }
     }
 
     /// The leaves a command would write, applied to the state as it is,
@@ -625,8 +869,9 @@ impl Mixer {
         if let (Some(d), Some(shape)) = (&mut self.derived, self.shape.as_deref()) {
             let vcas = vcas.as_ref().unwrap_or(&Value::Null);
             let paths = changed.iter().map(|(p, _)| p.as_str());
-            d.update(shape, &self.wiring, &self.state, vcas, paths);
+            d.update(shape, &self.effective, &self.state, vcas, paths);
         }
+        self.follow_switches(&changed);
         changed
     }
 
@@ -1226,6 +1471,14 @@ impl Mixer {
             .collect();
         self.dropped = dropped;
         self.merge_consoles(saved.consoles);
+        // Connections of ports the configuration no longer has go.
+        let mut ports = saved.ports;
+        ports.receivers.retain(|id, _| shape.is_channel(id));
+        ports.legs.retain(|id, _| shape.is_channel(id));
+        ports
+            .senders
+            .retain(|id, _| shape.outputs.iter().any(|o| o.id == *id));
+        self.ports = ports;
     }
 }
 
@@ -1265,18 +1518,28 @@ impl Product for Mixer {
             } => self.register(origin, id, console, *bank_offset),
             Command::PutConsole { id, console } => self.put_console(&session, id, console),
             Command::RemoveConsole { id, console } => self.remove_console(&session, id, console),
+            Command::Connect { id, port, active } => self.connect(&session, id, port, active, ctx),
         }
     }
 
     /// [`mix::targets`] of the state, as every write keeps them; none
     /// without an engine's wiring.
     fn targets(&self) -> Option<Targets> {
-        self.derived.as_ref().map(|d| d.targets().clone())
+        let mut t = self.derived.as_ref()?.targets().clone();
+        self.overlay(&mut t);
+        Some(t)
     }
 
     fn reroutes(&self, _origin: &Origin, command: &[u8]) -> Vec<u32> {
-        serde_json::from_slice::<Command>(command)
-            .map_or_else(|_| Vec::new(), |c| self.rerouted(&self.writes_of(&c)))
+        match serde_json::from_slice::<Command>(command) {
+            Ok(Command::Connect {
+                port: PortRef::Receiver(channel),
+                active,
+                ..
+            }) => self.connect_reroutes(&channel, &active),
+            Ok(c) => self.rerouted(&self.writes_of(&c)),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// XXH3 over [`DERIVATION_VERSION`], the shape, the declared consoles
@@ -1401,6 +1664,7 @@ impl Product for Mixer {
                 .collect(),
             scenes_created: self.scenes_created,
             consoles: self.consoles.clone(),
+            ports: self.ports.clone(),
         };
         let snapshot = Snapshot {
             format: FORMAT,
@@ -1417,7 +1681,7 @@ impl Product for Mixer {
         let value: Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
         let saved: Saved = match value.get("format") {
             None => serde_json::from_value(value).map_err(|e| e.to_string())?,
-            Some(f) if *f == FORMAT => {
+            Some(f) if *f == FORMAT || *f == FORMAT_WITHOUT_PORTS => {
                 let snapshot: Snapshot =
                     serde_json::from_value(value).map_err(|e| e.to_string())?;
                 snapshot.mixer
@@ -1448,7 +1712,9 @@ impl Product for Mixer {
             self.owners = saved.owners.into_iter().collect();
             self.dropped = Vec::new();
             self.consoles = saved.consoles;
+            self.ports = saved.ports;
         }
+        self.rewire();
         self.derive();
         Ok(())
     }
@@ -1506,6 +1772,15 @@ pub fn tokens(path: &str) -> Vec<String> {
         .skip(1)
         .map(|t| t.replace("~1", "/").replace("~0", "~"))
         .collect()
+}
+
+/// The lowercase canonical UUID form MXL flow and NMOS ids take.
+fn is_uuid(v: &str) -> bool {
+    v.len() == 36
+        && v.bytes().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_digit() || (b'a'..=b'f').contains(&c),
+        })
 }
 
 fn escape(token: &str) -> String {
@@ -3742,12 +4017,187 @@ mod tests {
             "earlier binaries refuse it"
         );
         let mut v: Value = serde_json::from_slice(&saved).unwrap();
-        v["format"] = json!(3);
+        v["format"] = json!(FORMAT + 1);
         let e = mixer().load(&serde_json::to_vec(&v).unwrap()).unwrap_err();
-        assert!(e.contains("format 3"), "{e}");
+        assert!(e.contains(&format!("format {}", FORMAT + 1)), "{e}");
         let earlier = serde_json::to_vec(&v["mixer"]).unwrap();
         let mut back = mixer();
         back.load(&earlier).unwrap();
         assert_eq!(back.state(), m.state());
+    }
+
+    const F1: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a01";
+    const F2: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a02";
+    const DOMAIN: &str = "6f1f1d1e-56f6-4c4c-8d32-9e7f4a3b2c10";
+
+    fn conn(enabled: bool, flow: Option<&str>) -> Connection {
+        Connection {
+            master_enable: enabled,
+            peer: None,
+            domain: Some(DOMAIN.into()),
+            flow: flow.map(Into::into),
+        }
+    }
+
+    fn connect(m: &mut Mixer, id: &str, port: PortRef, active: Connection) -> Effect<Edits> {
+        let c = Command::Connect {
+            id: id.into(),
+            port,
+            active,
+        };
+        apply_as(m, &c, Some(true))
+    }
+
+    fn receiver(ch: &str) -> PortRef {
+        PortRef::Receiver(ch.into())
+    }
+
+    /// A receiver's activation is its channel's selected input: the
+    /// engine reads the flow it names, and a disabled receiver detaches
+    /// the channel whichever flow it names. The replicated state carries
+    /// it, so every replica routes alike.
+    #[test]
+    fn a_receiver_activation_routes_its_channel_and_a_disable_detaches_it() {
+        let mut m = wired();
+        let e = connect(&mut m, "n1", receiver("ch1"), conn(true, Some(F1)));
+        assert!(matches!(e, Effect::Changed(_)));
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some(F1));
+        let (shown, selected) = m.receiver("ch1").unwrap();
+        assert_eq!((shown, selected), (Some(&conn(true, Some(F1))), F1));
+        connect(&mut m, "n2", receiver("ch1"), conn(false, Some(F2)));
+        assert_eq!(m.targets().unwrap().flows[0], None);
+        assert!(m.engine_view().detached[0]);
+        connect(&mut m, "n3", receiver("ch1"), conn(true, Some(F2)));
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some(F2));
+        // The other channels keep their configured flows.
+        assert_eq!(m.targets().unwrap().flows[1].as_deref(), Some("a2"));
+    }
+
+    /// A switch between inputs a and b moves the receiver to the other
+    /// input's flow and keeps the flow an activation named for the input
+    /// it was on.
+    #[test]
+    fn a_switch_between_inputs_shows_in_the_receiver() {
+        let mut m = wired();
+        connect(&mut m, "n1", receiver("ch2"), conn(true, Some(F1)));
+        patch(&mut m, "p1", &[("/channels/ch2/input", json!("b"))]);
+        assert_eq!(
+            m.receiver("ch2").unwrap().0.unwrap().flow.as_deref(),
+            Some("b2")
+        );
+        assert_eq!(m.targets().unwrap().flows[1].as_deref(), Some("b2"));
+        patch(&mut m, "p2", &[("/channels/ch2/input", json!("a"))]);
+        assert_eq!(
+            m.receiver("ch2").unwrap().0.unwrap().flow.as_deref(),
+            Some(F1)
+        );
+        assert_eq!(m.targets().unwrap().flows[1].as_deref(), Some(F1));
+        // On input b an activation sets input b's flow.
+        patch(&mut m, "p3", &[("/channels/ch2/input", json!("b"))]);
+        connect(&mut m, "n2", receiver("ch2"), conn(true, Some(F2)));
+        patch(&mut m, "p4", &[("/channels/ch2/input", json!("a"))]);
+        assert_eq!(m.targets().unwrap().flows[1].as_deref(), Some(F1));
+        patch(&mut m, "p5", &[("/channels/ch2/input", json!("b"))]);
+        assert_eq!(m.targets().unwrap().flows[1].as_deref(), Some(F2));
+    }
+
+    /// A sender's `master_enable` starts and stops its output; an output
+    /// never activated is enabled.
+    #[test]
+    fn a_sender_activation_enables_its_output() {
+        let mut m = wired();
+        assert_eq!(m.targets().unwrap().outputs, [true]);
+        let out = || PortRef::Sender("out-pgm".into());
+        connect(&mut m, "n1", out(), conn(false, None));
+        assert_eq!(m.targets().unwrap().outputs, [false]);
+        assert_eq!(m.sender("out-pgm"), Some(&conn(false, None)));
+        connect(&mut m, "n2", out(), conn(true, Some(F1)));
+        assert_eq!(m.targets().unwrap().outputs, [true]);
+    }
+
+    /// An activation that changes the flow a channel reads is ordered on
+    /// the generation path like an input switch, and refused off it; one
+    /// that changes none is not.
+    #[test]
+    fn an_activation_switching_an_input_needs_the_generation_path() {
+        let m = wired();
+        let c = |active| {
+            let c = Command::Connect {
+                id: "n1".into(),
+                port: receiver("ch1"),
+                active,
+            };
+            serde_json::to_vec(&c).unwrap()
+        };
+        let same = Connection {
+            flow: Some("a1".into()),
+            ..conn(true, None)
+        };
+        assert_eq!(m.reroutes(&origin("rest"), &c(conn(true, Some(F1)))), [0]);
+        assert_eq!(m.reroutes(&origin("rest"), &c(conn(false, None))), [0]);
+        assert!(m.reroutes(&origin("rest"), &c(same)).is_empty());
+        let mut m = wired();
+        let off = Command::Connect {
+            id: "n2".into(),
+            port: receiver("ch1"),
+            active: conn(true, Some(F1)),
+        };
+        assert!(matches!(
+            apply_as(&mut m, &off, Some(false)),
+            Effect::Unchanged
+        ));
+        assert!(refused(&m, "n2"));
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn activations_of_unknown_ports_or_without_a_flow_are_refused() {
+        let mut m = wired();
+        let invalid = |m: &Mixer, id: &str| {
+            matches!(
+                m.answer(&rest_key(), id),
+                Some(Answer::Invalid { .. } | Answer::NotFound { .. })
+            )
+        };
+        connect(&mut m, "n1", receiver("nope"), conn(true, Some(F1)));
+        connect(
+            &mut m,
+            "n2",
+            PortRef::Sender("nope".into()),
+            conn(true, None),
+        );
+        connect(&mut m, "n3", receiver("ch1"), conn(true, None));
+        connect(&mut m, "n4", receiver("ch1"), conn(true, Some("A1")));
+        for id in ["n1", "n2", "n3", "n4"] {
+            assert!(invalid(&m, id), "{id}");
+        }
+        assert_eq!(m.targets().unwrap().flows[0].as_deref(), Some("a1"));
+    }
+
+    /// The connections survive a snapshot, so a restarted replica
+    /// routes and shows them as before; a snapshot of format 2 has none.
+    #[test]
+    fn connections_load_back_from_a_snapshot() {
+        let mut m = wired();
+        connect(&mut m, "n1", receiver("ch1"), conn(false, Some(F1)));
+        connect(&mut m, "n2", receiver("ch2"), conn(true, Some(F2)));
+        connect(
+            &mut m,
+            "n3",
+            PortRef::Sender("out-pgm".into()),
+            conn(false, None),
+        );
+        let saved = m.save();
+        let mut back = wired();
+        back.load(&saved).unwrap();
+        assert_eq!(back.targets(), m.targets());
+        assert_eq!(back.receiver("ch1"), m.receiver("ch1"));
+        assert_eq!(back.sender("out-pgm"), m.sender("out-pgm"));
+        let mut v: Value = serde_json::from_slice(&saved).unwrap();
+        v["format"] = json!(FORMAT_WITHOUT_PORTS);
+        v["mixer"].as_object_mut().unwrap().remove("ports");
+        let mut back = wired();
+        back.load(&serde_json::to_vec(&v).unwrap()).unwrap();
+        assert_eq!(back.targets(), wired().targets());
     }
 }

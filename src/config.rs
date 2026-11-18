@@ -56,6 +56,9 @@ pub struct Config {
     /// samplez's RT thread settings (`enabled`, `priority`, `rtCpu`).
     #[serde(default)]
     pub rt: Map<String, Value>,
+    /// NMOS registration and IS-05 connections over MXL.
+    #[serde(default)]
+    pub nmos: Nmos,
     /// The engine configuration [`Config::parse`] built from the above,
     /// with a matrix of zeros: the matrix comes from the live state.
     #[serde(skip)]
@@ -103,7 +106,89 @@ fn default_library_path() -> PathBuf {
 pub struct Domain {
     pub name: String,
     pub path: PathBuf,
+    /// The domain's MXL id, for NMOS; the domain's own `domain_def.json`
+    /// gives it otherwise.
+    #[serde(default)]
+    pub id: Option<String>,
 }
+
+/// NMOS: an IS-04 node registering the channels' receivers and the
+/// outputs' senders, and the IS-05 Connection API over MXL.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Nmos {
+    #[serde(default)]
+    pub enabled: bool,
+    /// What every resource id derives from: the replica's name in a set
+    /// of one, the StatefulSet's in a set of more, when absent.
+    #[serde(default)]
+    pub seed: Option<String>,
+    /// The host controllers reach the NMOS listener at.
+    #[serde(default)]
+    pub advertise_host: String,
+    /// 0 advertises the NMOS listener's port.
+    #[serde(default)]
+    pub advertise_port: u16,
+    #[serde(default = "default_heartbeat")]
+    pub heartbeat_s: u64,
+    #[serde(default)]
+    pub registry: Registry,
+    #[serde(default)]
+    pub asset: Asset,
+}
+
+impl Default for Nmos {
+    fn default() -> Nmos {
+        Nmos {
+            enabled: false,
+            seed: None,
+            advertise_host: String::new(),
+            advertise_port: 0,
+            heartbeat_s: default_heartbeat(),
+            registry: Registry::default(),
+            asset: Asset::default(),
+        }
+    }
+}
+
+fn default_heartbeat() -> u64 {
+    5
+}
+
+/// The Registration API: `url`, or DNS-SD in `dnsSdDomain` or the
+/// resolver's search domains, then mDNS.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Registry {
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub dns_sd_domain: Option<String>,
+}
+
+/// BCP-002-02 asset tags besides product and instance.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Asset {
+    #[serde(default = "default_manufacturer")]
+    pub manufacturer: String,
+}
+
+impl Default for Asset {
+    fn default() -> Asset {
+        Asset {
+            manufacturer: default_manufacturer(),
+        }
+    }
+}
+
+fn default_manufacturer() -> String {
+    "danielclasen".into()
+}
+
+/// The most seconds between two heartbeats `nmos.heartbeatS` takes: a
+/// registry drops a node after 12 s without one.
+const MAX_HEARTBEAT_S: u64 = 10;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -165,6 +250,11 @@ pub struct Output {
     /// Required with more than one domain.
     #[serde(default)]
     pub domain: Option<String>,
+    /// The flow that merges the member flows of a set of more than one
+    /// replica, which its NMOS sender names; required there with NMOS
+    /// enabled.
+    #[serde(default)]
+    pub merged_flow: Option<String>,
 }
 
 /// `readerMarginSamples` when the configuration sets none: 32 ms. An
@@ -749,11 +839,83 @@ impl Config {
                 .collect();
         }
         config.label_sources(&mut shape)?;
+        config.check_nmos()?;
         Ok((config, shape, name))
     }
 }
 
 impl Config {
+    /// The NMOS settings that cannot work: NMOS without an engine, without
+    /// an advertised host or port, over TLS, with a registry not on
+    /// plain HTTP or a heartbeat outside 1 to [`MAX_HEARTBEAT_S`] s, or
+    /// a set's output without its merged flow. A loopback listener with
+    /// another advertised host is noted.
+    fn check_nmos(&mut self) -> Result<(), String> {
+        let nmos = &self.nmos;
+        let merged = (self.mxl.iter()).flat_map(|m| m.outputs.iter());
+        for (id, o) in merged {
+            match (&o.merged_flow, &self.set) {
+                (Some(_), None) => {
+                    return Err(format!(
+                        "mxl.outputs.{id}.mergedFlow: a set of one writes its `flow` itself"
+                    ));
+                }
+                (None, Some(_)) if nmos.enabled => {
+                    return Err(format!(
+                        "mxl.outputs.{id}.mergedFlow: required with nmos.enabled in a set of \
+                         more than one replica, whose replicas write member flows"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if !nmos.enabled {
+            return Ok(());
+        }
+        let listener = &self.listeners.nmos;
+        if self.mxl.is_none() {
+            return Err("nmos.enabled: needs the mxl section, whose flows it connects".into());
+        }
+        if nmos.advertise_host.is_empty() {
+            return Err("nmos.advertiseHost: required with nmos.enabled".into());
+        }
+        if nmos.advertise_port == 0 && listener.port == 0 {
+            return Err("nmos.advertisePort: required with listeners.nmos.port 0".into());
+        }
+        if listener.tls.mode != TlsMode::None {
+            return Err(
+                "listeners.nmos.tls: the NMOS APIs are advertised as plain HTTP, mode none".into(),
+            );
+        }
+        if let Some(url) = &nmos.registry.url
+            && !url.starts_with("http://")
+        {
+            return Err(format!(
+                "nmos.registry.url {url:?}: the registration client speaks plain HTTP only"
+            ));
+        }
+        if !(1..=MAX_HEARTBEAT_S).contains(&nmos.heartbeat_s) {
+            return Err(format!(
+                "nmos.heartbeatS {}: not in 1..={MAX_HEARTBEAT_S}",
+                nmos.heartbeat_s
+            ));
+        }
+        let loopback = |h: &str| {
+            h == "localhost"
+                || h.parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        };
+        if listener.bind.is_loopback() && !loopback(&nmos.advertise_host) {
+            let note = format!(
+                "nmos.advertiseHost {} is not loopback but listeners.nmos binds {}: \
+                 nothing else reaches the advertised APIs",
+                nmos.advertise_host, listener.bind
+            );
+            self.notes.push(note);
+        }
+        Ok(())
+    }
+
     /// What a set's compatibility key hashes besides the engine version
     /// ([`samplez_replica::rollout::key`]): `product`, the mixer's
     /// configuration hash, the `engine` settings and each channel's flow
@@ -1607,6 +1769,88 @@ mod tests {
         Config::parse(&config(max - 3), || unreachable!()).unwrap();
         let e = Config::parse(&config(max - 2), || unreachable!()).unwrap_err();
         assert!(e.contains(&format!("at most {max}")), "{e}");
+    }
+
+    /// NMOS settings that cannot work refuse the configuration: NMOS
+    /// without an engine, an advertised address, plain HTTP or a merged
+    /// flow where a set of more needs one.
+    #[test]
+    fn nmos_settings_that_cannot_work_are_refused() {
+        let id = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let config = |nmos: Value, out: Value, replica: Value| {
+            json!({
+                "replica": replica,
+                "shape": small(),
+                "listeners": { "nmos": { "bind": "0.0.0.0", "port": 8081 } },
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d", "id": id(9) }],
+                    "inputs": {
+                        "ch1": { "flow": id(1), "altFlow": id(5) },
+                        "ch2": { "flow": id(2) },
+                        "st1": { "flow": id(3) },
+                    },
+                    "outputs": { "out-pgm": out },
+                },
+                "nmos": nmos,
+            })
+            .to_string()
+        };
+        let one = || json!({ "name": "r1" });
+        let flow = || json!({ "flow": id(4) });
+        let on = |extra: Value| {
+            let mut v = json!({ "enabled": true, "advertiseHost": "10.0.0.1" });
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let host = || "faderz-0".to_owned();
+        let (c, ..) = Config::parse(&config(on(json!({})), flow(), one()), host).unwrap();
+        assert_eq!(
+            (c.nmos.heartbeat_s, c.nmos.asset.manufacturer.as_str()),
+            (5, "danielclasen")
+        );
+        let refused = |text: String, key: &str| {
+            let e = Config::parse(&text, host).unwrap_err();
+            assert!(e.contains(key), "{key}: {e}");
+        };
+        let no_mxl = json!({ "replica": one(), "shape": small(), "nmos": on(json!({})) });
+        refused(no_mxl.to_string(), "nmos.enabled");
+        refused(
+            config(json!({ "enabled": true }), flow(), one()),
+            "nmos.advertiseHost",
+        );
+        let https = on(json!({ "registry": { "url": "https://registry:443" } }));
+        refused(config(https, flow(), one()), "nmos.registry.url");
+        refused(
+            config(on(json!({ "heartbeatS": 11 })), flow(), one()),
+            "nmos.heartbeatS",
+        );
+        let merged = json!({ "flow": id(4), "mergedFlow": id(6) });
+        refused(config(json!({}), merged, one()), "mergedFlow");
+        let set = || {
+            json!({
+                "replicas": 3,
+                "peers": ["f-0.f:7443", "f-1.f:7443", "f-2.f:7443"],
+                "peer": { "bind": "0.0.0.0", "port": 7443, "tls": {
+                    "mode": "files", "certFile": "/t/tls.crt", "keyFile": "/t/tls.key",
+                    "clientCaFile": "/t/ca.crt" } },
+                "marker": "m",
+            })
+        };
+        let members = || json!({ "flows": [id(4), id(7), id(8)] });
+        refused(config(on(json!({})), members(), set()), "mergedFlow");
+        let mut merged = members();
+        merged["mergedFlow"] = json!(id(6));
+        Config::parse(&config(on(json!({})), merged, set()), host).unwrap();
+        // Without NMOS a set needs none.
+        Config::parse(&config(json!({}), members(), set()), host).unwrap();
+        // A loopback listener with another advertised host is noted.
+        let mut loopback: Value =
+            serde_json::from_str(&config(on(json!({})), flow(), one())).unwrap();
+        loopback["listeners"]["nmos"]["bind"] = json!("127.0.0.1");
+        let (c, ..) = Config::parse(&loopback.to_string(), host).unwrap();
+        assert!(c.notes.iter().any(|n| n.contains("nmos.advertiseHost")));
     }
 
     /// Each channel's wiring names its input a and b flows and the domain

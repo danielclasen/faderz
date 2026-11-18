@@ -214,15 +214,15 @@ pub struct Wiring {
 pub fn selected(shape: &Shape, wiring: &[Wiring], state: &Value) -> Vec<String> {
     (shape.channels.iter())
         .zip(wiring)
-        .map(|(c, w)| flow(state, &c.id, w))
+        .map(|(c, w)| flow(state, &c.id, w).to_owned())
         .collect()
 }
 
 /// The flow channel `id`, wired as `w`, reads.
-fn flow(state: &Value, id: &str, w: &Wiring) -> String {
+pub(crate) fn flow<'w>(state: &Value, id: &str, w: &'w Wiring) -> &'w str {
     match (state["channels"][id]["input"].as_str(), &w.b) {
-        (Some("b"), Some(b)) => b.clone(),
-        _ => w.a.clone(),
+        (Some("b"), Some(b)) => b,
+        _ => &w.a,
     }
 }
 
@@ -233,6 +233,35 @@ fn flow(state: &Value, id: &str, w: &Wiring) -> String {
 /// output is enabled.
 pub fn targets(shape: &Shape, wiring: &[Wiring], state: &Value) -> Targets {
     Derived::new(shape, wiring, state).targets
+}
+
+/// What IS-05 activations set beside the state ([`crate::state::Mixer::engine_view`]):
+/// each channel's flows with the leg flows activations named, the
+/// channels whose receiver is disabled, and each output's enable.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EngineView {
+    pub wiring: Vec<Wiring>,
+    pub detached: Vec<bool>,
+    pub outputs: Vec<bool>,
+}
+
+impl EngineView {
+    /// [`targets`] of `state` read through this view.
+    pub fn targets(&self, shape: &Shape, state: &Value) -> Targets {
+        let mut t = targets(shape, &self.wiring, state);
+        self.overlay(&mut t);
+        t
+    }
+
+    /// Detaches the disabled channels and sets each output's enable.
+    pub fn overlay(&self, t: &mut Targets) {
+        for (flow, detached) in t.flows.iter_mut().zip(&self.detached) {
+            if *detached {
+                *flow = None;
+            }
+        }
+        t.outputs.clone_from(&self.outputs);
+    }
 }
 
 /// [`targets`] kept from one write to the next: a write derives again
@@ -299,7 +328,7 @@ impl Derived {
                     .collect(),
                 ducks: duck::targets(shape, state),
                 masks: duck::masks(shape, state),
-                outputs: Vec::new(),
+                ..Targets::default()
             },
             factors,
             first,
@@ -367,7 +396,8 @@ impl Derived {
             self.targets.strips[slot] = strip::params(&state["channels"][&c.id], c.width);
         }
         for slot in moved.flows {
-            self.targets.flows[slot] = Some(flow(state, &shape.channels[slot].id, &wiring[slot]));
+            self.targets.flows[slot] =
+                Some(flow(state, &shape.channels[slot].id, &wiring[slot]).to_owned());
         }
         // A handful of groups, each read in full: a key gain follows its
         // channel's fader, mute and VCAs, which any write can move.

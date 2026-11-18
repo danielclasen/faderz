@@ -9,7 +9,9 @@
 //! [`audio`] runs the samplez engine under the state: [`mix`] turns the
 //! state into its gain matrix, [`strip`] a channel's processing into its
 //! input's strip, and [`meters`] its meters into meter frames. [`duck`]
-//! holds the rules of duck groups in the state.
+//! holds the rules of duck groups in the state. [`nmos`] registers the
+//! channels and outputs as NMOS receivers and senders and takes IS-05
+//! connections over MXL.
 
 pub mod api;
 pub mod app;
@@ -19,6 +21,7 @@ pub mod contract;
 pub mod duck;
 pub mod meters;
 pub mod mix;
+pub mod nmos;
 pub mod replica;
 pub mod server;
 pub mod shape;

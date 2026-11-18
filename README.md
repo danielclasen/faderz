@@ -42,6 +42,8 @@ built into the binary and the control-surface bridge both speak.
   failover between them
 - Hardware control surfaces through `faderz-bridge` (Mackie Control over
   USB-MIDI or RTP-MIDI)
+- NMOS: each channel's input an IS-04 receiver and each output a sender,
+  connected over MXL through IS-05 per AMWA BCP-007-03
 - `/healthz`, `/readyz` and Prometheus `/metrics`; a container image and
   a release binary
 
@@ -239,7 +241,7 @@ variable; the flag wins over the variable, the variable over the file.
 | `listeners.api` | `127.0.0.1:8080` | `{bind, port, tls}`: `/api/v1`, `/api/v1/ws` and the console |
 | `listeners.ops` | `0.0.0.0:9090` | `{bind, port, tls}`: `/healthz`, `/readyz`, `/metrics` |
 | `listeners.machine` | none | `{bind, port, tls}`: a bearer-only listener for machine clients; `proxy` mode only |
-| `listeners.nmos` | `127.0.0.1:8081` | `{bind, port, tls}`: bound at start; faderz serves no routes on it |
+| `listeners.nmos` | `127.0.0.1:8081` | `{bind, port, tls}`: the NMOS Node and Connection APIs with `nmos.enabled`, unauthenticated; bound at start, serving nothing without; `tls.mode` `none` only |
 | `listeners.*.tls` | `{"mode": "none"}` | `none`; `files` with `certFile`, `keyFile` and optional `clientCaFile`, re-read when they change; `selfSigned` with `sans`, generated at start |
 | `auth.mode` | `none` | `none`, `token`, `proxy` or `oidc`; `--auth-mode`, `FADERZ_AUTH_MODE` |
 | `auth.token.file` | | the API bearer token's file; required in `token` mode, optional in `oidc` mode |
@@ -261,9 +263,9 @@ variable; the flag wins over the variable, the variable over the file.
 | `shape` | required | the mixer's shape, model `Shape` in `api/ws/model.schema.json` |
 | `consoles` | `[]` | consoles known before any registers: `id`, `name`, `protocol` (`mcu`), `transport` (`bridge`), `strips` (8) |
 | `mxl.libraryPath` | `/opt/mxl/lib/libmxl.so` | libmxl, loaded at start |
-| `mxl.domains` | | `[{name, path}]`: the mounted MXL domains |
+| `mxl.domains` | | `[{name, path, id}]`: the mounted MXL domains; `id`, the domain's MXL id, for NMOS when the domain has no `domain_def.json` |
 | `mxl.inputs.<channel>` | | `flow`; `altFlow` for a channel with `altInput`; `domain` with more than one domain; `channels`, the 1-based flow channel each leg reads |
-| `mxl.outputs.<output>` | | `flow` in a set of one; `flows`, one member flow per replica by ordinal, in a set of more; `domain` with more than one domain |
+| `mxl.outputs.<output>` | | `flow` in a set of one; `flows`, one member flow per replica by ordinal, in a set of more; `domain` with more than one domain; `mergedFlow`, the flow merging the member flows, which the NMOS sender names, in a set of more with `nmos.enabled` |
 | `engine.sampleRate` | `48000` | |
 | `engine.blockSize` | `48` | samples per block |
 | `engine.readerMarginSamples` | `1536` | read delay behind libmxl's clock; delays every output by as much |
@@ -273,6 +275,14 @@ variable; the flag wins over the variable, the variable over the file.
 | `rt.enabled` | `true` | `false` skips capabilities, memory locking and `SCHED_FIFO` |
 | `rt.priority` | `70` | `SCHED_FIFO` priority |
 | `rt.rtCpu` | `auto` | `auto`, `none`, `first`, `last` or an index into the allowed CPUs |
+| `nmos.enabled` | `false` | register with an NMOS registry and take IS-05 connections; needs the `mxl` section |
+| `nmos.seed` | replica name | what every NMOS id derives from; the StatefulSet's name in a set of more |
+| `nmos.advertiseHost` | | host controllers reach `listeners.nmos` at; required with `nmos.enabled` |
+| `nmos.advertisePort` | `0` | port controllers reach it at; 0 is `listeners.nmos.port` |
+| `nmos.registry.url` | | Registration API, `http://host:port`; absent, DNS-SD finds one |
+| `nmos.registry.dnsSdDomain` | | unicast DNS-SD domain; absent, the resolver's search domains, then mDNS |
+| `nmos.heartbeatS` | `5` | 1 to 10: seconds between heartbeats |
+| `nmos.asset.manufacturer` | `danielclasen` | BCP-002-02 manufacturer tag |
 
 Without an `mxl` section faderz runs no engine: the state is served,
 nothing is mixed and `/readyz` fails. In `proxy` mode faderz takes the
@@ -310,7 +320,7 @@ listener:
   on every replica: the leader orders no command while a replica reports
   another, and a replica of another one exits rather than install the
   set's snapshot. Changing it needs every replica stopped.
-- A snapshot carries its format, 2, which faderz 0.1.7 and earlier
+- A snapshot carries its format, 3, which faderz 0.2.0 and earlier
   cannot read. Rolling a set back to such an image needs the volumes
   that image wrote, or empty volumes and a new set.
 - With an `mxl` section every replica runs an engine of its own
@@ -441,6 +451,46 @@ Besides samplez's metrics, faderz exports
 channel input, `faderz_input_attached`,
 `faderz_input_margin_needed_samples`, `faderz_input_copied_blocks_total`,
 `faderz_input_late_blocks_total` and `faderz_input_too_late_blocks_total`.
+
+## NMOS
+
+With `nmos.enabled` faderz is one NMOS Node (IS-04 v1.3, IS-05 v1.2,
+AMWA BCP-007-03 for MXL): a Receiver per channel, which is the channel's
+input reader, and a Source, Flow and Sender per output, all with
+transport `urn:x-nmos:transport:mxl` and 32-bit float audio at 48 kHz.
+The ids derive from `nmos.seed`, so a restart keeps them. Each domain's
+MXL id comes from its `domain_def.json`, else from `mxl.domains[].id`;
+neither, or two that differ, stops faderz at start.
+
+- A receiver's `/active` flow is the flow of the channel's selected
+  input: an activation sets the flow of input a or b, whichever the
+  channel selects, and switching between them in the console changes
+  `/active`. `master_enable` false detaches the channel; it reads
+  nothing and is silent until activated again.
+- A sender's flow is the output's (`mergedFlow` in a set of more), and
+  `master_enable` false stops the output and removes its flow;
+  `true` writes it again.
+- Activations go through the replicated log like any command, so every
+  replica of a set routes alike and a restart keeps them. An
+  activation takes effect once it is ordered and applied, no earlier
+  than its activation time and later by at least one commit and the
+  engine's lead; faderz cannot place it on a given sample.
+- Only the replica leading the set registers the Node; a new leader
+  registers it again. Every replica serves the Node and Connection APIs
+  under the same ids, and each shows in `/active` what any replica
+  activated. `/staged` and scheduled activations are kept in memory by
+  the replica a request reached: other replicas do not see them, and a
+  restart drops them.
+- The listener is unauthenticated (no IS-10), and its activations
+  re-route inputs and start and stop outputs.
+
+CI runs the AMWA nmos-testing suites IS-04-01 (unicast and multicast
+DNS-SD), IS-05-01 and BCP-007-03-01 against the image
+(`tests/nmos/conformance.sh`); every result is Pass but those
+`tests/nmos/expected.json` lists, each with its reason from the tool's
+source. Among them are two Manual tests, IS-04-01 test_22 (ids kept
+across a restart) and BCP-007-03-01 test_15 (`master_enable` stops and
+starts the flow), which `tests/nmos.rs` covers.
 
 ## Control surfaces
 

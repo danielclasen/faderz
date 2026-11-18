@@ -19,6 +19,8 @@ openraft = "=0.9.26"
 rust-embed = { version = "=8.14.0", features = ["debug-embed", "deterministic-timestamps", "include-exclude", "mime-guess"] }
 samplez = { git = "https://github.com/danielclasen/samplez", tag = "v0.8.3", version = "=0.8.3" }
 samplez-dsp = { git = "https://github.com/danielclasen/samplez", tag = "v0.8.3", version = "=0.8.3" }
+samplez-mxl = { git = "https://github.com/danielclasen/samplez", tag = "v0.8.3", version = "=0.8.3" }
+samplez-nmos = { git = "https://github.com/danielclasen/samplez", tag = "v0.8.3", version = "=0.8.3" }
 samplez-replica = { git = "https://github.com/danielclasen/samplez", tag = "v0.8.3", version = "=0.8.3" }
 samplez-service = { git = "https://github.com/danielclasen/samplez", tag = "v0.8.3", version = "=0.8.3" }
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -29,7 +31,6 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 xxhash-rust = { version = "=0.8.15", features = ["xxh3"] }
 
 [dev-dependencies]
-samplez-mxl = { git = "https://github.com/danielclasen/samplez", tag = "v0.8.3", version = "=0.8.3" }
 futures-util = { version = "=0.3.34", default-features = false, features = ["alloc", "sink"] }
 tokio = { version = "=1.54.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 rcgen = { version = "=0.14.10", default-features = false, features = ["pem", "crypto", "ring"] }
