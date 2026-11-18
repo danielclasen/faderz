@@ -352,6 +352,73 @@ fn now_block() -> u64 {
     time::timestamp_to_index(&api, time::now(&api)) / B - 80
 }
 
+/// What a replica writes to its member flow from its start: the blocks
+/// its engine committed whole and the loudest sample in them, read every
+/// 20 ms so none of its first blocks is missed.
+struct Written {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::JoinHandle<(usize, f32)>,
+}
+
+impl Written {
+    fn watch(set: &Set, n: usize, node: &Node) -> Written {
+        let audio = node.server.audio.clone().expect("an engine");
+        let (domain, flow) = (set.domain.0.clone(), set.members[n].clone());
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut seen = BTreeSet::new();
+            let mut loudest = 0.0f32;
+            let mut reader: Option<(Generation, SlotState)> = None;
+            let mut buf = vec![0.0f32; 2 * B as usize];
+            let mut next = 0;
+            while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                if reader.is_none() {
+                    reader = Generation::new(&api(), &domain, 1).ok().and_then(|mut g| {
+                        let cfg = InputConfig {
+                            flow_id: &flow,
+                            channels: 2,
+                            flow_channels: None,
+                            offset: 0,
+                        };
+                        let timing = Timing {
+                            block: B,
+                            margin: 0,
+                            max_catchup_blocks: 0,
+                            resync_budget: 0,
+                        };
+                        g.attach(0, &cfg, &timing).ok()?;
+                        Some((g, SlotState::default()))
+                    });
+                }
+                if let Some((g, state)) = reader.as_mut() {
+                    let input = g.input(0).unwrap();
+                    let last = now_block();
+                    for k in next.max(last.saturating_sub(200))..=last {
+                        let whole = (audio.engine().block_status(0, k))
+                            .is_some_and(|s| s.kind == Kind::Committed && s.range == Range::Whole);
+                        if whole
+                            && input.read(state, k, &GroupWait::Skipped, &mut buf) == Outcome::Copy
+                        {
+                            seen.insert(k);
+                            loudest = buf.iter().fold(loudest, |m, v| m.max(v.abs()));
+                        }
+                    }
+                    next = last + 1;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            (seen.len(), loudest)
+        });
+        Written { stop, thread }
+    }
+
+    fn stop(self) -> (usize, f32) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.thread.join().unwrap()
+    }
+}
+
 /// Blocks per replica: an XXH3 of each block's samples and its energy,
 /// for the blocks its engine committed whole.
 type Blocks = Vec<BTreeMap<u64, (u64, f64)>>;
@@ -868,12 +935,17 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     });
     assert!(detached, "ch1 is not detached: {}", states(&nodes));
     nodes[leader] = Some(set.start(leader, None));
+    let written = Written::watch(&set, leader, node(&nodes, leader));
     steady(&nodes, leader);
     std::thread::sleep(Duration::from_secs(2));
-    let silent = node(&nodes, leader).peak();
+    let (blocks, loudest) = written.stop();
     assert!(
-        silent.iter().all(|&p| p == 0.0),
-        "a detached channel was heard: {silent:?}"
+        blocks > 100,
+        "the restarted replica committed {blocks} blocks"
+    );
+    assert_eq!(
+        loudest, 0.0,
+        "a detached channel was heard in the member flow"
     );
     activate(
         &nodes,
