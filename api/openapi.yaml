@@ -67,6 +67,14 @@ paths:
         All changes apply in one revision, or none does. A change to a
         control owned by a session (touch) is refused with 409 and the
         current value and owner of every owned control in the request.
+
+        Duck groups are written here like any other control, under
+        `/ducks/{duckId}/`: one boolean per trigger, target and
+        destination, so a preset is one request. A change that would
+        make a channel trigger and target of one group, or give a group
+        more than 8 triggers, is refused with 400, as is `hold: true`:
+        the hold is momentary, and only a WebSocket session that touched
+        it sets it.
       parameters:
         - $ref: "#/components/parameters/RequestHeader"
       requestBody:
@@ -85,6 +93,23 @@ paths:
                   minItems: 1
                   items:
                     $ref: "./ws/model.schema.json#/$defs/Change"
+            examples:
+              latchDuck:
+                summary: Latch a duck group in.
+                value:
+                  commandId: 0b6b2c2e-7d1f-4a3c-9a55-0f5c1d8e2b41
+                  changes:
+                    - { path: /ducks/comm/mode, value: "on" }
+              duckSetup:
+                summary: Duck the ambience under the commentator by 15 dB.
+                value:
+                  commandId: 5d0c9a1e-3b7f-4e2a-8c61-2f4b9d7e1a03
+                  changes:
+                    - { path: /ducks/comm/channels/comm1/trigger, value: true }
+                    - { path: /ducks/comm/channels/amb/target, value: true }
+                    - { path: /ducks/comm/channels/amb/depth, value: 15 }
+                    - { path: /ducks/comm/attackMs, value: 20 }
+                    - { path: /ducks/comm/releaseMs, value: 1000 }
       responses:
         "403":
           $ref: "#/components/responses/Error"

@@ -28,6 +28,7 @@ fn shape() -> Value {
         "auxes": [],
         "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
         "vcas": [],
+        "ducks": [{ "id": "comm", "name": "Commentary" }],
         "monitorOutputs": [],
         "outputs": [],
     })
@@ -553,6 +554,58 @@ impl Rest {
 
 const RESULT: &str = "/components/schemas/CommandResult";
 const ERROR: &str = "/components/schemas/Error";
+
+/// `PATCH /state` sets up and latches a duck group atomically and is
+/// refused a channel that would trigger and be ducked by one group, and
+/// a hold, which only a WebSocket session holding it sets; the state
+/// read back matches the contract.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn duck_groups_are_set_through_the_api() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let rest = Rest::new(&server);
+    let id = || faderz::app::uuid().unwrap();
+    let patch = |changes: Value| json!({ "commandId": id(), "changes": changes });
+    let setup = patch(json!([
+        { "path": "/ducks/comm/channels/ch1/trigger", "value": true },
+        { "path": "/ducks/comm/channels/ch2/target", "value": true },
+        { "path": "/ducks/comm/channels/ch2/depth", "value": 15 },
+        { "path": "/ducks/comm/mode", "value": "on" },
+    ]));
+    let (s, _) = rest
+        .call("PATCH", "/state", Some(setup), Some(RESULT))
+        .await;
+    assert_eq!(s, 200);
+    let get = "/paths/~1state/get/responses/200/content/application~1json/schema";
+    let (_, doc) = rest.call("GET", "/state", None, Some(get)).await;
+    let comm = &doc["state"]["ducks"]["comm"];
+    assert_eq!(
+        (&comm["mode"], &comm["channels"]["ch2"]["depth"]),
+        (&json!("on"), &json!(15))
+    );
+    assert_eq!(doc["shape"]["ducks"][0]["id"], "comm");
+    let both = patch(json!([{ "path": "/ducks/comm/channels/ch2/trigger", "value": true }]));
+    let (s, e) = rest.call("PATCH", "/state", Some(both), Some(ERROR)).await;
+    assert_eq!(s, 400, "{e}");
+    let hold = patch(json!([{ "path": "/ducks/comm/hold", "value": true }]));
+    let (s, e) = rest.call("PATCH", "/state", Some(hold), Some(ERROR)).await;
+    assert_eq!(s, 400, "{e}");
+
+    let path = "/ducks/comm/hold";
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.hello().await;
+    let c = a.command("set", path, Some(json!(true))).await;
+    assert_eq!(a.answer(&c).await["code"], 400, "not held");
+    let c = a.command("touch", path, None).await;
+    a.answer(&c).await;
+    let c = a.command("set", path, Some(json!(true))).await;
+    let d = a.answer(&c).await;
+    assert_eq!(d["changes"], json!([{ "path": path, "value": true }]));
+    let c = a.command("release", path, None).await;
+    let d = a.answer(&c).await;
+    assert_eq!(d["changes"], json!([{ "path": path, "value": false }]));
+    server.stop().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rest_answers_match_the_contract() {

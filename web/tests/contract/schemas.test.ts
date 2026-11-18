@@ -199,6 +199,50 @@ describe('Change values are constrained by path', () => {
   });
 });
 
+describe('Duck group controls', () => {
+  const contract = new Contract();
+  const set = (path: string, value: unknown) =>
+    contract.checkClientMessage({ type: 'set', id: crypto.randomUUID(), seq: 1, path, value });
+
+  it.each([
+    ['/ducks/comm/mode', 'on'],
+    ['/ducks/comm/hold', true],
+    ['/ducks/comm/keyTap', 'preFaderOpen'],
+    ['/ducks/comm/threshold', -60],
+    ['/ducks/comm/hysteresis', 12],
+    ['/ducks/comm/keyHpf/freq', 20],
+    ['/ducks/comm/keyLpf/enabled', true],
+    ['/ducks/comm/keyLpf/freq', 1000],
+    ['/ducks/comm/attackMs', 500],
+    ['/ducks/comm/holdMs', 0],
+    ['/ducks/comm/releaseMs', 10000],
+    ['/ducks/comm/channels/ch1/trigger', true],
+    ['/ducks/comm/channels/ch1/target', false],
+    ['/ducks/comm/channels/ch1/depth', 40],
+    ['/ducks/comm/destinations/mm1', true],
+  ])('takes %s = %j', (path, value) => {
+    expect(set(path, value)).toBeNull();
+  });
+
+  it.each([
+    ['/ducks/comm/mode', 'bypass'],
+    ['/ducks/comm/hold', 1],
+    ['/ducks/comm/keyTap', 'input'],
+    ['/ducks/comm/threshold', -61],
+    ['/ducks/comm/hysteresis', 12.5],
+    ['/ducks/comm/keyHpf/freq', 600],
+    ['/ducks/comm/keyLpf/freq', 900],
+    ['/ducks/comm/attackMs', 0.5],
+    ['/ducks/comm/holdMs', 5001],
+    ['/ducks/comm/releaseMs', 5],
+    ['/ducks/comm/channels/ch1/depth', 41],
+    ['/ducks/comm/destinations/mm1', 'yes'],
+    ['/ducks/comm/channels/ch1', { trigger: true, target: false, depth: 10 }],
+  ])('refuses %s = %j', (path, value) => {
+    expect(set(path, value)).not.toBeNull();
+  });
+});
+
 describe('ContinuousPath', () => {
   const model = read('model.schema.json') as { $defs: Record<string, { anyOf: Array<{ pattern: string }> }> };
   const ajv = new Ajv2020({ strict: true });
@@ -220,6 +264,10 @@ describe('ContinuousPath', () => {
     '/mixMinus/mm1/fader',
     '/vcas/vca1/offset',
     '/monitor/level',
+    '/ducks/comm/threshold',
+    '/ducks/comm/keyLpf/freq',
+    '/ducks/comm/releaseMs',
+    '/ducks/comm/channels/ch1/depth',
   ])('%s is a continuous control path', (path) => {
     expect(controlPath(path)).toBe(true);
     expect(isContinuousPath(path)).toBe(true);
@@ -234,6 +282,12 @@ describe('ContinuousPath', () => {
     '/monitor/source',
     '/vcas/vca1/members',
     '/afv/ch13/source',
+    '/ducks/comm/mode',
+    '/ducks/comm/hold',
+    '/ducks/comm/keyTap',
+    '/ducks/comm/keyHpf/enabled',
+    '/ducks/comm/channels/ch1/trigger',
+    '/ducks/comm/destinations/pgm20',
   ])('%s is a discrete control path', (path) => {
     expect(controlPath(path)).toBe(true);
     expect(isContinuousPath(path)).toBe(false);
