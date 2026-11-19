@@ -52,6 +52,31 @@ pub struct Identity {
 const IDENTITY: &str = "faderz.json";
 const STORE: &str = "replica";
 
+/// Written to a volume once a binary that migrates the pan of a state
+/// saved before the surround panner has opened it.
+const PAN_MARKER: &str = "pan-field";
+
+/// Whether the volume `dir` holds a log or a snapshot written before the
+/// surround panner: it has a replicated state and no [`PAN_MARKER`]. Its
+/// log is replayed onto the initial state of the shape, which then has to
+/// be the one the entries were written against
+/// ([`Mixer::factory_for`]); a snapshot is migrated as it loads.
+pub fn legacy_volume(dir: &Path) -> bool {
+    let held = |name: &str| fs::metadata(dir.join(STORE).join(name)).is_ok_and(|m| m.len() > 0);
+    !dir.join(PAN_MARKER).exists() && (held("log") || held("snapshot"))
+}
+
+/// Records that this binary has opened `dir`, so [`legacy_volume`] is
+/// false from then on.
+///
+/// # Errors
+///
+/// When the marker cannot be written.
+pub fn mark_volume(dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    fs::write(dir.join(PAN_MARKER), b"1\n")
+}
+
 /// The identity kept in `dir`, or a new one when `dir` holds no state:
 /// a new epoch is drawn exactly when the state starts empty, and kept
 /// across restarts.
@@ -287,5 +312,32 @@ impl PeerClient for Lone {
         _within: Duration,
     ) -> BoxFuture<'a, Result<PeerReply, String>> {
         Box::pin(async { Err("a set of one has no peers".into()) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A volume with a log and no marker was written before the surround
+    /// panner; one opened by this binary, or empty, was not.
+    #[test]
+    fn a_volume_with_a_log_and_no_marker_is_legacy() {
+        let dir = std::env::temp_dir().join(format!("faderz-legacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(!legacy_volume(&dir), "an absent volume");
+        fs::create_dir_all(dir.join(STORE)).unwrap();
+        assert!(!legacy_volume(&dir), "an empty volume");
+        fs::write(dir.join(STORE).join("log"), b"").unwrap();
+        assert!(!legacy_volume(&dir), "an empty log holds nothing");
+        fs::write(dir.join(STORE).join("log"), b"entry").unwrap();
+        assert!(legacy_volume(&dir), "a log without the marker");
+        mark_volume(&dir).unwrap();
+        assert!(!legacy_volume(&dir), "opened by this binary");
+        let snapshot = dir.join("other");
+        fs::create_dir_all(snapshot.join(STORE)).unwrap();
+        fs::write(snapshot.join(STORE).join("snapshot"), b"{}").unwrap();
+        assert!(legacy_volume(&snapshot), "a snapshot without the marker");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
