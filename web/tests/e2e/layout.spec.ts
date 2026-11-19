@@ -145,9 +145,12 @@ test('nothing moves on load, live updates, failover and interaction', { tag: '@m
   await request.post(`/__mock/replicas/${primary}/restart`);
   await expectNoShift(page, 'failover');
 
-  // A dropped link: the primary endpoint empties while reconnecting.
+  // A dropped link: the primary endpoint empties while reconnecting. The
+  // link is back within about 300 ms, too short to catch it not Live by
+  // polling, so the failover it caused is what shows it dropped.
+  const failovers = await debug(page, 'failovers');
   await request.post('/__mock/drop-clients');
-  await expect.poll(() => debug(page, 'connection')).not.toBe('Live');
+  await expect.poll(() => debug(page, 'failovers')).toBeGreaterThan(failovers);
   await expect.poll(() => debug(page, 'connection'), { timeout: 10_000 }).toBe('Live');
   await page.waitForTimeout(300);
   await expectNoShift(page, 'reconnect');
