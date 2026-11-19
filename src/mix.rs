@@ -60,7 +60,7 @@ fn on(v: &Value) -> bool {
 /// The channel mix-minus `id` carries in place of its mix while its
 /// talkback interrupt is active, per model `Interrupt`; an interrupt with
 /// no source changes nothing.
-fn talkback<'a>(state: &'a Value, id: &str) -> Option<&'a str> {
+pub(crate) fn talkback<'a>(state: &'a Value, id: &str) -> Option<&'a str> {
     let interrupt = &state["mixMinus"][id]["interrupt"];
     on(&interrupt["active"])
         .then(|| interrupt["source"].as_str())
@@ -552,9 +552,11 @@ impl Moved {
                 (Some("buses" | "auxes" | "mixMinus"), Some(id)) => {
                     moved.elements.insert(id.to_owned());
                     // An interrupt dims the monitor while talkbackDim is on.
-                    moved.monitor |= group == Some("mixMinus")
-                        && matches!(key, None | Some("interrupt"))
-                        && on(&state["monitor"]["talkbackDim"]);
+                    let interrupt =
+                        group == Some("mixMinus") && matches!(key, None | Some("interrupt"));
+                    moved.monitor |= interrupt && on(&state["monitor"]["talkbackDim"]);
+                    // And lifts the masks of the mix-minus while it lasts.
+                    moved.masks |= interrupt;
                 }
                 (Some("monitor"), _) => {
                     moved.monitor = true;
@@ -1362,6 +1364,11 @@ mod tests {
             s["monitor"]["talkbackDim"] = json!(true);
         }
         assert!(!Moved::of(&shape, &s, &Value::Null, ["/mixMinus/mm1/fader"]).monitor);
+        // The masks follow an interrupt, whatever talkbackDim says.
+        for path in ["/mixMinus/mm1", "/mixMinus/mm1/interrupt/active"] {
+            assert!(Moved::of(&shape, &s, &Value::Null, [path]).masks, "{path}");
+        }
+        assert!(!Moved::of(&shape, &s, &Value::Null, ["/mixMinus/mm1/fader"]).masks);
     }
 
     /// A closed or muted fader does not silence the talkback: the
@@ -1426,6 +1433,39 @@ mod tests {
         s["monitor"]["talkbackDim"] = json!(true);
         s["mixMinus"]["mm1"]["interrupt"]["active"] = json!(false);
         assert!(close(matrix(&shape, &s)[2][5], 1.0));
+    }
+
+    /// A listen and a talkback together: PFL on the monitor is dimmed by
+    /// the talkback dim once, also with dim on, and the monitor on an
+    /// interrupted mix-minus plays the talkback, dimmed.
+    #[test]
+    fn a_listen_and_a_talkback_share_one_dim_on_the_monitor() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        s["monitor"]["level"] = json!(0);
+        s["channels"]["ch1"]["solo"] = json!("pfl");
+        s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": "ch2", "active": true });
+        // PFL on ch1 while ch2 talks: dimmed, ch2 not heard.
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][5], h * gain(-20.0)), "{m:?}");
+        assert!(close(m[1][5], 0.0), "{m:?}");
+        s["monitor"]["dim"] = json!(true);
+        assert!(
+            close(matrix(&shape, &s)[0][5], h * gain(-20.0)),
+            "dimmed once"
+        );
+        s["monitor"]["dim"] = json!(false);
+        // Released: the PFL plays at full level again.
+        s["mixMinus"]["mm1"]["interrupt"]["active"] = json!(false);
+        assert!(close(matrix(&shape, &s)[0][5], h));
+        // No solo, the monitor on the interrupted mix-minus: the talkback.
+        s["channels"]["ch1"]["solo"] = json!("off");
+        s["monitor"]["source"] = json!("mm1");
+        s["mixMinus"]["mm1"]["interrupt"]["active"] = json!(true);
+        let m = matrix(&shape, &s);
+        assert!(close(m[1][5], h * gain(-20.0)), "{m:?}");
+        assert!(close(m[0][5], 0.0), "{m:?}");
     }
 
     #[test]

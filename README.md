@@ -62,6 +62,10 @@ channel and of the monitor, bus and aux processing (EQ, dynamics,
 limiter, delay), the line-up tone, the AFV rise, hold and fall times,
 and the scene crossfade time.
 
+A mix-minus carrying its talkback is never ducked: its duck masks, and
+those of a monitor playing it, are lifted until the interrupt is
+released.
+
 ## The console
 
 The web console has seven views: MIXER, ROUTING, AUX / N-1, AFV, DUCK,

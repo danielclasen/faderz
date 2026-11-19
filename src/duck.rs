@@ -183,7 +183,9 @@ pub fn key_gain(state: &Value, id: &str, tap: &str) -> f32 {
 /// target of `g` and the column carries a destination of `g`: an output
 /// or meter column of that bus, aux or mix-minus output, or a monitor
 /// output while the monitor's source is one, so the monitor plays and
-/// meters what goes out. While anything solos the monitor plays the
+/// meters what goes out. A mix-minus that carries its talkback
+/// interrupt ([`mix::talkback`]) has no mask, and neither has a monitor
+/// playing it. While anything solos the monitor plays the
 /// listens, no destination, and none of its columns is masked. None
 /// without duck groups.
 pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
@@ -195,7 +197,15 @@ pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
             .filter(|(_, d)| is(&state["ducks"][&d.id]))
             .fold(0, |bits, (g, _)| bits | 1 << g)
     };
-    let carried = |id: &str| groups(&|d| d["destinations"][id] == true);
+    // A mix-minus carrying its talkback is never ducked: the talent hears
+    // the producer whatever the groups do to the mix it replaced.
+    let carried = |id: &str| {
+        if mix::talkback(state, id).is_some() {
+            0
+        } else {
+            groups(&|d| d["destinations"][id] == true)
+        }
+    };
     let monitored = if mix::solos(state).0 {
         0
     } else {
@@ -307,6 +317,47 @@ mod tests {
         // Both groups on one coefficient.
         set_at(&mut state, "/ducks/rem/destinations/pgm", json!(true));
         assert_eq!(masks(&shape, &state)[0][..2], [3, 3]);
+    }
+
+    /// Talkback is never ducked: while a mix-minus carries its interrupt
+    /// its columns have no mask, nor has a monitor playing it; released,
+    /// the masks return. A solo keeps the monitor unmasked either way.
+    #[test]
+    fn a_mix_minus_carrying_talkback_is_never_ducked() {
+        let (shape, mut state) = two_groups();
+        with(
+            &mut state,
+            &[
+                ("/ducks/comm/channels/ch1/target", json!(true)),
+                ("/ducks/comm/destinations/mm1", json!(true)),
+                ("/ducks/rem/channels/ch1/target", json!(true)),
+                ("/ducks/rem/destinations/pgm", json!(true)),
+                ("/monitor/source", json!("mm1")),
+            ],
+        );
+        // pgm out, cf, aux1, mm1, mon.
+        assert_eq!(masks(&shape, &state)[0], [2, 2, 0, 0, 0, 1, 1, 1, 1]);
+        // The talker is the target: the interrupt lifts mm1 and the monitor.
+        with(
+            &mut state,
+            &[(
+                "/mixMinus/mm1/interrupt",
+                json!({ "source": "ch1", "active": true }),
+            )],
+        );
+        assert_eq!(masks(&shape, &state)[0], [2, 2, 0, 0, 0, 0, 0, 0, 0]);
+        // An interrupt with no source carries no talkback.
+        set_at(&mut state, "/mixMinus/mm1/interrupt/source", Value::Null);
+        assert_eq!(masks(&shape, &state)[0], [2, 2, 0, 0, 0, 1, 1, 1, 1]);
+        set_at(&mut state, "/mixMinus/mm1/interrupt/source", json!("ch1"));
+        // Released, the masks are back.
+        set_at(&mut state, "/mixMinus/mm1/interrupt/active", json!(false));
+        assert_eq!(masks(&shape, &state)[0], [2, 2, 0, 0, 0, 1, 1, 1, 1]);
+        // With a solo the monitor has no mask, interrupted or not.
+        set_at(&mut state, "/channels/ch1/solo", json!("pfl"));
+        assert_eq!(masks(&shape, &state)[0][7..], [0, 0]);
+        set_at(&mut state, "/mixMinus/mm1/interrupt/active", json!(true));
+        assert_eq!(masks(&shape, &state)[0][7..], [0, 0]);
     }
 
     /// Without duck groups nothing is masked and no column is ducked, so

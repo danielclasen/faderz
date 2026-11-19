@@ -1037,7 +1037,7 @@
       }
     },
     "Interrupt": {
-      "description": "IFB interrupt (talkback) of a mix-minus output: while active, the output carries the input channel source, at its trim and processing but before its fader, in place of the mix-minus, so a presenter hears the producer in the earpiece. active is momentary: the server sets it back to false when the session that owns /active releases it or its lease runs out, so a lost client never leaves an output interrupted. Setting active with source null changes nothing audible.",
+      "description": "IFB interrupt (talkback) of a mix-minus output: while active, the output carries the input channel source, at its trim and processing but before its fader, in place of the mix-minus, so a presenter hears the producer in the earpiece. active is momentary: the server sets it back to false when the session that owns /active releases it or its lease runs out, so a lost client never leaves an output interrupted. Setting active with source null changes nothing audible. An interrupted output is never ducked: its duck masks are lifted while it carries the talkback, and so are those of a monitor playing it.",
       "type": "object",
       "required": [
         "source",
