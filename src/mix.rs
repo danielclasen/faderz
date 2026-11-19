@@ -550,7 +550,9 @@ impl Moved {
                         continue;
                     };
                     match key {
-                        Some("fader" | "mute" | "routes" | "sends" | "pan" | "directOut") => {
+                        Some(
+                            "fader" | "mute" | "routes" | "sends" | "pan" | "image" | "directOut",
+                        ) => {
                             moved.rows.insert(s);
                         }
                         Some(
@@ -844,7 +846,7 @@ impl<'a> Mix<'a> {
     /// The listen sum takes each listening channel's legs at their own
     /// width. PFL is the channel after its strip, before fader, mute and
     /// pan: [`Tap::PreFader`], centred, so a mono channel plays on every
-    /// leg and a stereo one leg to leg. AFL is [`Tap::PostFader`], after
+    /// leg and a stereo one leg to leg, as its image sets them. AFL is [`Tap::PostFader`], after
     /// fader, mute and VCAs and before AFV, at the channel's pan.
     fn monitor(&self, width: usize, g: &mut [f64]) {
         let m = &self.state["monitor"];
@@ -1637,6 +1639,40 @@ mod tests {
         s["channels"]["st1"]["image"] = json!("swap");
         let m = at(&s);
         assert!(close(m[2][3], 0.0) && close(m[2][4], 1.0), "{m:?}");
+    }
+
+    /// The image reaches an aux send and the AFL listen as it reaches a
+    /// bus, with the send's and the channel's pan, and a stereo direct
+    /// out stays as the channel is.
+    #[test]
+    fn the_image_reaches_sends_and_listens_but_not_the_direct_out() {
+        let mut v = small();
+        v["outputs"] = json!([
+            { "id": "o-aux", "name": "IFB", "source": "aux1", "width": 1, "layout": "mono" },
+            { "id": "o-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" },
+            { "id": "o-st1", "name": "DO", "source": "st1", "width": 2, "layout": "stereo" },
+        ]);
+        let shape = Shape::parse(&v).unwrap();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["channels"]["st1"]["image"] = json!("leftToBoth");
+        s["channels"]["st1"]["sends"]["aux1"] =
+            json!({ "on": true, "level": 0, "pan": 0, "pre": false });
+        s["monitor"]["level"] = json!(0);
+        // Rows: ch1, ch2, st1 L, st1 R. Columns: o-aux, o-mon L R, o-st1 L R.
+        let m = matrix(&shape, &s);
+        // Both legs carry the left one onto the mono aux, -6 dB each.
+        assert!(close(m[2][0], 1.0) && close(m[3][0], 0.0), "{m:?}");
+        // The direct out is the channel: leg to leg, image or not.
+        assert!(close(m[2][3], 1.0) && close(m[3][4], 1.0), "{m:?}");
+        assert!(close(m[2][4], 0.0) && close(m[3][3], 0.0), "{m:?}");
+        // AFL at the channel's pan and image: the left leg to both, the
+        // right one of them lowered by a pan of -1.
+        s["channels"]["st1"]["solo"] = json!("afl");
+        s["channels"]["st1"]["pan"]["lr"] = json!(-1);
+        let m = matrix(&shape, &s);
+        assert!(close(m[2][1], 1.0) && close(m[2][2], 0.0), "{m:?}");
+        assert!(close(m[3][1], 0.0) && close(m[3][2], 0.0), "{m:?}");
     }
 
     /// The monitor's image takes its stereo legs after the fold, then

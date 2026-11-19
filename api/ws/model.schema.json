@@ -216,7 +216,7 @@
       "maximum": 1
     },
     "StereoImage": {
-      "description": "Leg use of a stereo channel: normal, leftToBoth feeds the left leg to both, rightToBoth the right leg to both, swap exchanges the legs. Ignored for other layouts.",
+      "description": "Leg use of a stereo channel: normal, leftToBoth feeds the left leg to both, rightToBoth the right leg to both, swap exchanges the legs. Applies before the balance on every bus, aux and mix-minus the channel feeds and on its listens, not on its direct out or its meters. Ignored for other layouts.",
       "type": "string",
       "enum": [
         "normal",
