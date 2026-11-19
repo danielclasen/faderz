@@ -236,6 +236,30 @@ impl Markers for Memory {
     }
 }
 
+/// A TCP port free now, below the kernel's ephemeral range: a socket a
+/// test binds to port 0 is never given it, so it stays free until the
+/// listener it is meant for binds it, where a port taken from port 0
+/// and let go can be given to another test first. The process hands
+/// each out once.
+pub fn reserved_port() -> u16 {
+    static TAKEN: Mutex<std::collections::BTreeSet<u16>> =
+        Mutex::new(std::collections::BTreeSet::new());
+    let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|r| r.split_whitespace().next()?.parse::<u16>().ok())
+        .unwrap_or(32768);
+    let span = u64::from(low.saturating_sub(10_000).max(1));
+    let mut taken = TAKEN.lock().unwrap();
+    loop {
+        let draw = RandomState::new().hash_one(std::time::Instant::now()) % span;
+        let port = 10_000 + u16::try_from(draw).unwrap();
+        if !taken.contains(&port) && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            taken.insert(port);
+            return port;
+        }
+    }
+}
+
 /// A directory under the target directory, removed when dropped.
 pub fn scratch(name: &str) -> Dir {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))

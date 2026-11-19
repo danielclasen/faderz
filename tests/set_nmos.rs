@@ -100,12 +100,9 @@ impl Set {
             inputs: json!({ "ch1": { "flow": ch1 }, "ch2": { "flow": ch2, "altFlow": ch2b } }),
             outputs: json!({ "out-pgm": { "flows": members, "mergedFlow": merged } }),
             merged,
-            nmos: (0..REPLICAS)
-                .map(|_| {
-                    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                    l.local_addr().unwrap().port()
-                })
-                .collect(),
+            // Every replica names the others' NMOS ports, so they are
+            // chosen before any binds them.
+            nmos: (0..REPLICAS).map(|_| reserved_port()).collect(),
             ch1,
             other,
             members,

@@ -200,15 +200,13 @@ impl Drop for Rtpmidid {
     }
 }
 
-/// A control port whose data port above it is free too.
+/// A control port whose data port above it is free too, below the
+/// ephemeral range ([`super::reserved_port`]).
 fn udp_ports() -> u16 {
-    loop {
-        let s = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let p = s.local_addr().unwrap().port();
-        if p < 65535 && std::net::UdpSocket::bind(("127.0.0.1", p + 1)).is_ok() {
-            return p;
-        }
-    }
+    super::reserved_port(|p| {
+        let free = |p: u16| std::net::UdpSocket::bind(("127.0.0.1", p)).is_ok();
+        p < 65535 && free(p) && free(p + 1)
+    })
 }
 
 /// A bridge with one X-Touch on an RTP-MIDI session; returns its

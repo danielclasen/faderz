@@ -86,6 +86,9 @@ fn main() -> ExitCode {
         eprintln!("faderz: peer listener on {peer}");
     }
     eprintln!("faderz: ops listener on {}", server.ops);
+    // Logged once every listener is bound, last: the bridge's end-to-end
+    // tests take this line as faderz listening on its own ports
+    // (tests/listeners.rs holds it to that).
     eprintln!("faderz: nmos listener on {}", server.nmos);
     match &server.audio {
         Some(audio) => eprintln!("faderz: rt {:?}", audio.engine().status().rt),
