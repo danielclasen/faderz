@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/danielclasen/faderz/compare/v0.3.1...v0.3.2) (2026-11-19)
+
+
+### Bug Fixes
+
+* **audio:** follow the faders in a set replica's meters ([#76](https://github.com/danielclasen/faderz/issues/76)) ([f6a28fb](https://github.com/danielclasen/faderz/commit/f6a28fb97b463a43af96ab8c6b58b198ac15ef2f))
+* **web:** wait in settled() until the worker took every write ([#72](https://github.com/danielclasen/faderz/issues/72)) ([3ab4b25](https://github.com/danielclasen/faderz/commit/3ab4b25bec3611922c67d9f3226e82aec81bded5))
+
 ## [0.3.1](https://github.com/danielclasen/faderz/compare/v0.3.0...v0.3.1) (2026-11-19)
 
 
