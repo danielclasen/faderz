@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/danielclasen/faderz/compare/v0.4.1...v0.4.2) (2026-11-19)
+
+
+### Features
+
+* **audio:** restart a loudness measurement on POST /loudness/reset ([#99](https://github.com/danielclasen/faderz/issues/99)) ([26bf845](https://github.com/danielclasen/faderz/commit/26bf845c48e65f420e0e48b7f3341c5927bfdb4f))
+
 ## [0.4.1](https://github.com/danielclasen/faderz/compare/v0.4.0...v0.4.1) (2026-11-19)
 
 
