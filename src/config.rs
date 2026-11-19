@@ -1076,7 +1076,39 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(set.statefulset, None);
-        assert_eq!(member_names(&set, "desk"), ["f-0", "f-1", "desk"]);
+        assert_eq!(
+            member_names(&set, "desk"),
+            ["f-0.f:7443", "f-1.f:7443", "desk"]
+        );
+    }
+
+    /// Without a StatefulSet each other replica is its whole peer
+    /// address, entry n for `peers[n]`: IP peers and bracketed IPv6 ones
+    /// stay distinct and the same on every replica, and a configured name
+    /// that is not `<set>-<n>` takes only its own slot.
+    #[test]
+    fn replica_ids_are_unique_whatever_the_peer_addresses_are() {
+        use crate::app::member_names;
+        let mut cfg = three(json!({ "name": "desk", "ordinal": 1 }));
+        for peers in [
+            ["10.0.0.1:80", "10.0.0.2:80", "10.0.0.3:80"],
+            ["[::1]:80", "[::2]:80", "[::3]:80"],
+            ["a.x:80", "b.x:80", "a.y:80"],
+            ["h:80", "h:81", "h:82"],
+        ] {
+            cfg["peers"] = json!(peers);
+            let set = set_of(cfg.clone(), || "x".into()).unwrap().unwrap();
+            let names = member_names(&set, "desk");
+            assert_eq!(names.len(), 3);
+            for (n, name) in names.iter().enumerate() {
+                let expect = if n == 1 { "desk" } else { peers[n] };
+                assert_eq!(name, expect, "ordinal {n} is peers[{n}]");
+            }
+            let mut unique = names.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(unique.len(), 3, "{names:?}");
+        }
     }
 
     /// One replica is a set of one, as before; it takes none of a set's

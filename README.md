@@ -318,12 +318,15 @@ listener:
 - Each replica lists every replica of the set in `GET /api/v1/replicas`
   and the WebSocket's `replicas` message, named as the pods are,
   `<StatefulSet>-<ordinal>` (with a `name` that ends in no ordinal, the
-  first label of its `peers` host), with the leader raft follows. Another replica is
-  healthy while this one is in contact with a majority and has had a
-  report from it within the contact window, and can commit while it is
+  replica's `peers` address, `host:port`), with the leader raft
+  follows. Another replica is healthy while this one is in contact with
+  a majority and has had a report from it within the contact window.
+  Every entry, this replica's own included, is commitable while it is
   healthy and a majority of the voters is. Without an engine there is
   no contact and only raft's view: a follower vouches for the leader
-  alone, the leader for a follower that has matched its log.
+  alone, for as long as raft names one (it drops the name when no
+  heartbeat arrives within the election timeout), and the leader for a
+  follower whose matched log is within 16 entries of its own.
 
 ### Engines in a set
 
