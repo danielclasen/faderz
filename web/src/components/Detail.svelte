@@ -37,7 +37,7 @@
   const group = $derived(channel ? 'channels' : shape.buses.some((b) => b.id === id) ? 'buses' : 'auxes');
   const element = $derived(channel ?? shape.buses.find((b) => b.id === id) ?? shape.auxes.find((a) => a.id === id)!);
   const st = $derived(mixer.state![group][id] as ChannelState | BusState);
-  // Front/rear, divergence and the LFE send place a mono channel in the field of
+  // Front/rear, spread and the LFE send place a mono channel in the field of
   // a bus or mix-minus of more than two legs, or of a monitor of more than two
   // legs through its AFL, so they act only when it reaches one; a send to an aux
   // and a PFL keep the L/R pair.
@@ -193,9 +193,9 @@
           <Param path={p('pan', 'spread')} label="Spread" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
           <Param path={p('pan', 'lfeSend')} label="LFE" min={-90} max={10} fader format={(v) => formatDb(v)} />
         {:else if element.width === 1}
-          <p class="note">Front/rear, divergence and LFE act on a surround bus: route this channel to one.</p>
+          <p class="note">Front/rear, spread and LFE act on a surround bus: route this channel to one.</p>
         {:else}
-          <p class="note">Front/rear, divergence and LFE are mono-channel controls.</p>
+          <p class="note">Front/rear, spread and LFE are mono-channel controls.</p>
         {/if}
       {:else if ch}
         <p class="note">{element.layout} maps leg to leg on {element.layout} buses and folds down (Lo/Ro) on narrower ones.</p>

@@ -221,9 +221,9 @@ impl Place {
     fn of(pan: &Value) -> Place {
         Place {
             lr: num(&pan["lr"]),
-            fr: num(&pan["frontRear"]),
-            divergence: num(&pan["spread"]),
-            lfe: num(&pan["lfeSend"]),
+            fr: pan["frontRear"].as_f64().unwrap_or(Place::FRONT.fr),
+            divergence: pan["spread"].as_f64().unwrap_or(Place::FRONT.divergence),
+            lfe: pan["lfeSend"].as_f64().unwrap_or(Place::FRONT.lfe),
         }
     }
 }

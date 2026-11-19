@@ -1979,6 +1979,7 @@ impl Product for Mixer {
         } else {
             self.shape = Some(Arc::new(saved.shape));
             self.state = saved.state;
+            fill_pan(&mut self.state);
             // Taken before duck groups were kept: its shape has none.
             if self.state.get("ducks").is_none() {
                 self.state["ducks"] = json!({});
@@ -1991,6 +1992,18 @@ impl Product for Mixer {
         self.rewire();
         self.derive();
         Ok(())
+    }
+}
+
+/// A snapshot an older binary saved has no surround position in the pan
+/// of its channels: the initial one fills it in, as a configured state
+/// does ([`Mixer::reconcile`]), so a write can reach it.
+fn fill_pan(state: &mut Value) {
+    let channels = state["channels"].as_object_mut().into_iter().flatten();
+    for pan in channels.filter_map(|(_, c)| c.get_mut("pan")?.as_object_mut()) {
+        for (leaf, initial) in [("frontRear", -1), ("spread", 1), ("lfeSend", -90)] {
+            pan.entry(leaf).or_insert(json!(initial));
+        }
     }
 }
 
@@ -4652,6 +4665,12 @@ mod tests {
         back.load(&serde_json::to_vec(&old).unwrap()).unwrap();
         assert_eq!(back.text(), replayed.text());
         close(legs(&back));
+        // A snapshot install builds a default state that takes the saved
+        // one, the missing surround position filled in.
+        let mut installed = Mixer::default();
+        installed.load(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(installed.text(), replayed.text());
+        close(legs(&installed));
         // The stored scene recalls the same.
         set(&mut back, "b", 1, "/channels/ch1/pan/lr", json!(-1));
         let recalled = Command::Recall {
