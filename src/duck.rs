@@ -277,7 +277,7 @@ mod tests {
 
     /// A mask names a group on a target's rows in the columns of the
     /// group's destinations: the output carrying pgm, the meter columns of
-    /// an element no output carries, and the monitor while its source is a
+    /// an element no full-width output carries, and the monitor while its source is a
     /// destination. Overlapping groups set both bits; a trigger's rows and
     /// a column of no destination stay 0.
     #[test]
@@ -359,6 +359,28 @@ mod tests {
         assert_eq!(masks(&shape, &state)[0][7..], [0, 0]);
         set_at(&mut state, "/mixMinus/mm1/interrupt/active", json!(true));
         assert_eq!(masks(&shape, &state)[0][7..], [0, 0]);
+    }
+
+    /// A destination is an element, so a group ducking pgm lowers every
+    /// column that carries it: the folded stereo output as well as the
+    /// 6-leg one, on each leg of a target.
+    #[test]
+    fn a_duck_group_lowers_the_folded_output_of_its_destination() {
+        let shape = Shape::parse(&crate::shape::tests::surround()).unwrap();
+        let mut state = shape.initial_state();
+        with(
+            &mut state,
+            &[
+                ("/ducks/comm/channels/sur/target", json!(true)),
+                ("/ducks/comm/destinations/pgm", json!(true)),
+            ],
+        );
+        // Rows ch1, ch2, st1 L R, sur x6; columns out-51 x6, out-lr x2,
+        // then the meters of cf x2, aux1 and mon x2.
+        let m = masks(&shape, &state);
+        assert_eq!(m[4..], [[1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]; 6]);
+        assert!(m[..4].iter().flatten().all(|&b| b == 0));
+        assert_eq!(columns(&shape), (0..13).collect::<Vec<_>>());
     }
 
     /// Without duck groups nothing is masked and no column is ducked, so

@@ -3821,8 +3821,18 @@ mod tests {
     /// The small shape with more channels, a 5.1 one among them, a
     /// second VCA, a stereo aux and a direct out, each channel wired to
     /// flows of its own in one domain.
-    fn wide() -> Mixer {
+    /// With `fold` its programme bus is 5.1, carried by a 6-leg output
+    /// and a stereo one that folds it down.
+    fn wide_with(fold: bool) -> Mixer {
         let mut shape = small();
+        if fold {
+            shape["buses"][0] = json!({ "id": "pgm", "name": "PGM", "kind": "program", "width": 6, "layout": "5.1" });
+            shape["mixMinus"] = json!([]);
+            shape["outputs"] = json!([
+                { "id": "out-51", "name": "PGM 5.1", "source": "pgm", "width": 6, "layout": "5.1" },
+                { "id": "out-lr", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            ]);
+        }
         let channel = |id: &str, width: usize, layout: &str| json!({ "id": id, "name": id, "width": width, "layout": layout, "altInput": true });
         let more = [
             channel("ch3", 1, "mono"),
@@ -3856,7 +3866,9 @@ mod tests {
     /// The targets a mixer keeps from write to write are those derived
     /// from its whole state, bit for bit, after every command of random
     /// sequences: sets, patches, touches and releases, scenes stored and
-    /// recalled, tally, expiries, refused commands and a save and load.
+    /// recalled, tally, expiries, refused commands and a save and load;
+    /// on the shape of [`wide_with`] and on one whose programme bus a stereo
+    /// output folds down, a duck group among its destinations.
     #[test]
     fn the_kept_targets_are_those_of_the_whole_state_bit_for_bit() {
         let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
@@ -4008,7 +4020,8 @@ mod tests {
         let mut seq = 0;
         let mut changed = 0;
         for round in 0..150 {
-            let mut m = wide();
+            let fold = round % 2 == 1;
+            let mut m = wide_with(fold);
             let mut scenes: Vec<String> = Vec::new();
             for step in 0..60 {
                 seq += 1;
@@ -4070,7 +4083,7 @@ mod tests {
                     }
                     _ => {
                         let before = m.targets().unwrap();
-                        let mut loaded = wide();
+                        let mut loaded = wide_with(fold);
                         loaded.load(&m.save()).unwrap();
                         assert_eq!(
                             format!("{:?}", loaded.targets()),
@@ -4105,6 +4118,46 @@ mod tests {
             changed > 150 * 60 / 3,
             "{changed} commands changed the state"
         );
+    }
+
+    /// On a programme bus a stereo output folds down, each write of a
+    /// fader, a pan or a duck group keeps the folded columns and the
+    /// masks onto them those of the whole state, and the folded columns
+    /// are the fold of the bus (centre at -3 dB on both sides).
+    #[test]
+    fn a_folded_output_and_its_duck_mask_follow_each_write() {
+        let mut m = wide_with(true);
+        let kept = |m: &Mixer| {
+            let kept = m.targets().unwrap();
+            let whole = mix::targets(m.shape(), &m.wiring, m.state());
+            assert_eq!(gain_bits(&kept), gain_bits(&whole));
+            assert_eq!(kept.masks, whole.masks);
+            kept
+        };
+        patch(
+            &mut m,
+            "p1",
+            &[
+                ("/channels/c51/fader", json!(0)),
+                ("/channels/c51/routes/pgm", json!(true)),
+                ("/ducks/comm/channels/c51/target", json!(true)),
+                ("/ducks/comm/destinations/pgm", json!(true)),
+            ],
+        );
+        kept(&m);
+        set(&mut m, "s", 1, "/buses/pgm/fader", json!(-6));
+        let t = kept(&m);
+        // Rows ch1, ch2, st1 x2, ch3, st2 x2, c51 x6: the centre is the
+        // third leg. Columns: out-51 x6, out-lr x2.
+        let row = 7 + 2;
+        let h = std::f64::consts::FRAC_1_SQRT_2 * mix::gain(-6.0);
+        assert!((f64::from(t.gains[row][6]) - h).abs() < 1e-6, "Lo of C");
+        assert!((f64::from(t.gains[row][7]) - h).abs() < 1e-6, "Ro of C");
+        assert_eq!(t.masks[row][6..8], [1, 1], "ducked on the fold");
+        set(&mut m, "s", 2, "/ducks/comm/destinations/pgm", json!(false));
+        assert_eq!(kept(&m).masks[row][6..8], [0, 0]);
+        set(&mut m, "s", 3, "/channels/c51/fader", json!(-10));
+        kept(&m);
     }
 
     fn input(ch: &str, value: &str) -> Command {

@@ -70,9 +70,12 @@ An output may be narrower than the element it names as its `source`: it
 then writes the source folded down, 5.1 and 7.1 onto stereo by the ITU-R
 BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1
 onto 5.1, and stereo or wider onto mono as a channel is folded onto a
-narrower bus. A bus carried by a full-width output is metered by that
-output; one carried only by narrower outputs gets an engine meter of its
-own, counted against the meters the engine allows.
+narrower bus. 7.1 folds onto 5.1 with L, R, C and LFE
+passed and Ls (Rs) the sum of the left (right) side and rear surround,
+each at -3 dB. A narrower output has no meter of its own: a bus is
+metered by the output carrying it at full width, and one carried only by
+narrower outputs gets an engine meter of its own, counted against the
+meters the engine allows.
 
 ## The console
 

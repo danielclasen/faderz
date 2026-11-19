@@ -1065,7 +1065,7 @@ impl Config {
     /// zeros: one input per channel reading its flow of input a, one
     /// output per output of the shape writing this replica's flow
     /// ([`Config::member_flows`]), one meter per bus, aux,
-    /// mix-minus and monitor output no output carries, and the columns a
+    /// mix-minus and monitor output no full-width output carries, and the columns a
     /// duck group can lower ([`crate::duck::columns`]).
     fn audio(&self, shape: &Shape) -> Result<Option<samplez::Config>, String> {
         let Some(mxl) = &self.mxl else {
@@ -1158,7 +1158,7 @@ impl Config {
         let columns = shape.meter_columns();
         if columns.len() > samplez::config::MAX_METERS {
             return Err(format!(
-                "shape: {} buses, auxes, mix-minus and monitor outputs have no output, \
+                "shape: {} buses, auxes, mix-minus and monitor outputs have no full-width output, \
                  the engine meters at most {} of them; add outputs for the others",
                 columns.len(),
                 samplez::config::MAX_METERS
@@ -1732,7 +1732,7 @@ mod tests {
         let ok = config(json!({ "flow": id(1), "altFlow": id(5) }));
         Config::parse(&ok, || unreachable!()).unwrap();
 
-        // Each bus, aux, mix-minus and monitor output no output carries
+        // Each bus, aux, mix-minus and monitor output no full-width output carries
         // is an engine meter on matrix columns after the outputs', and
         // each leg is weighted for loudness by its layout.
         let (c, ..) = Config::parse(&ok, || unreachable!()).unwrap();
@@ -1889,7 +1889,7 @@ mod tests {
         let id = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
         let config = |auxes: usize| {
             let mut shape = small();
-            // cf, mm1 and mon have no output: aux1 and the added auxes
+            // cf, mm1 and mon have no full-width output: aux1 and the added auxes
             // make up the rest.
             let aux = |i: usize| json!({ "id": format!("aux{i}"), "name": "a", "width": 1, "layout": "mono" });
             shape["auxes"] = (1..=auxes).map(aux).collect();
