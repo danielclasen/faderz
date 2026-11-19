@@ -4,6 +4,7 @@
 //!
 //! Run with `FADERZ_BIN=... cargo test --features e2e --test e2e`.
 
+use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -74,21 +75,41 @@ impl Faderz {
         let dir =
             std::env::temp_dir().join(format!("bridge-e2e-{}", session::random_id().unwrap()));
         std::fs::create_dir_all(&dir).unwrap();
-        let (port, ops, nmos) = (free_port(), free_port(), free_port());
-        let mut f = Faderz {
-            child: None,
-            auth,
-            port,
-            ops,
-            nmos,
-            dir,
-        };
-        f.spawn().await;
-        f
+        // A port free_port() saw free can be taken by a parallel test
+        // before faderz binds it; faderz then exits, and the next start
+        // takes ports of its own.
+        for _ in 0..5 {
+            let (port, ops, nmos) = (free_port(), free_port(), free_port());
+            let mut f = Faderz {
+                child: None,
+                auth: auth.clone(),
+                port,
+                ops,
+                nmos,
+                dir: dir.clone(),
+            };
+            if f.try_spawn().await {
+                return f;
+            }
+        }
+        panic!("faderz did not bind free ports in 5 starts");
     }
 
-    /// Starts the process on this instance's ports and data directory.
+    /// Starts the process on the instance's ports and data directory;
+    /// a port taken by another process fails the test.
     async fn spawn(&mut self) {
+        assert!(
+            self.try_spawn().await,
+            "faderz could not bind its ports again"
+        );
+    }
+
+    /// Starts the process on the instance's ports and data directory and
+    /// waits for its API to answer; false when it exits first, as it does
+    /// when one of its ports is taken. It is up only once it has said it
+    /// listens on its own ports: until then an answer on the API port can
+    /// come from whatever process holds that port.
+    async fn try_spawn(&mut self) -> bool {
         let bin = std::env::var("FADERZ_BIN").expect("FADERZ_BIN names the faderz binary");
         let listener = |port: u16| json!({ "bind": "127.0.0.1", "port": port });
         let config = json!({
@@ -97,22 +118,45 @@ impl Faderz {
             "auth": self.auth,
             "shape": shape(),
         });
+        std::fs::create_dir_all(&self.dir).unwrap();
         let path = self.dir.join("config.json");
         std::fs::write(&path, config.to_string()).unwrap();
-        let child = Command::new(bin)
+        let mut child = Command::new(bin)
             .arg("--config")
             .arg(&path)
             .stdout(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
+        // Its log goes on to the test's, and the line naming its last
+        // listener says it holds all of them.
+        let bound = format!("nmos listener on 127.0.0.1:{}", self.nmos);
+        let (listening, heard) = std::sync::mpsc::channel();
+        let stderr = child.stderr.take().unwrap();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                eprintln!("{line}");
+                if line.contains(&bound) {
+                    let _ = listening.send(());
+                }
+            }
+        });
         self.child = Some(child);
+        let mut up = false;
         for _ in 0..200 {
-            if self
-                .get("/api/v1/replicas")
-                .await
-                .is_some_and(|r| r.starts_with("HTTP/1.1 "))
+            let child = self.child.as_mut().unwrap();
+            if child.try_wait().unwrap().is_some() {
+                self.child = None;
+                return false;
+            }
+            up = up || heard.try_recv().is_ok();
+            if up
+                && self
+                    .get("/api/v1/replicas")
+                    .await
+                    .is_some_and(|r| r.starts_with("HTTP/1.1 "))
             {
-                return;
+                return true;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
