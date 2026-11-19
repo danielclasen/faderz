@@ -492,13 +492,19 @@ test('sets the LFE send and the stereo image of a channel from the processing pa
   expect((await serverState(request)).state.channels['st1']!.image).toBe('rightToBoth');
   await expect(page.getByRole('radio', { name: 'Right to both', exact: true })).toHaveAttribute('aria-checked', 'true');
   await patch(request, '/channels/st1/image', 'normal');
+  await patch(request, '/channels/ch1/routes/pgm51', false);
   await page.locator('[data-channel="ch1"] .head').click();
+  // A mono channel that feeds no bus of more than two legs has no field to be placed in.
+  await expect(page.getByLabel('LFE', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Front/rear, divergence and LFE act when this channel feeds a 5.1 or 7.1 bus.')).toBeVisible();
+  await patch(request, '/channels/ch1/routes/pgm51', true);
   await expect(page.getByLabel('LFE', { exact: true })).toBeVisible();
   await patch(request, '/channels/ch1/pan/lfe', -12);
   await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuetext', '-12.0');
   // On the fader taper, as the Aux view's send levels: -12 dB sits at 47.5 % of the travel.
   await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuenow', /^4[78]$/);
   await patch(request, '/channels/ch1/pan/lfe', -90);
+  await patch(request, '/channels/ch1/routes/pgm51', true);
 });
 
 test('enters a channel delay in frames and shows it in ms', async ({ page, request }) => {
