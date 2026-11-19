@@ -94,7 +94,18 @@ test('three clients moving faders with meters on and duck groups firing stay und
     // On a retry, a performance trace of the window, kept only when a
     // page has a long task in it, shows what ran in that task.
     if (info.retry > 0) {
-      await browser.startTracing(undefined, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing'] });
+      // Invalidation tracking with stacks names the element and the code
+      // that made a layout or style recalculation as large as it was.
+      await browser.startTracing(undefined, {
+        categories: [
+          'devtools.timeline',
+          'disabled-by-default-devtools.timeline',
+          'disabled-by-default-devtools.timeline.invalidationTracking',
+          'disabled-by-default-devtools.timeline.stack',
+          'v8.execute',
+          'blink.user_timing',
+        ],
+      });
       tracing = true;
     }
     const starts = await Promise.all(pages.map((p) => p.evaluate(() => ({ t: performance.now(), patches: window.__faderz!.patches }))));
