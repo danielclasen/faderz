@@ -354,7 +354,7 @@ impl Audio {
                 Some(deltas) => {
                     for d in deltas {
                         let Ok(delta) = serde_json::from_str::<Value>(&d.text) else {
-                            (state, revision) = state_of(replica);
+                            (state, revision) = owned_state_of(replica);
                             break;
                         };
                         revision = d.revision;
@@ -368,7 +368,7 @@ impl Audio {
                 }
                 // No longer held: taken from the state, as soon as the
                 // engine takes it.
-                None => (state, revision) = state_of(replica),
+                None => (state, revision) = owned_state_of(replica),
             }
             let view = crate::app::with_state(replica, |sm| sm.product.engine_view());
             self.apply(&state, &view, &mut sent, at, false).await;
@@ -1152,9 +1152,16 @@ fn resets_of(state: &Value) -> BTreeMap<String, u64> {
         .collect()
 }
 
-/// The state and revision `replica` holds now.
-pub fn state_of(replica: &Replica<Mixer>) -> (Value, u64) {
-    crate::app::with_state(replica, |sm| (sm.product.state().clone(), sm.revision))
+/// The state and revision `replica` holds now: shared, so the store lock
+/// is held for a pointer copy, not a copy of the state.
+pub fn state_of(replica: &Replica<Mixer>) -> (Arc<Value>, u64) {
+    crate::app::with_state(replica, |sm| (sm.product.shared_state(), sm.revision))
+}
+
+/// [`state_of`], owned: copied after the store lock is released.
+pub fn owned_state_of(replica: &Replica<Mixer>) -> (Value, u64) {
+    let (state, revision) = state_of(replica);
+    (Arc::unwrap_or_clone(state), revision)
 }
 
 #[cfg(test)]

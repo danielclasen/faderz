@@ -156,7 +156,7 @@ impl Server {
         let audio = match &config.audio {
             Some(engine) => {
                 let process = process.unwrap_or_else(|| samplez::rt::setup_process(&engine.rt));
-                let (live, revision) = audio::state_of(&state);
+                let (live, revision) = audio::owned_state_of(&state);
                 // The leg flows IS-05 activations named, the detached
                 // channels and the outputs' enable, which the state keeps.
                 let view = crate::app::with_state(&state, |sm| sm.product.engine_view());

@@ -430,7 +430,9 @@ pub const MAX_CONSOLES: usize = 64;
 pub struct Mixer {
     /// `None` only in a [`Default`] state before a snapshot is loaded.
     shape: Option<Arc<Shape>>,
-    state: Value,
+    /// Shared, so a reader copies a pointer under the store lock; a
+    /// write copies it only while a reader still holds the old one.
+    state: Arc<Value>,
     owners: BTreeMap<String, Holder>,
     seqs: BTreeMap<SessionKey, BTreeMap<String, u64>>,
     answers: BTreeMap<SessionKey, VecDeque<(String, Answer)>>,
@@ -501,7 +503,7 @@ impl Mixer {
     /// ([`Product::targets`]).
     pub fn configured(shape: Shape, declared: Vec<Console>, wiring: Vec<Wiring>) -> Mixer {
         let mut m = Mixer {
-            state: shape.initial_state(),
+            state: Arc::new(shape.initial_state()),
             shape: Some(Arc::new(shape)),
             consoles: declared.iter().map(Mixer::declared_entry).collect(),
             declared,
@@ -509,7 +511,8 @@ impl Mixer {
             wiring,
             ..Mixer::default()
         };
-        m.state["consoles"] = m.console_list();
+        let consoles = m.console_list();
+        Arc::make_mut(&mut m.state)["consoles"] = consoles;
         m.derive();
         m
     }
@@ -945,6 +948,18 @@ impl Mixer {
         &self.state
     }
 
+    /// [`Mixer::shape`] shared: a pointer copy, for a reader that takes it
+    /// out of the store lock.
+    pub fn shared_shape(&self) -> Arc<Shape> {
+        self.shape.clone().expect("a shape is configured or loaded")
+    }
+
+    /// [`Mixer::state`] shared: a pointer copy, for a reader that takes it
+    /// out of the store lock.
+    pub fn shared_state(&self) -> Arc<Value> {
+        self.state.clone()
+    }
+
     /// Owned controls, model `Owners`.
     pub fn owners(&self) -> Value {
         Value::Object(
@@ -1083,7 +1098,7 @@ impl Mixer {
         let mut changed: Vec<(String, Value)> = Vec::new();
         for (path, value) in all {
             if self.state.pointer(&path) != Some(&value) {
-                set_at(&mut self.state, &path, value.clone());
+                set_at(Arc::make_mut(&mut self.state), &path, value.clone());
                 changed.retain(|(p, _)| *p != path);
                 changed.push((path, value));
             }
@@ -1092,7 +1107,7 @@ impl Mixer {
             for (channel, open) in self.afv_open() {
                 if self.state["afv"][&channel]["open"] != open {
                     let path = format!("/afv/{channel}/open");
-                    set_at(&mut self.state, &path, json!(open));
+                    set_at(Arc::make_mut(&mut self.state), &path, json!(open));
                     changed.push((path, json!(open)));
                 }
             }
@@ -1699,7 +1714,7 @@ impl Mixer {
             .filter(|s| !s.declared && !self.declared.iter().any(|d| d.id == s.console.id));
         merged.extend(runtime);
         self.consoles = merged;
-        self.state["consoles"] = self.console_list();
+        Arc::make_mut(&mut self.state)["consoles"] = self.console_list();
     }
 
     /// Loads `saved` into this state's configured shape: leaves the shape
@@ -1742,7 +1757,7 @@ impl Mixer {
         for group in ["tally", "scenes", "sceneRecalled"] {
             state[group] = saved.state[group].clone();
         }
-        self.state = state;
+        self.state = Arc::new(state);
         self.owners = saved
             .owners
             .into_iter()
@@ -1959,13 +1974,13 @@ impl Product for Mixer {
 
     /// `shape`, `state` and `owners`, which the snapshot message carries.
     fn text(&self) -> String {
-        json!({ "shape": self.shape(), "state": self.state, "owners": self.owners() }).to_string()
+        json!({ "shape": self.shape(), "state": &*self.state, "owners": self.owners() }).to_string()
     }
 
     fn save(&self) -> Vec<u8> {
         let saved = Saved {
             shape: self.shape().clone(),
-            state: self.state.clone(),
+            state: Value::clone(&self.state),
             owners: self
                 .owners
                 .iter()
@@ -2028,11 +2043,11 @@ impl Product for Mixer {
             self.reconcile(saved);
         } else {
             self.shape = Some(Arc::new(saved.shape));
-            self.state = saved.state;
-            fill_pan(&mut self.state);
+            self.state = Arc::new(saved.state);
+            fill_pan(Arc::make_mut(&mut self.state));
             // Taken before duck groups were kept: its shape has none.
             if self.state.get("ducks").is_none() {
-                self.state["ducks"] = json!({});
+                Arc::make_mut(&mut self.state)["ducks"] = json!({});
             }
             self.owners = saved.owners.into_iter().collect();
             self.dropped = Vec::new();
@@ -2229,6 +2244,19 @@ mod tests {
 
     fn mixer() -> Mixer {
         Mixer::new(Shape::parse(&small()).unwrap())
+    }
+
+    /// A reader takes the state out of the store lock as a pointer: what
+    /// it took stays as it was while writes go on, and the next reader
+    /// sees them.
+    #[test]
+    fn a_shared_state_stays_as_taken_while_writes_go_on() {
+        let mut m = mixer();
+        let taken = m.shared_state();
+        assert!(Arc::ptr_eq(&taken, &m.shared_state()), "a pointer copy");
+        set(&mut m, "a", 1, "/channels/ch1/fader", json!(-6));
+        assert_eq!(taken["channels"]["ch1"]["fader"], json!(-90));
+        assert_eq!(m.shared_state()["channels"]["ch1"]["fader"], json!(-6));
     }
 
     fn origin(session: &str) -> Origin {
@@ -3005,7 +3033,7 @@ mod tests {
     #[test]
     fn a_tally_reasserts_a_stage_that_contradicts_it() {
         let mut m = mixer();
-        set_at(&mut m.state, "/afv/ch1/open", json!(false));
+        set_at(Arc::make_mut(&mut m.state), "/afv/ch1/open", json!(false));
         let sources = BTreeMap::from([("CAM9".to_owned(), "program".to_owned())]);
         let v = values(&rest(
             &mut m,

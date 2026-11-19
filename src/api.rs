@@ -153,16 +153,24 @@ async fn result(app: &App, ack: &Ack, command_id: bool) -> Value {
 async fn get_state(State(app): State<Arc<App>>) -> Response {
     // Taken before the state: it reaches samplez's contact lock.
     let replica = app.replica_ref();
-    let document = app.with_state(|sm| {
-        json!({
-            "revision": sm.revision,
-            "replica": replica,
-            "shape": sm.product.shape(),
-            "state": sm.product.state(),
-            "owners": sm.product.owners(),
-        })
+    // Pointers and the owners only under the store lock: the state is
+    // serialised after it, as the lock holds off applying entries.
+    let (revision, shape, state, owners) = app.with_state(|sm| {
+        (
+            sm.revision,
+            sm.product.shared_shape(),
+            sm.product.shared_state(),
+            sm.product.owners(),
+        )
     });
-    Json(document).into_response()
+    Json(json!({
+        "revision": revision,
+        "replica": replica,
+        "shape": &*shape,
+        "state": &*state,
+        "owners": owners,
+    }))
+    .into_response()
 }
 
 async fn status(State(app): State<Arc<App>>) -> Response {
