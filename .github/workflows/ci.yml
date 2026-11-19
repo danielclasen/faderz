@@ -494,7 +494,9 @@ jobs:
   # reason.
   nmos:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Twice a run with an uncached faderz image, plus the wait for an
+    # image a pull request publishes.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -507,12 +509,27 @@ jobs:
           load: true
           tags: faderz:nmos
           cache-from: type=gha,scope=image
-      # Published by nmos-testing-image.yml for the pinned commit.
+      # Published by nmos-testing-image.yml for the pinned commit. A pull
+      # request that changes the pin publishes the image in a run of its
+      # own, which this waits for, up to 20 min. The tag is resolved to a
+      # digest once, pulled by it, and checked to carry the pin as its
+      # revision.
       - name: Pull the nmos-testing image
         run: |
-          image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/faderz-nmos-testing:$(cat .github/nmos-testing.ref)
-          docker pull "$image"
-          docker tag "$image" nmos-testing:ci
+          ref=$(cat .github/nmos-testing.ref)
+          repo=ghcr.io/${GITHUB_REPOSITORY_OWNER}/faderz-nmos-testing
+          deadline=$((SECONDS + 1200))
+          until digest=$(docker buildx imagetools inspect "$repo:$ref" --format '{{json .Manifest}}' 2>/dev/null | jq -er .digest); do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::$repo:$ref is not published; nmos-testing-image.yml publishes it"
+              exit 1
+            fi
+            echo "waiting for $repo:$ref"
+            sleep 30
+          done
+          docker pull "$repo@$digest"
+          test "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$repo@$digest")" = "$ref"
+          docker tag "$repo@$digest" nmos-testing:ci
       # faderz reads CLOCK_TAI, the tool computes TAI from UTC: absolute
       # activations meet only with the kernel's TAI offset set.
       - name: Set the kernel TAI offset
