@@ -146,6 +146,30 @@ paths:
                     minItems: 1
                     items:
                       $ref: "./ws/model.schema.json#/$defs/ReplicaStatus"
+  /about:
+    get:
+      operationId: getAbout
+      summary: What the serving replica was built from, and the faderz changelog of that release.
+      description: |
+        Both come from the binary: the changelog is the CHANGELOG.md of
+        the faderz release it was built from, embedded when it was built,
+        so answering makes no request beyond the replica.
+      responses:
+        "200":
+          description: About.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [build, changelog]
+                additionalProperties: false
+                properties:
+                  build:
+                    $ref: "./ws/model.schema.json#/$defs/Build"
+                  changelog:
+                    description: The faderz CHANGELOG.md, Markdown as release-please writes it, newest release first.
+                    type: string
+                    minLength: 1
   /status:
     get:
       operationId: getStatus

@@ -37,6 +37,7 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/state", get(get_state).patch(patch_state))
         .route("/replicas", get(replicas))
+        .route("/about", get(about))
         .route("/status", get(status))
         .route("/scenes", post(create_scene))
         .route("/scenes/{scene}", put(store_scene).delete(delete_scene))
@@ -189,6 +190,13 @@ async fn status(State(app): State<Arc<App>>) -> Response {
 
 async fn replicas(State(app): State<Arc<App>>) -> Response {
     Json(json!({ "replica": app.replica_ref(), "build": crate::app::build(), "replicas": app.replicas() }))
+        .into_response()
+}
+
+/// What this replica was built from and the faderz changelog of that
+/// release, from the binary: no request leaves the replica for it.
+async fn about() -> Response {
+    Json(json!({ "build": crate::app::build(), "changelog": crate::app::CHANGELOG }))
         .into_response()
 }
 

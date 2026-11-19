@@ -461,6 +461,7 @@ committed.
 | `GET /api/v1/state` | shape, live state, owners and the revision |
 | `PATCH /api/v1/state` | write one or more controls atomically |
 | `GET /api/v1/replicas` | the replica set as the serving replica sees it, and the faderz version and samplez release the serving replica was built from |
+| `GET /api/v1/about` | what the serving replica was built from, and the faderz changelog of that release, embedded in the binary |
 | `GET /api/v1/status` | the serving replica's role, readiness and contact state, and its engine's inputs (state, flow, blocks copied, late and too late) and outputs |
 | `POST /api/v1/scenes`, `PUT` and `DELETE /api/v1/scenes/{id}` | store, overwrite or rename, and delete scenes |
 | `POST /api/v1/scenes/{id}/recall` | recall a scene |

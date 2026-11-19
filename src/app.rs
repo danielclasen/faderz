@@ -205,6 +205,10 @@ pub fn build() -> Value {
     json!({ "faderz": env!("CARGO_PKG_VERSION"), "samplez": env!("FADERZ_SAMPLEZ") })
 }
 
+/// The faderz CHANGELOG.md of the release this binary was built from,
+/// embedded at build time: `GET /about` serves it as it is.
+pub const CHANGELOG: &str = include_str!("../CHANGELOG.md");
+
 /// Whether replica `me` hears replica `id` of its set. With contact
 /// running: contact holds a majority and has had a report from `id`
 /// within its window. Without (a set without an engine), what raft

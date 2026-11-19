@@ -658,6 +658,28 @@ async fn a_replica_names_the_build_cargo_lock_pins() {
     server.stop().await;
 }
 
+/// GET /about answers with the CHANGELOG.md of the checkout the binary
+/// was built from, byte for byte, and the build the replica names: the
+/// changelog is in the binary, so a replica with no way out answers it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn about_serves_the_changelog_the_binary_was_built_with() {
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let rest = Rest::new(&server);
+    let (s, v) = rest
+        .call(
+            "GET",
+            "/about",
+            None,
+            Some("/paths/~1about/get/responses/200/content/application~1json/schema"),
+        )
+        .await;
+    assert_eq!(s, 200);
+    assert_eq!(v["changelog"], include_str!("../CHANGELOG.md"));
+    assert_eq!(v["build"], faderz::app::build());
+    server.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rest_answers_match_the_contract() {
     let dir = data_dir();
