@@ -94,7 +94,8 @@ test('README screenshots', async ({ browser }) => {
   await alex.screenshot({ path: `${OUT}/scenes.png`, clip: { x: 0, y: 0, width: 1160, height: 560 } });
 
   const tablet = await screen(browser, { ...devices['iPad Pro 11 landscape'], deviceScaleFactor: 2 });
-  await tablet.getByRole('button', { name: 'Switch to light theme' }).click();
+  await tablet.getByTestId('account').click();
+  await tablet.getByRole('menuitem', { name: 'Switch to light theme' }).click();
   await tablet.waitForTimeout(3000);
   await tablet.screenshot({ path: `${OUT}/tablet-light.png` });
 

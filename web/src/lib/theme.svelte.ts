@@ -1,6 +1,5 @@
 // Theme of this screen, dark or light: a per-screen preference kept in
-// localStorage, set from the header key, the account menu, or the Setup
-// view, which every width reaches.
+// localStorage, set from the account menu or the Setup view.
 
 export type Theme = 'dark' | 'light';
 const KEY = 'faderz.theme';

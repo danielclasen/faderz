@@ -105,8 +105,7 @@
 
   <section class="card" aria-labelledby="setup-screen">
     <h2 class="panel-title" id="setup-screen">This screen</h2>
-    <!-- The header's theme key is not shown on the narrowest phones; this
-         one is reached at every width. -->
+    <!-- The same choice as the account menu's theme entry. -->
     <div class="radios" role="radiogroup" aria-label="Theme of this screen">
       {#each THEMES as t (t.id)}
         <button class="key" role="radio" aria-checked={theme.value === t.id} onclick={() => setTheme(t.id)}>{t.label}</button>

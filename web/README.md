@@ -169,7 +169,9 @@ user, where that is no email address), switches the theme, and in
 `token` and `oidc` mode offers Sign out (`POST /api/v1/logout`), which
 in `oidc` mode continues to the provider's end-session endpoint when it
 has one; under its entries it names the faderz version and samplez
-release the primary replica was built from. Below 1200 px the menu takes the theme key's place. The status
+release the primary replica was built from. The pill shows at every
+width and in every mode, with a person mark where nobody is signed in;
+its menu and the Setup view are where the theme is switched. The status
 bar starts with the ENGINE lamp and the session tag and endpoint, then
 the notice line.
 A viewer's write controls are locked with the reason "signed in as a
@@ -393,6 +395,14 @@ the sessions on other replicas that hold a control. Its panel lists
 each with who is signed in (the display name, or token or anonymous),
 the role, the handle tag, what it holds and what it has selected;
 every role sees it. Each replica knows only its own connections.
+
+The header's right end holds what the screen shows, then, past a
+divider, what it does. Left of the divider are the status readouts:
+the connected control surfaces in one well, each with its protocol and
+the strips its bank is on (from 1301 px; below that the USERS panel
+lists them), the pending count, a failover and the line-up tone lamp.
+Right of it are the controls, USERS, LOCK DESK and the account pill,
+all one height (26 px, 32 px to a finger).
 
 A label cut off for lack of room, such as a long channel name, shows
 its full text in a tooltip: after a short hover, on keyboard focus (Tab

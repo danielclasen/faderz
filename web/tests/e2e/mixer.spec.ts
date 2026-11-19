@@ -18,6 +18,7 @@ import {
   resetMock,
   serverState,
   settled,
+  switchTheme,
   uiFontLoaded,
 } from './support';
 
@@ -380,8 +381,7 @@ test('moves nothing on its own when the system asks for reduced motion', async (
 test('switches to the light theme and works at tablet width', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await live(page);
-  await page.getByRole('button', { name: 'Switch to light theme' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await switchTheme(page, 'light');
   const width = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(width).toBeLessThanOrEqual(1024);
   await expect(page.getByRole('button', { name: 'Pres 1 mute' })).toBeVisible();
@@ -1329,7 +1329,7 @@ test('writes the tally on the strip in words: PGM, PVW, and CLOSED when the AFV 
   await expect(page.getByTestId('tally-ch15')).not.toHaveCSS('text-decoration-line', 'line-through');
   // The words take the chip's colour in both themes: white on the PGM fill, the PVW colour on its tint.
   for (const theme of ['dark', 'light']) {
-    if (theme === 'light') await page.getByRole('button', { name: 'Switch to light theme' }).click();
+    if (theme === 'light') await switchTheme(page, 'light');
     for (const ch of ['ch13', 'ch14']) {
       const chip = page.getByTestId(`tally-${ch}`);
       await expect(chip.locator('span')).toHaveCSS('color', await chip.evaluate((el) => getComputedStyle(el).color));
@@ -2075,7 +2075,7 @@ test('every state word of a bank-bar pill fits its box at 1024, 1180 and 1280 px
         await page.mouse.up();
         await expect(word).toHaveText('AUTO');
       }
-      if (theme === 'dark') await page.getByRole('button', { name: 'Switch to light theme' }).click();
+      if (theme === 'dark') await switchTheme(page, 'light');
     }
   } finally {
     await patch(request, '/ducks/comm/mode', 'auto');

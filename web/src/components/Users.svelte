@@ -26,7 +26,7 @@
     Object.entries(mixer.owners)
       .filter(([, o]) => o?.kind === 'console' && o.handle === handle)
       .map(([p]) => p);
-  /** A short screen (App.svelte) or a phone: USR, so the notice line and the header keys keep room. */
+  /** A short screen (App.svelte) or a phone: USR, so the notice line and the header keys keep room. The key shows at every width: below 1301 px the panel is where the surfaces' banks are read. */
   const short = new MediaQuery('(max-height: 500px), (max-width: 700px)');
   const count = $derived(rows.length + consoles.filter((c) => c.connected).length);
   const kindLabel = (kind: string) => (kind === 'ui' ? 'web client' : kind);
@@ -44,8 +44,8 @@
 </script>
 
 <div class="users">
-  <button class="key" aria-label={`Users ${count}`} aria-expanded={open} aria-controls="users-panel" onclick={() => (open = !open)} title="Who works on this mixer"
-    ><span class="count"><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(count).padStart(2)}</span></span></button
+  <button class="key users-key" aria-label={`Users ${count}`} aria-expanded={open} aria-controls="users-panel" onclick={() => (open = !open)} title="Who works on this mixer"
+    ><span class="count"><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(count).padStart(2)}</span></span><i class="caret" aria-hidden="true"></i></button
   >
   <div class="panel" class:open id="users-panel" role="region" aria-label="Users">
     {#each rows as r (r.handle)}
@@ -75,11 +75,27 @@
   .users {
     flex: none;
   }
-  /* Phones: the header has room for the connection state only. */
-  @media (max-width: 700px) {
-    .users {
-      display: none;
-    }
+  /* A control that opens a panel: a caret says so, turned while open. */
+  .users-key {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-right: 7px;
+  }
+  .users-key[aria-expanded='true'] {
+    border-color: var(--text-dim);
+    color: var(--text);
+  }
+  .caret {
+    flex: none;
+    width: 0;
+    height: 0;
+    border-left: 3.5px solid transparent;
+    border-right: 3.5px solid transparent;
+    border-top: 4px solid currentColor;
+  }
+  .users-key[aria-expanded='true'] .caret {
+    transform: rotate(180deg);
   }
   /* The count changes whenever a session elsewhere takes or lets go of a
      control. A button lays out its content as flex items, which are never
@@ -99,7 +115,7 @@
     line-height: 14px;
     contain: size layout style;
   }
-  @media (max-height: 500px) {
+  @media (max-height: 500px), (max-width: 700px) {
     .count .fixed {
       width: calc(6ch + 6 * 0.06em);
     }

@@ -176,7 +176,7 @@ test('names the signed-in user by initials in a pill at the header end, with Sig
   await expect(menu).toBeVisible();
   await page.locator('main').click({ position: { x: 5, y: 5 } });
   await expect(menu).toBeHidden();
-  // The theme entry switches the theme, as the theme key does.
+  // The theme entry switches the theme.
   await pill.click();
   await menu.getByRole('menuitem', { name: 'Switch to light theme' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

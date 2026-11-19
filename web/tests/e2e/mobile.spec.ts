@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { REPLICAS, debug, live, uiFontLoaded } from './support';
+import { REPLICAS, debug, live, switchTheme, uiFontLoaded } from './support';
 
 test('renders the mixer on a phone over a plain-HTTP LAN origin', async ({ page, baseURL }) => {
   const errors: string[] = [];
@@ -20,6 +20,35 @@ test('renders the mixer on a phone over a plain-HTTP LAN origin', async ({ page,
   await mute.click();
   await expect(mute).toHaveAttribute('aria-pressed', before === 'true' ? 'false' : 'true');
   expect(errors).toEqual([]);
+});
+
+test('a phone header holds the view menu, the users key and the account pill, one finger tall, and no theme key', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('link')).toContainText('LIVE');
+  const header = page.locator('header.top');
+  await expect(header.getByRole('button', { name: /theme$/ })).toHaveCount(0);
+  // The surfaces are read in the users panel here.
+  await expect(page.getByTestId('consoles')).toBeHidden();
+  const users = header.getByRole('button', { name: /^Users \d+$/ });
+  const account = header.getByTestId('account');
+  const W = page.viewportSize()!.width;
+  for (const key of [users, account]) {
+    const box = (await key.boundingBox())!;
+    expect(box.height).toBe(32);
+    expect(box.x + box.width).toBeLessThanOrEqual(W);
+  }
+  await expect(users).toHaveText(/^USR\s+\d+$/);
+  await users.click();
+  const panel = page.getByRole('region', { name: 'Users' });
+  await expect(panel.getByTestId('console').first()).toBeVisible();
+  const p = (await panel.boundingBox())!;
+  expect(p.x).toBeGreaterThanOrEqual(0);
+  expect(p.x + p.width).toBeLessThanOrEqual(W);
+  await users.click();
+  // The theme switches from the account menu.
+  await switchTheme(page, 'light');
+  await switchTheme(page, 'dark');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(W);
 });
 
 test('shows one duck group at a time on a phone, picked from a list, within the screen', async ({ page }) => {

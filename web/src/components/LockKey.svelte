@@ -72,10 +72,9 @@
     width: calc(9ch + 9 * 0.06em);
     text-align: center;
   }
-  /* Phones: the header holds the connection state and the tone lamp; a
-     LOCK DESK key would make it wider than the screen. A locked desk
-     shows its key in any case, in the room of the theme key (App), so
-     a lock made in landscape can be undone in portrait. */
+  /* Phones: a LOCK DESK key would make the header wider than the
+     screen. A locked desk shows its key in any case, narrowed, so a
+     lock made in landscape can be undone in portrait. */
   @media (max-width: 700px) {
     .lock:not(.on) {
       display: none;

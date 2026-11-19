@@ -195,7 +195,7 @@
 </div>
 
 <style>
-  /* Items of the header's right group: see Consoles. */
+  /* Items of the header's status group (App.svelte), or of the status bar. */
   .status {
     display: contents;
   }
@@ -209,7 +209,7 @@
   }
   /* The link lamp and the quorum read as one key with two fields. */
   .conn {
-    --h: 24px;
+    --h: var(--item-h, 24px);
     flex: none;
     display: flex;
     align-items: stretch;

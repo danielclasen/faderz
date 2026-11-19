@@ -7,11 +7,12 @@ import { MixerStore, mixerContext } from '../../src/lib/state/mixer.svelte';
 import SignIn from '../../src/components/SignIn.svelte';
 import StatusBar from '../../src/components/StatusBar.svelte';
 import Account from '../../src/components/Account.svelte';
+import { setTheme } from '../../src/lib/theme.svelte';
 
 const BASE = 'http://mixer.example/api/v1';
 
 /** A fetch answering each `METHOD path` from `routes`, recording every request. */
-function fakeFetch(routes: Record<string, () => Response>) {
+function fakeFetch(routes: Record<string, () => Response | Promise<Response>>) {
   const calls: { method: string; path: string; headers: Record<string, string>; body: string | null }[] = [];
   const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -197,12 +198,67 @@ describe('the signed-in user in the header', () => {
     done();
   });
 
-  it('shows nobody in none mode', async () => {
+  it('keeps the pill in none mode, with a person mark for nobody and the theme in its menu', async () => {
     const { f } = fakeFetch({ 'GET /api/v1/session': session({ mode: 'none', user: null, role: 'operator' }) });
     const auth = new AuthStore(BASE, f);
     await auth.refresh();
     const { target, done } = mountWith(Account, auth);
-    expect(target.querySelector('[data-testid="account"]')).toBeNull();
+    const pill = target.querySelector<HTMLButtonElement>('[data-testid="account"]')!;
+    expect(pill.getAttribute('aria-label')).toBe('Account, operator');
+    expect(pill.querySelector('svg.person')).not.toBeNull();
+    expect(pill.textContent).toBe('');
+    pill.click();
+    flushSync();
+    await tick();
+    expect(target.querySelector('.who b')?.textContent).toBe('Not signed in');
+    const items = [...target.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(items.map((b) => b.textContent)).toEqual(['Switch to light theme']);
+    try {
+      items[0]!.click();
+      await settle();
+      expect(document.documentElement.dataset['theme']).toBe('light');
+    } finally {
+      setTheme('dark');
+      done();
+    }
+  });
+
+  it('shows the pill before the session is known', () => {
+    const auth = new AuthStore(BASE, fakeFetch({}).f);
+    const { target, done } = mountWith(Account, auth);
+    expect(target.querySelector('[data-testid="account"]')?.getAttribute('aria-label')).toBe('Account');
+    done();
+  });
+
+  it('shows signing out from the press until the server answers, takes no second press, and says why it failed', async () => {
+    let answer: (r: Response) => void = () => {};
+    let posts = 0;
+    const { f } = fakeFetch({
+      'GET /api/v1/session': session({ mode: 'oidc', user: 'alice', role: 'operator' }),
+      'POST /api/v1/logout': () => {
+        posts++;
+        return new Promise<Response>((r) => (answer = r));
+      },
+    });
+    const auth = new AuthStore(BASE, f);
+    await auth.refresh();
+    const { target, mixer, done } = mountWith(Account, auth);
+    target.querySelector<HTMLButtonElement>('[data-testid="account"]')!.click();
+    flushSync();
+    await tick();
+    const out = () => target.querySelector<HTMLButtonElement>('[data-entry="sign-out"]');
+    out()!.click();
+    await settle();
+    expect(out()?.textContent).toBe('Signing out...');
+    expect(out()?.getAttribute('aria-busy')).toBe('true');
+    expect(target.querySelector('[data-entry="theme"]')?.getAttribute('aria-disabled')).toBe('true');
+    out()!.click();
+    await settle();
+    expect(posts).toBe(1);
+    answer(new Response(null, { status: 500 }));
+    await settle();
+    expect(out()).toBeNull();
+    expect(mixer.notices.map((n) => n.text)).toEqual([expect.stringContaining('sign-out failed: HTTP 500')]);
     done();
   });
 

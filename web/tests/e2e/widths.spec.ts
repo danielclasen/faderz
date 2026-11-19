@@ -4,7 +4,7 @@
 // locked. Runs on the desktop project, which sizes its own pages.
 
 import { expect, test, type Browser, type Page } from '@playwright/test';
-import { live, resetMock } from './support';
+import { live, resetMock, switchTheme } from './support';
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
@@ -163,25 +163,95 @@ test('rotating a tablet swaps the tab row and the menu, moves nothing else, and 
   }
 });
 
-test('the theme switches from the Setup view at every width, where the header has no theme key', async ({ page }) => {
+test('the header has no theme key at any width; the account menu and the Setup view switch the theme', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 740 });
   await live(page);
-  await expect(page.getByRole('button', { name: /theme$/ })).toBeHidden();
+  for (const [width, height] of [...SIZES, [1600, 1000]] as const) {
+    await page.setViewportSize({ width, height });
+    await expect(page.locator('header.top').getByRole('button', { name: /theme$/ }), `${width}x${height}`).toHaveCount(0);
+  }
+  // A phone: the account pill's menu switches it.
+  await page.setViewportSize({ width: 360, height: 740 });
+  await switchTheme(page, 'light');
   await page.getByRole('combobox', { name: 'View' }).selectOption('setup');
   const themes = page.getByRole('radiogroup', { name: 'Theme of this screen' });
-  await expect(themes.getByRole('radio', { name: 'DARK' })).toHaveAttribute('aria-checked', 'true');
-  await themes.getByRole('radio', { name: 'LIGHT' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await expect(themes.getByRole('radio', { name: 'LIGHT' })).toHaveAttribute('aria-checked', 'true');
-  // Kept for this screen, and the header key agrees where it is shown.
+  // Kept for this screen, and the menu agrees at desktop width.
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.setViewportSize({ width: 1600, height: 1000 });
-  await expect(page.getByRole('button', { name: 'Switch to dark theme' })).toHaveText('DARK');
-  await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+  await switchTheme(page, 'dark');
   await page.getByRole('button', { name: 'Setup', exact: true }).click();
-  await expect(page.getByRole('radiogroup', { name: 'Theme of this screen' }).getByRole('radio', { name: 'DARK' })).toHaveAttribute('aria-checked', 'true');
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(themes.getByRole('radio', { name: 'DARK' })).toHaveAttribute('aria-checked', 'true');
+  // The Setup view switches it too.
+  await themes.getByRole('radio', { name: 'LIGHT' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('the header shows status left of a separator and controls right of it, each item one height, at every width', async ({ page }) => {
+  await live(page);
+  await expect(page.getByTestId('consoles').locator('[data-console]').first()).toBeAttached();
+  const found: string[] = [];
+  for (const [width, height] of [...SIZES, [1301, 900], [1440, 900], [1600, 1000]] as const) {
+    await page.setViewportSize({ width, height });
+    const at = `${width}x${height}`;
+    const layout = await page.evaluate(() => {
+      const box = (el: Element | null) => (el && el.getBoundingClientRect().width > 0 ? el.getBoundingClientRect() : null);
+      const status = document.querySelector('header [role="group"][aria-label="Status"]')!;
+      const controls = document.querySelector('header [role="group"][aria-label="Controls"]')!;
+      const shown = (root: Element) =>
+        [...root.querySelectorAll<HTMLElement>(':scope > *, :scope > * > *')]
+          .filter((el) => el.matches('button, [data-testid="consoles"], .conn') && box(el) && getComputedStyle(el).visibility !== 'hidden')
+          .map((el) => {
+            const r = el.getBoundingClientRect();
+            return { name: (el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 20), h: Math.round(r.height), w: Math.round(r.width), left: r.left, right: r.right };
+          });
+      const s = shown(status);
+      const c = shown(controls);
+      return {
+        status: s,
+        controls: c,
+        statusRight: s.length > 0 ? Math.max(...s.map((i) => i.right)) : null,
+        controlsLeft: c.length > 0 ? Math.min(...c.map((i) => i.left)) : null,
+        sep: (() => {
+          const sep = document.querySelector('header .sep');
+          return sep && getComputedStyle(sep).visibility !== 'hidden' ? box(sep) : null;
+        })(),
+        consoles: box(document.querySelector('[data-testid="consoles"]')) !== null,
+      };
+    });
+    const names = layout.controls.map((c) => c.name);
+    // USERS opens the panel that lists the surfaces at every width, and the account pill is always there.
+    if (!names.some((n) => /^Users \d+$/.test(n))) found.push(`${at}: no users key in ${names}`);
+    const pill = layout.controls.find((c) => c.name.startsWith('Account'));
+    if (!pill) found.push(`${at}: no account pill`);
+    // One width for any initials or none: a session arriving moves nothing.
+    else if (pill.w !== 32) found.push(`${at}: account pill ${pill.w} px wide`);
+    // Controls are one height, and so is every status item shown.
+    const heights = new Set([...layout.status, ...layout.controls].map((c) => c.h));
+    if (heights.size !== 1) found.push(`${at}: heights ${JSON.stringify([...layout.status, ...layout.controls])}`);
+    // The surfaces show from 1301 px, the separator with them, between status and controls.
+    if (layout.consoles !== width > 1300) found.push(`${at}: surfaces ${layout.consoles}`);
+    if ((layout.sep !== null) !== layout.consoles) found.push(`${at}: separator ${layout.sep !== null}`);
+    if (layout.sep && layout.statusRight !== null && layout.controlsLeft !== null && !(layout.statusRight <= layout.sep.left && layout.sep.right <= layout.controlsLeft)) {
+      found.push(`${at}: separator not between status and controls`);
+    }
+  }
+  expect(found).toEqual([]);
+});
+
+test('the users panel lists every control surface with its strips, where the header has no room for them', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await live(page);
+  await expect(page.getByTestId('consoles')).toBeHidden();
+  const key = page.getByRole('button', { name: /^Users \d+$/ });
+  await key.click();
+  await expect(key).toHaveAttribute('aria-expanded', 'true');
+  const panel = page.getByRole('region', { name: 'Users' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId('console').first()).toContainText(/(MCU|OSC), (strips \d+-\d+|disconnected)/);
+  await key.click();
+  await expect(panel).toBeHidden();
 });
 
 test('the duck tiles and the Duck view fit every width from 320 px, with no sideways page scroll and no tile text cut', async ({ page }) => {

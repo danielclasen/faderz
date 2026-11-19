@@ -1,7 +1,6 @@
 <script lang="ts">
   import { MediaQuery } from 'svelte/reactivity';
   import { getMixer } from './lib/state/mixer.svelte';
-  import { setTheme, theme } from './lib/theme.svelte';
   import MixerView from './components/MixerView.svelte';
   import RoutingView from './components/RoutingView.svelte';
   import AuxView from './components/AuxView.svelte';
@@ -64,9 +63,6 @@
     document.dispatchEvent(new CustomEvent('faderz:show-masters'));
     requestAnimationFrame(() => document.getElementById(id)?.focus());
   }
-  function toggleTheme(): void {
-    setTheme(theme.value === 'dark' ? 'light' : 'dark');
-  }
   /** Selecting never closes: a second press on the selected strip keeps it; CLOSE or Escape closes. */
   function select(id: string, to: string | null = null): void {
     selected = id;
@@ -88,7 +84,7 @@
       <a href="#monitor" onclick={(e) => skip(e, 'monitor')}>Skip to monitor</a>
     </div>
   {/if}
-  <header class="top" class:desk-locked={mixer.deskLock}>
+  <header class="top">
     <div class="brand" aria-label="faderz"><i></i>faderz</div>
     <select class="view-menu" aria-label="View" value={view} onchange={(e) => (view = (e.currentTarget as HTMLSelectElement).value as View)}>
       {#each VIEWS as v (v.id)}<option value={v.id}>{v.label}</option>{/each}
@@ -98,6 +94,10 @@
         <button class="tab" aria-current={view === v.id ? 'page' : undefined} onclick={() => (view = v.id)}>{v.label}</button>
       {/each}
     </nav>
+    <!-- Status left, controls right. Every status slot keeps its size
+         whether it shows or not; the surfaces, whose number the shape
+         sets, stand furthest left next to the free space, so they move
+         nothing when they arrive. -->
     <div class="right">
       <!-- Free header space: the notice line on a short screen, which has
            no status bar. It grows into the room the fixed items leave, so
@@ -105,22 +105,24 @@
       <div class="mid">
         {#if short.current}<NoticeLine />{/if}
       </div>
-      <Consoles />
-      <StatusArea />
-      {#if short.current}<ConnectionKey where="header" />{/if}
-      <Users />
-      <!-- Reserved: shown or not, the tone lamp moves nothing. -->
-      <span class="tone-slot">
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <span class="tone" class:on={toneOn} role="status" data-testid="tone" aria-hidden={!toneOn} use:tip={toneOn ? toneText : ''} tabindex={toneOn ? 0 : -1}
-          >TONE<span class="sr-only">{toneOn ? ` on: ${toneText}` : ''}</span></span
-        >
-      </span>
-      <LockKey />
-      <button class="key theme" onclick={toggleTheme} aria-label={`Switch to ${theme.value === 'dark' ? 'light' : 'dark'} theme`}>
-        {theme.value === 'dark' ? 'LIGHT' : 'DARK'}
-      </button>
-      <Account />
+      <div class="group status-group" role="group" aria-label="Status">
+        <Consoles />
+        <StatusArea />
+        <!-- Reserved: shown or not, the tone lamp moves nothing. -->
+        <span class="tone-slot">
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <span class="tone" class:on={toneOn} role="status" data-testid="tone" aria-hidden={!toneOn} use:tip={toneOn ? toneText : ''} tabindex={toneOn ? 0 : -1}
+            >TONE<span class="sr-only">{toneOn ? ` on: ${toneText}` : ''}</span></span
+          >
+        </span>
+        {#if short.current}<ConnectionKey where="header" />{/if}
+      </div>
+      <span class="sep" aria-hidden="true"></span>
+      <div class="group controls" role="group" aria-label="Controls">
+        <Users />
+        <LockKey />
+        <Account />
+      </div>
     </div>
   </header>
 
@@ -285,19 +287,6 @@
       height: 31px;
     }
   }
-  /* Phones: a locked desk's key takes the theme key's room (LockKey). */
-  @media (max-width: 700px) {
-    .desk-locked .theme {
-      display: none;
-    }
-  }
-  /* Below 1200 px the signed-in user's pill takes the theme key's room:
-     its menu switches the theme, as Setup does. */
-  @media (max-width: 1199px) {
-    .top:has(:global([data-testid='account'])) .theme {
-      display: none;
-    }
-  }
   /* Short screens (a phone in landscape): one header row of 36 px with
      the view menu, the notices and the connection state; the status bar
      is gone, so the faders get the height. */
@@ -368,6 +357,31 @@
     flex-wrap: nowrap;
     overflow: hidden;
   }
+  /* The status items, then the controls: groups to assistive technology,
+     items of the right group to layout, so an item that appears at a
+     group's start moves no box. */
+  .group {
+    display: contents;
+  }
+  /* Between what the header shows and what it does. */
+  .sep {
+    flex: none;
+    width: 1px;
+    height: 18px;
+    background: var(--line-strong);
+  }
+  /* Every item of the header row is one height: 26 px, 32 px to a finger. */
+  .top {
+    --item-h: 26px;
+  }
+  @media (pointer: coarse) {
+    .top {
+      --item-h: 32px;
+    }
+  }
+  .controls :global(.key) {
+    height: var(--item-h);
+  }
   .tone-slot {
     flex: none;
     width: 46px;
@@ -376,8 +390,8 @@
   }
   .tone {
     visibility: hidden;
-    height: 24px;
-    line-height: 24px;
+    height: var(--item-h);
+    line-height: var(--item-h);
     padding: 0 6px;
     border-radius: 3px;
     font-size: 11px;
@@ -433,17 +447,29 @@
       letter-spacing: 0;
     }
   }
-  /* The narrowest phones: the brand mark and the theme key go (the theme
-     stays as set) and the gaps narrow, so the view menu, quorum, link,
-     tone lamp and a locked desk's key fit 320 px. Last in the sheet: it
-     overrides the rules above. */
+  /* The separator stands beside the surfaces: without them (none in
+     the shape, or below 1301 px, where Consoles hides them and the users
+     panel lists them) the status slots left of it are mostly empty.
+     Before the state names them it keeps its room, so their arrival
+     moves nothing. */
+  .right:not(:has(:global([data-testid='consoles']))) .sep {
+    visibility: hidden;
+  }
+  @media (max-width: 1300px) {
+    .sep {
+      display: none;
+    }
+  }
+  /* The narrowest phones: the brand mark goes and the gaps narrow, so
+     the view menu, the tone lamp, USR, a locked desk's key and the
+     account pill fit 320 px. Last in the sheet: it overrides the rules
+     above. */
   @media (max-width: 389px) {
     .top {
       gap: 4px;
       padding: 0 4px;
     }
-    .brand,
-    .theme {
+    .brand {
       display: none;
     }
     .right {

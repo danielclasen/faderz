@@ -249,3 +249,10 @@ export async function uiFontLoaded(page: Page): Promise<boolean> {
     return [...document.fonts].some((f) => f.family.replace(/["']/g, '') === 'IBM Plex Sans Condensed' && f.status === 'loaded');
   });
 }
+
+/** Switches the theme from the account menu, the header's one theme control. */
+export async function switchTheme(page: Page, to: 'light' | 'dark'): Promise<void> {
+  await page.getByTestId('account').click();
+  await page.getByRole('menu', { name: 'Account' }).getByRole('menuitem', { name: `Switch to ${to} theme` }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', to);
+}

@@ -1,9 +1,11 @@
 <script lang="ts">
-  // The signed-in user at the header's right end: a pill with the user's
-  // initials that opens a menu. The menu names the role, and the user
-  // only where that is no email address; its entries are a list of
-  // settings, then Sign out; under them, what the serving replica was
-  // built from, an entry that opens About / What's new.
+  // The account pill at the header's right end, at every width and in
+  // every sign-in mode: the user's initials, or a person mark where
+  // nobody is signed in. It opens a menu that names the role, and the
+  // user only where that is no email address; its entries are a list of
+  // settings (the theme), then Sign out where the mode signs out; under
+  // them, what the serving replica was built from, an entry that opens
+  // About / What's new.
   import { tick } from 'svelte';
   import { getAuth } from '../lib/auth.svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -20,11 +22,13 @@
   const user = $derived(session?.role && session.mode !== 'none' ? (session.user ?? 'token') : null);
   /** The user's name where it may be shown: never an email address. */
   const name = $derived(user !== null && !isEmail(user) ? user : null);
-  const label = $derived(`Account${name ? ` ${name}` : ''}, ${session?.role ?? ''}`);
+  const label = $derived(`Account${name ? ` ${name}` : ''}${session?.role ? `, ${session.role}` : ''}`);
 
   interface Entry {
     id: string;
     label: string;
+    /** Shown while `run` has not settled; an entry with it keeps the menu open meanwhile. */
+    busyLabel?: string;
     run: () => void | Promise<void>;
   }
   const entries = $derived<Entry[]>([
@@ -33,7 +37,7 @@
       label: `Switch to ${theme.value === 'dark' ? 'light' : 'dark'} theme`,
       run: () => setTheme(theme.value === 'dark' ? 'light' : 'dark'),
     },
-    ...(session?.role != null && (session.mode === 'token' || session.mode === 'oidc') ? [{ id: 'sign-out', label: 'Sign out', run: leave }] : []),
+    ...(session?.role != null && (session.mode === 'token' || session.mode === 'oidc') ? [{ id: 'sign-out', label: 'Sign out', busyLabel: 'Signing out...', run: leave }] : []),
   ]);
 
   async function leave(): Promise<void> {
@@ -45,6 +49,8 @@
       mixer.notify('error', e instanceof Error ? e.message : String(e));
     }
   }
+  /** The entry whose action runs now: it shows so and takes no second press. */
+  let busy = $state<string | null>(null);
 
   let open = $state(false);
   let pill = $state<HTMLButtonElement>();
@@ -100,15 +106,26 @@
     if (!pill?.contains(t) && !menu?.contains(t)) hide(false);
   }
   async function choose(entry: Entry): Promise<void> {
-    hide(true);
-    await entry.run();
+    if (busy !== null) return;
+    if (!entry.busyLabel) {
+      hide(true);
+      return void (await entry.run());
+    }
+    busy = entry.id;
+    try {
+      await entry.run();
+    } finally {
+      busy = null;
+      // Back to the pill only from the menu: closed meanwhile, the focus stays where it went.
+      const from = menu?.contains(document.activeElement) ?? false;
+      if (open) hide(from);
+    }
   }
 </script>
 
 <svelte:window onpointerdown={outside} />
 
-{#if user !== null}
-  <button
+<button
     bind:this={pill}
     class="pill"
     class:open
@@ -119,7 +136,8 @@
     title={label}
     data-testid="account"
     onclick={() => (open ? hide(false) : void show(null))}
-    onkeydown={pillKey}><span class="fixed">{initials(user)}</span></button
+    onkeydown={pillKey}
+    >{#if user !== null}<span class="fixed">{initials(user)}</span>{:else}{@render person()}{/if}</button
   >
   {#if open}
     <!-- svelte-ignore a11y_interactive_supports_focus -->
@@ -135,14 +153,22 @@
       onkeydown={menuKey}
     >
       <div class="who" role="presentation">
-        <span class="badge fixed" aria-hidden="true">{initials(user)}</span>
+        <span class="badge fixed" aria-hidden="true">{#if user !== null}{initials(user)}{:else}{@render person()}{/if}</span>
         <span class="names">
-          <b>{name ?? 'Signed in'}</b>
-          <span data-testid="account-role">{session?.role}</span>
+          <b>{name ?? (user !== null ? 'Signed in' : 'Not signed in')}</b>
+          {#if session?.role}<span data-testid="account-role">{session.role}</span>{/if}
         </span>
       </div>
       {#each entries as entry (entry.id)}
-        <button class="item" role="menuitem" tabindex="-1" data-entry={entry.id} onclick={() => choose(entry)}>{entry.label}</button>
+        <button
+          class="item"
+          role="menuitem"
+          tabindex="-1"
+          data-entry={entry.id}
+          aria-busy={busy === entry.id}
+          aria-disabled={busy !== null}
+          onclick={() => choose(entry)}>{busy === entry.id && entry.busyLabel ? entry.busyLabel : entry.label}</button
+        >
       {/each}
       {#if mixer.status.build}
         <button
@@ -159,15 +185,22 @@
       {/if}
     </div>
   {/if}
-{/if}
+
+{#snippet person()}
+  <svg class="person" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="4" r="2.3" /><path d="M1.6 11.2c0-2.6 2-4.2 4.4-4.2s4.4 1.6 4.4 4.2" /></svg>
+{/snippet}
 
 <style>
   .pill {
     flex: none;
+    display: grid;
+    place-items: center;
     box-sizing: border-box;
-    min-width: 28px;
-    height: 26px;
-    padding: 0 6px;
+    /* One width for the person mark and any two initials, so the
+       session's arrival moves nothing. */
+    width: 32px;
+    height: var(--item-h, 26px);
+    padding: 0;
     border: 1px solid var(--key-edge);
     border-radius: 13px;
     background: var(--panel-2);
@@ -244,6 +277,21 @@
     color: var(--text);
     cursor: pointer;
   }
+  .person {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+  }
+  .item[aria-busy='true'] {
+    color: var(--text-dim);
+    cursor: progress;
+  }
+  .item[aria-disabled='true']:not([aria-busy='true']) {
+    opacity: 0.5;
+    cursor: default;
+  }
   .item:hover,
   .item:focus-visible {
     background: var(--panel-2);
@@ -262,8 +310,6 @@
   }
   @media (pointer: coarse) {
     .pill {
-      min-width: 32px;
-      height: 32px;
       border-radius: 16px;
     }
     .item {

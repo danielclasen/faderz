@@ -41,7 +41,7 @@
 </div>
 
 <style>
-  /* Items of the header's right group: see Consoles. */
+  /* Items of the header's status group (App.svelte). */
   .status {
     display: contents;
   }
@@ -83,8 +83,8 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    height: 24px;
-    line-height: 24px;
+    height: var(--item-h, 24px);
+    line-height: var(--item-h, 24px);
     padding: 0 8px;
     border-radius: 3px;
     background: var(--warn);
