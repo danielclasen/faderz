@@ -1059,6 +1059,26 @@ mod tests {
         assert_eq!(set.ordinal, 1, "an explicit ordinal wins");
     }
 
+    /// The `replicas` message names every replica as clients see it named:
+    /// its pod's name, the StatefulSet's and its ordinal; without a
+    /// StatefulSet, the first label of its peer host; this one by its own
+    /// name.
+    #[test]
+    fn every_replica_of_a_set_is_named_as_its_pod_is() {
+        use crate::app::member_names;
+        let set = set_of(three(json!({})), || "mix-1".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(member_names(&set, "mix-1"), ["mix-0", "mix-1", "mix-2"]);
+        let set = set_of(three(json!({ "name": "desk", "ordinal": 2 })), || {
+            "x".into()
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(set.statefulset, None);
+        assert_eq!(member_names(&set, "desk"), ["f-0", "f-1", "desk"]);
+    }
+
     /// One replica is a set of one, as before; it takes none of a set's
     /// keys, so a half-configured set does not start as one alone.
     #[test]

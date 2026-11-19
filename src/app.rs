@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use samplez_replica::Replica;
-use samplez_replica::entry::SessionKey;
+use samplez_replica::entry::{NodeId, SessionKey};
+use samplez_replica::membership;
 use samplez_service::config::AuthMode;
 use samplez_service::metrics::Metrics;
 use samplez_service::replica::{Ack, Commands, Resolution};
@@ -18,6 +19,7 @@ use tokio::sync::watch;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::audio::Audio;
+use crate::config::Set;
 use crate::state::{Answer, Mixer};
 
 /// Deltas waiting per client before it is caught up by snapshot instead.
@@ -30,6 +32,9 @@ pub struct App {
     pub replica: Arc<Replica<Mixer>>,
     /// The replica's id in the contract (`ReplicaRef.id`).
     pub name: String,
+    /// The id of each replica of the set by ordinal ([`member_names`]);
+    /// empty for a set of one.
+    members: Vec<String>,
     pub hub: Hub,
     pub commands: Commands,
     /// The revision of the last delta handed to the hub.
@@ -112,10 +117,33 @@ const SELECTION_GRACE: Duration = samplez_replica::session::LEASE;
 /// A session's requests for one control forwarded at most this often.
 pub const REQUEST_INTERVAL: Duration = Duration::from_secs(3);
 
+/// The id of each replica of `set` by ordinal: `name` for this one, and
+/// for the others the StatefulSet's name and their ordinal, as its pods
+/// are named, or, without a StatefulSet, the first label of their peer
+/// address's host.
+pub fn member_names(set: &Set, name: &str) -> Vec<String> {
+    (set.peers.iter().enumerate())
+        .map(|(n, addr)| match &set.statefulset {
+            _ if n == usize::from(set.ordinal) => name.to_owned(),
+            Some(statefulset) => format!("{statefulset}-{n}"),
+            None => addr.split([':', '.']).next().unwrap_or(addr).to_owned(),
+        })
+        .collect()
+}
+
+/// The ordinal of an audio replica's node id; a witness sorts last.
+fn ordinal_of(id: NodeId) -> u16 {
+    match membership::slot_of(id) {
+        membership::Slot::Audio(ordinal) => ordinal,
+        membership::Slot::Witness => u16::MAX,
+    }
+}
+
 impl App {
     pub fn new(
         replica: Arc<Replica<Mixer>>,
         name: String,
+        set: Option<&Set>,
         auth: AuthMode,
         metrics: &Metrics,
     ) -> Arc<App> {
@@ -123,6 +151,7 @@ impl App {
         Arc::new(App {
             commands: Commands::new(replica.clone(), COMMANDS_IN_FLIGHT),
             replica,
+            members: set.map_or_else(Vec::new, |set| member_names(set, &name)),
             name,
             hub: Hub::new(CLIENT_DELTAS, metrics),
             published,
@@ -154,13 +183,82 @@ impl App {
         json!({ "id": self.name, "role": role })
     }
 
-    /// Model `ReplicaStatus` of every replica this one knows: itself.
+    /// Model `ReplicaStatus` of every replica of the set as this one sees
+    /// it, by ordinal: itself as [`ReplicatedState::replica`] reports it,
+    /// and each other voter that serves clients (not a witness) by what
+    /// this replica hears of it ([`App::hears`]). The leader is the one
+    /// raft follows. Another replica can commit, as far as this one can
+    /// tell, while it is heard and a majority of the voters is: this
+    /// replica counting itself when it is ready.
     pub fn replicas(&self) -> Value {
         let info = self.replica.replica();
-        let mut status = self.replica_ref();
-        status["healthy"] = json!(info.ready);
-        status["commitable"] = json!(info.commitable);
-        json!([status])
+        let mut own = self.replica_ref();
+        own["healthy"] = json!(info.ready);
+        own["commitable"] = json!(info.commitable);
+        if self.members.is_empty() {
+            return json!([own]);
+        }
+        let metrics = self.replica.raft().metrics().borrow().clone();
+        let me = self.replica.id();
+        let voters: Vec<NodeId> = metrics.membership_config.membership().voter_ids().collect();
+        let up = |id: NodeId| {
+            if id == me {
+                info.ready
+            } else {
+                self.hears(id, &metrics)
+            }
+        };
+        let quorum = 2 * voters.iter().filter(|&&id| up(id)).count() > voters.len();
+        let mut listed: Vec<(u16, Value)> = Vec::new();
+        for &id in &voters {
+            let membership::Slot::Audio(ordinal) = membership::slot_of(id) else {
+                continue;
+            };
+            let status = if id == me {
+                own.clone()
+            } else {
+                let Some(name) = self.members.get(usize::from(ordinal)) else {
+                    continue;
+                };
+                let healthy = up(id);
+                let role = if metrics.current_leader == Some(id) {
+                    "leader"
+                } else {
+                    "follower"
+                };
+                json!({ "id": name, "role": role, "healthy": healthy, "commitable": healthy && quorum })
+            };
+            listed.push((ordinal, status));
+        }
+        // Not yet a voter itself, as while it joins: listed all the same.
+        if !voters.contains(&me) {
+            listed.push((ordinal_of(me), own));
+        }
+        listed.sort_by_key(|(ordinal, _)| *ordinal);
+        Value::Array(listed.into_iter().map(|(_, s)| s).collect())
+    }
+
+    /// Whether this replica hears replica `id` of its set. With contact
+    /// running: contact holds a majority and has had a report from `id`
+    /// within its window. Without (a set without an engine), what raft
+    /// shows: a follower hears the leader it follows; the leader hears a
+    /// follower that has matched its last log entry.
+    fn hears(
+        &self,
+        id: NodeId,
+        metrics: &openraft::RaftMetrics<NodeId, openraft::BasicNode>,
+    ) -> bool {
+        if let Some(contact) = self.replica.contact_metrics() {
+            return contact.in_contact
+                && (contact.peers.iter()).any(|p| p.node == id && p.reports > 0 && !p.silent);
+        }
+        if metrics.current_leader == Some(self.replica.id()) {
+            let matched = (metrics.replication.as_ref())
+                .and_then(|r| r.get(&id).copied().flatten())
+                .map(|log| log.index);
+            return matched.is_some() && matched == metrics.last_log_index;
+        }
+        metrics.current_leader == Some(id)
     }
 
     /// The `replicas` message.
@@ -650,6 +748,7 @@ pub(crate) mod tests {
         let app = App::new(
             Arc::new(replica),
             "r1".into(),
+            None,
             AuthMode::None,
             &Metrics::default(),
         );

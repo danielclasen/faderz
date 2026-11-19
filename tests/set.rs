@@ -213,3 +213,110 @@ async fn a_write_to_one_replica_reaches_the_clients_of_another() {
         server.stop().await;
     }
 }
+
+/// The `replicas` message of a set lists all three, by the names the
+/// pods have, with the leader among them. A set without an engine has
+/// raft's view alone: the leader hears a follower that has matched its
+/// log, so one stopped is listed down once the log has moved on without
+/// it, and the other two still hold the quorum.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_leader_lists_every_replica_and_one_stopped_as_down() {
+    let at = scratch("members");
+    let mut servers = start_set(&at.0, Arc::default()).await;
+    formed(&servers).await;
+    let leader = loop {
+        let leading = (servers.iter()).position(|s| replica_info_sync(s)["role"] == "leader");
+        if let Some(n) = leading {
+            break n;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let names = |v: &Value| -> Vec<String> {
+        (v.as_array().unwrap().iter())
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let listed = until_replicas(&servers[leader], |v| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["healthy"] == true && r["commitable"] == true)
+    })
+    .await;
+    assert_eq!(
+        names(&listed),
+        ["faderz-0", "faderz-1", "faderz-2"],
+        "{listed}"
+    );
+    let leaders: Vec<&Value> = (listed.as_array().unwrap().iter())
+        .filter(|r| r["role"] == "leader")
+        .collect();
+    assert_eq!(leaders.len(), 1, "{listed}");
+    assert_eq!(leaders[0]["id"], format!("faderz-{leader}"), "{listed}");
+
+    let gone = (leader + 1) % REPLICAS;
+    servers.remove(gone).stop().await;
+    let leader_now = if gone < leader { leader - 1 } else { leader };
+    // A write moves the log on without the stopped replica.
+    let mut writer = client(&servers[leader_now], "session-m-0123456789abcdef").await;
+    for seq in 1..=5 {
+        let id = faderz::app::uuid().unwrap();
+        let set = json!({ "type": "set", "id": id, "seq": seq, "path": "/channels/ch1/fader", "value": -seq });
+        writer.send(Message::text(set.to_string())).await.unwrap();
+        let answered =
+            tokio::time::timeout(Duration::from_secs(15), answer(&mut writer, &id)).await;
+        if answered.is_ok_and(|a| a["type"] == "delta") {
+            break;
+        }
+    }
+    let name = format!("faderz-{gone}");
+    let listed = until_replicas(&servers[leader_now], |v| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == name.as_str() && r["healthy"] == false)
+    })
+    .await;
+    assert_eq!(
+        names(&listed),
+        ["faderz-0", "faderz-1", "faderz-2"],
+        "{listed}"
+    );
+    for r in listed.as_array().unwrap() {
+        let up = r["id"] != name.as_str();
+        assert_eq!(r["healthy"], up, "{listed}");
+        assert_eq!(
+            r["commitable"], up,
+            "the quorum holds with two of three: {listed}"
+        );
+    }
+    for server in servers {
+        server.stop().await;
+    }
+}
+
+fn replica_info_sync(server: &Server) -> Value {
+    let info = server.app.replica.raft().metrics().borrow().clone();
+    let role = if info.current_leader == Some(server.app.replica.id()) {
+        "leader"
+    } else {
+        "follower"
+    };
+    json!({ "role": role })
+}
+
+/// The replicas `server` lists once `done` holds of them, within 15 s.
+async fn until_replicas(server: &Server, done: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let listed = server.app.replicas();
+        if done(&listed) {
+            return listed;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "not within 15 s: {listed}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

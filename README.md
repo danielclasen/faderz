@@ -315,6 +315,15 @@ listener:
   that image wrote, or empty volumes and a new set.
 - With an `mxl` section every replica runs an engine of its own
   (below); without one the set serves the state and mixes nothing.
+- Each replica lists every replica of the set in `GET /api/v1/replicas`
+  and the WebSocket's `replicas` message, named as the pods are,
+  `<StatefulSet>-<ordinal>` (with a `name` that ends in no ordinal, the
+  first label of its `peers` host), with the leader raft follows. Another replica is
+  healthy while this one is in contact with a majority and has had a
+  report from it within the contact window, and can commit while it is
+  healthy and a majority of the voters is. Without an engine there is
+  no contact and only raft's view: a follower vouches for the leader
+  alone, the leader for a follower that has matched its log.
 
 ### Engines in a set
 

@@ -617,6 +617,62 @@ fn every_replicas_meters_follow_the_faders() {
     }
 }
 
+/// Every replica of a set with engines lists all three in its `replicas`
+/// message, as clients show the set, healthy and able to commit; one
+/// killed, the other two each list it down within a few report windows,
+/// and themselves still able to commit with two of three.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_lists_the_set_and_a_killed_one_as_down() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (set, listeners) = Set::new("members");
+    let mut nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let names: Vec<String> = (0..REPLICAS).map(|n| format!("faderz-{n}")).collect();
+    let ids = |v: &Value| -> Vec<String> {
+        (v.as_array().unwrap().iter())
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    for n in 0..REPLICAS {
+        let mut last = Value::Null;
+        let all = until(10, || {
+            last = node(&nodes, n).server.app.replicas();
+            last.as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["healthy"] == true && r["commitable"] == true)
+                && ids(&last) == names
+        });
+        assert!(all, "replica {n} lists {last}: {}", states(&nodes));
+        let leaders = (last.as_array().unwrap().iter())
+            .filter(|r| r["role"] == "leader")
+            .count();
+        assert_eq!(leaders, 1, "replica {n} lists {last}");
+    }
+    nodes[2].take().unwrap().kill();
+    for n in 0..2 {
+        let mut last = Value::Null;
+        let down = until(20, || {
+            last = node(&nodes, n).server.app.replicas();
+            let listed = last.as_array().unwrap();
+            ids(&last) == names
+                && listed.iter().all(|r| {
+                    let up = r["id"] != "faderz-2";
+                    r["healthy"] == up && r["commitable"] == up
+                })
+        });
+        assert!(down, "replica {n} lists {last}: {}", states(&nodes));
+    }
+}
+
 /// Contact runs from each replica's start. The set forms with the first
 /// replica alone and grows by two voters at once: with two of the three
 /// running the first commits alone and the second stays a learner, and

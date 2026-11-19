@@ -139,6 +139,7 @@ impl Server {
         let app = App::new(
             state.clone(),
             name.clone(),
+            config.set.as_ref(),
             config.auth.mode,
             ops_state.metrics(),
         );
