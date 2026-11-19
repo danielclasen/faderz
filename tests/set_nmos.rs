@@ -616,6 +616,30 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     let ch1 = format!("receivers/{}", id_of(&nodes, 0, "receivers", "Pres 1"));
     let ch2 = format!("receivers/{}", id_of(&nodes, 0, "receivers", "Pres 2"));
     let pgm = format!("senders/{}", id_of(&nodes, 0, "senders", "PGM out"));
+    // The sender is the set's merged output: every replica advertises the
+    // merged flow, never a replica's member flow.
+    for n in 0..REPLICAS {
+        let (_, sender) = node(&nodes, n).nmos("GET", &format!("/x-nmos/node/v1.3/{pgm}"), None);
+        let flow_id = sender["flow_id"].as_str().unwrap().to_owned();
+        let (_, flow) =
+            node(&nodes, n).nmos("GET", &format!("/x-nmos/node/v1.3/flows/{flow_id}"), None);
+        assert!(
+            flow.is_object(),
+            "replica {n}: the sender's flow {flow_id} is served"
+        );
+        let (_, active) = node(&nodes, n).nmos("GET", &format!("{CONNECTION}/{pgm}/active"), None);
+        let mxl = active["transport_params"][0]["mxl_flow_id"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            mxl, set.merged,
+            "replica {n} advertises another flow than the merged one"
+        );
+        assert!(
+            !set.members.iter().any(|m| m == mxl),
+            "replica {n} advertises a member flow"
+        );
+    }
 
     // No receiver takes the set's own output: the merged flow or any
     // replica's member flow, staged on any replica.
