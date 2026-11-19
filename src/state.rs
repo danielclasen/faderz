@@ -23,7 +23,7 @@ use crate::shape::Shape;
 /// state, in [`Mixer::config_hash`]: a change to the derivation that
 /// gives other targets for one state takes another version, so replicas
 /// deriving differently never form one set.
-pub const DERIVATION_VERSION: u32 = 3;
+pub const DERIVATION_VERSION: u32 = 4;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
@@ -3965,7 +3965,7 @@ mod tests {
             let some = |next: &mut dyn FnMut(u64) -> u64| -> Value {
                 json!(channels.iter().filter(|_| next(3) == 0).collect::<Vec<_>>())
             };
-            match next(38) {
+            match next(39) {
                 0 => (format!("/channels/{ch}/fader"), db),
                 1 => (format!("/channels/{ch}/mute"), flag),
                 2 => (
@@ -4084,6 +4084,14 @@ mod tests {
                     ("/mixMinus/mm1/interrupt/source".into(), json!(source))
                 }
                 36 => ("/mixMinus/mm1/interrupt/active".into(), flag),
+                37 => (
+                    if next(2) == 0 {
+                        format!("/channels/{ch}/image")
+                    } else {
+                        "/monitor/image".into()
+                    },
+                    json!(["normal", "leftToBoth", "rightToBoth", "swap"][next(4) as usize]),
+                ),
                 _ => ("/metering/loudness/preset".into(), json!("atsc")),
             }
         };

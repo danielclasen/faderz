@@ -625,6 +625,50 @@ async fn a_loudness_reset_restarts_the_measurement() {
     server.stop().await;
 }
 
+/// A stereo channel's image and balance reach the programme flow: the
+/// legs it feeds both, or swapped, and the opposite leg lowered by its
+/// pan, which a mono channel's pan does not do.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stereo_channels_image_and_balance_reach_the_programme() {
+    let domain = domain("image");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-image");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    patch(&server, &[("/channels/st1/fader", json!(0))]).await;
+    pgm.expect(ST1[0], ST1[1], "normal").await;
+    for (image, l, r) in [
+        ("swap", ST1[1], ST1[0]),
+        ("leftToBoth", ST1[0], ST1[0]),
+        ("rightToBoth", ST1[1], ST1[1]),
+    ] {
+        patch(&server, &[("/channels/st1/image", json!(image))]).await;
+        pgm.expect(l, r, image).await;
+    }
+    patch(
+        &server,
+        &[
+            ("/channels/st1/image", json!("normal")),
+            ("/channels/st1/pan/lr", json!(-1)),
+        ],
+    )
+    .await;
+    pgm.expect(ST1[0], 0.0, "balanced hard left").await;
+    patch(&server, &[("/channels/st1/pan/lr", json!(0.5))]).await;
+    pgm.expect(ST1[0] * 0.5, ST1[1], "balanced half right")
+        .await;
+    server.stop().await;
+}
+
 /// Channel and VCA PFL and AFL reach the monitor output flow in place
 /// of its source, PFL over AFL, and every solo off gives the source back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

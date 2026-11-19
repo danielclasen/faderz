@@ -812,7 +812,7 @@
       "maximum": 0
     },
     "PanState": {
-      "description": "lr is the left/right position; fr the front/rear position, divergence the front spread and lfe the send level into the LFE leg, used by the panner on surround buses. The LFE send is band-limited to 120 Hz (ITU-R BS.775-4); -90 is off. pan is ignored for channels whose width equals the bus width, which map leg to leg by label. A channel wider than the bus folds down: 5.1 and 7.1 to stereo by the ITU-R BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1 to 5.1 by summing each side and back surround pair at -3 dB.",
+      "description": "lr is the left/right position; fr the front/rear position, divergence the front spread and lfe the send level into the LFE leg, used by the panner on surround buses. The LFE send is band-limited to 120 Hz (ITU-R BS.775-4); -90 is off. A stereo channel on a bus of two legs or more is balanced by lr: the opposite leg is lowered linearly, to silence at the edge, and the near leg stays at unity, so the centre passes both legs. pan is otherwise ignored for channels whose width equals the bus width, which map leg to leg by label. A channel wider than the bus folds down: 5.1 and 7.1 to stereo by the ITU-R BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1 to 5.1 by summing each side and back surround pair at -3 dB.",
       "type": "object",
       "required": [
         "lr",

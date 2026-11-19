@@ -160,12 +160,20 @@ fn listens(state: &Value, id: &str) -> (bool, bool) {
 /// The gain from leg `i` of a `from`-leg signal to leg `j` of a `to`-leg
 /// element (model `Layout`: 1 mono, 2 stereo L R, 6 5.1 L R C LFE Ls Rs,
 /// 8 7.1 L R C LFE Ls Rs Lrs Rrs), per model `PanState`: a mono signal
-/// pans onto the first two legs at constant power by `pan` (-1 to 1);
-/// any other signal ignores `pan`, maps leg to leg by label onto an
-/// element as wide or wider, and folds down onto a narrower one.
+/// pans onto the first two legs at constant power by `pan` (-1 to 1); a
+/// stereo one onto an element of two legs or more balances: `pan` lowers
+/// the opposite leg linearly, to silence at the edge, and leaves the
+/// other at unity, so the centre passes both legs; any other signal
+/// ignores `pan`. A signal maps leg to leg by label onto an element as
+/// wide or wider, and folds down onto a narrower one.
 pub fn pan(from: usize, to: usize, i: usize, j: usize, pan: f64) -> f64 {
     match (from, to) {
         (1, 1) => 1.0,
+        (2, 2..) => {
+            let p = pan.clamp(-1.0, 1.0);
+            let balance = if i == 0 { 1.0 - p } else { 1.0 + p };
+            fold(from, to, i, j) * balance.min(1.0)
+        }
         (1, _) => {
             let theta = (pan.clamp(-1.0, 1.0) + 1.0) * std::f64::consts::FRAC_PI_4;
             match j {
@@ -178,6 +186,49 @@ pub fn pan(from: usize, to: usize, i: usize, j: usize, pan: f64) -> f64 {
         // pair keeps its level. The contract does not define it.
         (_, 1) => (fold(from, 2, i, 0) + fold(from, 2, i, 1)) / 2.0,
         _ => fold(from, to, i, j),
+    }
+}
+
+/// How a stereo channel or monitor uses its legs (model `StereoImage`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Image {
+    Normal,
+    LeftToBoth,
+    RightToBoth,
+    Swap,
+}
+
+impl Image {
+    fn of(v: &Value) -> Image {
+        match v.as_str() {
+            Some("leftToBoth") => Image::LeftToBoth,
+            Some("rightToBoth") => Image::RightToBoth,
+            Some("swap") => Image::Swap,
+            _ => Image::Normal,
+        }
+    }
+
+    /// The share of leg `k` of the signal that leg `i` of the imaged
+    /// stereo signal carries.
+    fn share(self, i: usize, k: usize) -> f64 {
+        let on = match self {
+            Image::Normal => i == k,
+            Image::LeftToBoth => k == 0,
+            Image::RightToBoth => k == 1,
+            Image::Swap => i != k,
+        };
+        f64::from(u8::from(on))
+    }
+}
+
+/// [`pan`] of a stereo signal whose legs `image` has put to use first.
+fn pan_image(from: usize, to: usize, i: usize, j: usize, p: f64, image: Image) -> f64 {
+    if from == 2 && image != Image::Normal {
+        (0..2)
+            .map(|a| image.share(a, i) * pan(from, to, a, j, p))
+            .sum()
+    } else {
+        pan(from, to, i, j, p)
     }
 }
 
@@ -646,6 +697,8 @@ struct Chan<'a> {
     sends: &'a Value,
     /// Its pan, `pan.lr`.
     pan: f64,
+    /// Its stereo image.
+    image: Image,
     /// The row of its first leg.
     row: usize,
     width: usize,
@@ -705,6 +758,7 @@ impl<'a> Mix<'a> {
                     routes: &s["routes"],
                     sends: &s["sends"],
                     pan: num(&s["pan"]["lr"]),
+                    image: Image::of(&s["image"]),
                     row,
                     width: c.width,
                     factors: factors(slot),
@@ -758,10 +812,16 @@ impl<'a> Mix<'a> {
                 continue;
             };
             let at = c.at(tap) * level;
+            // A direct out is the channel itself, whatever its image.
+            let image = if matches!(kind, Kind::Channel) {
+                Image::Normal
+            } else {
+                c.image
+            };
             for i in 0..c.width {
                 let row = &mut g[(c.row + i) * width..][..width];
                 for (j, out) in row.iter_mut().enumerate() {
-                    *out = at * pan(c.width, width, i, j, p);
+                    *out = at * pan_image(c.width, width, i, j, p, image);
                 }
             }
         }
@@ -802,12 +862,28 @@ impl<'a> Mix<'a> {
         }
         // The `from` legs of a signal panned by `p` onto monitor leg `j`,
         // folded by the downmix: lr plays only its L and R legs.
-        let folded = |legs: &[f64], from: usize, p: f64, j: usize| -> f64 {
+        let folded = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
             if lr && from > width {
                 legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
             } else {
-                (0..from).map(|i| legs[i] * pan(from, width, i, j, p)).sum()
+                (0..from)
+                    .map(|i| legs[i] * pan_image(from, width, i, j, p, image))
+                    .sum()
             }
+        };
+        // The monitor's image takes its stereo legs after the fold.
+        let monitor_image = if width == 2 {
+            Image::of(&m["image"])
+        } else {
+            Image::Normal
+        };
+        let shaped = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
+            if monitor_image == Image::Normal {
+                return folded(legs, from, p, image, j);
+            }
+            (0..width)
+                .map(|k| monitor_image.share(j, k) * folded(legs, from, p, image, k))
+                .sum()
         };
         let speaker_solo = m["speakerSolo"]
             .as_array()
@@ -819,12 +895,12 @@ impl<'a> Mix<'a> {
                 if audible { level } else { 0.0 }
             })
             .collect();
-        let mut play = |row: usize, legs: &[f64], from: usize, p: f64| {
+        let mut play = |row: usize, legs: &[f64], from: usize, p: f64, image: Image| {
             for (j, out) in g[row * width..][..width].iter_mut().enumerate() {
                 let v: f64 = if mono {
-                    (0..width).map(|k| folded(legs, from, p, k)).sum()
+                    (0..width).map(|k| shaped(legs, from, p, image, k)).sum()
                 } else {
-                    folded(legs, from, p, j)
+                    shaped(legs, from, p, image, j)
                 };
                 *out = v * leg_gain[j];
             }
@@ -835,7 +911,7 @@ impl<'a> Mix<'a> {
             let mut src = Vec::new();
             let from = self.element(source, &mut src);
             for row in 0..self.rows {
-                play(row, &src[row * from..][..from], from, 0.0);
+                play(row, &src[row * from..][..from], from, 0.0, Image::Normal);
             }
             return;
         }
@@ -854,7 +930,7 @@ impl<'a> Mix<'a> {
                 legs.clear();
                 legs.resize(c.width, 0.0);
                 legs[i] = c.at(tap);
-                play(c.row + i, &legs, c.width, p);
+                play(c.row + i, &legs, c.width, p, c.image);
             }
         }
     }
@@ -943,7 +1019,8 @@ mod tests {
     /// reference the single-replica engine path was sent.
     mod before {
         use super::super::{
-            Tap, channel, gain, listens, num, on, pan, solos, talkback, talking, width_of,
+            Image, Tap, channel, gain, listens, num, on, pan_image, solos, talkback, talking,
+            width_of,
         };
         use crate::shape::Shape;
         use serde_json::Value;
@@ -977,10 +1054,15 @@ mod tests {
             for c in &shape.channels {
                 let feed = feed(shape, state, &c.id, id);
                 if let Some((tap, level, p)) = feed {
+                    let image = if c.id == id {
+                        Image::Normal
+                    } else {
+                        Image::of(&state["channels"][&c.id]["image"])
+                    };
                     for i in 0..c.width {
                         let at = channel(state, &c.id, tap) * level;
                         for (j, out) in g[row + i].iter_mut().enumerate() {
-                            *out = at * pan(c.width, width, i, j, p);
+                            *out = at * pan_image(c.width, width, i, j, p, image);
                         }
                     }
                 }
@@ -1072,12 +1154,27 @@ mod tests {
             }
             // The `from` legs of a signal panned by `p` onto monitor leg
             // `j`, folded by the downmix: lr plays only its L and R legs.
-            let folded = |legs: &[f64], from: usize, p: f64, j: usize| -> f64 {
+            let folded = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
                 if lr && from > width {
                     legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
                 } else {
-                    (0..from).map(|i| legs[i] * pan(from, width, i, j, p)).sum()
+                    (0..from)
+                        .map(|i| legs[i] * pan_image(from, width, i, j, p, image))
+                        .sum()
                 }
+            };
+            let monitor_image = if width == 2 {
+                Image::of(&m["image"])
+            } else {
+                Image::Normal
+            };
+            let shaped = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
+                if monitor_image == Image::Normal {
+                    return folded(legs, from, p, image, j);
+                }
+                (0..width)
+                    .map(|k| monitor_image.share(j, k) * folded(legs, from, p, image, k))
+                    .sum()
             };
             let leg_gain = |j: usize| {
                 let solo = m["speakerSolo"]
@@ -1086,13 +1183,13 @@ mod tests {
                 let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
                 if audible { level } else { 0.0 }
             };
-            let play = |legs: &[f64], from: usize, p: f64| -> Vec<f64> {
+            let play = |legs: &[f64], from: usize, p: f64, image: Image| -> Vec<f64> {
                 (0..width)
                     .map(|j| {
                         let v: f64 = if mono {
-                            (0..width).map(|k| folded(legs, from, p, k)).sum()
+                            (0..width).map(|k| shaped(legs, from, p, image, k)).sum()
                         } else {
-                            folded(legs, from, p, j)
+                            shaped(legs, from, p, image, j)
                         };
                         v * leg_gain(j)
                     })
@@ -1103,7 +1200,10 @@ mod tests {
                 let source = m["source"].as_str().unwrap_or_default();
                 let src = element(shape, state, source);
                 let from = width_of(shape, source);
-                return src.iter().map(|legs| play(legs, from, 0.0)).collect();
+                return src
+                    .iter()
+                    .map(|legs| play(legs, from, 0.0, Image::Normal))
+                    .collect();
             }
             let mut g = Vec::new();
             for c in &shape.channels {
@@ -1118,7 +1218,12 @@ mod tests {
                         Some((tap, p)) => {
                             let mut legs = vec![0.0; c.width];
                             legs[i] = channel(state, &c.id, tap);
-                            play(&legs, c.width, p)
+                            play(
+                                &legs,
+                                c.width,
+                                p,
+                                Image::of(&state["channels"][&c.id]["image"]),
+                            )
                         }
                         None => vec![0.0; width],
                     };
@@ -1479,6 +1584,86 @@ mod tests {
         assert!(close(m[0][5], 0.0), "{m:?}");
     }
 
+    /// A stereo channel's pan balances it: the opposite leg lowers and
+    /// the near one stays, on a stereo bus; a mono channel's pan still
+    /// places it at constant power.
+    #[test]
+    fn a_stereo_channels_pan_balances_its_legs() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["channels"]["st1"]["pan"]["lr"] = json!(-0.5);
+        // Rows: ch1, ch2, st1 L, st1 R; columns o-pgm L R.
+        let m = matrix(&shape, &s);
+        assert!(close(m[2][0], 1.0) && close(m[2][1], 0.0), "{m:?}");
+        assert!(close(m[3][1], 0.5) && close(m[3][0], 0.0), "{m:?}");
+        s["channels"]["st1"]["pan"]["lr"] = json!(0.5);
+        let m = matrix(&shape, &s);
+        assert!(close(m[2][0], 0.5) && close(m[3][1], 1.0), "{m:?}");
+    }
+
+    /// A stereo channel's image feeds one leg to both, or swaps them,
+    /// before the balance, on every bus, aux and mix-minus it feeds, and
+    /// not on its direct out.
+    #[test]
+    fn a_stereo_images_use_of_its_legs_reaches_what_it_feeds() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        let at = |s: &Value| matrix(&shape, s);
+        // (image, [L->L, L->R, R->L, R->R]) onto the programme.
+        for (image, want) in [
+            ("normal", [1.0, 0.0, 0.0, 1.0]),
+            ("leftToBoth", [1.0, 1.0, 0.0, 0.0]),
+            ("rightToBoth", [0.0, 0.0, 1.0, 1.0]),
+            ("swap", [0.0, 1.0, 1.0, 0.0]),
+        ] {
+            s["channels"]["st1"]["image"] = json!(image);
+            let m = at(&s);
+            let got = [m[2][0], m[2][1], m[3][0], m[3][1]];
+            assert!(
+                got.iter().zip(want).all(|(g, w)| close(*g, w)),
+                "{image}: {m:?}"
+            );
+        }
+        // The image comes before the balance: the left leg to both, the
+        // right one lowered by a pan of -1 on the way.
+        s["channels"]["st1"]["image"] = json!("leftToBoth");
+        s["channels"]["st1"]["pan"]["lr"] = json!(-1);
+        let m = at(&s);
+        assert!(close(m[2][0], 1.0) && close(m[2][1], 0.0), "{m:?}");
+        // The mix-minus follows the bus, imaged alike.
+        s["channels"]["st1"]["pan"]["lr"] = json!(0);
+        s["channels"]["st1"]["image"] = json!("swap");
+        let m = at(&s);
+        assert!(close(m[2][3], 0.0) && close(m[2][4], 1.0), "{m:?}");
+    }
+
+    /// The monitor's image takes its stereo legs after the fold, then
+    /// the speaker mutes: left to both, right to both, or swapped.
+    #[test]
+    fn the_monitors_image_uses_the_legs_it_plays() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["channels"]["st1"]["pan"]["lr"] = json!(0);
+        s["monitor"]["level"] = json!(0);
+        for (image, want) in [
+            ("normal", [1.0, 0.0, 0.0, 1.0]),
+            ("leftToBoth", [1.0, 1.0, 0.0, 0.0]),
+            ("rightToBoth", [0.0, 0.0, 1.0, 1.0]),
+            ("swap", [0.0, 1.0, 1.0, 0.0]),
+        ] {
+            s["monitor"]["image"] = json!(image);
+            let m = matrix(&shape, &s);
+            let got = [m[2][5], m[2][6], m[3][5], m[3][6]];
+            assert!(
+                got.iter().zip(want).all(|(g, w)| close(*g, w)),
+                "{image}: {m:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_monitor_follows_its_source_and_its_own_controls() {
         let shape = shape();
@@ -1671,7 +1856,15 @@ mod tests {
         assert_eq!(pan(8, 6, 7, 5, 0.0), h);
         assert_eq!(pan(8, 6, 2, 2, 0.0), 1.0);
         assert_eq!(pan(8, 6, 6, 0, 0.0), 0.0);
-        assert_eq!(pan(2, 6, 1, 1, -1.0), 1.0);
+        // Stereo balances onto two legs or more: unity at the centre, the
+        // opposite leg lowered linearly, the same leg to leg onto 5.1.
+        assert_eq!(pan(2, 6, 1, 1, 0.0), 1.0);
+        assert_eq!(pan(2, 6, 1, 1, -1.0), 0.0);
+        assert_eq!(pan(2, 6, 0, 0, -1.0), 1.0);
+        assert_eq!(pan(2, 6, 1, 1, -0.25), 0.75);
+        assert_eq!(pan(2, 2, 0, 0, 0.5), 0.5);
+        assert_eq!(pan(2, 2, 1, 1, 0.5), 1.0);
+        assert_eq!(pan(2, 2, 0, 1, 0.5), 0.0, "legs stay on their own");
         assert_eq!(pan(2, 6, 1, 2, -1.0), 0.0);
         // Stereo onto mono at -6 dB per leg; 5.1 onto mono through Lo/Ro.
         assert_eq!(pan(2, 1, 0, 0, 0.0), 0.5);
@@ -1842,7 +2035,7 @@ mod tests {
                 let ch = channels[next(3) as usize];
                 let db = json!(next(1200) as f64 / 10.0 - 100.0);
                 let flag = json!(next(2) == 0);
-                let (path, value) = match next(19) {
+                let (path, value) = match next(20) {
                     0 => (format!("/channels/{ch}/fader"), db),
                     1 => (format!("/channels/{ch}/mute"), flag),
                     2 => (
@@ -1897,6 +2090,14 @@ mod tests {
                         if next(2) == 0 { json!(null) } else { json!(ch) },
                     ),
                     17 => ("/mixMinus/mm1/interrupt/active".into(), flag),
+                    18 => (
+                        if next(2) == 0 {
+                            format!("/channels/{ch}/image")
+                        } else {
+                            "/monitor/image".into()
+                        },
+                        json!(["normal", "leftToBoth", "rightToBoth", "swap"][next(4) as usize]),
+                    ),
                     _ => match next(9) {
                         0 => (
                             "/monitor/source".into(),

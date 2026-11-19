@@ -1157,6 +1157,86 @@ fn every_replica_writes_the_fold_down_of_a_surround_bus() {
     }
 }
 
+/// A stereo channel's image and balance are replicated state: every
+/// replica writes the legs it feeds both, or swapped, and the opposite
+/// leg lowered by its pan.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_applies_a_stereo_channels_image_and_balance() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "st", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let legs = [0.5f32, 0.25];
+    let (set, listeners) = Set::with("image", shape, &["out-pgm"], |domain| {
+        let src = new_id();
+        (
+            vec![Source::start(domain, &src, legs.to_vec())],
+            json!({ "st": { "flow": src } }),
+        )
+    });
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let near = |leg: &[f32], want: f32| leg.iter().all(|v| (v - want).abs() <= 1e-6);
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/st/fader", json!(0)),
+            ("/channels/st/routes/pgm", json!(true)),
+        ],
+    );
+    // The image, the pan and the legs every replica writes.
+    let steps: [(&str, f64, [f32; 2]); 5] = [
+        ("normal", 0.0, [0.5, 0.25]),
+        ("swap", 0.0, [0.25, 0.5]),
+        ("leftToBoth", 0.0, [0.5, 0.5]),
+        ("normal", -1.0, [0.5, 0.0]),
+        ("normal", 0.5, [0.25, 0.25]),
+    ];
+    for (image, pan, want) in steps {
+        write(
+            &nodes,
+            1,
+            &[
+                ("/channels/st/image", json!(image)),
+                ("/channels/st/pan/lr", json!(pan)),
+            ],
+        );
+        for n in 0..REPLICAS {
+            let mut last = None;
+            let read = until(20, || {
+                let Some(out) = legs_of(&set.domain.0, &set.members[n], 2) else {
+                    return false;
+                };
+                last = Some((out[0][0], out[1][0]));
+                near(&out[0], want[0]) && near(&out[1], want[1])
+            });
+            assert!(
+                read,
+                "replica {n} with image {image}, pan {pan}: wanted {want:?}, read {last:?}: {}",
+                states(&nodes)
+            );
+        }
+    }
+}
+
 /// An interrupt of the mix-minus output is one replicated command: every
 /// replica's member flow of it carries the talkback channel alone, at
 /// its level (ch1 is 6 dB above ch2) before its closed fader, in place of the mix, alike on all
