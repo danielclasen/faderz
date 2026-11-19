@@ -36,7 +36,7 @@ test('shows one duck group at a time on a phone, picked from a list, within the 
   expect(table.x + table.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
-test('keeps the commit banner readable on its own row when quorum is lost on a phone', async ({ page, request }) => {
+test('keeps the commit banner readable on its own row when quorum is lost on a phone', { tag: '@mock' }, async ({ page, request }) => {
   test.setTimeout(60_000);
   await live(page);
   const primary = (await debug(page, 'primaryReplica'))!;
