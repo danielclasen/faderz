@@ -855,6 +855,81 @@ async fn a_talkback_interrupt_replaces_the_mix_minus_until_released() {
     server.stop().await;
 }
 
+/// Direct outs, mix-minus exclusions, bus, aux and mix-minus masters,
+/// aux sends, VCAs and the AFV stage a tally drives reach the flows of
+/// the outputs carrying them: through every step of [`routing::steps`]
+/// each output holds the legs the step gives it, the outputs a step is
+/// not about included.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_routing_reaches_every_output_flow() {
+    let domain = domain("routing");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-routing");
+    let (ch1, ch2) = (new_id(), new_id());
+    let _ch1 = Source::start(&domain.0, &ch1, vec![routing::CH1]);
+    let _ch2 = Source::start(&domain.0, &ch2, vec![routing::CH2]);
+    let flows: Vec<String> = routing::OUTPUTS.iter().map(|_| new_id()).collect();
+    let outputs: serde_json::Map<String, Value> = (routing::OUTPUTS.iter().zip(&flows))
+        .map(|((id, _), flow)| ((*id).to_owned(), json!({ "flow": flow })))
+        .collect();
+    let inputs = json!({ "ch1": { "flow": ch1 }, "ch2": { "flow": ch2 } });
+    let server = start_with(
+        &data.0,
+        &domain.0,
+        routing::shape(),
+        inputs,
+        Value::Object(outputs),
+    )
+    .await;
+    for flow in &flows {
+        appears(&domain.0, flow).await;
+    }
+    let mut readers: Vec<Reader> = (routing::OUTPUTS.iter().zip(&flows))
+        .map(|((_, width), flow)| Reader::wide(&domain.0, flow, *width))
+        .collect();
+    // A patch before the engine is ready is refused with 503.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let n = B as usize;
+    let near = |leg: &[f32], want: f32| leg.iter().all(|v| (v - want).abs() <= 1e-6);
+    for step in routing::steps() {
+        match &step.change {
+            routing::Change::Patch(changes) => patch(&server, changes).await,
+            routing::Change::Tally(source, state) => tally(&server, source, state).await,
+        }
+        // Twice in a row: an output read before the change was applied
+        // holds its old legs, which a step may wrongly leave alone.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut held = 0;
+        loop {
+            let mut read = Vec::new();
+            let mut all = true;
+            for (reader, want) in readers.iter_mut().zip(step.legs.each()) {
+                let Some(block) = reader.recent() else {
+                    all = false;
+                    continue;
+                };
+                all &= block.chunks(n).zip(want).all(|(leg, w)| near(leg, *w));
+                read.push(block.chunks(n).map(|leg| leg[n - 1]).collect::<Vec<_>>());
+            }
+            held = if all { held + 1 } else { 0 };
+            if held == 2 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{}: expected {:?}, last read {read:?}",
+                step.what,
+                step.legs
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    server.stop().await;
+}
+
 /// A mono channel's pan places it in the field of a 5.1 bus: at the
 /// front it is the centre leg alone, divergence spreads it to L and R,
 /// fr takes it to the surrounds, and the LFE send is a gain of its own.

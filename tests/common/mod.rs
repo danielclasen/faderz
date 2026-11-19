@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod registry;
+pub mod routing;
 
 use std::hash::{BuildHasher, RandomState};
 use std::path::{Path, PathBuf};
