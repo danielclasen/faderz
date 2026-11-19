@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.3](https://github.com/danielclasen/faderz/compare/v0.4.2...v0.4.3) (2026-11-19)
+
+
+### Features
+
+* **mix:** balance a stereo channel and apply its image and the monitor's ([#103](https://github.com/danielclasen/faderz/issues/103)) ([f682151](https://github.com/danielclasen/faderz/commit/f682151652e79e0c0a0f5563c964c669c1d1eec5))
+* **mix:** pan a mono channel in the field of a 5.1 or 7.1 bus ([#104](https://github.com/danielclasen/faderz/issues/104)) ([e44204e](https://github.com/danielclasen/faderz/commit/e44204eb3928aa3cc806e1b69d1db5b785d30d96))
+
+
+### Bug Fixes
+
+* **meters:** read silence for a channel loudness at a closed tap ([#108](https://github.com/danielclasen/faderz/issues/108)) ([dcd3cb7](https://github.com/danielclasen/faderz/commit/dcd3cb7e2ae8286bd9f5cefc00614620b5fb8dd0))
+* **ws:** deliver a control request to the holder on whichever replica it is ([#106](https://github.com/danielclasen/faderz/issues/106)) ([23216fc](https://github.com/danielclasen/faderz/commit/23216fcb3891af8cb36eece84a94919714145d0f))
+
 ## [0.4.2](https://github.com/danielclasen/faderz/compare/v0.4.1...v0.4.2) (2026-11-19)
 
 

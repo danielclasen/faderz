@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.2.0...faderz-bridge-v0.2.1) (2026-11-19)
+
+
+### Features
+
+* **mix:** pan a mono channel in the field of a 5.1 or 7.1 bus ([#104](https://github.com/danielclasen/faderz/issues/104)) ([e44204e](https://github.com/danielclasen/faderz/commit/e44204eb3928aa3cc806e1b69d1db5b785d30d96))
+
 ## [0.2.0](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.1.4...faderz-bridge-v0.2.0) (2026-11-18)
 
 
