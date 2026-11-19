@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/danielclasen/faderz/compare/v0.3.0...v0.3.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **deps:** build against samplez 0.8.3 ([#74](https://github.com/danielclasen/faderz/issues/74)) ([1df0168](https://github.com/danielclasen/faderz/commit/1df01685104716b0b832fdc787771e3e419ca626))
+* **web:** move a duck group's threshold mark by transform ([#70](https://github.com/danielclasen/faderz/issues/70)) ([768d3d1](https://github.com/danielclasen/faderz/commit/768d3d12af702a20fb8b1f979f941d222cebf175))
+
 ## [0.3.0](https://github.com/danielclasen/faderz/compare/v0.2.0...v0.3.0) (2026-11-18)
 
 
