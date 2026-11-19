@@ -35,7 +35,8 @@ fn shape() -> Value {
             { "id": "ch2", "name": "Pres 2", "width": 1, "layout": "mono", "altInput": true },
         ],
         "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
-        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "auxes": [], "mixMinus": [], "vcas": [],
+        "monitorOutputs": [{ "id": "mon", "name": "Monitor", "width": 2, "layout": "stereo" }],
         "ducks": [{ "id": "talk", "name": "Talk" }],
         "outputs": [
             { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
@@ -517,13 +518,18 @@ fn steady(nodes: &[Option<Node>], n: usize) {
     assert!(steady, "replica {n} did not commit: {}", states(nodes));
 }
 
+/// The meter frame's values: ch1 3, ch2 3, pgm 14, then the monitor
+/// 2; ch1's peak is the first, the monitor's left leg the 21st.
+const CH1: usize = 0;
+const MON: usize = 20;
+
 /// Held by each test that runs a set: two sets of three engines at once
 /// miss their deadlines on a CI host, so they run one after the other.
 static ONE_SET: Mutex<()> = Mutex::new(());
 
-/// The ch1 peak, in centi-dB, of the meter frame the replica `node`
-/// sends a client after the first `skip`.
-fn ch1_peak(node: &Node, skip: usize) -> i16 {
+/// Value `index` of the meter frame the replica `node` sends a client
+/// after the first `skip`: [`CH1`] or [`MON`], a peak in centi-dB.
+fn peak(node: &Node, skip: usize, index: usize) -> i16 {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
     node.runtime.block_on(async {
@@ -548,9 +554,9 @@ fn ch1_peak(node: &Node, skip: usize) -> i16 {
                 }
                 assert_eq!(f[..2], [0x4d, 4], "magic and version");
                 // After the 12-byte header and the replica's name, padded
-                // to an even length; ch1's peak is the frame's first value.
+                // to an even length.
                 let name = usize::from(f[2]);
-                let at = 12 + name + name % 2;
+                let at = 12 + name + name % 2 + 2 * index;
                 return i16::from_le_bytes([f[at], f[at + 1]]);
             }
         }
@@ -563,7 +569,8 @@ fn ch1_peak(node: &Node, skip: usize) -> i16 {
 /// fader opens, digital silence once it closes, 10 dB less at -10, and
 /// silence again once muted.
 /// The faders start closed, so a replica metering at the gains it
-/// started with reads silence throughout.
+/// started with reads silence throughout. The monitor meter follows a
+/// PFL alike.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -598,19 +605,36 @@ fn every_replicas_meters_follow_the_faders() {
         ),
         (("/channels/ch1/mute", json!(true)), FLOOR, "muted"),
     ];
-    for ((path, value), want, what) in steps {
+    // The monitor meters what it plays: the programme, ch2's -12 dBFS
+    // sine centred at -3 dB, until ch1's PFL takes its place, centred
+    // at -3 dB before its closed fader and mute, and the programme again
+    // once every solo is off.
+    let monitor = [
+        (("/monitor/level", json!(0)), FLOOR, "on its silent source"),
+        (("/channels/ch2/fader", json!(0)), -1505, "on its source"),
+        (("/channels/ch1/fader", json!(-90)), -1505, "on its source"),
+        (("/channels/ch1/solo", json!("pfl")), -903, "on ch1's PFL"),
+        (
+            ("/channels/ch1/solo", json!("off")),
+            -1505,
+            "on its source again",
+        ),
+    ];
+    let steps = (steps.into_iter().map(|s| (CH1, s))).chain(monitor.into_iter().map(|s| (MON, s)));
+    for (index, ((path, value), want, what)) in steps {
         write(&nodes, 0, &[(path, value)]);
         for n in 0..REPLICAS {
             let mut last = 0;
             let read = until(10, || {
                 // The meters cover a 100 ms window: the first frames are
                 // skipped.
-                last = ch1_peak(node(&nodes, n), 3);
+                last = peak(node(&nodes, n), 3, index);
                 (last - want).abs() <= 10
             });
+            let meter = if index == MON { "monitor" } else { "ch1" };
             assert!(
                 read,
-                "replica {n}'s ch1 meter {what}: {last}, not {want}: {}",
+                "replica {n}'s {meter} meter {what}: {last}, not {want}: {}",
                 states(&nodes)
             );
         }

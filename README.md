@@ -52,11 +52,11 @@ high-pass, EQ, gate, compressor), faders, mutes, VCA offsets and mutes,
 AFV open and closed with the off level, mono pan and the fold-down of
 wider channels, bus routing, sends, the bus, aux and mix-minus faders and
 mutes, bus and aux polarity, mix-minus exclusions, the monitor's
-source, fold-down, level, dim, cut, mono and speaker mutes and solos, and
-duck groups. The rest of the state is kept, shown and replicated but not applied to the
-audio in this version: channel delay, PFL and AFL listening, VCA solo,
-front/rear pan, divergence and LFE send, the stereo image setting of a
-channel and of the monitor, the monitor's talkback dim, bus and aux
+source, channel and VCA PFL and AFL listening (PFL over AFL), fold-down,
+level, dim, cut, mono and speaker mutes and solos, and duck groups. The
+rest of the state is kept, shown and replicated but not applied to the
+audio in this version: channel delay, front/rear pan, divergence and LFE
+send, the stereo image setting of a channel and of the monitor, the monitor's talkback dim, bus and aux
 processing (EQ, dynamics, limiter, delay), the line-up tone, mix-minus
 talkback interrupts, the AFV rise, hold and fall times, and the scene
 crossfade time.
@@ -317,10 +317,11 @@ listener:
 - In `oidc` mode the replicas behind one host name share
   `auth.oidc.sessionKey`.
 - The configuration that changes how a command applies, the shape, the
-  declared consoles and each channel's input flows and domain, is equal
-  on every replica: the leader orders no command while a replica reports
-  another, and a replica of another one exits rather than install the
-  set's snapshot. Changing it needs every replica stopped.
+  declared consoles, each channel's input flows and domain, and the
+  version of how the release derives engine targets from the state, is
+  equal on every replica: the leader orders no command while a replica
+  reports another, and a replica of another one exits rather than
+  install the set's snapshot. Changing it needs every replica stopped.
 - A snapshot carries its format, 3, which faderz 0.2.0 and earlier
   cannot read. Rolling a set back to such an image needs the volumes
   that image wrote, or empty volumes and a new set.

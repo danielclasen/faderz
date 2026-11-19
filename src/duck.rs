@@ -183,7 +183,9 @@ pub fn key_gain(state: &Value, id: &str, tap: &str) -> f32 {
 /// target of `g` and the column carries a destination of `g`: an output
 /// or meter column of that bus, aux or mix-minus output, or a monitor
 /// output while the monitor's source is one, so the monitor plays and
-/// meters what goes out. None without duck groups.
+/// meters what goes out. While anything solos the monitor plays the
+/// listens, no destination, and none of its columns is masked. None
+/// without duck groups.
 pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
     if shape.ducks.is_empty() {
         return Vec::new();
@@ -194,7 +196,11 @@ pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
             .fold(0, |bits, (g, _)| bits | 1 << g)
     };
     let carried = |id: &str| groups(&|d| d["destinations"][id] == true);
-    let monitored = carried(state["monitor"]["source"].as_str().unwrap_or_default());
+    let monitored = if mix::solos(state).0 {
+        0
+    } else {
+        carried(state["monitor"]["source"].as_str().unwrap_or_default())
+    };
     let columns: Vec<u8> = (mix::columns(shape).into_iter())
         .flat_map(|(id, width)| {
             let monitor = shape.monitor_outputs.iter().any(|m| m.id == id);
@@ -292,6 +298,12 @@ mod tests {
         assert_eq!(masks(&shape, &state)[0][7..], [2, 2]);
         set_at(&mut state, "/monitor/source", json!("cf"));
         assert_eq!(masks(&shape, &state)[0][7..], [0, 0]);
+        // On the listens, a PFL of a target among them, neither.
+        set_at(&mut state, "/monitor/source", json!("aux1"));
+        set_at(&mut state, "/channels/ch1/solo", json!("pfl"));
+        assert_eq!(masks(&shape, &state)[0][7..], [0, 0]);
+        set_at(&mut state, "/channels/ch1/solo", json!("off"));
+        assert_eq!(masks(&shape, &state)[0][7..], [2, 2]);
         // Both groups on one coefficient.
         set_at(&mut state, "/ducks/rem/destinations/pgm", json!(true));
         assert_eq!(masks(&shape, &state)[0][..2], [3, 3]);

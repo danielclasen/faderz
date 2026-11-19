@@ -504,6 +504,122 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     server.stop().await;
 }
 
+/// With no output carrying the monitor, its meter is a matrix column of
+/// its own, and it follows a solo as an output would: the PFL of ch1,
+/// whose fader is closed, at -3 dB centred, then the source again once
+/// every solo is off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_solo_reaches_the_monitor_meter() {
+    let domain = domain("solo-meter");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-solo-meter");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    let near = |v: i16, want: i16| (v - want).abs() <= 2;
+    // A patch before the engine is ready is refused with 503.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    patch(
+        &server,
+        &[
+            ("/monitor/level", json!(0)),
+            ("/channels/st1/fader", json!(0)),
+        ],
+    )
+    .await;
+    let v = meter_values(&server, 5).await;
+    assert!(near(v[MON_PEAK], -1204), "the source, pgm, in {v:?}");
+    patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
+    let v = meter_values(&server, 5).await;
+    assert!(near(v[MON_PEAK], -903), "ch1 PFL in {v:?}");
+    patch(&server, &[("/channels/ch1/solo", json!("off"))]).await;
+    let v = meter_values(&server, 5).await;
+    assert!(near(v[MON_PEAK], -1204), "the source again in {v:?}");
+    server.stop().await;
+}
+
+/// Channel and VCA PFL and AFL reach the monitor output flow in place
+/// of its source, PFL over AFL, and every solo off gives the source back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn solos_reach_the_monitor_output_flow() {
+    let domain = domain("solo");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-solo");
+    let (ch1, ch2, ch2b, st1) = (new_id(), new_id(), new_id(), new_id());
+    let (pgm_id, mm_id, mon_id) = (new_id(), new_id(), new_id());
+    let _ch1 = Source::start(&domain.0, &ch1, vec![CH1]);
+    let _st1 = Source::start(&domain.0, &st1, ST1.to_vec());
+    let mut v = shape();
+    v["vcas"] = json!([{ "id": "vca1", "name": "Music" }]);
+    v["outputs"].as_array_mut().unwrap().push(
+        json!({ "id": "out-mon", "name": "Mon out", "source": "mon", "width": 2, "layout": "stereo" }),
+    );
+    let inputs = json!({
+        "ch1": { "flow": ch1 },
+        "ch2": { "flow": ch2, "altFlow": ch2b },
+        "st1": { "flow": st1 },
+    });
+    let outputs = json!({
+        "out-pgm": { "flow": pgm_id },
+        "out-mm": { "flow": mm_id },
+        "out-mon": { "flow": mon_id },
+    });
+    let server = start_with(&data.0, &domain.0, v, inputs, outputs).await;
+    appears(&domain.0, &mon_id).await;
+    let mut mon = Reader::new(&domain.0, &mon_id);
+    // A patch before the engine is ready is refused with 503.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let pfl = CH1 * std::f32::consts::FRAC_1_SQRT_2;
+    patch(
+        &server,
+        &[
+            ("/monitor/level", json!(0)),
+            ("/channels/st1/fader", json!(0)),
+        ],
+    )
+    .await;
+    mon.expect(ST1[0], ST1[1], "the source, pgm").await;
+    patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
+    mon.expect(pfl, pfl, "ch1 PFL with its fader closed").await;
+    // The monitor meter reads the meters of the output carrying it.
+    let v = meter_values(&server, 5).await;
+    assert!((v[MON_PEAK] + 903).abs() <= 2, "monitor peak in {v:?}");
+    patch(&server, &[("/channels/ch1/solo", json!("afl"))]).await;
+    mon.expect(0.0, 0.0, "ch1 AFL with its fader closed").await;
+    patch(&server, &[("/channels/ch1/solo", json!("off"))]).await;
+    mon.expect(ST1[0], ST1[1], "the source again").await;
+    // AFL is after the fader, not after the routes.
+    patch(&server, &[("/channels/st1/routes/pgm", json!(false))]).await;
+    mon.expect(0.0, 0.0, "st1 off the source").await;
+    patch(
+        &server,
+        &[
+            ("/vcas/vca1/members", json!(["st1"])),
+            ("/vcas/vca1/solo", json!("afl")),
+        ],
+    )
+    .await;
+    mon.expect(ST1[0], ST1[1], "st1 AFL through its VCA").await;
+    patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
+    mon.expect(pfl, pfl, "ch1 PFL over st1 AFL").await;
+    server.stop().await;
+}
+
 /// Each channel reads the legs its `channels` select out of a wider
 /// flow, each channel of which carries its own value: ch1 flow channel
 /// 16 and st1 flow channels 7 and 8 of one 16-channel flow, and ch2 flow

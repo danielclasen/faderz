@@ -8,8 +8,9 @@
 //! offsets and mutes, AFV open or closed, pan of a mono leg and the
 //! fold-down of a wider channel, bus routes, sends
 //! and their levels, bus, aux and mix-minus faders, mutes and polarity,
-//! the mix-minus exclusions, and the monitor's source, downmix, level,
-//! dim, cut, mono and speaker mutes and solos. Everything else in the
+//! the mix-minus exclusions, and the monitor's source or the channel and
+//! VCA PFL and AFL listens, downmix, level, dim, cut, mono and speaker
+//! mutes and solos. Everything else in the
 //! state is the input's strip ([`crate::strip`]), a duck group
 //! ([`crate::duck`]) or is kept and not applied. [`targets`] adds the
 //! strips, the duck groups and their masks, and each input's flow.
@@ -103,6 +104,40 @@ fn channel(state: &Value, id: &str, tap: Tap) -> f64 {
         g *= gain(num(&afv["offLevel"]));
     }
     g
+}
+
+/// Whether any channel or VCA solos, and whether any of them is in PFL:
+/// per model `MonitorState` the monitor then plays the listen sum, and
+/// per `MonitorMeter` PFL takes priority over AFL, so while any PFL is
+/// on only the PFL listens are summed. A VCA solos even without members,
+/// which makes the listen sum silent.
+pub(crate) fn solos(state: &Value) -> (bool, bool) {
+    let all = ["channels", "vcas"]
+        .into_iter()
+        .filter_map(|g| state[g].as_object())
+        .flat_map(|m| m.values())
+        .map(|e| e["solo"].as_str().unwrap_or("off"));
+    all.fold((false, false), |(any, pfl), mode| {
+        (any || mode != "off", pfl || mode == "pfl")
+    })
+}
+
+/// Whether channel `id` listens in PFL and in AFL: per model `VcaState`
+/// a VCA's solo listens to every member as if the member had it set, so
+/// its own solo and that of each VCA it is a member of add up.
+fn listens(state: &Value, id: &str) -> (bool, bool) {
+    let own = std::iter::once(&state["channels"][id]["solo"]);
+    let vcas = (state["vcas"].as_object().into_iter())
+        .flat_map(|v| v.values())
+        .filter(|v| {
+            v["members"]
+                .as_array()
+                .is_some_and(|m| m.iter().any(|m| m == id))
+        })
+        .map(|v| &v["solo"]);
+    own.chain(vcas).fold((false, false), |(pfl, afl), mode| {
+        (pfl || mode == "pfl", afl || mode == "afl")
+    })
 }
 
 /// The gain from leg `i` of a `from`-leg signal to leg `j` of a `to`-leg
@@ -448,10 +483,19 @@ impl Moved {
                         Some("input") => {
                             moved.flows.insert(s);
                         }
+                        // Whether anything solos, and in which mode, moves
+                        // every row of the monitor ([`Mix::monitor`]) and
+                        // its duck masks.
+                        Some("solo") => {
+                            moved.monitor = true;
+                            moved.masks = true;
+                        }
                         _ => {
                             moved.rows.insert(s);
                             moved.strips.insert(s);
                             moved.flows.insert(s);
+                            moved.monitor = true;
+                            moved.masks = true;
                         }
                     }
                 }
@@ -461,8 +505,12 @@ impl Moved {
                     }
                     None => moved.all = true,
                 },
-                // A VCA moves its members, those it had and those it has.
+                // A VCA moves its members, those it had and those it has,
+                // and its solo every row of the monitor and its masks.
                 (Some("vcas"), _) => {
+                    let solo = matches!(key, None | Some("solo"));
+                    moved.monitor |= solo;
+                    moved.masks |= solo;
                     for vcas in [vcas, &state["vcas"]] {
                         let touched: Vec<&Value> = match id {
                             Some(v) => vec![&vcas[v]],
@@ -681,14 +729,19 @@ impl<'a> Mix<'a> {
         width
     }
 
-    /// The monitor output: its source's legs onto the monitor's, folded
-    /// down by `downmix` when the source is wider, then level, dim, cut,
-    /// mono (the sum of the folded legs) and the speaker mutes and solos.
+    /// The monitor output: while any channel or VCA solos the listen sum
+    /// ([`solos`]), else its source; that signal's legs onto the
+    /// monitor's, folded down by `downmix` when it is wider, then level,
+    /// dim, cut, mono (the sum of the folded legs) and the speaker mutes
+    /// and solos.
+    ///
+    /// The listen sum takes each listening channel's legs at their own
+    /// width. PFL is the channel after its strip, before fader, mute and
+    /// pan: [`Tap::PreFader`], centred. AFL is the channel as a bus takes
+    /// it ([`feed`]): [`Tap::Mix`], after fader, mute, VCAs and AFV, at
+    /// its pan, so it is what the channel adds to the mix.
     fn monitor(&self, width: usize, g: &mut [f64]) {
         let m = &self.state["monitor"];
-        let source = m["source"].as_str().unwrap_or_default();
-        let mut src = Vec::new();
-        let from = self.element(source, &mut src);
         let mut level = gain(num(&m["level"]));
         if on(&m["dim"]) {
             level *= gain(-num(&m["dimDepth"]));
@@ -701,35 +754,61 @@ impl<'a> Mix<'a> {
         if mono {
             level *= gain(-num(&m["monoCompensation"]));
         }
-        // The source's legs onto monitor leg `j`, folded by the downmix:
-        // lr plays only the source's L and R legs.
-        let folded = |legs: &[f64], j: usize| -> f64 {
+        // The `from` legs of a signal panned by `p` onto monitor leg `j`,
+        // folded by the downmix: lr plays only its L and R legs.
+        let folded = |legs: &[f64], from: usize, p: f64, j: usize| -> f64 {
             if lr && from > width {
                 legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
             } else {
-                (0..from)
-                    .map(|i| legs[i] * pan(from, width, i, j, 0.0))
-                    .sum()
+                (0..from).map(|i| legs[i] * pan(from, width, i, j, p)).sum()
             }
         };
-        let solo = m["speakerSolo"]
+        let speaker_solo = m["speakerSolo"]
             .as_array()
             .is_some_and(|s| s.iter().any(on));
         let leg_gain: Vec<f64> = (0..width)
             .map(|j| {
-                let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
+                let audible =
+                    !on(&m["speakerMute"][j]) && (!speaker_solo || on(&m["speakerSolo"][j]));
                 if audible { level } else { 0.0 }
             })
             .collect();
-        for row in 0..self.rows {
-            let legs = &src[row * from..][..from];
+        let mut play = |row: usize, legs: &[f64], from: usize, p: f64| {
             for (j, out) in g[row * width..][..width].iter_mut().enumerate() {
                 let v: f64 = if mono {
-                    (0..width).map(|k| folded(legs, k)).sum()
+                    (0..width).map(|k| folded(legs, from, p, k)).sum()
                 } else {
-                    folded(legs, j)
+                    folded(legs, from, p, j)
                 };
                 *out = v * leg_gain[j];
+            }
+        };
+        let (soloing, pfl) = solos(self.state);
+        if !soloing {
+            let source = m["source"].as_str().unwrap_or_default();
+            let mut src = Vec::new();
+            let from = self.element(source, &mut src);
+            for row in 0..self.rows {
+                play(row, &src[row * from..][..from], from, 0.0);
+            }
+            return;
+        }
+        let mut legs = Vec::new();
+        for c in &self.chans {
+            let (p, a) = listens(self.state, c.id);
+            let heard = if pfl {
+                p.then_some((Tap::PreFader, 0.0))
+            } else {
+                a.then_some((Tap::Mix, c.pan))
+            };
+            let Some((tap, p)) = heard else {
+                continue;
+            };
+            for i in 0..c.width {
+                legs.clear();
+                legs.resize(c.width, 0.0);
+                legs[i] = c.at(tap);
+                play(c.row + i, &legs, c.width, p);
             }
         }
     }
@@ -815,7 +894,7 @@ mod tests {
     /// the per-channel and per-element factors were taken once: the
     /// reference the single-replica engine path was sent.
     mod before {
-        use super::super::{Tap, channel, gain, num, on, pan, width_of};
+        use super::super::{Tap, channel, gain, listens, num, on, pan, solos, width_of};
         use crate::shape::Shape;
         use serde_json::Value;
 
@@ -920,14 +999,12 @@ mod tests {
             }
         }
 
-        /// The monitor output: its source's legs onto the monitor's, folded down
-        /// by `downmix` when the source is wider, then level, dim, cut, mono (the
+        /// The monitor output: while anything solos the listen sum, else
+        /// its source; that signal's legs onto the monitor's, folded down
+        /// by `downmix` when it is wider, then level, dim, cut, mono (the
         /// sum of the folded legs) and the speaker mutes and solos.
         fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
             let m = &state["monitor"];
-            let source = m["source"].as_str().unwrap_or_default();
-            let src = element(shape, state, source);
-            let from = width_of(shape, source);
             let mut level = gain(num(&m["level"]));
             if on(&m["dim"]) {
                 level *= gain(-num(&m["dimDepth"]));
@@ -940,15 +1017,13 @@ mod tests {
             if mono {
                 level *= gain(-num(&m["monoCompensation"]));
             }
-            // The source's legs onto monitor leg `j`, folded by the downmix: lr
-            // plays only the source's L and R legs.
-            let folded = |legs: &[f64], j: usize| -> f64 {
+            // The `from` legs of a signal panned by `p` onto monitor leg
+            // `j`, folded by the downmix: lr plays only its L and R legs.
+            let folded = |legs: &[f64], from: usize, p: f64, j: usize| -> f64 {
                 if lr && from > width {
                     legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
                 } else {
-                    (0..from)
-                        .map(|i| legs[i] * pan(from, width, i, j, 0.0))
-                        .sum()
+                    (0..from).map(|i| legs[i] * pan(from, width, i, j, p)).sum()
                 }
             };
             let leg_gain = |j: usize| {
@@ -958,20 +1033,46 @@ mod tests {
                 let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
                 if audible { level } else { 0.0 }
             };
-            src.iter()
-                .map(|legs| {
-                    (0..width)
-                        .map(|j| {
-                            let v: f64 = if mono {
-                                (0..width).map(|k| folded(legs, k)).sum()
-                            } else {
-                                folded(legs, j)
-                            };
-                            v * leg_gain(j)
-                        })
-                        .collect()
-                })
-                .collect()
+            let play = |legs: &[f64], from: usize, p: f64| -> Vec<f64> {
+                (0..width)
+                    .map(|j| {
+                        let v: f64 = if mono {
+                            (0..width).map(|k| folded(legs, from, p, k)).sum()
+                        } else {
+                            folded(legs, from, p, j)
+                        };
+                        v * leg_gain(j)
+                    })
+                    .collect()
+            };
+            let (soloing, pfl) = solos(state);
+            if !soloing {
+                let source = m["source"].as_str().unwrap_or_default();
+                let src = element(shape, state, source);
+                let from = width_of(shape, source);
+                return src.iter().map(|legs| play(legs, from, 0.0)).collect();
+            }
+            let mut g = Vec::new();
+            for c in &shape.channels {
+                let (p, a) = listens(state, &c.id);
+                let heard = if pfl {
+                    p.then_some((Tap::PreFader, 0.0))
+                } else {
+                    a.then(|| (Tap::Mix, num(&state["channels"][&c.id]["pan"]["lr"])))
+                };
+                for i in 0..c.width {
+                    let row = match heard {
+                        Some((tap, p)) => {
+                            let mut legs = vec![0.0; c.width];
+                            legs[i] = channel(state, &c.id, tap);
+                            play(&legs, c.width, p)
+                        }
+                        None => vec![0.0; width],
+                    };
+                    g.push(row);
+                }
+            }
+            g
         }
     }
     use super::*;
@@ -1152,6 +1253,113 @@ mod tests {
         );
     }
 
+    /// PFL listens after the strip and before the fader, centred: a
+    /// channel with its fader closed is heard on the monitor, and the
+    /// source is not.
+    #[test]
+    fn a_pfl_is_heard_on_the_monitor_with_its_fader_closed() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["channels"]["ch1"]["pan"]["lr"] = json!(-1);
+        s["monitor"]["level"] = json!(-6);
+        s["channels"]["ch1"]["solo"] = json!("pfl");
+        let m = matrix(&shape, &s);
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        assert!(close(m[0][5], h * gain(-6.0)) && close(m[0][6], h * gain(-6.0)));
+        assert!(m[1..].iter().all(|r| r[5] == 0.0 && r[6] == 0.0));
+        // The monitor's own controls follow.
+        s["monitor"]["speakerMute"] = json!([false, true]);
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][5], h * gain(-6.0)) && m[0][6] == 0.0);
+    }
+
+    /// AFL listens to what the channel adds to the mix: nothing while its
+    /// fader is closed, and at its pan while it is open.
+    #[test]
+    fn an_afl_of_a_closed_fader_is_silent() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["monitor"]["level"] = json!(0);
+        s["channels"]["ch1"]["solo"] = json!("afl");
+        let m = matrix(&shape, &s);
+        assert!(m.iter().all(|r| r[5] == 0.0 && r[6] == 0.0));
+        s["channels"]["ch1"]["fader"] = json!(-6);
+        s["channels"]["ch1"]["pan"]["lr"] = json!(-1);
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][5], gain(-6.0)) && close(m[0][6], 0.0));
+        assert!(m[1..].iter().all(|r| r[5] == 0.0 && r[6] == 0.0));
+    }
+
+    /// VcaState: a VCA's solo listens to each member as if the member had
+    /// it set.
+    #[test]
+    fn a_vca_solo_solos_its_members() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(0);
+        s["monitor"]["level"] = json!(0);
+        s["vcas"]["vca1"]["members"] = json!(["st1"]);
+        s["vcas"]["vca1"]["solo"] = json!("pfl");
+        let m = matrix(&shape, &s);
+        assert!(close(m[2][5], 1.0) && close(m[3][6], 1.0));
+        assert!(m[2][6] == 0.0 && m[3][5] == 0.0);
+        assert!(m[..2].iter().all(|r| r[5] == 0.0 && r[6] == 0.0));
+        // AFL through the VCA: the member's fader and the VCA's offset.
+        s["vcas"]["vca1"]["solo"] = json!("afl");
+        s["vcas"]["vca1"]["offset"] = json!(-2);
+        s["channels"]["st1"]["fader"] = json!(-4);
+        let m = matrix(&shape, &s);
+        assert!(close(m[2][5], gain(-6.0)) && close(m[3][6], gain(-6.0)));
+        assert!(m[..2].iter().all(|r| r[5] == 0.0 && r[6] == 0.0));
+    }
+
+    /// With every solo off again the monitor plays its source, bit for bit
+    /// as before any solo.
+    #[test]
+    fn all_solos_off_restores_the_monitor_source() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["monitor"]["level"] = json!(0);
+        let source = matrix(&shape, &s);
+        assert!(close(source[2][5], 1.0));
+        s["channels"]["ch2"]["solo"] = json!("pfl");
+        s["vcas"]["vca1"]["solo"] = json!("afl");
+        assert!(matrix(&shape, &s)[2][5] == 0.0);
+        s["channels"]["ch2"]["solo"] = json!("off");
+        s["vcas"]["vca1"]["solo"] = json!("off");
+        assert_eq!(matrix(&shape, &s), source);
+    }
+
+    /// MonitorMeter: PFL takes priority over AFL, so while any PFL is on
+    /// only the PFL listens are heard; a channel listens in PFL when its
+    /// own solo or a VCA's it is a member of is PFL.
+    #[test]
+    fn pfl_takes_priority_over_afl() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(0);
+        s["channels"]["ch1"]["pan"]["lr"] = json!(-1);
+        s["monitor"]["level"] = json!(0);
+        s["channels"]["ch1"]["solo"] = json!("afl");
+        s["channels"]["ch2"]["solo"] = json!("pfl");
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let m = matrix(&shape, &s);
+        assert!(m[0][5] == 0.0 && m[0][6] == 0.0, "the AFL waits");
+        assert!(close(m[1][5], h) && close(m[1][6], h));
+        s["channels"]["ch2"]["solo"] = json!("off");
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][5], 1.0) && m[0][6] == 0.0, "the AFL again");
+        // A VCA in PFL over a member's own AFL: the member listens in PFL.
+        s["vcas"]["vca1"]["members"] = json!(["ch1"]);
+        s["vcas"]["vca1"]["solo"] = json!("pfl");
+        s["channels"]["ch1"]["fader"] = json!(-90);
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][5], h) && close(m[0][6], h));
+    }
+
     /// PanState: a channel as wide as the bus maps leg to leg whatever its
     /// pan; only a mono channel pans.
     #[test]
@@ -1289,7 +1497,7 @@ mod tests {
                 let ch = channels[next(3) as usize];
                 let db = json!(next(1200) as f64 / 10.0 - 100.0);
                 let flag = json!(next(2) == 0);
-                let (path, value) = match next(16) {
+                let (path, value) = match next(17) {
                     0 => (format!("/channels/{ch}/fader"), db),
                     1 => (format!("/channels/{ch}/mute"), flag),
                     2 => (
@@ -1331,6 +1539,13 @@ mod tests {
                     14 => (
                         format!("/afv/{ch}/{}", ["enabled", "open"][next(2) as usize]),
                         flag,
+                    ),
+                    15 => (
+                        format!(
+                            "/{}/solo",
+                            ["channels/ch1", "channels/st1", "vcas/vca1"][next(3) as usize]
+                        ),
+                        json!(["off", "off", "off", "pfl", "afl"][next(5) as usize]),
                     ),
                     _ => match next(8) {
                         0 => (
