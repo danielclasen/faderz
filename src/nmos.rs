@@ -1463,7 +1463,8 @@ mod tests {
         ];
         assert_eq!(bulk_cancels(&asked, &answered), vec![(1, 1)]);
         // A response out of step with the request cancels nothing.
-        assert_eq!(bulk_cancels(&asked[1..2], &answered[..1]), vec![]);
+        let other = [serde_json::json!({ "id": "a", "code": 200 })];
+        assert_eq!(bulk_cancels(&asked[1..2], &other), vec![]);
     }
 
     /// A staging request's scheduled activation is kept with the mode
