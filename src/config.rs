@@ -1209,8 +1209,13 @@ impl Config {
         let ordinal = self.set.as_ref().map_or(0, |s| usize::from(s.ordinal));
         let mut engine = None;
         for n in 0..members.first().map_or(1, Vec::len) {
-            for (output, flows) in outputs.iter_mut().zip(&members) {
+            for ((output, flows), o) in outputs.iter_mut().zip(&members).zip(&shape.outputs) {
                 output["flowId"] = json!(flows[n]);
+                // A member flow reads as a member, whose it is, while the
+                // output's NMOS sender keeps the output's own name.
+                if flows.len() > 1 {
+                    output["label"] = json!(format!("{} (replica {n})", o.name));
+                }
             }
             v["outputs"] = json!(outputs);
             let parsed = samplez::Config::parse(&v.to_string()).map_err(|e| match &self.set {
@@ -1439,10 +1444,12 @@ mod tests {
             (|| "faderz-1".into(), id(6)),
             (|| "faderz-2".into(), id(7)),
         ];
-        for (host, flow) in hosts {
+        for (n, (host, flow)) in hosts.into_iter().enumerate() {
             let (config, _, _) = Config::parse_with(&text, &[], env, host).unwrap();
             let engine = config.audio.as_ref().expect("an engine");
             assert_eq!(engine.outputs[0].flow_id, flow);
+            // The member flow says whose it is.
+            assert_eq!(engine.outputs[0].label, format!("PGM out (replica {n})"));
             let set = config.set.unwrap();
             assert_eq!(set.statefulset.as_deref(), Some("faderz"));
             assert_eq!(set.revision.as_deref(), Some("faderz-5d8f7c"));
@@ -1517,7 +1524,13 @@ mod tests {
         assert!(e.starts_with("mxl.outputs.out-pgm.flows"), "{e}");
         one["mxl"]["outputs"]["out-pgm"] = json!({ "flow": id(4) });
         let (config, _, _) = Config::parse(&one.to_string(), || unreachable!()).unwrap();
-        assert_eq!(config.audio.unwrap().outputs[0].flow_id, id(4));
+        let audio = config.audio.unwrap();
+        let output = &audio.outputs[0];
+        assert_eq!(output.flow_id, id(4));
+        assert_eq!(
+            output.label, "PGM out",
+            "a set of one writes the merged flow"
+        );
     }
 
     /// The marker's name can come from the environment.

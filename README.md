@@ -354,7 +354,10 @@ of each output: `mxl.outputs.<output>.flows` lists one flow per replica,
 by ordinal, and replica n writes the n-th. No two outputs or replicas
 name the same flow, and none names an input's. faderz writes no flow
 that merges the members; whatever merges them lists the member flows,
-so a change of `flows` changes that list in the same change.
+so a change of `flows` changes that list in the same change. A member
+flow's label is the output's name and its ordinal, `PGM out (replica 1)`;
+a set of one, and the NMOS sender of the output, keep the output's
+name.
 
 The engine follows the replicated log (samplez's replicated mode). Each
 log entry's engine entries are derived from the mixer state as the entry
