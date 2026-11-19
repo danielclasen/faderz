@@ -707,9 +707,10 @@ fn every_replicas_meters_follow_the_faders() {
 /// A reset of an output's loudness posted to one replica restarts the
 /// measurement on every replica: the highest momentary loudness since
 /// the last reset falls on each to the level the output has then, and
-/// the replicas agree on it. Not on the integrated loudness: samplez
-/// keeps that invalid after a missed meter slice until the next reset,
-/// so a starved host would leave it unmeasured.
+/// the replicas agree on that highest momentary loudness. Not on the
+/// integrated loudness: samplez-dsp keeps it invalid after a gap in the
+/// meter slices until the next reset (loudness.rs, `Loudness::gap`), so
+/// a starved host would leave it unmeasured.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -770,11 +771,14 @@ fn a_loudness_reset_restarts_every_replicas_measurement() {
         });
         assert!(reset, "replica {n} restarted: {}", states(&nodes));
     }
-    // A steady tone measured from one sample: the replicas agree.
-    std::thread::sleep(Duration::from_secs(3));
-    let each: Vec<i16> = (0..REPLICAS).map(|n| read(n, max_momentary)).collect();
-    let spread = each.iter().max().unwrap() - each.iter().min().unwrap();
-    assert!(spread <= 5, "highest momentary loudness {each:?} centi-LU");
+    // A steady tone: the replicas agree.
+    let mut each = Vec::new();
+    let agree = until(30, || {
+        each = (0..REPLICAS).map(|n| read(n, max_momentary)).collect();
+        let spread = each.iter().max().unwrap() - each.iter().min().unwrap();
+        !each.contains(&null) && spread <= 5
+    });
+    assert!(agree, "highest momentary loudness {each:?} centi-LU");
 }
 
 /// Every replica of a set with engines lists all three in its `replicas`
