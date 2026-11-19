@@ -3097,7 +3097,7 @@
           "type": "boolean"
         },
         "resets": {
-          "description": "How many times POST /loudness/reset has restarted the measurement. Written by the server only; a client sees a reset when the count rises, at the delta's atIndex.",
+          "description": "How many times POST /loudness/reset has restarted the measurement. Written by the server only; a client sees a reset when the count rises; every replica restarts the measurement at the first 100 ms window at or after the delta's atIndex, or at its engine's earliest index when it applies the delta later.",
           "type": "integer",
           "minimum": 0
         }

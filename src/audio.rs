@@ -412,14 +412,21 @@ impl Audio {
     /// window starting at or after it. A replica that applies the delta
     /// after the engine's earliest index restarts it at that index
     /// instead, and says so. Never returns.
-    pub async fn follow_resets(&self, replica: &Replica<Mixer>) {
+    pub async fn follow_resets(&self, replica: &Replica<Mixer>, state: &Value, mut revision: u64) {
         let layout = Layout::of(&self.shape);
-        let (state, mut revision) = state_of(replica);
-        let mut seen = resets_of(&state);
+        let mut seen = resets_of(state);
         loop {
             tokio::select! {
                 () = replica.applied(revision + 1) => {}
                 () = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
+            // A revision moved backwards by a rebuild: the counts are
+            // the state's, and a reset below what was seen is not lost.
+            if replica.store().with_state(|sm| sm.revision) < revision {
+                let (now, at) = state_of(replica);
+                revision = at;
+                seen = resets_of(&now);
+                continue;
             }
             let since = Position {
                 epoch: replica.epoch(),
@@ -467,6 +474,7 @@ impl Audio {
 
     /// Restarts the measurement of bus `id` at `at` rounded up to a block.
     async fn reset_loudness(&self, layout: &Layout, id: &str, at: u64) {
+        debug_assert!(self.block > 0, "a block size to place the reset in");
         let Some(meter) = layout.loudness_meter(id) else {
             tracing::warn!(id, "a loudness reset of an element no meter measures");
             return;

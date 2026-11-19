@@ -336,8 +336,6 @@ mod tests {
         assert_eq!(fnv1a("a"), 0xe40c_292c);
     }
 
-    /// An element's offset is the values of every element before it, so
-    /// it moves when an element is added ahead of it.
     #[test]
     fn a_loudness_meter_is_its_output_or_its_engine_meter_after_them() {
         let layout = Layout::of(&Shape::parse(&small()).unwrap());
@@ -350,6 +348,8 @@ mod tests {
         assert_eq!(layout.loudness_meter("nope"), None);
     }
 
+    /// An element's offset is the values of every element before it, so
+    /// it moves when an element is added ahead of it.
     #[test]
     fn an_offset_counts_the_values_of_the_elements_before() {
         let layout = Layout::of(&Shape::parse(&small()).unwrap());

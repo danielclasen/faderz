@@ -599,6 +599,12 @@ async fn a_loudness_reset_restarts_the_measurement() {
         v[INTEGRATED] != i16::MIN && v[MAX_MOMENTARY] != i16::MIN
     })
     .await;
+    // A steady tone: the maximum is settled when the momentary loudness
+    // has reached it.
+    let v = until_values(&server, "the maximum settles", |v| {
+        v[MOMENTARY] != i16::MIN && v[MAX_MOMENTARY] - v[MOMENTARY] <= 30
+    })
+    .await;
     let loud = v[MAX_MOMENTARY];
     // 20 dB down: the maximum holds, the momentary level follows.
     patch(&server, &[("/channels/ch1/fader", json!(-20))]).await;
