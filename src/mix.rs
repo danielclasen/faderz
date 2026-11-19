@@ -189,6 +189,107 @@ pub fn pan(from: usize, to: usize, i: usize, j: usize, pan: f64) -> f64 {
     }
 }
 
+/// Where a channel sits in the field its panner places it in (model
+/// `PanState`): `lr` left to right and `fr` front to rear, both -1 to 1,
+/// the front `divergence` and the `lfe` send in dB.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Place {
+    lr: f64,
+    fr: f64,
+    divergence: f64,
+    lfe: f64,
+}
+
+impl Place {
+    /// Centred at the front, no spread, no LFE: where a send, a direct
+    /// out and a PFL listen put a signal.
+    const FRONT: Place = Place {
+        lr: 0.0,
+        fr: -1.0,
+        divergence: 0.0,
+        lfe: -90.0,
+    };
+
+    /// A position on the left-right axis alone, at the front.
+    fn lr(lr: f64) -> Place {
+        Place { lr, ..Place::FRONT }
+    }
+
+    fn of(pan: &Value) -> Place {
+        Place {
+            lr: num(&pan["lr"]),
+            fr: num(&pan["fr"]),
+            divergence: num(&pan["divergence"]),
+            lfe: num(&pan["lfe"]),
+        }
+    }
+}
+
+/// The gain of leg `j` of a 5.1 (L R C LFE Ls Rs) or 7.1 (L R C LFE Ls
+/// Rs Lrs Rrs) element for a mono signal at `place`. The field is the
+/// ITU-R BS.775 layout, L -30, C 0, R +30, Ls -110 and Rs +110 degrees
+/// (7.1: sides at +-90 and rear surrounds at +-135), and every law is
+/// constant power:
+///
+/// - Front: `lr` pans pairwise between adjacent speakers, L and C for
+///   the left half, C and R for the right, so the centre of the field
+///   is the C leg alone. `divergence` moves the C leg's power to L and
+///   R in equal parts, none at 0 and all of it at 1.
+/// - Rear: `lr` pans between the surrounds Ls and Rs; on 7.1 the side
+///   pair and the rear pair take half the power each.
+/// - `fr` crossfades the front into the rear, -1 the front alone, 1
+///   the rear alone, and the middle half of each.
+/// - The LFE leg takes the `lfe` send as an independent gain, silent at
+///   -90 dB; it is no part of the pan.
+fn surround(to: usize, j: usize, place: &Place) -> f64 {
+    use std::f64::consts::FRAC_PI_2;
+    let lr = place.lr.clamp(-1.0, 1.0);
+    if j == 3 {
+        return gain(place.lfe);
+    }
+    // (cos, sin) of the position along a pair, 0 at its first speaker.
+    let pair = |at: f64| {
+        let a = at.clamp(0.0, 1.0) * FRAC_PI_2;
+        (libm::cos(a), libm::sin(a))
+    };
+    let front = {
+        let (left, centre, right) = if lr <= 0.0 {
+            let (a, b) = pair(lr + 1.0);
+            (a, b, 0.0)
+        } else {
+            let (a, b) = pair(lr);
+            (0.0, a, b)
+        };
+        let (keep, spread) = pair(place.divergence);
+        let half = centre * spread / std::f64::consts::SQRT_2;
+        match j {
+            0 => libm::sqrt(left * left + half * half),
+            1 => libm::sqrt(right * right + half * half),
+            2 => centre * keep,
+            _ => 0.0,
+        }
+    };
+    let (rl, rr) = pair((lr + 1.0) / 2.0);
+    let rear = match (j, to) {
+        (4, 6) | (4, 8) => rl,
+        (5, 6) | (5, 8) => rr,
+        _ => 0.0,
+    };
+    let rear = if to == 8 {
+        // The side pair and the rear pair, half the power each.
+        match j {
+            4 | 5 => rear / std::f64::consts::SQRT_2,
+            6 => rl / std::f64::consts::SQRT_2,
+            7 => rr / std::f64::consts::SQRT_2,
+            _ => 0.0,
+        }
+    } else {
+        rear
+    };
+    let (wf, wr) = pair((place.fr.clamp(-1.0, 1.0) + 1.0) / 2.0);
+    wf * front + wr * rear
+}
+
 /// How a stereo channel or monitor uses its legs (model `StereoImage`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Image {
@@ -221,14 +322,25 @@ impl Image {
     }
 }
 
-/// [`pan`] of a stereo signal whose legs `image` has put to use first.
-fn pan_image(from: usize, to: usize, i: usize, j: usize, p: f64, image: Image) -> f64 {
+/// [`pan`] of a signal at `place`, a mono one onto a surround element by
+/// [`surround`].
+fn pan_place(from: usize, to: usize, i: usize, j: usize, place: &Place) -> f64 {
+    if from == 1 && to >= 6 {
+        surround(to, j, place)
+    } else {
+        pan(from, to, i, j, place.lr)
+    }
+}
+
+/// [`pan_place`] of a stereo signal whose legs `image` has put to use
+/// first.
+fn pan_image(from: usize, to: usize, i: usize, j: usize, place: &Place, image: Image) -> f64 {
     if from == 2 && image != Image::Normal {
         (0..2)
-            .map(|a| image.share(a, i) * pan(from, to, a, j, p))
+            .map(|a| image.share(a, i) * pan_place(from, to, a, j, place))
             .sum()
     } else {
-        pan(from, to, i, j, p)
+        pan_place(from, to, i, j, place)
     }
 }
 
@@ -697,8 +809,8 @@ struct Chan<'a> {
     state: &'a Value,
     routes: &'a Value,
     sends: &'a Value,
-    /// Its pan, `pan.lr`.
-    pan: f64,
+    /// Its pan.
+    place: Place,
     /// Its stereo image.
     image: Image,
     /// The row of its first leg.
@@ -759,7 +871,7 @@ impl<'a> Mix<'a> {
                     state: s,
                     routes: &s["routes"],
                     sends: &s["sends"],
-                    pan: num(&s["pan"]["lr"]),
+                    place: Place::of(&s["pan"]),
                     image: Image::of(&s["image"]),
                     row,
                     width: c.width,
@@ -823,7 +935,7 @@ impl<'a> Mix<'a> {
             for i in 0..c.width {
                 let row = &mut g[(c.row + i) * width..][..width];
                 for (j, out) in row.iter_mut().enumerate() {
-                    *out = at * pan_image(c.width, width, i, j, p, image);
+                    *out = at * pan_image(c.width, width, i, j, &p, image);
                 }
             }
         }
@@ -864,7 +976,7 @@ impl<'a> Mix<'a> {
         }
         // The `from` legs of a signal panned by `p` onto monitor leg `j`,
         // folded by the downmix: lr plays only its L and R legs.
-        let folded = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
+        let folded = |legs: &[f64], from: usize, p: &Place, image: Image, j: usize| -> f64 {
             if lr && from > width {
                 legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
             } else {
@@ -879,7 +991,7 @@ impl<'a> Mix<'a> {
         } else {
             Image::Normal
         };
-        let shaped = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
+        let shaped = |legs: &[f64], from: usize, p: &Place, image: Image, j: usize| -> f64 {
             if monitor_image == Image::Normal {
                 return folded(legs, from, p, image, j);
             }
@@ -897,7 +1009,7 @@ impl<'a> Mix<'a> {
                 if audible { level } else { 0.0 }
             })
             .collect();
-        let mut play = |row: usize, legs: &[f64], from: usize, p: f64, image: Image| {
+        let mut play = |row: usize, legs: &[f64], from: usize, p: &Place, image: Image| {
             for (j, out) in g[row * width..][..width].iter_mut().enumerate() {
                 let v: f64 = if mono {
                     (0..width).map(|k| shaped(legs, from, p, image, k)).sum()
@@ -913,7 +1025,13 @@ impl<'a> Mix<'a> {
             let mut src = Vec::new();
             let from = self.element(source, &mut src);
             for row in 0..self.rows {
-                play(row, &src[row * from..][..from], from, 0.0, Image::Normal);
+                play(
+                    row,
+                    &src[row * from..][..from],
+                    from,
+                    &Place::FRONT,
+                    Image::Normal,
+                );
             }
             return;
         }
@@ -921,9 +1039,9 @@ impl<'a> Mix<'a> {
         for c in &self.chans {
             let (p, a) = listens(self.state, c.id);
             let heard = if pfl {
-                p.then_some((Tap::PreFader, 0.0))
+                p.then_some((Tap::PreFader, Place::FRONT))
             } else {
-                a.then_some((Tap::PostFader, c.pan))
+                a.then_some((Tap::PostFader, c.place))
             };
             let Some((tap, p)) = heard else {
                 continue;
@@ -932,7 +1050,7 @@ impl<'a> Mix<'a> {
                 legs.clear();
                 legs.resize(c.width, 0.0);
                 legs[i] = c.at(tap);
-                play(c.row + i, &legs, c.width, p, c.image);
+                play(c.row + i, &legs, c.width, &p, c.image);
             }
         }
     }
@@ -940,7 +1058,7 @@ impl<'a> Mix<'a> {
 
 /// How channel `c` feeds element `id` of `kind`: tap, level and pan, or
 /// `None` when it does not.
-fn feed(c: &Chan<'_>, kind: &Kind<'_>, id: &str) -> Option<(Tap, f64, f64)> {
+fn feed(c: &Chan<'_>, kind: &Kind<'_>, id: &str) -> Option<(Tap, f64, Place)> {
     match kind {
         Kind::Channel if c.id == id => {
             let tap = match c.state["directOut"]["tap"].as_str() {
@@ -948,9 +1066,9 @@ fn feed(c: &Chan<'_>, kind: &Kind<'_>, id: &str) -> Option<(Tap, f64, f64)> {
                 Some("postFader") => Tap::PostFader,
                 _ => Tap::PreFader,
             };
-            Some((tap, 1.0, 0.0))
+            Some((tap, 1.0, Place::FRONT))
         }
-        Kind::Bus => on(&c.routes[id]).then_some((Tap::Mix, 1.0, c.pan)),
+        Kind::Bus => on(&c.routes[id]).then_some((Tap::Mix, 1.0, c.place)),
         Kind::Aux => {
             let send = &c.sends[id];
             if !on(&send["on"]) {
@@ -961,15 +1079,17 @@ fn feed(c: &Chan<'_>, kind: &Kind<'_>, id: &str) -> Option<(Tap, f64, f64)> {
             } else {
                 Tap::Mix
             };
-            Some((tap, gain(num(&send["level"])), num(&send["pan"])))
+            Some((tap, gain(num(&send["level"])), Place::lr(num(&send["pan"]))))
         }
         // The talkback alone, after its strip and before its fader.
-        Kind::MixMinus(_, _, Some(talk)) => (c.id == *talk).then_some((Tap::PreFader, 1.0, c.pan)),
+        Kind::MixMinus(_, _, Some(talk)) => {
+            (c.id == *talk).then_some((Tap::PreFader, 1.0, c.place))
+        }
         Kind::MixMinus(bus, exclude, None) => {
             let excluded = exclude
                 .as_array()
                 .is_some_and(|e| e.iter().any(|e| e == c.id));
-            (on(&c.routes[*bus]) && !excluded).then_some((Tap::Mix, 1.0, c.pan))
+            (on(&c.routes[*bus]) && !excluded).then_some((Tap::Mix, 1.0, c.place))
         }
         _ => None,
     }
@@ -1064,7 +1184,7 @@ mod tests {
                     for i in 0..c.width {
                         let at = channel(state, &c.id, tap) * level;
                         for (j, out) in g[row + i].iter_mut().enumerate() {
-                            *out = at * pan_image(c.width, width, i, j, p, image);
+                            *out = at * pan_image(c.width, width, i, j, &p, image);
                         }
                     }
                 }
@@ -1084,16 +1204,21 @@ mod tests {
 
         /// How channel `channel` feeds element `id`: tap, level and pan, or
         /// `None` when it does not.
-        fn feed(shape: &Shape, state: &Value, channel: &str, id: &str) -> Option<(Tap, f64, f64)> {
+        fn feed(
+            shape: &Shape,
+            state: &Value,
+            channel: &str,
+            id: &str,
+        ) -> Option<(Tap, f64, Place)> {
             let c = &state["channels"][channel];
-            let pan = num(&c["pan"]["lr"]);
+            let pan = Place::of(&c["pan"]);
             if channel == id {
                 let tap = match c["directOut"]["tap"].as_str() {
                     Some("input") => Tap::Input,
                     Some("postFader") => Tap::PostFader,
                     _ => Tap::PreFader,
                 };
-                return Some((tap, 1.0, 0.0));
+                return Some((tap, 1.0, Place::FRONT));
             }
             if shape.buses.iter().any(|b| b.id == id) {
                 return on(&c["routes"][id]).then_some((Tap::Mix, 1.0, pan));
@@ -1105,7 +1230,11 @@ mod tests {
                 } else {
                     Tap::Mix
                 };
-                return on(&s["on"]).then_some((tap, gain(num(&s["level"])), num(&s["pan"])));
+                return on(&s["on"]).then_some((
+                    tap,
+                    gain(num(&s["level"])),
+                    Place::lr(num(&s["pan"])),
+                ));
             }
             let m = shape.mix_minus.iter().find(|m| m.id == id)?;
             if let Some(talk) = talkback(state, id) {
@@ -1156,7 +1285,7 @@ mod tests {
             }
             // The `from` legs of a signal panned by `p` onto monitor leg
             // `j`, folded by the downmix: lr plays only its L and R legs.
-            let folded = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
+            let folded = |legs: &[f64], from: usize, p: &Place, image: Image, j: usize| -> f64 {
                 if lr && from > width {
                     legs.get(j).copied().filter(|_| j < 2).unwrap_or(0.0)
                 } else {
@@ -1170,7 +1299,7 @@ mod tests {
             } else {
                 Image::Normal
             };
-            let shaped = |legs: &[f64], from: usize, p: f64, image: Image, j: usize| -> f64 {
+            let shaped = |legs: &[f64], from: usize, p: &Place, image: Image, j: usize| -> f64 {
                 if monitor_image == Image::Normal {
                     return folded(legs, from, p, image, j);
                 }
@@ -1185,7 +1314,7 @@ mod tests {
                 let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
                 if audible { level } else { 0.0 }
             };
-            let play = |legs: &[f64], from: usize, p: f64, image: Image| -> Vec<f64> {
+            let play = |legs: &[f64], from: usize, p: &Place, image: Image| -> Vec<f64> {
                 (0..width)
                     .map(|j| {
                         let v: f64 = if mono {
@@ -1204,16 +1333,16 @@ mod tests {
                 let from = width_of(shape, source);
                 return src
                     .iter()
-                    .map(|legs| play(legs, from, 0.0, Image::Normal))
+                    .map(|legs| play(legs, from, &Place::FRONT, Image::Normal))
                     .collect();
             }
             let mut g = Vec::new();
             for c in &shape.channels {
                 let (p, a) = listens(state, &c.id);
                 let heard = if pfl {
-                    p.then_some((Tap::PreFader, 0.0))
+                    p.then_some((Tap::PreFader, Place::FRONT))
                 } else {
-                    a.then(|| (Tap::PostFader, num(&state["channels"][&c.id]["pan"]["lr"])))
+                    a.then(|| (Tap::PostFader, Place::of(&state["channels"][&c.id]["pan"])))
                 };
                 for i in 0..c.width {
                     let row = match heard {
@@ -1223,7 +1352,7 @@ mod tests {
                             play(
                                 &legs,
                                 c.width,
-                                p,
+                                &p,
                                 Image::of(&state["channels"][&c.id]["image"]),
                             )
                         }
@@ -1698,6 +1827,163 @@ mod tests {
                 "{image}: {m:?}"
             );
         }
+    }
+
+    fn place(lr: f64, fr: f64, divergence: f64) -> Place {
+        Place {
+            lr,
+            fr,
+            divergence,
+            lfe: -90.0,
+        }
+    }
+
+    fn legs_of(to: usize, p: &Place) -> Vec<f64> {
+        (0..to).map(|j| surround(to, j, p)).collect()
+    }
+
+    /// The surround panner's law points on 5.1: the front of the field
+    /// pans pairwise at constant power, the centre is the C leg alone,
+    /// divergence moves its power to L and R, fr crossfades front and
+    /// rear and the rear pans between the surrounds.
+    #[test]
+    fn the_surround_panner_places_a_mono_source_in_the_field() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let is = |got: Vec<f64>, want: [f64; 6]| {
+            assert!(
+                got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-12),
+                "{got:?} vs {want:?}"
+            );
+        };
+        // L R C LFE Ls Rs.
+        is(
+            legs_of(6, &place(0.0, -1.0, 0.0)),
+            [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        );
+        is(
+            legs_of(6, &place(-1.0, -1.0, 0.0)),
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        is(
+            legs_of(6, &place(1.0, -1.0, 0.0)),
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        is(
+            legs_of(6, &place(-0.5, -1.0, 0.0)),
+            [h, 0.0, h, 0.0, 0.0, 0.0],
+        );
+        is(
+            legs_of(6, &place(0.5, -1.0, 0.0)),
+            [0.0, h, h, 0.0, 0.0, 0.0],
+        );
+        // Divergence: the centre's power to L and R in equal parts.
+        is(
+            legs_of(6, &place(0.0, -1.0, 1.0)),
+            [h, h, 0.0, 0.0, 0.0, 0.0],
+        );
+        let (c, l) = (libm::cos(0.25 * std::f64::consts::FRAC_PI_2), 0.0);
+        let half = libm::sin(0.25 * std::f64::consts::FRAC_PI_2) * h;
+        is(
+            legs_of(6, &place(0.0, -1.0, 0.25)),
+            [half, half, c, l, 0.0, 0.0],
+        );
+        // The rear: the surrounds alone, panned between them.
+        is(
+            legs_of(6, &place(0.0, 1.0, 0.0)),
+            [0.0, 0.0, 0.0, 0.0, h, h],
+        );
+        is(
+            legs_of(6, &place(-1.0, 1.0, 0.0)),
+            [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        );
+        is(
+            legs_of(6, &place(1.0, 1.0, 0.0)),
+            [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        );
+        // fr crossfades at constant power: half the power each.
+        is(
+            legs_of(6, &place(0.0, 0.0, 0.0)),
+            [0.0, 0.0, h, 0.0, 0.5, 0.5],
+        );
+    }
+
+    /// The LFE leg takes its send as a gain of its own, whatever the pan
+    /// and divergence, and is silent at -90 dB; 7.1 shares the rear
+    /// between the side and the rear surrounds.
+    #[test]
+    fn the_lfe_send_is_a_gain_of_its_own_and_7_1_splits_its_rear() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        for (lr, fr, d) in [(0.0, -1.0, 0.0), (-1.0, 1.0, 1.0), (0.3, 0.2, 0.6)] {
+            let p = Place {
+                lfe: -6.0,
+                ..place(lr, fr, d)
+            };
+            assert!((surround(6, 3, &p) - gain(-6.0)).abs() < 1e-12);
+            assert!((surround(8, 3, &p) - gain(-6.0)).abs() < 1e-12);
+            assert_eq!(surround(6, 3, &place(lr, fr, d)), 0.0, "-90 is off");
+        }
+        // L R C LFE Ls Rs Lrs Rrs.
+        let got = legs_of(8, &place(-1.0, 1.0, 0.0));
+        let want = [0.0, 0.0, 0.0, 0.0, h, 0.0, h, 0.0];
+        assert!(
+            got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-12),
+            "{got:?}"
+        );
+        let got = legs_of(8, &place(0.0, 1.0, 0.0));
+        assert!(
+            (got[4] - 0.5).abs() < 1e-12 && (got[7] - 0.5).abs() < 1e-12,
+            "{got:?}"
+        );
+    }
+
+    /// Every position keeps the power of the source: the legs but the
+    /// LFE sum to unity over the field, on 5.1 and on 7.1.
+    #[test]
+    fn the_surround_panner_keeps_constant_power_over_the_field() {
+        for to in [6, 8] {
+            for lr in (-10..=10).map(|n| f64::from(n) / 10.0) {
+                for fr in (-10..=10).map(|n| f64::from(n) / 10.0) {
+                    for d in (0..=10).map(|n| f64::from(n) / 10.0) {
+                        let power: f64 = (0..to)
+                            .filter(|&j| j != 3)
+                            .map(|j| surround(to, j, &place(lr, fr, d)).powi(2))
+                            .sum();
+                        assert!(
+                            (power - 1.0).abs() < 1e-9,
+                            "{to} legs at {lr} {fr} {d}: {power}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The matrix reads a mono channel's whole pan onto a 5.1 bus, and
+    /// its fold-down onto the stereo output follows from the legs.
+    #[test]
+    fn a_mono_channels_pan_reaches_a_surround_bus() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let shape = Shape::parse(&crate::shape::tests::surround()).unwrap();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(0);
+        s["channels"]["ch1"]["routes"]["pgm"] = json!(true);
+        // Rows ch1, ch2, st1 L R, sur x6; columns out-51 x6, out-lr x2.
+        let m = matrix(&shape, &s);
+        let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
+        assert!(
+            (row[2] - 1.0).abs() < 1e-6 && row[0] == 0.0 && row[1] == 0.0,
+            "{row:?}"
+        );
+        // The fold onto Lo and Ro: the centre at -3 dB.
+        assert!(close(m[0][6], h) && close(m[0][7], h), "{m:?}");
+        s["channels"]["ch1"]["pan"] = json!({ "lr": 0, "fr": 1, "divergence": 0, "lfe": -6 });
+        let m = matrix(&shape, &s);
+        let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
+        assert!(
+            row[2] == 0.0 && (row[4] - h).abs() < 1e-6 && (row[5] - h).abs() < 1e-6,
+            "{row:?}"
+        );
+        assert!((row[3] - gain(-6.0)).abs() < 1e-6, "the LFE send: {row:?}");
     }
 
     #[test]

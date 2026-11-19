@@ -49,21 +49,31 @@ built into the binary and the control-surface bridge both speak.
 
 The engine applies the channel strip (trim, leg trim, polarity,
 high-pass, EQ, gate, compressor), faders, mutes, VCA offsets and mutes,
-AFV open and closed with the off level, mono pan, stereo balance and
-image, and the fold-down of wider channels, bus routing, sends, the bus, aux and mix-minus faders and
+AFV open and closed with the off level, mono pan, surround pan (a mono channel in the field of a 5.1 or 7.1 bus), stereo balance
+and image, and the fold-down of wider channels, bus routing, sends, the bus, aux and mix-minus faders and
 mutes, bus and aux polarity, mix-minus exclusions and talkback
 interrupts, the monitor's source, channel and VCA PFL and AFL listening
 (PFL over AFL; PFL centred before the pan, AFL at the pan before the AFV
 stage), fold-down, image, level, dim, talkback dim, cut, mono and speaker mutes
 and solos, and duck groups. The rest of the state is kept, shown and
 replicated but not applied to the audio in this version: channel delay,
-front/rear pan, divergence and LFE send, bus and aux processing (EQ, dynamics,
+bus and aux processing (EQ, dynamics,
 limiter, delay), the line-up tone, the AFV rise, hold and fall times,
 and the scene crossfade time.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is
 released.
+
+A mono channel on a 5.1 or 7.1 bus is panned in the field of the ITU-R
+BS.775 layout (L -30, C 0, R +30, Ls -110, Rs +110 degrees; 7.1 takes
+its sides at +-90 and its rear surrounds at +-135), every law at
+constant power: `lr` pans pairwise between adjacent speakers at the
+front (the centre of the field is the C leg alone) and between the
+surrounds at the rear; `divergence` moves the C leg's power to L and R
+in equal parts; `fr` crossfades front and rear, -1 the front alone and 1
+the rear alone; `lfe` is a send of its own onto the LFE leg, silent at
+-90 dB. A new channel is at the front, `fr` -1.
 
 A loudness reset restarts the measurement at the first 100 ms window
 starting at or after the `atIndex` of the delta that counted it, the same
