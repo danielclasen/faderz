@@ -25,13 +25,29 @@ use crate::config::Set;
 use crate::state::{Answer, Command, Mixer};
 
 thread_local! {
-    /// Whether this thread is inside [`App::with_state`], holding the log
+    /// Whether this thread is inside [`with_state`], holding the log
     /// store's lock.
     static IN_STATE: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Runs `f` on the replicated state of `replica`, under its log store's
+/// lock. samplez takes its contact lock and then the store's, and until
+/// the replica is ready its own view of itself takes the store's again,
+/// so `f` must not call into the replica: [`App::info`] and
+/// [`App::contact_metrics`] would deadlock. Debug builds assert that.
+pub fn with_state<T>(replica: &Replica<Mixer>, f: impl FnOnce(&StateMachine<Mixer>) -> T) -> T {
+    struct Leave(bool);
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            IN_STATE.set(self.0);
+        }
+    }
+    let _leave = Leave(IN_STATE.replace(true));
+    replica.store().with_state(f)
+}
+
 /// Asserts in debug builds that this thread is not inside
-/// [`App::with_state`].
+/// [`with_state`].
 fn outside_state() {
     debug_assert!(
         !IN_STATE.get(),
@@ -250,20 +266,9 @@ impl App {
         self.replica.epoch()
     }
 
-    /// Runs `f` on the replicated state, under the log store's lock.
-    /// samplez takes its contact lock and then the store's, so `f` must
-    /// not call into the replica: a call that takes the contact lock
-    /// ([`App::info`], [`App::contact_metrics`]) deadlocks against it.
-    /// Debug builds assert that.
+    /// [`with_state`] on this app's replica.
     pub fn with_state<T>(&self, f: impl FnOnce(&StateMachine<Mixer>) -> T) -> T {
-        struct Leave(bool);
-        impl Drop for Leave {
-            fn drop(&mut self) {
-                IN_STATE.set(self.0);
-            }
-        }
-        let _leave = Leave(IN_STATE.replace(true));
-        self.replica.store().with_state(f)
+        with_state(&self.replica, f)
     }
 
     /// The replica's own view of itself; takes samplez's contact lock.
@@ -1127,6 +1132,7 @@ pub(crate) mod tests {
     /// samplez takes its contact lock and then the log store's, so a call
     /// that takes the contact lock inside [`App::with_state`] deadlocks
     /// against it; debug builds catch one before it can.
+    #[cfg(debug_assertions)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[should_panic(expected = "the contact lock under the store lock")]
     async fn a_contact_call_under_the_store_lock_is_caught() {

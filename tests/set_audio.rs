@@ -1576,3 +1576,66 @@ fn an_interrupt_changes_every_replicas_mix_minus_alike() {
     outputs.stop.store(true, Ordering::Relaxed);
     reader.join().unwrap();
 }
+
+/// GET `route` on `api` over a plain socket; `None` when it does not
+/// answer within 5 s.
+fn get_within(api: std::net::SocketAddr, route: &str) -> Option<u16> {
+    use std::io::{Read, Write};
+    let mut tcp = std::net::TcpStream::connect(api).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let request = format!("GET {route} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    tcp.write_all(request.as_bytes()).unwrap();
+    let mut answer = String::new();
+    tcp.read_to_string(&mut answer).ok()?;
+    answer.get(9..12)?.parse().ok()
+}
+
+/// The routes that read the replica beside its state keep answering on
+/// every replica while the set commits writes and each replica's contact
+/// loop runs: one that took samplez's contact lock under the log store's
+/// lock deadlocked against that loop, which takes them the other way
+/// round, and hung the replica for good.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_answers_its_state_routes_while_the_set_commits() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (set, listeners) = Set::new("routes");
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let until = Instant::now() + Duration::from_secs(10);
+    let readers: Vec<_> = (0..REPLICAS)
+        .map(|n| {
+            let api = node(&nodes, n).server.api;
+            std::thread::spawn(move || {
+                let mut answered = 0;
+                while Instant::now() < until {
+                    for route in ["/api/v1/state", "/api/v1/replicas", "/api/v1/status"] {
+                        let status = get_within(api, route);
+                        assert_eq!(status, Some(200), "{route} on replica {n}");
+                        answered += 1;
+                    }
+                }
+                answered
+            })
+        })
+        .collect();
+    let mut i = 0;
+    while Instant::now() < until {
+        write(
+            &nodes,
+            i,
+            &[("/channels/ch1/fader", json!(-((i % 40) as i64)))],
+        );
+        i += 1;
+    }
+    for reader in readers {
+        assert!(reader.join().expect("a route hung or failed") > 0);
+    }
+}

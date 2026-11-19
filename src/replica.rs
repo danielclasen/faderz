@@ -166,9 +166,7 @@ pub async fn start(
 }
 
 fn warn_dropped(replica: &Replica<Mixer>) {
-    let dropped = replica
-        .store()
-        .with_state(|sm| sm.product.dropped().to_vec());
+    let dropped = crate::app::with_state(replica, |sm| sm.product.dropped().to_vec());
     if !dropped.is_empty() {
         tracing::warn!(
             ?dropped,

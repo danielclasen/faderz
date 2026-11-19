@@ -144,7 +144,7 @@ impl Node {
         let flow = |at: &str, id: &str| {
             Uuid::parse_str(id).map_err(|e| format!("nmos: {at} flow {id:?}: {e}"))
         };
-        let (receivers, senders) = replica.store().with_state(|sm| {
+        let (receivers, senders) = crate::app::with_state(replica, |sm| {
             let m = &sm.product;
             let receivers = (shape.channels.iter().zip(&engine.inputs))
                 .map(|(c, input)| {
@@ -219,9 +219,7 @@ impl Node {
             asked: Mutex::new(vec![None; model.senders.len() + model.receivers.len()]),
             instance: crate::app::uuid().map_err(|e| format!("nmos: {e}"))?,
         });
-        let shown = replica
-            .store()
-            .with_state(|sm| actives(&sm.product, &ports));
+        let shown = crate::app::with_state(replica, |sm| actives(&sm.product, &ports));
         let store = Loaded(ports.iter().map(Model::key).zip(shown).collect());
         let cfg = NmosConfig {
             seed: seed.clone(),
@@ -305,7 +303,7 @@ impl Node {
     fn scheduled(&self, index: usize) -> Option<Scheduled> {
         let port = self.ports[index].port_ref();
         let replica = self.replica.upgrade()?;
-        replica.store().with_state(|sm| {
+        crate::app::with_state(&replica, |sm| {
             (sm.product.scheduled().iter())
                 .find(|s| s.port == port)
                 .cloned()
@@ -451,7 +449,7 @@ impl Node {
             return response;
         }
         let connection = self.replica.upgrade().and_then(|r| {
-            r.store().with_state(|sm| match &self.ports[index] {
+            crate::app::with_state(&r, |sm| match &self.ports[index] {
                 Model::Sender { output, .. } => sm.product.sender(output).cloned(),
                 Model::Receiver { channel, .. } => {
                     sm.product.receiver(channel).and_then(|(c, _)| c.cloned())
@@ -507,7 +505,7 @@ impl Node {
             };
             let due: Vec<Scheduled> = if leading(&replica) {
                 let now = SystemTai.now().as_nanos();
-                replica.store().with_state(|sm| {
+                crate::app::with_state(&replica, |sm| {
                     (sm.product.scheduled().iter())
                         .filter(|s| u128::from(s.at) <= now)
                         .cloned()
@@ -560,7 +558,7 @@ impl Node {
             // at again.
             let _ = tokio::time::timeout(FOLLOW_TICK, replica.applied(revision + 1)).await;
             let (now, scheduled);
-            (now, scheduled, revision) = replica.store().with_state(|sm| {
+            (now, scheduled, revision) = crate::app::with_state(&replica, |sm| {
                 // Only a schedule whose time has come holds a port: until
                 // then the port shows the state's connection as any other.
                 let due = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);

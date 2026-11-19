@@ -326,7 +326,7 @@ impl Audio {
                 ..Targets::default()
             }),
         };
-        let view = replica.store().with_state(|sm| sm.product.engine_view());
+        let view = crate::app::with_state(replica, |sm| sm.product.engine_view());
         self.apply(&state, &view, &mut sent, 0, true).await;
         // A resend asked for meanwhile marks it ready once done. The lock
         // is held over the check and the store, so a hold() cannot fall
@@ -370,7 +370,7 @@ impl Audio {
                 // engine takes it.
                 None => (state, revision) = state_of(replica),
             }
-            let view = replica.store().with_state(|sm| sm.product.engine_view());
+            let view = crate::app::with_state(replica, |sm| sm.product.engine_view());
             self.apply(&state, &view, &mut sent, at, false).await;
             if let Some(n) = resent {
                 let asked = self.resends_asked.lock().expect("resend lock poisoned");
@@ -394,7 +394,7 @@ impl Audio {
                 () = replica.applied(revision + 1) => {}
                 () = tokio::time::sleep(Duration::from_secs(1)) => {}
             }
-            let (taps, at) = replica.store().with_state(|sm| {
+            let (taps, at) = crate::app::with_state(replica, |sm| {
                 (
                     mix::meter_taps(&self.shape, sm.product.state()),
                     sm.revision,
@@ -422,7 +422,7 @@ impl Audio {
             }
             // A revision moved backwards by a rebuild: the counts are
             // the state's, and a reset below what was seen is not lost.
-            if replica.store().with_state(|sm| sm.revision) < revision {
+            if crate::app::with_state(replica, |sm| sm.revision) < revision {
                 let (now, at) = state_of(replica);
                 revision = at;
                 seen = resets_of(&now);
@@ -1003,7 +1003,7 @@ pub fn report_inputs(
                 now,
                 leads,
                 |slot| engine.upgrade().and_then(|e| engine_up(&e, slot)),
-                |slot| replica.store().with_state(|sm| applied_up(sm, slot)),
+                |slot| crate::app::with_state(&replica, |sm| applied_up(sm, slot)),
                 |body| {
                     if let Err(e) = replica.append(body) {
                         tracing::warn!("input report not appended: {e}");
@@ -1154,9 +1154,7 @@ fn resets_of(state: &Value) -> BTreeMap<String, u64> {
 
 /// The state and revision `replica` holds now.
 pub fn state_of(replica: &Replica<Mixer>) -> (Value, u64) {
-    replica
-        .store()
-        .with_state(|sm| (sm.product.state().clone(), sm.revision))
+    crate::app::with_state(replica, |sm| (sm.product.state().clone(), sm.revision))
 }
 
 #[cfg(test)]

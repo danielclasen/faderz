@@ -159,7 +159,7 @@ impl Server {
                 let (live, revision) = audio::state_of(&state);
                 // The leg flows IS-05 activations named, the detached
                 // channels and the outputs' enable, which the state keeps.
-                let view = state.store().with_state(|sm| sm.product.engine_view());
+                let view = crate::app::with_state(&state, |sm| sm.product.engine_view());
                 let audio = match &config.set {
                     None => Audio::start(
                         engine.clone(),
