@@ -1551,6 +1551,27 @@ test('lists every session connected to the replica in USERS, until it closes', a
   await expect(key).toHaveAttribute('aria-label', `Users ${count}`);
 });
 
+// The count sits in a box of fixed size (Users.svelte), so it has to fit
+// a count of three digits, on a tall screen and on a short one.
+test('shows a USERS count of three digits whole, on a tall and a short screen', { tag: '@mock' }, async ({ page, baseURL }) => {
+  const ws = baseURL!.replace(/^http/, 'ws');
+  await live(page, `/?endpoints=${ws}/__mock/replicas/r1/api/v1/ws,${ws}/__mock/replicas/r2/api/v1/ws`);
+  const clients = await Promise.all(Array.from({ length: 100 }, () => RawClient.open(`${baseURL}/__mock/replicas/r1`)));
+  try {
+    const key = page.getByRole('button', { name: /^Users \d+$/ });
+    await expect(key).toHaveAttribute('aria-label', /^Users 1\d\d$/);
+    const count = key.locator('.fixed');
+    const whole = () => count.evaluate((el) => el.scrollWidth <= el.clientWidth);
+    await expect(count).toHaveText(/^USERS 1\d\d$/);
+    expect(await whole()).toBe(true);
+    await page.setViewportSize({ width: 1600, height: 480 });
+    await expect(count).toHaveText(/^USR 1\d\d$/);
+    expect(await whole()).toBe(true);
+  } finally {
+    for (const c of clients) c.close();
+  }
+});
+
 test('steps banks with [ and ], jumps to a channel by name or number, and spills a VCA', async ({ page, request }) => {
   await live(page);
   const scrollLeft = () => page.locator('.scroller').evaluate((el) => el.scrollLeft);

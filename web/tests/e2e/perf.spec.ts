@@ -171,9 +171,11 @@ test('another client touching and releasing a fader lays out no more than its bo
   const other = await RawClient.open(PERF_URL);
   const owner = page.locator('[data-path="/channels/ch2/fader"] [data-testid="owner"]');
   const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  let tracing = false;
   try {
     await frames();
     await browser.startTracing(page, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline'] });
+    tracing = true;
     for (let i = 0; i < 3; i++) {
       await other.command({ type: 'touch', path: '/channels/ch2/fader' });
       await expect(owner).toBeVisible();
@@ -182,12 +184,17 @@ test('another client touching and releasing a fader lays out no more than its bo
       await expect(owner).toHaveCount(0);
       await frames();
     }
+    tracing = false;
     const events = (JSON.parse((await browser.stopTracing()).toString()) as { traceEvents: TraceEvent[] }).traceEvents;
     const layouts = events.filter((e) => e.name === 'Layout' && e.ph === 'X');
     expect(layouts.length).toBeGreaterThan(0);
+    // Every layout says whether it started below the document: without
+    // that the check below would hold of any trace.
+    expect(layouts.filter((e) => typeof e.args?.beginData?.partialLayout !== 'boolean')).toEqual([]);
     // Objects of each layout from the document down.
     expect(layouts.filter((e) => e.args?.beginData?.partialLayout === false).map((e) => e.args?.beginData?.totalObjects)).toEqual([]);
   } finally {
+    if (tracing) await browser.stopTracing().catch(() => undefined);
     other.close();
   }
 });
