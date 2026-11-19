@@ -692,19 +692,30 @@ impl Audio {
         }
     }
 
-    /// The model `Counters` of the `counters` message ([`counters`]) and
-    /// the engine of `GET /status` ([`engine_status`]), from one reading of
-    /// the engine's status.
+    /// The `values` and `inputs` of the `counters` message ([`counters`])
+    /// and the engine of `GET /status` ([`engine_status`]), from one
+    /// reading of the engine's status.
     pub fn readings(&self) -> (Value, Value) {
         let status = self.engine.status();
-        (self.counters(&status), engine_status(&status))
+        let inputs: Vec<Value> = (status.inputs.iter())
+            .map(|i| {
+                json!({
+                    "channel": i.name,
+                    "state": input_state(i.state),
+                    "up": i.up,
+                    "lateBlocks": i.counters.late,
+                    "tooLateBlocks": i.counters.too_late,
+                })
+            })
+            .collect();
+        let counters = json!({ "values": self.counters(&status), "inputs": inputs });
+        (counters, engine_status(&status))
     }
 
     /// The model `Counters` of the `counters` message: the engine's counts
     /// of faults an operator acts on, the inputs' too-late blocks and the
-    /// resends, totals since the engine started. None grows while the
-    /// engine keeps up, so the UI's lamp lights on any growth; counts that
-    /// grow every block, such as the blocks processed, are left out.
+    /// resends, totals since the engine started; counts that grow every
+    /// block, such as the blocks processed, are left out.
     fn counters(&self, status: &samplez::Status) -> Value {
         let mut values: Map<String, Value> = engine_counters(self.engine.counters())
             .into_iter()
@@ -717,6 +728,15 @@ impl Audio {
     }
 }
 
+/// An input's state as the contract names it.
+fn input_state(state: InputState) -> &'static str {
+    match state {
+        InputState::Attached => "attached",
+        InputState::Pruned => "pruned",
+        InputState::Detached => "detached",
+    }
+}
+
 /// The engine of `GET /status`: per channel its input's state in the
 /// engine, whether the log has it up, the flow it reads and its blocks
 /// copied, late and too late; per output whether it is enabled and
@@ -724,14 +744,9 @@ impl Audio {
 fn engine_status(status: &samplez::Status) -> Value {
     let inputs: Vec<Value> = (status.inputs.iter())
         .map(|i| {
-            let state = match i.state {
-                InputState::Attached => "attached",
-                InputState::Pruned => "pruned",
-                InputState::Detached => "detached",
-            };
             json!({
                 "channel": i.name,
-                "state": state,
+                "state": input_state(i.state),
                 "up": i.up,
                 "flowId": i.flow_id,
                 "copiedBlocks": i.counters.copied,
@@ -1422,6 +1437,36 @@ mod tests {
         u.report(Report::InputPruned { slot: 4 }, t0);
         u.retry(t0, true, |_| Some(true), |_| true, |b| appended.push(b));
         assert_eq!(appended, [down(4)]);
+    }
+
+    /// counters.schema.json names exactly the counters the `counters`
+    /// message carries, each with a title and a description, so the
+    /// console never shows a counter it cannot explain.
+    #[test]
+    fn the_counters_schema_names_every_counter_sent() {
+        let schema: Value =
+            serde_json::from_str(include_str!("../api/ws/counters.schema.json")).unwrap();
+        let named: std::collections::BTreeSet<&str> = (schema["properties"].as_object())
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let c = Counters::default();
+        let sent: std::collections::BTreeSet<String> = (engine_counters(&c).iter())
+            .map(|(name, _)| format!("{name}_total"))
+            .chain(["input_too_late_blocks_total".into(), "resends_total".into()])
+            .collect();
+        assert_eq!(
+            named,
+            sent.iter().map(String::as_str).collect(),
+            "counters.schema.json and the counters message"
+        );
+        for name in named {
+            for key in ["title", "description"] {
+                let text = schema["properties"][name][key].as_str().unwrap_or("");
+                assert!(!text.is_empty(), "{name} has no {key}");
+            }
+        }
     }
 
     /// A strip parameter the RT thread refused counts as a drop.

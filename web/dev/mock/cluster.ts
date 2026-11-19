@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import type {
   AckMessage,
+  InputHealth,
   AfvBinding,
   Build,
   Change,
@@ -47,6 +48,7 @@ import {
   SELECTIONS_INTERVAL_MS,
 } from '../../src/lib/contract/protocol.ts';
 import { getAt, parsePointer, pointer, setAt } from '../../src/lib/state/pointer.ts';
+import counterSchema from '../../../api/ws/counters.schema.json' with { type: 'json' };
 import { Contract, ContractViolation } from './contract.ts';
 import { handleOf } from './handle.ts';
 import { CONSOLE_SESSIONS, exampleShape, initialState } from './shape.ts';
@@ -147,6 +149,8 @@ export interface Replica {
   /** Meter period counter, uint32, sent as the frame sequence. */
   meterSequence: number;
   counters: Record<string, number>;
+  /** Each channel's input as this replica's engine reads it. */
+  inputs: InputHealth[];
 }
 
 /** One command applied to the state, as GET /__mock/audit lists it. */
@@ -263,7 +267,17 @@ export interface ClusterOptions {
   automation?: boolean;
   /** Input channels of the generated shape. */
   channels?: number;
+  /**
+   * The channel whose input delivers nothing, pruned on every replica and
+   * counting silenced blocks; null for none. FAULTY_INPUT by default.
+   */
+  faultyInput?: string | null;
 }
+
+/** The input the mock prunes by default: VT 2, whose clip server is gone. */
+export const FAULTY_INPUT = 'st3';
+/** Blocks per second the faulty input has silenced. */
+const SILENCED_PER_S = 200;
 
 interface Batch {
   revision: number;
@@ -339,6 +353,7 @@ export class Cluster {
     this.state = initialState(this.shape);
     this.sources = new SourceModel(this.shape);
     this.automation = options.automation ?? true;
+    const faulty = options.faultyInput === undefined ? FAULTY_INPUT : options.faultyInput;
     const n = options.replicas ?? 3;
     this.replicas = Array.from({ length: n }, (_, i) => ({
       id: `r${i + 1}`,
@@ -356,14 +371,14 @@ export class Cluster {
       // only where they hold or latch one.
       meters: new ReplicaMeters(this.shape, this.automation ? 'triggers' : 'steady'),
       meterSequence: 0,
-      counters: {
-        deadline_miss_total: 0,
-        overrun_skipped_samples_total: 0,
-        input_late_blocks_total: 0,
-        input_wait_timeout_total: 0,
-        command_late_total: 0,
-        afv_late_total: 0,
-      },
+      counters: Object.fromEntries(Object.keys(counterSchema.properties).map((n) => [n, 0])),
+      inputs: this.shape.channels.map((c) => ({
+        channel: c.id,
+        state: c.id === faulty ? 'pruned' : 'attached',
+        up: true,
+        lateBlocks: 0,
+        tooLateBlocks: 0,
+      })),
     }));
     this.storeScene('Opening', null);
     this.storeScene('Interview', null);
@@ -734,7 +749,8 @@ export class Cluster {
   }
 
   private emitCounters(conn: Conn): void {
-    this.emit(conn, { type: 'counters', replica: this.ref(conn.replica), values: { ...conn.replica.counters } });
+    const r = conn.replica;
+    this.emit(conn, { type: 'counters', replica: this.ref(r), values: { ...r.counters }, inputs: r.inputs.map((i) => ({ ...i })) });
   }
 
   /**
@@ -1353,9 +1369,16 @@ export class Cluster {
   private counterTick(): void {
     for (const r of this.replicas) {
       if (!this.ready(r)) continue;
-      if (Math.random() < 0.05) r.counters['input_late_blocks_total']! += 1;
-      if (Math.random() < 0.02) r.counters['deadline_miss_total']! += 1;
-      if (Math.random() < 0.03) r.counters['command_late_total']! += 1;
+      for (const i of r.inputs) if (i.state === 'pruned') r.counters['input_silenced_blocks_total']! += SILENCED_PER_S;
+      // With automation, now and then a late block on an input that is
+      // read, as a jittery source gives, a late output block or a late change.
+      const read = r.inputs.filter((i) => i.state === 'attached');
+      if (this.automation && read.length > 0 && Math.random() < 0.05) {
+        read[Math.floor(Math.random() * read.length)]!.lateBlocks += 1;
+        r.counters['input_late_blocks_total']! += 1;
+      }
+      if (this.automation && Math.random() < 0.02) r.counters['deadline_miss_total']! += 1;
+      if (this.automation && Math.random() < 0.03) r.counters['command_late_total']! += 1;
       // Standby connections too, so a promoted standby has them at once.
       for (const c of r.conns) if (c.synced) this.emitCounters(c);
     }

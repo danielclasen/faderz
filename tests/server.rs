@@ -497,12 +497,19 @@ impl Rest {
         let openapi: Value = serde_yaml::from_str(include_str!("../api/openapi.yaml")).unwrap();
         let model: Value =
             serde_json::from_str(include_str!("../api/ws/model.schema.json")).unwrap();
+        let counters: Value =
+            serde_json::from_str(include_str!("../api/ws/counters.schema.json")).unwrap();
         let registry = jsonschema::Registry::new()
             .add(OPENAPI, openapi)
             .unwrap()
             .add(
                 "https://github.com/danielclasen/faderz/raw/main/api/ws/model.schema.json",
                 model,
+            )
+            .unwrap()
+            .add(
+                "https://github.com/danielclasen/faderz/raw/main/api/ws/counters.schema.json",
+                counters,
             )
             .unwrap()
             .prepare()

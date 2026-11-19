@@ -9,10 +9,14 @@ use serde_json::{Value, json};
 
 const BASE: &str = "https://github.com/danielclasen/faderz/raw/main/api/ws/";
 
-const SCHEMAS: [(&str, &str); 3] = [
+const SCHEMAS: [(&str, &str); 4] = [
     (
         "model.schema.json",
         include_str!("../api/ws/model.schema.json"),
+    ),
+    (
+        "counters.schema.json",
+        include_str!("../api/ws/counters.schema.json"),
     ),
     (
         "client-message.schema.json",

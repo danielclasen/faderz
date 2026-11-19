@@ -1563,6 +1563,17 @@ async fn the_engine_counters_reach_every_connection() {
         ] {
             assert!(values[name].is_u64(), "{mode}: {name} in {values:?}");
         }
+        // Every channel's input beside them, in shape order; ch2 and st1
+        // read flows nobody writes, so the engine reads neither.
+        let inputs = first["inputs"].as_array().unwrap();
+        let channels: Vec<&str> = inputs
+            .iter()
+            .map(|i| i["channel"].as_str().unwrap())
+            .collect();
+        assert_eq!(channels, ["ch1", "ch2", "st1"], "{mode}");
+        for i in &inputs[1..] {
+            assert_ne!(i["state"], "attached", "{mode}: {i}");
+        }
         // Then once a second: two more within 3 s, not in one burst.
         let (_, _) = next_of(&mut ws, "counters").await;
         let at = Instant::now();

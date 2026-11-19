@@ -568,10 +568,19 @@ export interface ReplicasMessage {
   build: Build;
   replicas: ReplicaStatus[];
 }
+/** A channel's input as the engine read it, beside the counters (model.schema.json InputHealth). */
+export interface InputHealth {
+  channel: Id;
+  state: 'attached' | 'pruned' | 'detached';
+  up: boolean;
+  lateBlocks: number;
+  tooLateBlocks: number;
+}
 export interface CountersMessage {
   type: 'counters';
   replica: ReplicaRef;
   values: Record<string, number>;
+  inputs: InputHealth[];
 }
 export interface ErrorMessage {
   type: 'error';

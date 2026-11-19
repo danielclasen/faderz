@@ -298,12 +298,13 @@
       ]
     },
     "Counters": {
-      "description": "Engine counters of the sending replica, on every connection, standby ones included: after the snapshot or resume that answers its hello, and once per second. A replica that runs no engine sends none. A client takes them from its primary connection only; a standby connection receives them so a promoted standby has them at once.",
+      "description": "Engine counters of the sending replica and its engine's inputs, from one reading, on every connection, standby ones included: after the snapshot or resume that answers its hello, and once per second. A replica that runs no engine sends none. A client takes them from its primary connection only; a standby connection receives them so a promoted standby has them at once.",
       "type": "object",
       "required": [
         "type",
         "replica",
-        "values"
+        "values",
+        "inputs"
       ],
       "additionalProperties": false,
       "properties": {
@@ -315,6 +316,13 @@
         },
         "values": {
           "$ref": "model.schema.json#/$defs/Counters"
+        },
+        "inputs": {
+          "description": "One per channel, in shape order: which input a rise of an input counter comes from.",
+          "type": "array",
+          "items": {
+            "$ref": "model.schema.json#/$defs/InputHealth"
+          }
         }
       }
     },

@@ -6,9 +6,10 @@ info:
   summary: Operated broadcast multichannel mixer.
   description: |
     REST reads and writes of the faderz mixer, plus one WebSocket at
-    /api/v1/ws. Shared types live in ws/model.schema.json; WebSocket
-    messages in ws/client-message.schema.json and
-    ws/server-message.schema.json.
+    /api/v1/ws. Shared types live in ws/model.schema.json, and the engine
+    counters, each with its name for people and what a rise means, in
+    ws/counters.schema.json; WebSocket messages in
+    ws/client-message.schema.json and ws/server-message.schema.json.
 
     faderz runs as one or more replicas sharing one replicated state with a
     global revision. Any replica serves any request. Writes carry a

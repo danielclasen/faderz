@@ -9,16 +9,18 @@ import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { BUILD, Cluster, DEDUP_RETENTION_MS, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, sessionKey, type ClusterOptions } from '../../dev/mock/cluster';
+import { BUILD, Cluster, DEDUP_RETENTION_MS, FAULTY_INPUT, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, sessionKey, type ClusterOptions } from '../../dev/mock/cluster';
 import { Contract } from '../../dev/mock/contract';
 import { MockServer } from '../../dev/mock/server';
 import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
 import { ownerHandle } from '../../src/lib/net/handle';
+import counterSchema from '../../../api/ws/counters.schema.json' with { type: 'json' };
 import { decodeMeterFrame, deriveMeterLayout, type MeterFrame, type MeterLayout } from '../../src/lib/contract/meterFrame';
 import { DEAD_MS, HEARTBEAT_MS, LEASE_MS, METER_CREDIT_CAP, METER_PERIOD_MS, SELECTIONS_INTERVAL_MS } from '../../src/lib/contract/protocol';
 import type {
   AckMessage,
   ConsoleStatus,
+  CountersMessage,
   DeltaMessage,
   ErrorMessage,
   LinkMode,
@@ -336,6 +338,17 @@ describe('hello', () => {
     await c.next((m) => m.type === 'counters', 0, 1500);
     const row = await statsOf(c);
     expect(row).toMatchObject({ mode: 'primary', creditsOutstanding: 0, meterFramesSent: 5 });
+  });
+
+  it('sends every counter the contract names and each channel\'s input, the faulty one pruned and counting silenced blocks', async () => {
+    const c = await new Client().open();
+    await c.hello();
+    const first = (await c.next((m) => m.type === 'counters', 0, 1500)) as CountersMessage;
+    expect(Object.keys(first.values)).toEqual(Object.keys(counterSchema.properties));
+    expect(first.inputs.map((i) => i.channel)).toEqual(cluster.shape.channels.map((ch) => ch.id));
+    expect(first.inputs.find((i) => i.channel === FAULTY_INPUT)).toMatchObject({ state: 'pruned', up: true });
+    const next = (await c.next((m) => m !== first && m.type === 'counters', 0, 2500)) as CountersMessage;
+    expect(next.values['input_silenced_blocks_total']).toBeGreaterThan(first.values['input_silenced_blocks_total']!);
   });
 
   it('is answered as a console client with kind console', async () => {

@@ -8,7 +8,7 @@ import { API_DIR, Contract } from '../../dev/mock/contract';
 import { CONTINUOUS_PATH_PATTERNS, isContinuousPath } from '../../src/lib/contract/continuous';
 
 const addFormats = addFormatsModule as unknown as (ajv: Ajv2020) => Ajv2020;
-const FILES = ['model.schema.json', 'client-message.schema.json', 'server-message.schema.json'];
+const FILES = ['model.schema.json', 'counters.schema.json', 'client-message.schema.json', 'server-message.schema.json'];
 const read = (f: string) => JSON.parse(readFileSync(join(API_DIR, 'ws', f), 'utf8')) as Record<string, unknown>;
 
 describe('JSON Schemas', () => {
@@ -429,7 +429,7 @@ describe('WebSocket messages', () => {
     // <replica>:<32 hex>:<n> with a 63-character replica id.
     ['owner of a long connection id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, connection: `${'r'.repeat(63)}:${'0f'.repeat(16)}:18446744073709551615` } }] }],
     ['503 not applied', { type: 'error', replica, code: 503, message: 'not applied', commandId: cmd, path: '/channels/ch1/fader' }],
-    ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 } }],
+    ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 }, inputs: [{ channel: 'ch1', state: 'pruned', up: false, lateBlocks: 3, tooLateBlocks: 0 }] }],
     ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
     ['selections', { type: 'selections', replica, selections: [{ session: owner, element: 'ch3' }, { session: { ...owner, handle: 'Rk9vYmFyLWJhei1xdXV4LT' }, element: 'pgm20' }] }],
     ['no selections', { type: 'selections', replica, selections: [] }],
@@ -546,5 +546,33 @@ describe('the replicas message names the build of its replica', () => {
     const { type: _, ...body } = message({ faderz: '0.4.3', samplez: '0.12.3' });
     expect(() => contract.assertResponse('/replicas', 'GET', 200, body)).not.toThrow();
     expect(() => contract.assertResponse('/replicas', 'GET', 200, { replica, replicas: body.replicas })).toThrow();
+  });
+});
+
+describe('engine counters', () => {
+  const schema = read('counters.schema.json') as { properties: Record<string, { title?: string; description?: string }> };
+  const names = Object.keys(schema.properties);
+
+  it('give every counter a name for people and an explanation, as the console shows them', () => {
+    expect(names.length).toBeGreaterThan(10);
+    for (const name of names) {
+      const { title, description } = schema.properties[name]!;
+      expect(name, name).toMatch(/^[a-z][a-z0-9_]*_total$/);
+      expect(title?.length, `${name} title`).toBeGreaterThan(0);
+      // One or two short sentences.
+      expect(description?.split(/\. /).length, `${name} description`).toBeLessThanOrEqual(3);
+      expect(description?.length, `${name} description`).toBeLessThanOrEqual(260);
+    }
+    expect(new Set(names.map((n) => schema.properties[n]!.title)).size, 'titles are distinct').toBe(names.length);
+  });
+
+  it('refuse a counters message with a counter they do not name, or without the inputs', () => {
+    const contract = new Contract();
+    const replica = { id: 'r1', role: 'leader' };
+    const inputs = [{ channel: 'ch1', state: 'attached', up: true, lateBlocks: 0, tooLateBlocks: 0 }];
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs })).not.toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { afv_late_total: 1 }, inputs })).toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 } })).toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: {}, inputs: [{ ...inputs[0], state: 'gone' }] })).toThrow();
   });
 });

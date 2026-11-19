@@ -80,8 +80,9 @@ pub struct App {
     /// When each asking session last had a control request for a path
     /// forwarded.
     requests: Mutex<BTreeMap<(SessionKey, String), Instant>>,
-    /// The engine's counters last read ([`App::count`]); none without an
-    /// engine.
+    /// The engine's counters and inputs last read, as the `values` and
+    /// `inputs` of the `counters` message ([`App::count`]); none without
+    /// an engine.
     counters: Mutex<Option<Value>>,
     /// The engine's inputs and outputs last read ([`App::count`]); none
     /// without an engine.
@@ -412,15 +413,20 @@ impl App {
         serde_json::from_str::<Value>(&delta.text).ok()?["atIndex"].as_u64()
     }
 
-    /// The `counters` message of the engine's counters last read; none
-    /// before the first read or without an engine.
+    /// The `counters` message of the engine's counters and inputs last
+    /// read; none before the first read or without an engine.
     pub fn counters_message(&self) -> Option<String> {
-        let values = self
+        let read = self
             .counters
             .lock()
             .expect("counters lock poisoned")
             .clone()?;
-        let m = json!({ "type": "counters", "replica": self.replica_ref(), "values": values });
+        let m = json!({
+            "type": "counters",
+            "replica": self.replica_ref(),
+            "values": read["values"],
+            "inputs": read["inputs"],
+        });
         Some(m.to_string())
     }
 

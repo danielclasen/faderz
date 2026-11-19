@@ -3341,14 +3341,47 @@
       }
     },
     "Counters": {
-      "description": "Engine counters by name, each a total since the engine started and named with the suffix _total. Each counts an event an operator acts on, such as a missed deadline or a late input block; none counts normal work, such as blocks processed.",
+      "description": "Engine counters by name, each a total since the engine started; counters.schema.json names every one, for people too.",
+      "$ref": "counters.schema.json"
+    },
+    "InputHealth": {
+      "description": "A channel's input as the engine read it, in the same reading as the counters beside it, as GET /status names it (openapi.yaml#/components/schemas/Status).",
       "type": "object",
-      "propertyNames": {
-        "pattern": "^[a-z][a-z0-9_]*_total$"
-      },
-      "additionalProperties": {
-        "type": "integer",
-        "minimum": 0
+      "required": [
+        "channel",
+        "state",
+        "up",
+        "lateBlocks",
+        "tooLateBlocks"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "description": "attached while the engine reads it; pruned while its flow delivers nothing in time and is polled until it does, the input silenced meanwhile; detached while it is routed to no flow.",
+          "type": "string",
+          "enum": [
+            "attached",
+            "pruned",
+            "detached"
+          ]
+        },
+        "up": {
+          "description": "The replicated log has the input up. A replica set takes an input down, silenced on every replica, while the engines cannot read its flow.",
+          "type": "boolean"
+        },
+        "lateBlocks": {
+          "description": "Blocks of the input not read in time, a total since the engine started.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "tooLateBlocks": {
+          "description": "Blocks of the input that arrived too late to be used, a total since the engine started.",
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "ScribbleColor": {

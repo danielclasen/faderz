@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/danielclasen/faderz/raw/main/api/ws/counters.schema.json",
+  "title": "faderz engine counters",
+  "description": "The engine counters of a counters message (server-message.schema.json#/$defs/Counters), by name, each a total since the engine started. Each counts an event an operator may act on; none counts normal work, such as blocks processed. Each counter's title is its name for people and its description says what it counts and what a rise means; the web console shows both.",
+  "type": "object",
+  "properties": {
+    "deadline_miss_total": {
+      "title": "Late output blocks",
+      "description": "Audio blocks the engine finished after their deadline, so listeners may hear a click or gap. 0 is normal; any rise means the machine could not keep up at that moment, and a steady climb means it is overloaded.",
+      "$ref": "#/$defs/Count"
+    },
+    "overrun_skipped_samples_total": {
+      "title": "Skipped samples",
+      "description": "Samples the engine skipped after falling too far behind, written out as silence. 0 is normal; any rise is an audible gap, and a steady climb means the machine cannot keep up.",
+      "$ref": "#/$defs/Count"
+    },
+    "clock_steps_total": {
+      "title": "Clock jumps",
+      "description": "Times the media clock jumped by more than one block instead of running smoothly. 0 is normal; a rise means the time source stepped, which can cause a short gap; repeated rises point at an unstable time source.",
+      "$ref": "#/$defs/Count"
+    },
+    "clock_behind_wakes_total": {
+      "title": "Waits after a clock jump back",
+      "description": "Wake-ups while the clock was behind the last block made, after it jumped backwards; no block is made twice. It rises together with Clock jumps and needs no action of its own.",
+      "$ref": "#/$defs/Count"
+    },
+    "input_wait_timeout_total": {
+      "title": "Input waits run out",
+      "description": "Times the engine stopped waiting for an input because the block's deadline came first. It rises with Late input blocks, which names the effect; on its own it needs no action.",
+      "$ref": "#/$defs/Count"
+    },
+    "input_late_blocks_total": {
+      "title": "Late input blocks",
+      "description": "Input audio that arrived too late for its block and was replaced by silence. 0 is normal; a rise is a short dropout on that input, and a steady climb means the source or the network delivers too late.",
+      "$ref": "#/$defs/Count"
+    },
+    "input_too_late_blocks_total": {
+      "title": "Unusable input blocks",
+      "description": "Input audio that arrived so late the engine could not use it at all. 0 is normal; a rise is a dropout on that input, and a steady climb means its source is far behind.",
+      "$ref": "#/$defs/Count"
+    },
+    "input_silenced_blocks_total": {
+      "title": "Silenced input blocks",
+      "description": "Input blocks played as silence because the input delivered nothing usable; inputs routed to no source on purpose are not counted. 0 is normal; a steady climb means an input is missing or has stopped.",
+      "$ref": "#/$defs/Count"
+    },
+    "output_held_blocks_total": {
+      "title": "Output blocks not written",
+      "description": "Output blocks not written because the output already held audio from that point on. It needs no action unless it climbs together with Late output blocks.",
+      "$ref": "#/$defs/Count"
+    },
+    "output_failed_writes_total": {
+      "title": "Failed output writes",
+      "description": "Times an output could not be opened or written, so its listeners got nothing for that block. 0 is normal; any rise is an output fault, and a steady climb means an output is not being delivered.",
+      "$ref": "#/$defs/Count"
+    },
+    "command_late_total": {
+      "title": "Late changes",
+      "description": "Control changes, such as a fader move, that reached the engine after the moment they were meant for and were not applied; faderz then restores the engine's settings. 0 is normal; a rise means a change was briefly lost, a steady climb an overloaded system.",
+      "$ref": "#/$defs/Count"
+    },
+    "generation_late_total": {
+      "title": "Late input switches",
+      "description": "Input re-routes that took effect before the new source was ready, so the channel was silent until it was. 0 is normal; a rise is a short gap at a source switch.",
+      "$ref": "#/$defs/Count"
+    },
+    "strip_refused_total": {
+      "title": "Refused settings",
+      "description": "Channel processing or limiter settings the engine refused and did not apply. 0 is normal; any rise means the console and the engine disagree; faderz then restores the engine's settings.",
+      "$ref": "#/$defs/Count"
+    },
+    "late_routes_lost_total": {
+      "title": "Unlogged re-routes",
+      "description": "Re-routes that happened while too many were in progress to record each one. The audio is not affected; it needs no action.",
+      "$ref": "#/$defs/Count"
+    },
+    "blocks_withheld_total": {
+      "title": "Withheld blocks",
+      "description": "Blocks this replica did not write out, for example while it was starting or catching up with the others. A rise while a replica starts is expected.",
+      "$ref": "#/$defs/Count"
+    },
+    "hold_overflows_total": {
+      "title": "Withheld blocks, buffer full",
+      "description": "Blocks this replica could not keep for later because its holding buffer was full. A rise while a replica starts or catches up is expected.",
+      "$ref": "#/$defs/Count"
+    },
+    "blocks_without_core_total": {
+      "title": "Blocks before start-up",
+      "description": "Blocks this replica did not compute because it had not yet received the mixer state from the others. It rises while a replica starts and then stops.",
+      "$ref": "#/$defs/Count"
+    },
+    "meter_dropped_total": {
+      "title": "Dropped meter readings",
+      "description": "Meter readings not passed on because their queue was full. Only the meters on screen miss an update; the audio is not affected.",
+      "$ref": "#/$defs/Count"
+    },
+    "telemetry_dropped_total": {
+      "title": "Dropped telemetry",
+      "description": "Monitoring records not passed on because their queue was full. The audio is not affected; it needs no action.",
+      "$ref": "#/$defs/Count"
+    },
+    "status_changes_dropped_total": {
+      "title": "Dropped status updates",
+      "description": "Internal status updates not passed on because their queue was full. The audio is not affected; it needs no action.",
+      "$ref": "#/$defs/Count"
+    },
+    "resends_total": {
+      "title": "Full resends",
+      "description": "Times faderz sent the engine every setting again after it dropped or refused changes. It rises after Late changes or Refused settings and needs no action of its own.",
+      "$ref": "#/$defs/Count"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

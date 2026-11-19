@@ -55,7 +55,7 @@ export class Contract {
     // strict mode in the contract tests.
     this.ajv = new Ajv2020({ strict: false, allErrors: true });
     addFormats(this.ajv);
-    for (const f of ['model.schema.json', 'client-message.schema.json', 'server-message.schema.json']) {
+    for (const f of ['model.schema.json', 'counters.schema.json', 'client-message.schema.json', 'server-message.schema.json']) {
       this.ajv.addSchema(readJson(`ws/${f}`));
     }
     this.openapi = parseYaml(readFileSync(join(API_DIR, 'openapi.yaml'), 'utf8')) as OpenApiDoc;
