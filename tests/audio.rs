@@ -967,53 +967,14 @@ async fn the_monitor_controls_reach_the_monitor_output_flow() {
     server.stop().await;
 }
 
-/// Writes `changes` as [`patch`] does, sent again under the same command
-/// id while the server answers 503, not applied, as a client retries.
-async fn applied(server: &Server, changes: &[(&str, Value)]) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let changes: Vec<Value> = (changes.iter())
-        .map(|(p, v)| json!({ "path": p, "value": v }))
-        .collect();
-    let body =
-        json!({ "commandId": faderz::app::uuid().unwrap(), "changes": &changes }).to_string();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let mut tcp = TcpStream::connect(server.api).await.unwrap();
-        let request = format!(
-            "PATCH /api/v1/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
-             X-Samplez-Request: 1\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        tcp.write_all(request.as_bytes()).await.unwrap();
-        let mut answer = String::new();
-        tcp.read_to_string(&mut answer).await.unwrap();
-        if answer.starts_with("HTTP/1.1 200") {
-            return;
-        }
-        assert!(
-            answer.starts_with("HTTP/1.1 503") && Instant::now() < deadline,
-            "{changes:?}: {answer}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-/// POSTs `body` to `path`, sent again while the server answers 503, not
-/// applied, as [`applied`] does: the body of the success answered.
+/// POSTs `body` to `path`, which must succeed; the answer.
 async fn posted(server: &Server, path: &str, body: &Value) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let (status, answer) = post(server.api, path, body).await;
-        if (200..300).contains(&status) {
-            return answer;
-        }
-        assert!(
-            status == 503 && Instant::now() < deadline,
-            "{path} {body}: {status} {answer}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let (status, answer) = post(server.api, path, body).await;
+    assert!(
+        (200..300).contains(&status),
+        "{path} {body}: {status} {answer}"
+    );
+    answer
 }
 
 /// A scene recall brings back the mix stored in it, and an element made
@@ -1047,8 +1008,8 @@ async fn a_scene_recall_brings_the_stored_mix_back() {
             ("/channels/st1/fader", json!(db)),
         ]
     };
-    applied(&server, &[("/channels/ch1/pan/lr", json!(-1))]).await;
-    applied(&server, &faders(0)).await;
+    patch(&server, &[("/channels/ch1/pan/lr", json!(-1))]).await;
+    patch(&server, &faders(0)).await;
     pgm.expect(CH1 + ST1[0], ST1[1], "the mix stored").await;
     let id = faderz::app::uuid().unwrap();
     let stored = posted(
@@ -1063,14 +1024,14 @@ async fn a_scene_recall_brings_the_stored_mix_back() {
         let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": 0 });
         posted(server, path, &body).await;
     }
-    applied(&server, &faders(-20)).await;
+    patch(&server, &faders(-20)).await;
     pgm.expect((CH1 + ST1[0]) * low, ST1[1] * low, "both faders down")
         .await;
     recall(&server, &path).await;
     pgm.expect(CH1 + ST1[0], ST1[1], "the stored mix recalled")
         .await;
-    applied(&server, &faders(-20)).await;
-    applied(&server, &[("/recallSafe/st1", json!(["fader"]))]).await;
+    patch(&server, &faders(-20)).await;
+    patch(&server, &[("/recallSafe/st1", json!(["fader"]))]).await;
     pgm.expect((CH1 + ST1[0]) * low, ST1[1] * low, "both faders down again")
         .await;
     recall(&server, &path).await;
