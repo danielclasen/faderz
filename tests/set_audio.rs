@@ -573,6 +573,12 @@ static ONE_SET: Mutex<()> = Mutex::new(());
 /// Value `index` of the meter frame the replica `node` sends a client
 /// after the first `skip`: [`CH1`] or [`mon()`], a peak in centi-dB.
 fn peak(node: &Node, skip: usize, index: usize) -> i16 {
+    values(node, skip)[index]
+}
+
+/// The values of the meter frame the replica `node` sends a client after
+/// the first `skip`.
+fn values(node: &Node, skip: usize) -> Vec<i16> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
     node.runtime.block_on(async {
@@ -599,8 +605,10 @@ fn peak(node: &Node, skip: usize, index: usize) -> i16 {
                 // After the 12-byte header and the replica's name, padded
                 // to an even length.
                 let name = usize::from(f[2]);
-                let at = 12 + name + name % 2 + 2 * index;
-                return i16::from_le_bytes([f[at], f[at + 1]]);
+                return f[12 + name + name % 2..]
+                    .chunks_exact(2)
+                    .map(|v| i16::from_le_bytes([v[0], v[1]]))
+                    .collect();
             }
         }
     })
@@ -1638,5 +1646,445 @@ fn every_replica_answers_its_state_routes_while_the_set_commits() {
     }
     for reader in readers {
         assert!(reader.join().expect("a route hung or failed") > 0);
+    }
+}
+
+/// Starts every replica of `set` and waits until each commits.
+fn run(set: &Set, listeners: Vec<std::net::TcpListener>) -> Vec<Option<Node>> {
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    nodes
+}
+
+/// Waits until every replica's member flow of the output whose member
+/// flows are `flows` reads `want` on each leg, within the rounding of an
+/// f32 gain or `tol`.
+fn every_replica_writes(
+    set: &Set,
+    nodes: &[Option<Node>],
+    flows: &[String],
+    want: &[f32],
+    tol: f32,
+    what: &str,
+) {
+    for (n, flow) in flows.iter().enumerate() {
+        let mut last = None;
+        let read = until(20, || {
+            let Some(out) = legs_of(&set.domain.0, flow, want.len() as u32) else {
+                return false;
+            };
+            last = Some(out.iter().map(|leg| leg[0]).collect::<Vec<_>>());
+            (out.iter().zip(want)).all(|(leg, w)| leg.iter().all(|v| (v - w).abs() <= tol))
+        });
+        assert!(
+            read,
+            "replica {n}, {what}: wanted {want:?}, read {last:?}: {}",
+            states(nodes)
+        );
+    }
+}
+
+/// The monitor is replicated state: through every step of
+/// [`monitor::steps`], written to one replica after another, every
+/// replica's monitor output plays the legs the step gives.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_plays_the_monitor_alike() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (set, listeners) = Set::with("monitor", monitor::shape(), &["out-mon"], |domain| {
+        let (st, sur) = (new_id(), new_id());
+        (
+            vec![
+                Source::start(domain, &st, monitor::ST.to_vec()),
+                Source::start(domain, &sur, monitor::SUR.to_vec()),
+            ],
+            json!({ "st": { "flow": st }, "sur": { "flow": sur } }),
+        )
+    });
+    let nodes = run(&set, listeners);
+    // Each step changes what the monitor plays: the block that reads it
+    // is after the change.
+    for (i, step) in monitor::steps().iter().enumerate() {
+        write(&nodes, i, &step.changes);
+        every_replica_writes(&set, &nodes, &set.members, &step.legs, 1e-6, step.what);
+    }
+}
+
+/// Each replica of a set runs each stage of a channel's strip as the
+/// replicated state sets it, on constant inputs, one channel at a time
+/// hard left: the high-pass takes out a constant, a low shelf lifts it
+/// by its gain, the compressor reduces it after the shelf and not before
+/// it, the gate closes it by its range and the compressor by its ratio,
+/// and a stereo channel's leg trim lowers one leg and its polarity
+/// inverts the other.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_runs_each_strip_stage() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let mono =
+        |id: &str| json!({ "id": id, "name": id, "width": 1, "layout": "mono", "altInput": false });
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            mono("hpf"), mono("eq"), mono("gate"), mono("comp"),
+            { "id": "st", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let (set, listeners) = Set::with("strip", shape, &["out-pgm"], |domain| {
+        let ids: Vec<String> = (0..5).map(|_| new_id()).collect();
+        let values = [
+            vec![0.5],
+            vec![0.05],
+            vec![0.01],
+            vec![0.5],
+            vec![0.5, 0.25],
+        ];
+        let sources = (ids.iter().zip(values))
+            .map(|(id, v)| Source::start(domain, id, v))
+            .collect();
+        let inputs = json!({
+            "hpf": { "flow": ids[0] },
+            "eq": { "flow": ids[1] },
+            "gate": { "flow": ids[2] },
+            "comp": { "flow": ids[3] },
+            "st": { "flow": ids[4] },
+        });
+        (sources, inputs)
+    });
+    let nodes = run(&set, listeners);
+    let g = |db: f32| 10f32.powf(db / 20.0);
+    // A hard-knee compressor's output for a constant `x` above its
+    // threshold `t` at `ratio`.
+    let compressed = |x: f32, t: f32, ratio: f32| {
+        let over = 20.0 * x.log10() - t;
+        x * g(over * (1.0 / ratio - 1.0))
+    };
+    let lifted = 0.05 * g(12.0);
+    // What each step writes, the legs every replica then writes and their
+    // tolerance.
+    type Step = (&'static str, Vec<(&'static str, Value)>, [f32; 2], f32);
+    let steps: Vec<Step> = vec![
+        (
+            "a constant, high-pass off",
+            vec![
+                ("/channels/hpf/fader", json!(0)),
+                ("/channels/hpf/pan/lr", json!(-1)),
+                ("/channels/st/routes/pgm", json!(false)),
+            ],
+            [0.5, 0.0],
+            1e-6,
+        ),
+        (
+            "a constant under a high-pass",
+            vec![("/channels/hpf/hpf/enabled", json!(true))],
+            [0.0, 0.0],
+            1e-4,
+        ),
+        (
+            "a constant, EQ off",
+            vec![
+                ("/channels/hpf/fader", json!(-90)),
+                ("/channels/eq/fader", json!(0)),
+                ("/channels/eq/pan/lr", json!(-1)),
+            ],
+            [0.05, 0.0],
+            1e-6,
+        ),
+        // A shelf's gain at 0 Hz is its whole gain.
+        (
+            "a constant under a +12 dB low shelf",
+            vec![
+                ("/channels/eq/eq/enabled", json!(true)),
+                ("/channels/eq/eq/bands/0/gain", json!(12)),
+            ],
+            [lifted, 0.0],
+            1e-4,
+        ),
+        (
+            "the compressor after the shelf",
+            vec![
+                ("/channels/eq/comp/enabled", json!(true)),
+                ("/channels/eq/comp/threshold", json!(-20)),
+                ("/channels/eq/comp/ratio", json!(20)),
+                ("/channels/eq/comp/attack", json!(1)),
+                ("/channels/eq/comp/release", json!(50)),
+            ],
+            [compressed(lifted, -20.0, 20.0), 0.0],
+            1e-4,
+        ),
+        // Before the shelf the constant stays under the threshold.
+        (
+            "the compressor before the shelf",
+            vec![("/channels/eq/dynamicsBeforeEq", json!(true))],
+            [lifted, 0.0],
+            1e-4,
+        ),
+        (
+            "-40 dBFS, gate off",
+            vec![
+                ("/channels/eq/fader", json!(-90)),
+                ("/channels/gate/fader", json!(0)),
+                ("/channels/gate/pan/lr", json!(-1)),
+            ],
+            [0.01, 0.0],
+            1e-6,
+        ),
+        (
+            "-40 dBFS under a -30 dBFS gate, 20 dB range",
+            vec![
+                ("/channels/gate/gate/enabled", json!(true)),
+                ("/channels/gate/gate/threshold", json!(-30)),
+                ("/channels/gate/gate/range", json!(20)),
+                ("/channels/gate/gate/attack", json!(1)),
+                ("/channels/gate/gate/release", json!(50)),
+            ],
+            [0.001, 0.0],
+            1e-6,
+        ),
+        (
+            "-6 dBFS, compressor off",
+            vec![
+                ("/channels/gate/fader", json!(-90)),
+                ("/channels/comp/fader", json!(0)),
+                ("/channels/comp/pan/lr", json!(-1)),
+            ],
+            [0.5, 0.0],
+            1e-6,
+        ),
+        (
+            "-6 dBFS into 4:1 from -20 dBFS",
+            vec![
+                ("/channels/comp/comp/enabled", json!(true)),
+                ("/channels/comp/comp/threshold", json!(-20)),
+                ("/channels/comp/comp/ratio", json!(4)),
+                ("/channels/comp/comp/attack", json!(1)),
+                ("/channels/comp/comp/release", json!(50)),
+            ],
+            [compressed(0.5, -20.0, 4.0), 0.0],
+            1e-4,
+        ),
+        (
+            "a stereo channel as it is",
+            vec![
+                ("/channels/comp/fader", json!(-90)),
+                ("/channels/st/routes/pgm", json!(true)),
+                ("/channels/st/fader", json!(0)),
+            ],
+            [0.5, 0.25],
+            1e-6,
+        ),
+        (
+            "its right leg trimmed",
+            vec![("/channels/st/legTrim/1", json!(-6))],
+            [0.5, 0.25 * g(-6.0)],
+            1e-6,
+        ),
+        (
+            "its left leg inverted",
+            vec![("/channels/st/polarity/0", json!(true))],
+            [-0.5, 0.25 * g(-6.0)],
+            1e-6,
+        ),
+    ];
+    for (i, (what, changes, want, tol)) in steps.iter().enumerate() {
+        write(&nodes, i, changes);
+        every_replica_writes(&set, &nodes, &set.members, want, *tol, what);
+    }
+}
+
+/// A scene stored through one replica and recalled through others
+/// brings the stored mix back on every replica, and a fader made
+/// recall-safe keeps its value on every one.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_scene_recall_brings_every_replicas_mix_back() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch1", "name": "Pres 1", "width": 1, "layout": "mono", "altInput": false },
+            { "id": "ch2", "name": "Pres 2", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let (a, b) = (0.5f32, 0.125f32);
+    let (set, listeners) = Set::with("scene", shape, &["out-pgm"], |domain| {
+        let (ch1, ch2) = (new_id(), new_id());
+        (
+            vec![
+                Source::start(domain, &ch1, vec![a]),
+                Source::start(domain, &ch2, vec![b]),
+            ],
+            json!({ "ch1": { "flow": ch1 }, "ch2": { "flow": ch2 } }),
+        )
+    });
+    let nodes = run(&set, listeners);
+    let low = 10f32.powf(-20.0 / 20.0);
+    let faders = |db: i32| {
+        [
+            ("/channels/ch1/fader", json!(db)),
+            ("/channels/ch2/fader", json!(db)),
+        ]
+    };
+    // ch1 hard left, ch2 hard right.
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/channels/ch2/pan/lr", json!(1)),
+        ],
+    );
+    write(&nodes, 1, &faders(0));
+    every_replica_writes(&set, &nodes, &set.members, &[a, b], 1e-6, "the mix stored");
+    // One command id for every attempt: a retry is the same command.
+    let id = faderz::app::uuid().unwrap();
+    let stored = post_any(
+        &nodes,
+        2,
+        "/scenes",
+        &json!({ "commandId": id, "name": "Show" }),
+    );
+    let scene: Value = serde_json::from_str(&stored).unwrap();
+    let path = format!("/scenes/{}/recall", scene["scene"]["id"].as_str().unwrap());
+    let recall = |first: usize| {
+        let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": 0 });
+        post_any(&nodes, first, &path, &body);
+    };
+    write(&nodes, 0, &faders(-20));
+    every_replica_writes(
+        &set,
+        &nodes,
+        &set.members,
+        &[a * low, b * low],
+        1e-6,
+        "faders down",
+    );
+    recall(1);
+    every_replica_writes(
+        &set,
+        &nodes,
+        &set.members,
+        &[a, b],
+        1e-6,
+        "the mix recalled",
+    );
+    write(&nodes, 2, &faders(-20));
+    write(&nodes, 0, &[("/recallSafe/ch2", json!(["fader"]))]);
+    every_replica_writes(
+        &set,
+        &nodes,
+        &set.members,
+        &[a * low, b * low],
+        1e-6,
+        "faders down again",
+    );
+    recall(2);
+    every_replica_writes(
+        &set,
+        &nodes,
+        &set.members,
+        &[a, b * low],
+        1e-6,
+        "ch2's fader kept",
+    );
+}
+
+/// POSTs `body` to `path` through the running replica `first` names, or
+/// the next one, while the set answers otherwise than with success, as
+/// [`write`] does: the body answered.
+fn post_any(nodes: &[Option<Node>], first: usize, path: &str, body: &Value) -> String {
+    let running: Vec<&Node> = (0..REPLICAS)
+        .map(|n| (first + n) % REPLICAS)
+        .filter_map(|n| nodes[n].as_ref())
+        .collect();
+    let mut answers = Vec::new();
+    for attempt in 0..30 {
+        let node = running[attempt % running.len()];
+        let (status, answer) = node.runtime.block_on(post(node.server.api, path, body));
+        if (200..300).contains(&status) {
+            return answer;
+        }
+        answers.push(answer);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("{path} {body} not applied: {answers:?}{}", states(nodes));
+}
+
+/// Each replica of a set meters a bus, its mix-minus and an aux on the
+/// tone and constant they carry, and a duck group on its key, through
+/// every step of [`metered::steps`], each written to the next replica.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_meters_its_elements_and_duck_groups() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let outputs = ["out-pgm", "out-mm"];
+    let (set, listeners) = Set::with("metered", metered::shape(), &outputs, |domain| {
+        let (tone, dc, key, bed) = (new_id(), new_id(), new_id(), new_id());
+        (
+            vec![
+                Source::sine(domain, &tone, metered::TONE.0, metered::TONE.1),
+                Source::start(domain, &dc, vec![metered::DC]),
+                Source::start(domain, &key, vec![metered::KEY]),
+            ],
+            // bed reads a flow nobody writes: silent.
+            json!({
+                "tone": { "flow": tone },
+                "dc": { "flow": dc },
+                "key": { "flow": key },
+                "bed": { "flow": bed },
+            }),
+        )
+    });
+    let nodes = run(&set, listeners);
+    for (i, step) in metered::steps().iter().enumerate() {
+        write(&nodes, i, &step.changes);
+        for n in 0..REPLICAS {
+            let mut wrong = Vec::new();
+            // A momentary loudness takes 400 ms to measure.
+            let read = until(30, || {
+                let v = values(node(&nodes, n), 1);
+                wrong = (step.values.iter())
+                    .filter(|&&(i, want, tol)| {
+                        (i32::from(v[i]) - i32::from(want)).abs() > i32::from(tol)
+                    })
+                    .map(|&(i, want, _)| (i, want, v[i]))
+                    .collect();
+                wrong.is_empty()
+            });
+            assert!(
+                read,
+                "replica {n}, {}: (index, wanted, read) {wrong:?}: {}",
+                step.what,
+                states(&nodes)
+            );
+        }
     }
 }
