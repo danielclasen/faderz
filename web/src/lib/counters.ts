@@ -11,8 +11,8 @@ import { fit } from './format';
 
 export const WARN_WINDOW_MS = 10_000;
 
-/** Width of the lamp text: "ENGINE WARN 99+" is the longest. */
-const LAMP_W = 15;
+/** Width of the lamp text: "WARN IN VT 2 +2 more" fills it. */
+const LAMP_W = 20;
 
 /**
  * The counters whose rise is a fault now: audio was lost or late, a change
@@ -49,6 +49,9 @@ const KNOWN: Record<string, { title: string; description: string }> = schema.pro
 
 /** Every counter the contract names, in its order. */
 export const COUNTER_NAMES: readonly string[] = Object.keys(KNOWN);
+const RANK = new Map(COUNTER_NAMES.map((n, i) => [n, i]));
+/** A counter's place in the contract's order; one it does not name after them all. */
+const rank = (name: string) => RANK.get(name) ?? COUNTER_NAMES.length;
 
 /** What the contract says of counter `name`; one it does not name shows by its key. */
 export function counterInfo(name: string): CounterInfo {
@@ -147,8 +150,6 @@ export class CounterRates {
     const rises: Record<string, number> = {};
     for (const [name, value] of Object.entries(values)) rises[name] = this.counters.rise(name, value, now);
     this.counters.keep(new Set(Object.keys(values)));
-    const order = Object.keys(KNOWN);
-    const rank = (n: string) => (order.includes(n) ? order.indexOf(n) : order.length);
     const warnings = Object.keys(rises)
       .filter((n) => rises[n]! > 0 && FAULTS.has(n))
       .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
@@ -172,15 +173,15 @@ export class CounterRates {
 }
 
 /**
- * The lamp's text, at one width for every case: OK; WARN naming the first
- * input at fault, and how many more there are; or WARN with the number of
- * fault counters that rose.
+ * The lamp's text, at one width for every case: OK; WARN IN naming the
+ * first input at fault, and how many more inputs there are; or WARN with
+ * the number of fault counters that rose.
  */
 export function engineLamp(warnings: number, inputs: string[] = []): string {
   if (inputs.length > 0) {
-    const more = inputs.length > 1 ? ` +${inputs.length - 1}` : '';
+    const more = inputs.length > 1 ? ` +${inputs.length - 1} more` : '';
     // A long name is cut, so the count of the others stays; the tooltip has it whole.
-    return fit(`WARN ${inputs[0]!.slice(0, LAMP_W - 5 - more.length)}${more}`, LAMP_W);
+    return fit(`WARN IN ${inputs[0]!.slice(0, LAMP_W - 8 - more.length)}${more}`, LAMP_W);
   }
   return fit(warnings === 0 ? 'ENGINE OK' : `ENGINE WARN ${warnings > 99 ? '99+' : warnings}`, LAMP_W);
 }

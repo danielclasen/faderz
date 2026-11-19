@@ -88,7 +88,7 @@ describe('CounterRates', () => {
     r.update({}, 0, 'r1', [input('ch1'), input('st3', { state: 'pruned' }), input('ch2'), input('ch9')]);
     const a = r.update({}, 1000, 'r1', [input('ch1', { lateBlocks: 1 }), input('st3', { state: 'pruned' }), input('ch2', { tooLateBlocks: 1 }), input('ch9', { up: false })]);
     expect(a.inputs.map((f) => f.channel)).toEqual(['st3', 'ch9', 'ch2', 'ch1']);
-    expect(engineLamp(a.warnings.length, a.inputs.map((f) => f.channel)).trim()).toBe('WARN st3 +3');
+    expect(engineLamp(a.warnings.length, a.inputs.map((f) => f.channel)).trim()).toBe('WARN IN st3 +3 more');
   });
 
   it('names an input whose late blocks rose within the window, and only then', () => {
@@ -127,12 +127,13 @@ describe('engineLamp', () => {
     for (const n of [1, 9, 10, 42, 99, 100, 1000]) expect(engineLamp(n), String(n)).toHaveLength(width);
     expect(engineLamp(12).trim()).toBe('ENGINE WARN 12');
     expect(engineLamp(150).trim()).toBe('ENGINE WARN 99+');
-    expect(engineLamp(1, ['mvw']).trim()).toBe('WARN mvw');
-    expect(engineLamp(0, ['VT 2', 'ch3', 'ch4']).trim()).toBe('WARN VT 2 +2');
+    // IN says it is an input; "more" says the count is of inputs, not a rise.
+    expect(engineLamp(1, ['mvw']).trim()).toBe('WARN IN mvw');
+    expect(engineLamp(0, ['VT 2', 'ch3', 'ch4']).trim()).toBe('WARN IN VT 2 +2 more');
     for (const names of [['mvw'], ['a-very-long-channel-name'], ['a-very-long-channel-name', 'b']]) {
       expect(engineLamp(1, names), names.join()).toHaveLength(width);
     }
     // A cut name keeps the count of the others readable.
-    expect(engineLamp(1, ['a-very-long-channel-name', 'b']).trim()).toMatch(/\+1$/);
+    expect(engineLamp(1, ['a-very-long-channel-name', 'b']).trim()).toMatch(/\+1 more$/);
   });
 });

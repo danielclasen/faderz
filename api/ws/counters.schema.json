@@ -57,7 +57,7 @@
     },
     "command_late_total": {
       "title": "Late changes",
-      "description": "Control changes, such as a fader move, that reached the engine after the moment they were meant for and were not applied; faderz then restores the engine's settings. 0 is normal; a rise means a change was briefly lost, a steady climb an overloaded system.",
+      "description": "Control changes, such as a fader move, that reached the engine after the moment they were meant for and were not applied. 0 is normal; a rise means a change was briefly lost, a steady climb an overloaded system.",
       "$ref": "#/$defs/Count"
     },
     "generation_late_total": {
@@ -67,7 +67,7 @@
     },
     "strip_refused_total": {
       "title": "Refused settings",
-      "description": "Channel processing or limiter settings the engine refused and did not apply. 0 is normal; any rise means the console and the engine disagree; faderz then restores the engine's settings.",
+      "description": "Channel processing or limiter settings the engine refused and did not apply. 0 is normal; any rise means the console and the engine disagree.",
       "$ref": "#/$defs/Count"
     },
     "late_routes_lost_total": {

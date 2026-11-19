@@ -1265,7 +1265,7 @@ test('opens the engine counters above the lamp, inside the viewport, at desktop 
 test('shows one engine lamp in the status bar and the counters only on request', { tag: '@meters' }, async ({ page }) => {
   await live(page);
   const lamp = page.getByTestId('engine');
-  await expect(lamp).toHaveText(/ENGINE (OK|WARN \d+)|WARN \S/);
+  await expect(lamp).toHaveText(/ENGINE (OK|WARN \d+)|WARN IN \S/);
   const width = (await lamp.boundingBox())!.width;
   await expect(page.locator('footer.bar')).not.toContainText('Late output blocks');
   await lamp.click();
@@ -1280,7 +1280,7 @@ test('shows one engine lamp in the status bar and the counters only on request',
   // OK, WARN with any count, two digits and capped ones included, and
   // WARN naming one input or several, a long name included, give the
   // lamp one width and fit its text: a change moves nothing.
-  const texts = [...[0, 3, 12, 99, 250].map((n) => engineLamp(n)), engineLamp(0, ['VT 2']), engineLamp(1, ['A very long strip name', 'VT 2', 'x'])];
+  const texts = [...[0, 3, 12, 99, 250].map((n) => engineLamp(n)), engineLamp(0, ['VT 2']), engineLamp(1, ['A very long strip name', 'VT 2', 'x']), engineLamp(1, ['VT 2', ...Array.from({ length: 120 }, (_, i) => `ch${i}`)])];
   const sizes = await lamp.evaluate((b, texts) => {
     const text = b.querySelector<HTMLElement>('.fixed')!;
     const was = text.textContent;
@@ -1298,7 +1298,7 @@ test('names the input at fault and why in the engine lamp and its panel, and exp
   await live(page);
   const lamp = page.getByTestId('engine');
   // The mock prunes VT 2 (st3): the lamp names it within a counters period or two.
-  await expect(lamp).toHaveText(/^\s*WARN VT 2/, { timeout: 5000 });
+  await expect(lamp).toHaveText(/^\s*WARN IN VT 2/, { timeout: 5000 });
   // Its tooltip says why.
   await expect(lamp).toHaveAttribute('data-tip', /^Input VT 2 \(st3\): its flow delivers no audio in time/);
   await lamp.click();
@@ -1325,6 +1325,18 @@ test('names the input at fault and why in the engine lamp and its panel, and exp
   await page.keyboard.press('Enter');
   await expect(help).toContainText(counterInfo('deadline_miss_total').help);
   await expect(counters.getByTestId('counter-help')).toHaveCount(1);
+  // Escape closes it and leaves focus on its button; Space opens it as Enter does.
+  const late = counters.getByRole('button', { name: 'What Late output blocks means' });
+  await page.keyboard.press('Escape');
+  await expect(counters.getByTestId('counter-help')).toHaveCount(0);
+  await expect(late).toHaveAttribute('aria-expanded', 'false');
+  await expect(late).toBeFocused();
+  await expect(counters).toBeVisible();
+  await page.keyboard.press('Space');
+  await expect(late).toHaveAttribute('aria-expanded', 'true');
+  await expect(help).toContainText(counterInfo('deadline_miss_total').help);
+  // The rise and the total sit under column headers.
+  await expect(counters.locator('.cols')).toHaveText(/last 10 s\s*total/);
   // The panel stays inside the viewport with the explanation open.
   const p = (await counters.boundingBox())!;
   expect(p.y).toBeGreaterThanOrEqual(0);

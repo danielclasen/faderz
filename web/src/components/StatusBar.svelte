@@ -61,6 +61,15 @@
     return follow(button, panel, 'above', 'centre', (p) => (place = p));
   });
 
+  /** Escape closes an open explanation and returns to its button; with none open it does nothing here. */
+  function onkeydown(e: KeyboardEvent): void {
+    if (!open || help === null || e.key !== 'Escape') return;
+    e.preventDefault();
+    const name = help;
+    help = null;
+    panel?.querySelector<HTMLButtonElement>(`[aria-controls="help-${name}"]`)?.focus();
+  }
+
   // While the commit banner holds the notice line, notices wait unseen:
   // they are timed only from when the line shows them again.
   $effect(() => {
@@ -74,16 +83,17 @@
   {@const rise = seen.rises[r.name] ?? 0}
   {@const warn = seen.warnings.includes(r.name)}
   <div class="c" class:nz={warn} data-counter={r.name}>
-    <span class="label">{r.info.label}</span>
+    <!-- The label and its (i) are one button: the whole name is the target. -->
     <button
-      class="info"
+      class="what"
       aria-expanded={help === r.name}
       aria-controls="help-{r.name}"
       aria-label="What {r.info.label} means"
-      onclick={() => (help = help === r.name ? null : r.name)}>i</button
+      onclick={() => (help = help === r.name ? null : r.name)}
+      ><span class="label">{r.info.label}</span><span class="info" aria-hidden="true">i</span></button
     >
-    <span class="rise num">{rise > 0 ? `+${rise}` : ''}</span>
-    <b class="num">{r.value}</b>
+    <span class="rise num">{#if rise > 0}<span class="sr-only">last {seconds} s </span>+{rise}{/if}</span>
+    <b class="num"><span class="sr-only">total </span>{r.value}</b>
   </div>
   {#if help === r.name}
     <p class="help" id="help-{r.name}" data-testid="counter-help">
@@ -93,6 +103,8 @@
     </p>
   {/if}
 {/snippet}
+
+<svelte:window {onkeydown} />
 
 <footer class="bar">
   <!-- The engine lamp, the connection key and the session and endpoint
@@ -126,6 +138,7 @@
             {/each}
           </ul>
         {/if}
+        <div class="cols" aria-hidden="true"><span>last {seconds} s</span><span>total</span></div>
         <div class="group">Faults: a rise is a problem now</div>
         {#each rows.faults as r (r.name)}{@render row(r)}{/each}
         <div class="group">Other: expected at times</div>
@@ -268,14 +281,23 @@
     line-height: 18px;
     white-space: nowrap;
   }
+  .c .what {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    cursor: pointer;
+  }
+  .c .what:focus-visible {
+    outline: 2px solid var(--focus);
+  }
   .c .label {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .c .info {
-    all: unset;
-    position: relative;
     flex: none;
     box-sizing: border-box;
     width: 14px;
@@ -288,19 +310,31 @@
     line-height: 12px;
     text-align: center;
     color: var(--text-faint);
-    cursor: pointer;
   }
-  .c .info:hover,
-  .c .info[aria-expanded='true'] {
+  .c .what:hover .info,
+  .c .what[aria-expanded='true'] .info {
     color: var(--text);
     border-color: var(--text-dim);
   }
-  .c .info:focus-visible {
-    outline: 2px solid var(--focus);
+  /* The rise and the total in columns the header names. */
+  .c .rise,
+  .cols span:first-child {
+    width: 9ch;
+    margin-left: auto;
+    text-align: right;
   }
   .c .rise {
-    margin-left: auto;
     color: var(--warn);
+  }
+  .cols {
+    display: flex;
+    gap: 6px;
+    font-size: 9.5px;
+    color: var(--text-faint);
+  }
+  .cols span:last-child {
+    min-width: 6ch;
+    text-align: right;
   }
   .c b {
     min-width: 6ch;
@@ -327,22 +361,17 @@
     font-size: 9.5px;
     color: var(--text-faint);
   }
-  /* Fingers: rows a finger apart, and an explanation key with a hit
-     area a finger wide. */
+  /* Fingers: each name a 44 px target; the list scrolls in the panel. */
   @media (pointer: coarse) {
-    .c {
-      line-height: 30px;
+    .c .what {
+      min-height: 44px;
+      min-width: 44px;
     }
     .c .info {
       width: 20px;
       height: 20px;
       line-height: 18px;
       font-size: 11px;
-    }
-    .c .info::after {
-      content: '';
-      position: absolute;
-      inset: -6px -12px;
     }
   }
   .session {

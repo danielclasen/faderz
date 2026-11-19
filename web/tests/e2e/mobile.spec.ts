@@ -150,19 +150,16 @@ test('explains an engine counter on a tap, with its key, and names the input at 
   await live(page);
   const lamp = page.getByTestId('engine');
   // The mock prunes VT 2 (st3).
-  await expect(lamp).toHaveText(/^\s*WARN VT 2/, { timeout: 5000 });
+  await expect(lamp).toHaveText(/^\s*WARN IN VT 2/, { timeout: 5000 });
   await lamp.tap();
   const counters = page.getByRole('region', { name: 'Engine counters' });
   await expect(counters.getByTestId('engine-faults')).toContainText('Input VT 2 (st3): its flow delivers no audio in time');
   const info = counters.getByRole('button', { name: 'What Late output blocks means' });
-  // A finger-sized target, though the mark is small.
-  const hit = await info.evaluate((b) => {
-    const after = getComputedStyle(b, '::after');
-    const r = b.getBoundingClientRect();
-    return { w: r.width - parseFloat(after.left) - parseFloat(after.right), h: r.height - parseFloat(after.top) - parseFloat(after.bottom) };
-  });
-  expect(hit.w).toBeGreaterThanOrEqual(44);
-  expect(hit.h).toBeGreaterThanOrEqual(28);
+  // The name and its (i) are one finger-sized target, though the mark is small.
+  const hit = (await info.boundingBox())!;
+  expect(hit.width).toBeGreaterThanOrEqual(44);
+  expect(hit.height).toBeGreaterThanOrEqual(44);
+  await expect(info).toContainText('Late output blocks');
   await info.tap();
   await expect(info).toHaveAttribute('aria-expanded', 'true');
   const help = counters.getByTestId('counter-help');
