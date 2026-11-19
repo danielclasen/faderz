@@ -130,6 +130,9 @@ pub enum Command {
         id: String,
         path: String,
         from: Value,
+        /// When the asker's replica took it, Unix milliseconds: a replica
+        /// that applies it much later does not hand it to the holder.
+        at: u64,
     },
 }
 
@@ -1490,7 +1493,13 @@ impl Mixer {
     /// control's holder: nothing when nobody else holds it. Every replica
     /// applies it, and the one the holder's primary connection is on
     /// delivers it ([`crate::app::App::publish`]).
-    fn control_request(&self, asker: &SessionKey, path: &str, from: &Value) -> Effect<Edits> {
+    fn control_request(
+        &self,
+        asker: &SessionKey,
+        path: &str,
+        from: &Value,
+        at: u64,
+    ) -> Effect<Edits> {
         let Some(holder) = self.owner_of(path) else {
             return Effect::Unchanged;
         };
@@ -1499,7 +1508,7 @@ impl Mixer {
         }
         let to = json!({ "principal": holder.principal, "session": holder.session });
         Effect::Changed(Edits {
-            requests: vec![json!({ "path": path, "from": from, "to": to })],
+            requests: vec![json!({ "path": path, "from": from, "to": to, "at": at })],
             ..Edits::default()
         })
     }
@@ -1817,8 +1826,8 @@ impl Product for Mixer {
             Command::Unschedule { port, .. } => self.unschedule(port),
             Command::Fire { id, schedule } => self.fire(&session, id, schedule, ctx),
             Command::ResetLoudness { id, ids } => self.reset_loudness(&session, id, ids),
-            Command::ControlRequest { path, from, .. } => {
-                self.control_request(&session, path, from)
+            Command::ControlRequest { path, from, at, .. } => {
+                self.control_request(&session, path, from, *at)
             }
         }
     }
@@ -4743,6 +4752,7 @@ mod tests {
                 id: format!("q-{session}"),
                 path: path.into(),
                 from: json!({ "name": session }),
+                at: 1_000,
             };
             m.apply(
                 &origin(session),
@@ -4767,6 +4777,7 @@ mod tests {
                 "path": path,
                 "from": { "name": "b" },
                 "to": { "principal": "anonymous", "session": "a" },
+                "at": 1_000,
             })]
         );
     }

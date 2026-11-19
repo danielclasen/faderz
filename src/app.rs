@@ -119,6 +119,9 @@ pub const COUNTERS_PERIOD: Duration = Duration::from_secs(1);
 const SELECTION_GRACE: Duration = samplez_replica::session::LEASE;
 /// A session's requests for one control forwarded at most this often.
 pub const REQUEST_INTERVAL: Duration = Duration::from_secs(3);
+/// How long after the asker's replica took a control request another
+/// replica still hands it to the holder.
+const REQUEST_LATE: Duration = Duration::from_secs(10);
 
 /// The id of each replica of `set` by ordinal: `name` for this one, and
 /// for the others the StatefulSet's name and their ordinal, as its pods
@@ -665,10 +668,14 @@ impl App {
             }
         }
         let Ok(id) = uuid() else { return };
+        let at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
         let command = Command::ControlRequest {
             id: id.clone(),
             path,
             from: asker,
+            at,
         };
         if let Begin::New(pending) = self.commands.begin(&from, &id) {
             let body = serde_json::to_vec(&command).expect("a command serializes");
@@ -680,9 +687,21 @@ impl App {
     /// connections of their holders on this replica, and returns the
     /// delta the clients see, without them.
     fn deliver_requests(&self, text: &str) -> Option<String> {
+        if !text.contains(r#""requests""#) {
+            return None;
+        }
         let mut delta: Value = serde_json::from_str(text).ok()?;
         let requests = delta.as_object_mut()?.remove("requests")?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
         for r in requests.as_array().into_iter().flatten() {
+            // One a lagging replica applies late is not handed on: the
+            // holder is asked for a control it may have let go long since.
+            let asked = r["at"].as_u64().unwrap_or(0);
+            if now.saturating_sub(asked) > u64::try_from(REQUEST_LATE.as_millis()).unwrap_or(0) {
+                continue;
+            }
             let (Some(principal), Some(session)) =
                 (r["to"]["principal"].as_str(), r["to"]["session"].as_str())
             else {
@@ -1034,6 +1053,33 @@ pub(crate) mod tests {
         let message: Value = serde_json::from_str(request.as_str()).unwrap();
         assert_eq!(message["path"], path);
         assert_eq!(message["from"]["name"], "b");
+        // A request applied long after it was asked is not handed on, and
+        // the clients' delta comes without it either way.
+        let stale = json!({
+            "requests": [{
+                "path": path,
+                "from": {},
+                "to": { "principal": holder.principal, "session": holder.session },
+                "at": 1,
+            }],
+        })
+        .to_string();
+        let shown = app
+            .deliver_requests(&stale)
+            .expect("the requests are taken out");
+        assert!(!shown.contains("requests"), "{shown}");
+        let drained = tokio::time::timeout(Duration::from_millis(300), async {
+            loop {
+                if let Popped::Frame(Frame::Text(text)) = queue.pop().await {
+                    assert!(
+                        !text.as_str().contains("controlRequest"),
+                        "a request that came late is handed on: {text}"
+                    );
+                }
+            }
+        })
+        .await;
+        assert!(drained.is_err());
         // The holder asking itself, or asking again within the interval, orders nothing.
         let revision = app.replica.revision();
         app.request(holder.clone(), json!({}), path.into()).await;
