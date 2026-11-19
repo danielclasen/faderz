@@ -390,7 +390,14 @@ impl Node {
                     && self.scheduled(index).is_some()
                     && let Err(Fail(e)) = self.conns.unschedule(index).await
                 {
+                    // The scheduled activation stays in the state and would
+                    // fire: the cancel is not done, whatever samplez-nmos
+                    // answered.
                     tracing::warn!(port = index, "nmos: the cancel was not ordered: {e}");
+                    return refused(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &format!("the cancel was not taken by the set: {e}; send it again"),
+                    );
                 }
             }
         }
@@ -503,8 +510,8 @@ impl Node {
     /// the state superseded or refused. A port is left alone while an
     /// activation of this replica is being applied on it, so an earlier
     /// one committing does not overwrite a later one `/active` shows,
-    /// and while the state holds a scheduled activation for it, which
-    /// this replica's `/active` may show from its time until it fires.
+    /// and while the state holds a scheduled activation for it whose time
+    /// has come, which this replica's `/active` may show until it fires.
     async fn follow(&self) {
         let ports = &self.ports;
         let mut revision = 0;
@@ -517,10 +524,14 @@ impl Node {
             let _ = tokio::time::timeout(FOLLOW_TICK, replica.applied(revision + 1)).await;
             let (now, scheduled);
             (now, scheduled, revision) = replica.store().with_state(|sm| {
+                // Only a schedule whose time has come holds a port: until
+                // then the port shows the state's connection as any other.
+                let due = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
                 let scheduled: Vec<PortRef> = sm
                     .product
                     .scheduled()
                     .iter()
+                    .filter(|s| s.at <= due)
                     .map(|s| s.port.clone())
                     .collect();
                 (actives(&sm.product, ports), scheduled, sm.revision)
