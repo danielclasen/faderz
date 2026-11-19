@@ -944,7 +944,7 @@ async fn the_routing_reaches_every_output_flow() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_monitor_controls_reach_the_monitor_output_flow() {
     let domain = domain("monitor");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-monitor");
+    let data = data("monitor");
     let (st, sur, mon) = (new_id(), new_id(), new_id());
     let _st = Source::start(&domain.0, &st, monitor::ST.to_vec());
     let _sur = Source::start(&domain.0, &sur, monitor::SUR.to_vec());
@@ -982,7 +982,7 @@ async fn posted(server: &Server, path: &str, body: &Value) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_scene_recall_brings_the_stored_mix_back() {
     let domain = domain("scene");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-scene");
+    let data = data("scene");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
@@ -1047,7 +1047,7 @@ async fn a_scene_recall_brings_the_stored_mix_back() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn element_and_duck_meters_read_their_signals() {
     let domain = domain("metered");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-metered");
+    let data = data("metered");
     let (tone, dc, key, bed) = (new_id(), new_id(), new_id(), new_id());
     let (pgm, mm) = (new_id(), new_id());
     let _tone = Source::sine(&domain.0, &tone, metered::TONE.0, metered::TONE.1);
