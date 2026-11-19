@@ -736,10 +736,16 @@ fn a_loudness_reset_restarts_every_replicas_measurement() {
         });
         assert!(measured, "replica {n} measures: {}", states(&nodes));
     }
-    // The maximum of a steady tone settles within a few windows.
-    std::thread::sleep(Duration::from_secs(3));
+    // A steady tone: the maximum is settled when the momentary loudness
+    // has reached it.
+    for n in 0..REPLICAS {
+        let settled = until(60, || {
+            let (now, max) = (read(n, momentary), read(n, max_momentary));
+            now != null && max != null && max - now <= 30
+        });
+        assert!(settled, "replica {n}'s maximum settles: {}", states(&nodes));
+    }
     let loud = (0..REPLICAS).map(|n| read(n, max_momentary)).max().unwrap();
-    assert!(loud != null);
     // 20 dB down: every maximum holds, the momentary levels follow.
     write(&nodes, 0, &[("/channels/ch1/fader", json!(-20))]);
     for n in 0..REPLICAS {
