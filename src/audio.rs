@@ -242,6 +242,11 @@ impl Audio {
         }
     }
 
+    /// The engine, for a thread that must not keep it running.
+    pub fn engine_weak(&self) -> Weak<Engine> {
+        Arc::downgrade(&self.engine)
+    }
+
     pub fn engine(&self) -> &Engine {
         &self.engine
     }
@@ -797,6 +802,7 @@ impl Drops {
 pub fn report_inputs(
     reports: Receiver<Report>,
     replica: Weak<Replica<Mixer>>,
+    engine: Weak<Engine>,
     write_timeout: Duration,
 ) {
     let forward = move || {
@@ -822,6 +828,7 @@ pub fn report_inputs(
             next = unapplied.retry(
                 now,
                 leads,
+                |slot| engine.upgrade().and_then(|e| engine_up(&e, slot)),
                 |slot| replica.store().with_state(|sm| applied_up(sm, slot)),
                 |body| {
                     if let Err(e) = replica.append(body) {
@@ -882,11 +889,18 @@ impl Unapplied {
 
     /// Appends each report due, while `leads`, unless it was appended
     /// before and the applied log holds it (`applied` says whether it
-    /// holds a slot up), which drops it. Returns when the next one is due.
+    /// holds a slot up), which drops it. A report made while following
+    /// that the local engine no longer agrees with (`engine_up` says
+    /// whether it reads a slot, none while it cannot tell) is dropped as
+    /// well: the engine took the input up or down again without a report,
+    /// as it does where the log already holds that, and appending it
+    /// would put a stale state into the log. Returns when the next one is
+    /// due.
     fn retry(
         &mut self,
         now: std::time::Instant,
         leads: bool,
+        engine_up: impl Fn(u32) -> Option<bool>,
         applied: impl Fn(u32) -> bool,
         mut append: impl FnMut(Body),
     ) -> Option<std::time::Instant> {
@@ -902,6 +916,9 @@ impl Unapplied {
                 r.due = now + first;
                 return true;
             }
+            if !r.fresh && engine_up(slot).is_some_and(|up| up != r.up) {
+                return false;
+            }
             if !r.fresh && applied(slot) == r.up {
                 return false;
             }
@@ -912,6 +929,16 @@ impl Unapplied {
             true
         });
         self.slots.values().map(|r| r.due).min()
+    }
+}
+
+/// Whether `engine` reads input `slot`: attached up, pruned down; none
+/// for a detached one, which reads nothing by command, not by health.
+fn engine_up(engine: &Engine, slot: u32) -> Option<bool> {
+    match engine.status().inputs.get(slot as usize)?.state {
+        InputState::Attached => Some(true),
+        InputState::Pruned => Some(false),
+        InputState::Detached => None,
     }
 }
 
@@ -1052,29 +1079,67 @@ mod tests {
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let mut u = Unapplied::new(first);
         let held_up = std::cell::Cell::new(true);
+        // The engine reads the input pruned throughout.
+        let pruned = |_: u32| Some(false);
         let mut appended = Vec::new();
         u.report(Report::InputPruned { slot: 3 }, t0);
-        let next = u.retry(t0, true, |_| held_up.get(), |b| appended.push(b));
+        let next = u.retry(t0, true, pruned, |_| held_up.get(), |b| appended.push(b));
         assert_eq!(appended, [down(3)]);
         assert_eq!(next, Some(at(2_000)));
         // Not due yet.
-        u.retry(at(1_000), true, |_| held_up.get(), |b| appended.push(b));
+        u.retry(
+            at(1_000),
+            true,
+            pruned,
+            |_| held_up.get(),
+            |b| appended.push(b),
+        );
         assert_eq!(appended.len(), 1);
         // The election: following, it appends nothing.
-        let next = u.retry(at(2_000), false, |_| held_up.get(), |b| appended.push(b));
+        let next = u.retry(
+            at(2_000),
+            false,
+            pruned,
+            |_| held_up.get(),
+            |b| appended.push(b),
+        );
         assert_eq!((appended.len(), next), (1, Some(at(4_000))));
         // Leading again, the set still holds the input up.
-        let next = u.retry(at(4_000), true, |_| held_up.get(), |b| appended.push(b));
+        let next = u.retry(
+            at(4_000),
+            true,
+            pruned,
+            |_| held_up.get(),
+            |b| appended.push(b),
+        );
         assert_eq!(appended, [down(3), down(3)]);
         assert_eq!(next, Some(at(8_000)));
-        let next = u.retry(at(8_000), true, |_| held_up.get(), |b| appended.push(b));
+        let next = u.retry(
+            at(8_000),
+            true,
+            pruned,
+            |_| held_up.get(),
+            |b| appended.push(b),
+        );
         assert_eq!((appended.len(), next), (3, Some(at(16_000))));
         // Bounded: never more than RETRY_CAP write timeouts apart.
-        let next = u.retry(at(16_000), true, |_| held_up.get(), |b| appended.push(b));
+        let next = u.retry(
+            at(16_000),
+            true,
+            pruned,
+            |_| held_up.get(),
+            |b| appended.push(b),
+        );
         assert_eq!((appended.len(), next), (4, Some(at(24_000))));
         // Applied: dropped.
         held_up.set(false);
-        let next = u.retry(at(24_000), true, |_| held_up.get(), |b| appended.push(b));
+        let next = u.retry(
+            at(24_000),
+            true,
+            pruned,
+            |_| held_up.get(),
+            |b| appended.push(b),
+        );
         assert_eq!((appended.len(), next), (4, None));
     }
 
@@ -1089,19 +1154,69 @@ mod tests {
         let mut appended = Vec::new();
         u.report(Report::InputPruned { slot: 1 }, t0);
         u.report(Report::InputReadable { slot: 1 }, t0);
-        u.retry(t0, true, |_| true, |b| appended.push(b));
+        u.retry(t0, true, |_| Some(true), |_| true, |b| appended.push(b));
         assert_eq!(appended, [up(1)]);
 
         let mut u = Unapplied::new(first);
         let mut appended = Vec::new();
         u.report(Report::InputPruned { slot: 0 }, t0);
         u.report(Report::InputPruned { slot: 2 }, t0);
-        u.retry(t0, false, |_| true, |b| appended.push(b));
+        u.retry(t0, false, |_| Some(false), |_| true, |b| appended.push(b));
         assert!(appended.is_empty());
         // Leading: slot 0 the set already holds down, slot 2 it does not.
-        let next = u.retry(t0 + first, true, |slot| slot != 0, |b| appended.push(b));
+        let next = u.retry(
+            t0 + first,
+            true,
+            |_| Some(false),
+            |slot| slot != 0,
+            |b| appended.push(b),
+        );
         assert_eq!(appended, [down(2)]);
         assert_eq!(next, Some(t0 + first * 2));
+    }
+
+    /// A follower reports an input pruned; its engine reads the input
+    /// again without a report, as it does where the log holds it up. Once
+    /// the replica leads, the stale report is dropped instead of putting
+    /// the input down in the log; a report made while leading is
+    /// appended whatever the engine reads.
+    #[test]
+    fn a_follower_report_the_engine_took_back_is_not_appended() {
+        let first = Duration::from_secs(2);
+        let t0 = std::time::Instant::now();
+        let mut u = Unapplied::new(first);
+        let mut appended = Vec::new();
+        let engine = std::cell::Cell::new(Some(false));
+        u.report(Report::InputPruned { slot: 4 }, t0);
+        u.retry(t0, false, |_| engine.get(), |_| true, |b| appended.push(b));
+        assert!(appended.is_empty());
+        engine.set(Some(true));
+        let next = u.retry(
+            t0 + first,
+            true,
+            |_| engine.get(),
+            |_| true,
+            |b| appended.push(b),
+        );
+        assert!(
+            appended.is_empty(),
+            "a stale report was appended: {appended:?}"
+        );
+        assert_eq!(next, None);
+
+        // Unknown to the engine (detached): the applied log decides.
+        let mut u = Unapplied::new(first);
+        u.report(Report::InputPruned { slot: 4 }, t0);
+        u.retry(t0, false, |_| None, |_| true, |b| appended.push(b));
+        u.retry(t0 + first, true, |_| None, |_| true, |b| appended.push(b));
+        assert_eq!(appended, [down(4)]);
+
+        // Reported while leading: appended at once.
+        let mut u = Unapplied::new(first);
+        let mut appended = Vec::new();
+        u.report(Report::InputPruned { slot: 4 }, t0);
+        u.retry(t0, true, |_| Some(true), |_| true, |b| appended.push(b));
+        assert_eq!(appended, [down(4)]);
     }
 
     /// A strip parameter the RT thread refused counts as a drop.

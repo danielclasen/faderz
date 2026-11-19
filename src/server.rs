@@ -182,6 +182,7 @@ impl Server {
                         audio::report_inputs(
                             started.reports,
                             Arc::downgrade(&state),
+                            started.audio.engine_weak(),
                             write_timeout,
                         );
                         started.audio
