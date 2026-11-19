@@ -5,9 +5,11 @@
 // tally and console clients. Every message it sends or receives is
 // checked against the committed contract.
 
+import { readFileSync } from 'node:fs';
 import type {
   AckMessage,
   AfvBinding,
+  Build,
   Change,
   ClientMessage,
   CommandMessage,
@@ -49,6 +51,19 @@ import { Contract, ContractViolation } from './contract.ts';
 import { handleOf } from './handle.ts';
 import { CONSOLE_SESSIONS, exampleShape, initialState } from './shape.ts';
 import { ReplicaMeters, SourceModel } from './signals.ts';
+
+/**
+ * What the replicas say they were built from: what a binary built from
+ * this checkout says (build.rs), the faderz version of Cargo.toml and the
+ * tag of the samplez entry in Cargo.lock.
+ */
+export const BUILD: Build = (() => {
+  const read = (file: string) => readFileSync(new URL(`../../../${file}`, import.meta.url), 'utf8');
+  const faderz = /^version = "([^"]+)"$/m.exec(read('Cargo.toml'))?.[1];
+  const samplez = /^name = "samplez"\nversion = "[^"]+"\nsource = "[^"?#]+\?tag=v([^"#&]+)/m.exec(read('Cargo.lock'))?.[1];
+  if (!faderz || !samplez) throw new Error('no faderz version in Cargo.toml or samplez tag in Cargo.lock');
+  return { faderz, samplez };
+})();
 
 /** Commands arriving within one block share a log entry. */
 export const BLOCK_MS = 5;
@@ -587,7 +602,7 @@ export class Cluster {
       conn.mode = msg.mode;
       this.broadcastPresence();
       this.renew(conn.owner, r);
-      this.emit(conn, { type: 'replicas', replica: this.ref(r), replicas: this.replicaStatus() });
+      this.emit(conn, { type: 'replicas', replica: this.ref(r), build: BUILD, replicas: this.replicaStatus() });
       return this.sync(conn, this.ownEpoch(msg.epoch, msg.lastRevision));
     }
     if (!conn.owner) {
@@ -1403,7 +1418,7 @@ export class Cluster {
   private broadcastReplicas(): void {
     const replicas = this.replicaStatus();
     for (const r of this.replicas) {
-      for (const c of r.conns) if (c.synced) this.emit(c, { type: 'replicas', replica: this.ref(r), replicas });
+      for (const c of r.conns) if (c.synced) this.emit(c, { type: 'replicas', replica: this.ref(r), build: BUILD, replicas });
     }
   }
 

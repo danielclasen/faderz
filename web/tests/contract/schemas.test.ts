@@ -422,7 +422,7 @@ describe('WebSocket messages', () => {
     ['resume', { type: 'resume', you: owner, replica, epoch, revision: 7, deltas: [delta] }],
     ['stale resume', { type: 'resume', you: owner, replica, epoch, revision: 7, deltas: [], stale: true }],
     ['script owner', { type: 'delta', replica, revision: 9, owners: [{ path: '/buses/pgm/fader', owner: { ...owner, kind: 'script' } }] }],
-    ['replicas', { type: 'replicas', replica, replicas: [{ ...replica, healthy: true, commitable: true }, { id: 'r2', role: 'follower', healthy: true, commitable: false }] }],
+    ['replicas', { type: 'replicas', replica, build: { faderz: '0.4.3', samplez: '0.12.3' }, replicas: [{ ...replica, healthy: true, commitable: true }, { id: 'r2', role: 'follower', healthy: true, commitable: false }] }],
     ['ping', { type: 'ping', replica, t: 0 }],
     ['pong', { type: 'pong', replica, t: 5 }],
     ['409 with owner', { type: 'error', replica, code: 409, message: 'owned', commandId: cmd, path: '/channels/ch1/fader', current: -3, owner }],
@@ -480,7 +480,7 @@ describe('WebSocket messages', () => {
     ['origin without owner', { ...delta, origins: [{ commandId: cmd }] }],
     ['origin with seq 0', { ...delta, origins: [{ owner, commandId: cmd, seq: 0 }] }],
     ['empty origins', { ...delta, origins: [] }],
-    ['replica without commitable', { type: 'replicas', replica, replicas: [{ ...replica, healthy: true }] }],
+    ['replica without commitable', { type: 'replicas', replica, build: { faderz: '0.4.3', samplez: '0.12.3' }, replicas: [{ ...replica, healthy: true }] }],
     ['ping with state', { type: 'ping', replica, t: 1, revision: 3 }],
     ['ping without replica', { type: 'ping', t: 1 }],
     ['error with a code outside the contract', { type: 'error', replica, code: 500, message: 'oops', commandId: cmd }],
@@ -523,5 +523,28 @@ describe('WebSocket messages', () => {
     expect(owners({ '/channels/ch1/fader': owner })).toBe(true);
     expect(owners({ '/channels/ch1/fader': 'dGFiLTEtc2Vzc2lvbi1pZA' })).toBe(false);
     expect(owners({ '/channels/ch1/peak': owner })).toBe(false);
+  });
+});
+
+describe('the replicas message names the build of its replica', () => {
+  const contract = new Contract();
+  const replica = { id: 'r1', role: 'leader' };
+  const message = (build: unknown) => ({ type: 'replicas', replica, ...(build === undefined ? {} : { build }), replicas: [{ ...replica, healthy: true, commitable: true }] });
+
+  it('accepts a release and a samplez commit no tag names', () => {
+    expect(() => contract.assertServerMessage(message({ faderz: '0.4.3', samplez: '0.12.3' }))).not.toThrow();
+    expect(() => contract.assertServerMessage(message({ faderz: '0.4.3', samplez: '0.12.3+eeab3c3' }))).not.toThrow();
+  });
+
+  it('refuses one without a build, or with a part missing, empty or unknown', () => {
+    for (const build of [undefined, { faderz: '0.4.3' }, { faderz: '', samplez: '0.12.3' }, { faderz: '0.4.3', samplez: '0.12.3', commit: 'eeab3c3' }]) {
+      expect(() => contract.assertServerMessage(message(build)), JSON.stringify(build)).toThrow();
+    }
+  });
+
+  it('holds for GET /replicas as well', () => {
+    const { type: _, ...body } = message({ faderz: '0.4.3', samplez: '0.12.3' });
+    expect(() => contract.assertResponse('/replicas', 'GET', 200, body)).not.toThrow();
+    expect(() => contract.assertResponse('/replicas', 'GET', 200, { replica, replicas: body.replicas })).toThrow();
   });
 });

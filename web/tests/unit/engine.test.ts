@@ -76,10 +76,14 @@ function setup(endpoints = ['ws://svc/api/v1/ws'], seqBase = SEQ_BASE, random = 
   return { clock, sockets, patches, engine, tick };
 }
 
+/** Each replica a build of its own, so a test tells whose a status names. */
+const buildOf = (r: ReplicaRef) => ({ faderz: `0.4.${r.id.slice(1)}`, samplez: '0.12.3' });
+
 function replicas(from: ReplicaRef, notCommitable: string[] = []): ReplicasMessage {
   return {
     type: 'replicas',
     replica: from,
+    build: buildOf(from),
     replicas: [R1, R2, R3].map((r) => ({ ...r, healthy: true, commitable: !notCommitable.includes(r.id) })),
   };
 }

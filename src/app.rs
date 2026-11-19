@@ -166,6 +166,12 @@ fn ordinal_of(id: NodeId) -> u16 {
     }
 }
 
+/// Model `Build`: the faderz version and the samplez release it was built
+/// against, as build.rs read it from Cargo.lock.
+pub fn build() -> Value {
+    json!({ "faderz": env!("CARGO_PKG_VERSION"), "samplez": env!("FADERZ_SAMPLEZ") })
+}
+
 /// Whether replica `me` hears replica `id` of its set. With contact
 /// running: contact holds a majority and has had a report from `id`
 /// within its window. Without (a set without an engine), what raft
@@ -309,8 +315,13 @@ impl App {
 
     /// The `replicas` message.
     pub fn replicas_message(&self) -> String {
-        json!({ "type": "replicas", "replica": self.replica_ref(), "replicas": self.replicas() })
-            .to_string()
+        json!({
+            "type": "replicas",
+            "replica": self.replica_ref(),
+            "build": build(),
+            "replicas": self.replicas(),
+        })
+        .to_string()
     }
 
     /// The `delta` message at `revision` of a delta the state machine

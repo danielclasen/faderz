@@ -126,7 +126,7 @@ paths:
   /replicas:
     get:
       operationId: getReplicas
-      summary: Replica set as seen by the serving replica.
+      summary: Replica set as seen by the serving replica, and what the serving replica was built from.
       responses:
         "200":
           description: Replicas.
@@ -134,11 +134,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [replica, replicas]
+                required: [replica, build, replicas]
                 additionalProperties: false
                 properties:
                   replica:
                     $ref: "./ws/model.schema.json#/$defs/ReplicaRef"
+                  build:
+                    $ref: "./ws/model.schema.json#/$defs/Build"
                   replicas:
                     type: array
                     minItems: 1

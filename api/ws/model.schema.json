@@ -131,6 +131,27 @@
         }
       }
     },
+    "Build": {
+      "description": "What the replica was built from. Both come from the release process: faderz from its package version, samplez from the samplez dependency Cargo.lock pins.",
+      "type": "object",
+      "required": [
+        "faderz",
+        "samplez"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "faderz": {
+          "description": "The faderz version, as its release tag names it without the v, such as 0.4.3.",
+          "type": "string",
+          "minLength": 1
+        },
+        "samplez": {
+          "description": "The samplez release faderz was built against: the tag of the samplez dependency without the v, such as 0.12.3; for a samplez commit no tag names, the package version with the commit's first 7 hex digits as build metadata, such as 0.12.3+eeab3c3.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "OwnershipChange": {
       "description": "A control was touched (owner set) or released (owner null).",
       "type": "object",

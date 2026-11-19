@@ -8,7 +8,7 @@ import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { Cluster, DEDUP_RETENTION_MS, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, sessionKey, type ClusterOptions } from '../../dev/mock/cluster';
+import { BUILD, Cluster, DEDUP_RETENTION_MS, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, sessionKey, type ClusterOptions } from '../../dev/mock/cluster';
 import { Contract } from '../../dev/mock/contract';
 import { MockServer } from '../../dev/mock/server';
 import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
@@ -299,7 +299,7 @@ describe('hello', () => {
   it('answers a primary hello with replicas and a snapshot carrying the owner record', async () => {
     const c = await new Client().open();
     const snap = (await c.hello()) as SnapshotMessage;
-    expect(c.messages[0]!.type).toBe('replicas');
+    expect(c.messages[0]).toMatchObject({ type: 'replicas', build: BUILD });
     expect(snap).toMatchObject({ type: 'snapshot', revision: cluster.revision });
     expect(snap.you).toEqual({ principal: 'anonymous', handle: ownerHandle(c.session), kind: 'ui', connection: expect.any(String) });
     expect(snap.state.consoles.map((k) => k.handle)).toEqual(Object.values(CONSOLE_SESSIONS).map(ownerHandle));
@@ -1443,6 +1443,8 @@ describe('REST', () => {
   it('resets loudness and lists replicas', async () => {
     expect((await rest('POST', '/loudness/reset', { ids: ['pgm51'] })).status).toBe(204);
     expect((await rest('POST', '/loudness/reset', { ids: ['nope'] })).status).toBe(404);
-    expect((await rest('GET', '/replicas')).body!['replicas']).toHaveLength(3);
+    const replicas = (await rest('GET', '/replicas')).body!;
+    expect(replicas['replicas']).toHaveLength(3);
+    expect(replicas['build']).toEqual(BUILD);
   });
 });

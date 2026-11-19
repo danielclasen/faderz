@@ -341,6 +341,11 @@ export interface ReplicaStatus extends ReplicaRef {
   healthy: boolean;
   commitable: boolean;
 }
+/** What a replica was built from: the faderz version and the samplez release it was built against. */
+export interface Build {
+  faderz: string;
+  samplez: string;
+}
 export interface StateDocument {
   revision: Revision;
   replica: ReplicaRef;
@@ -554,6 +559,7 @@ export interface AckMessage {
 export interface ReplicasMessage {
   type: 'replicas';
   replica: ReplicaRef;
+  build: Build;
   replicas: ReplicaStatus[];
 }
 export interface CountersMessage {

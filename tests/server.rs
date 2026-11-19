@@ -607,6 +607,49 @@ async fn duck_groups_are_set_through_the_api() {
     server.stop().await;
 }
 
+/// The build a replica names, on the WebSocket and over REST, is the one
+/// it was built from: the crate's version, and the samplez release that
+/// Cargo.lock pins and that the samplez crate linked in says it is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replica_names_the_build_cargo_lock_pins() {
+    let lock = include_str!("../Cargo.lock");
+    let source = (lock.split("[[package]]"))
+        .find(|p| p.lines().any(|l| l.trim() == r#"name = "samplez""#))
+        .and_then(|p| p.lines().find_map(|l| l.trim().strip_prefix("source = ")))
+        .expect("Cargo.lock pins samplez from git");
+    let dir = data_dir();
+    let server = start(&dir).await;
+    let mut a = Client::connect(&server, SESSION_A).await;
+    a.send(json!({ "type": "hello", "session": SESSION_A, "kind": "ui", "mode": "primary" }))
+        .await;
+    let replicas = a.next_of("replicas").await;
+    let build = &replicas["build"];
+    assert_eq!(build["faderz"], env!("CARGO_PKG_VERSION"));
+    let samplez = build["samplez"].as_str().unwrap();
+    match samplez.split_once('+') {
+        // A commit no tag names: the version, and the commit pinned.
+        Some((version, commit)) => {
+            assert_eq!(version, samplez::ENGINE_VERSION);
+            assert!(source.contains(&format!("#{commit}")), "{source}");
+        }
+        None => {
+            assert_eq!(samplez, samplez::ENGINE_VERSION);
+            assert!(source.contains(&format!("?tag=v{samplez}#")), "{source}");
+        }
+    }
+    let rest = Rest::new(&server);
+    let (s, v) = rest
+        .call(
+            "GET",
+            "/replicas",
+            None,
+            Some("/paths/~1replicas/get/responses/200/content/application~1json/schema"),
+        )
+        .await;
+    assert_eq!((s, &v["build"]), (200, build));
+    server.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rest_answers_match_the_contract() {
     let dir = data_dir();

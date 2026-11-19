@@ -263,11 +263,12 @@
       }
     },
     "Replicas": {
-      "description": "Replica set as seen by the sending replica, with health and whether each can commit. Sent after hello and whenever a role, health or quorum changes.",
+      "description": "Replica set as seen by the sending replica, with health and whether each can commit, and what the sending replica was built from. Sent after hello and whenever a role, health or quorum changes.",
       "type": "object",
       "required": [
         "type",
         "replica",
+        "build",
         "replicas"
       ],
       "additionalProperties": false,
@@ -277,6 +278,9 @@
         },
         "replica": {
           "$ref": "model.schema.json#/$defs/ReplicaRef"
+        },
+        "build": {
+          "$ref": "model.schema.json#/$defs/Build"
         },
         "replicas": {
           "type": "array",

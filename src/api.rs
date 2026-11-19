@@ -168,7 +168,8 @@ async fn status(State(app): State<Arc<App>>) -> Response {
 }
 
 async fn replicas(State(app): State<Arc<App>>) -> Response {
-    Json(json!({ "replica": app.replica_ref(), "replicas": app.replicas() })).into_response()
+    Json(json!({ "replica": app.replica_ref(), "build": crate::app::build(), "replicas": app.replicas() }))
+        .into_response()
 }
 
 #[derive(Deserialize)]
