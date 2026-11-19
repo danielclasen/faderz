@@ -136,8 +136,10 @@ jobs:
       - name: Push the image
         run: |
           docker tag faderz:ci "$IMAGE:$VERSION"
-          docker push "$IMAGE:$VERSION"
-          echo "PUSHED=$(docker inspect -f '{{index .RepoDigests 0}}' "$IMAGE:$VERSION")" >> "$GITHUB_ENV"
+          docker push "$IMAGE:$VERSION" | tee push.log
+          digest=$(grep -o 'digest: sha256:[0-9a-f]\{64\}' push.log | cut -d' ' -f2)
+          test -n "$digest"
+          echo "PUSHED=$IMAGE@$digest" >> "$GITHUB_ENV"
       # Workflow logs are no evidence the published artefact is right.
       - name: Pull the published image and start it
         run: |
@@ -234,8 +236,10 @@ jobs:
       - name: Push the image
         run: |
           docker tag faderz-bridge:ci "$IMAGE:$VERSION"
-          docker push "$IMAGE:$VERSION"
-          echo "PUSHED=$(docker inspect -f '{{index .RepoDigests 0}}' "$IMAGE:$VERSION")" >> "$GITHUB_ENV"
+          docker push "$IMAGE:$VERSION" | tee push.log
+          digest=$(grep -o 'digest: sha256:[0-9a-f]\{64\}' push.log | cut -d' ' -f2)
+          test -n "$digest"
+          echo "PUSHED=$IMAGE@$digest" >> "$GITHUB_ENV"
       # Workflow logs are no evidence the published artefact is right.
       - name: Pull the published image and start it
         run: |
