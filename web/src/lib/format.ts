@@ -3,6 +3,8 @@
 // (class "fixed" in app.css). A right-aligned or centred text of another
 // length would start elsewhere, which is a layout shift.
 
+import type { Layout } from './contract/types';
+
 /** `text` padded at the start to `width` characters. */
 export function fit(text: string, width: number): string {
   return text.padStart(width);
@@ -31,4 +33,12 @@ export function levelText(v: number | null | undefined, target?: number): string
 export function centre(text: string, width: number): string {
   const pad = Math.max(0, width - text.length);
   return ' '.repeat(Math.floor(pad / 2)) + text + ' '.repeat(Math.ceil(pad / 2));
+}
+
+/**
+ * The width of a channel or an output as its badge reads: nothing for
+ * mono, ST for stereo, else the layout's name ("5.1", "7.1").
+ */
+export function layoutBadge(layout: Layout): string {
+  return layout === 'mono' ? '' : layout === 'stereo' ? 'ST' : layout;
 }

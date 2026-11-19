@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { levelText } from '../../src/lib/format';
+import { layoutBadge, levelText } from '../../src/lib/format';
 
 describe('level readouts', () => {
   it('fit five characters in LUFS and in LU, whatever the value', () => {
@@ -21,5 +21,14 @@ describe('level readouts', () => {
     expect(levelText(-22, -23)).toBe(' +1.0');
     expect(levelText(-24.04, -23)).toBe(' -1.0');
     expect(levelText(null, -23)).toBe(' --.-');
+  });
+});
+
+describe('layout badges', () => {
+  it('read a width as the channel strip does: nothing for mono, ST for stereo, the layout above', () => {
+    expect(layoutBadge('mono')).toBe('');
+    expect(layoutBadge('stereo')).toBe('ST');
+    expect(layoutBadge('5.1')).toBe('5.1');
+    expect(layoutBadge('7.1')).toBe('7.1');
   });
 });

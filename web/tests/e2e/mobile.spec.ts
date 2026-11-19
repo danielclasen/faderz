@@ -51,6 +51,14 @@ test('a phone header holds the view menu, the users key and the account pill, on
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(W);
 });
 
+test('a phone names the 5.1 master with its width, over the strips as on a desk', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('link')).toContainText('LIVE');
+  await page.getByRole('button', { name: 'MASTERS' }).click();
+  await expect(page.getByTestId('layout-pgm51')).toHaveText('5.1');
+  await expect(page.getByTestId('layout-pgm20')).toHaveText('ST');
+});
+
 test('shows one duck group at a time on a phone, picked from a list, within the screen', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('link')).toContainText('LIVE');

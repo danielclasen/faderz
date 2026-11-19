@@ -5,6 +5,7 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import { channelPath } from '../lib/state/paths';
   import { effectiveGainDb, formatDb } from '../lib/audio/db';
+  import LayoutBadge from './LayoutBadge.svelte';
   import Fader from './Fader.svelte';
   import Meter from './Meter.svelte';
   import Pan from './Pan.svelte';
@@ -64,7 +65,6 @@
   const selectorsText = $derived(selectors.length > 0 ? `selected on ${selectors.map((o) => mixer.ownerLabel(o)).join(', ')}` : '');
   /** Recall-safe groups: a scene recall leaves these alone (an isolate on a console). */
   const safe = $derived(mixer.state!.recallSafe[channel.id] ?? []);
-  const badge = $derived(channel.layout === 'mono' ? '' : channel.layout === 'stereo' ? 'ST' : channel.layout);
   const short = (bus: { name: string; kind: string }) =>
     bus.kind === 'cleanFeed' ? 'CF' : bus.kind === 'me' ? 'ME' : (bus.name.split(' ').at(-1) ?? bus.name).slice(0, 4);
 
@@ -130,7 +130,7 @@
         <span class="badge iso" class:shown={safe.length > 0} aria-hidden="true" data-testid={`iso-${channel.id}`}>ISO</span>
         <span class="sr-only">{safe.length > 0 ? `, recall safe: ${safe.join(', ')}` : ''}</span>
         <span class="badge alt" class:shown={st.input === 'b'} title="Fed from its B input" aria-hidden={st.input !== 'b'}>B</span>
-        {#if badge}<span class="badge">{badge}</span>{/if}
+        <LayoutBadge layout={channel.layout} />
       </span>
     </span>
   </button>

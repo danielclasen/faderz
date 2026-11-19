@@ -1,6 +1,8 @@
-<script lang="ts" generics="Row extends { id: string; name: string }, Col extends { id: string; name: string }">
+<script lang="ts" generics="Row extends { id: string; name: string }, Col extends { id: string; name: string; layout?: Layout }">
   import { getMixer } from '../lib/state/mixer.svelte';
   import { pendingWrite } from '../lib/pending';
+  import type { Layout } from '../lib/contract/types';
+  import LayoutBadge from './LayoutBadge.svelte';
   // Grid of on/off cells with arrow-key navigation (one tab stop).
   interface Props {
     label: string;
@@ -40,7 +42,9 @@
       {/if}
       <tr>
         <th></th>
-        {#each cols as col (col.id)}<th scope="col"><span>{col.name}</span></th>{/each}
+        {#each cols as col (col.id)}<th scope="col" aria-label={col.layout && col.layout !== 'mono' ? `${col.name}, ${col.layout}` : undefined}
+            ><span class="col">{col.name}{#if col.layout}<LayoutBadge layout={col.layout} />{/if}</span></th
+          >{/each}
       </tr>
     </thead>
     <tbody>
@@ -101,6 +105,10 @@
   }
   thead tr:first-child th {
     top: 0;
+  }
+  /* A column's name, and beside it its width where it has one. */
+  .col :global(.badge) {
+    margin-left: 4px;
   }
   th.group {
     color: var(--accent);

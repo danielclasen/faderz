@@ -257,3 +257,43 @@ test('each duck group says what keys it at which tap, what it ducks on which out
     await patch(request, '/ducks/comm/threshold', -30);
   }
 });
+
+test('names each bus with its width on its master and in the routing columns, as a channel strip does', async ({ page, request }) => {
+  const { shape } = await serverState(request);
+  const wide = shape.buses.find((b) => b.layout === '5.1' || b.layout === '7.1');
+  const stereo = shape.buses.find((b) => b.layout === 'stereo');
+  expect(wide, 'the example shape has a bus wider than stereo').toBeDefined();
+  await live(page);
+  // The master's head: the same badge a 5.1 channel strip shows.
+  await expect(page.getByTestId(`layout-${wide!.id}`)).toHaveText(wide!.layout);
+  await expect(page.getByTestId(`layout-${stereo!.id}`)).toHaveText('ST');
+  // The channel strip's grey width badge, on the master as on a strip.
+  for (const badge of [page.getByTestId(`layout-${wide!.id}`).locator('.badge'), page.locator('[data-channel] .head .badge[data-layout]').first()]) {
+    await expect(badge).toHaveCSS('background-color', 'rgb(139, 150, 164)');
+    await expect(badge).toHaveCSS('color', 'rgb(11, 13, 16)');
+    await expect(badge).toHaveCSS('font-size', '10px');
+  }
+  // Line-up tone takes the width's place while it replaces the programme, moving nothing.
+  const box = await page.getByTestId(`layout-${stereo!.id}`).boundingBox();
+  try {
+    await patch(request, '/tone/targets', [stereo!.id]);
+    await patch(request, '/tone/on', true);
+    await expect(page.getByTestId(`tone-${stereo!.id}`)).toBeVisible();
+    await expect(page.getByTestId(`layout-${stereo!.id}`)).toBeHidden();
+    expect(await page.getByTestId(`layout-${stereo!.id}`).boundingBox()).toEqual(box);
+  } finally {
+    await patch(request, '/tone/on', false);
+    await patch(request, '/tone/targets', []);
+  }
+  await expect(page.getByTestId(`layout-${stereo!.id}`)).toBeVisible();
+  // A mono output shows none.
+  await page.getByRole('button', { name: 'Aux / N-1', exact: true }).click();
+  const mono = shape.auxes.find((a) => a.layout === 'mono')!;
+  await expect(page.getByTestId(`layout-${mono.id}`).locator('.badge')).toHaveCount(0);
+  // Routing: each bus column names its width beside its name; VCA columns have none.
+  await page.getByRole('button', { name: 'Routing', exact: true }).click();
+  const head = page.getByRole('table', { name: 'Routing' }).locator('thead tr').last();
+  await expect(head.getByRole('columnheader', { name: `${wide!.name}, ${wide!.layout}`, exact: true })).toBeVisible();
+  await expect(head.getByRole('columnheader', { name: `${stereo!.name}, stereo`, exact: true })).toBeVisible();
+  await expect(head.locator('.badge[data-layout]')).toHaveCount(shape.buses.filter((b) => b.layout !== 'mono').length);
+});

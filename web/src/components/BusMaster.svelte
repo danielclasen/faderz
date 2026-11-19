@@ -11,6 +11,7 @@
   import Meter from './Meter.svelte';
   import Loudness from './Loudness.svelte';
   import TalkKey from './TalkKey.svelte';
+  import LayoutBadge from './LayoutBadge.svelte';
   import HoldMute from './HoldMute.svelte';
   import { tip } from '../lib/tip';
 
@@ -43,10 +44,15 @@
 <section class="master" class:selected style:width={element.width > 2 ? `${WIDE_BASE_W + element.width * LEG_W}px` : undefined} aria-label={`${element.name} master`} data-master={element.id}>
   <button class="head" class:toned onclick={() => onselect?.(element.id)} disabled={!onselect} aria-pressed={selected} use:tip={element.name}>
     <span class="name">{element.name}</span>
-    <!-- Both tags keep their place, shown or not: the name never rewraps. -->
+    <!-- Every tag keeps its place, shown or not: the name never rewraps.
+         Under the kind, the width as a channel strip shows it; line-up
+         tone, which replaces the programme, shows in its place. -->
     <span class="tags">
       <span class="tag" class:blank={!tag}>{tag}</span>
-      <span class="tag tone" class:shown={toned} data-testid={`tone-${element.id}`} aria-hidden={!toned}>TONE<span class="sr-only">: line-up tone {tone.level} dBFS replaces this output</span></span>
+      <span class="second">
+        <span class="width" class:hidden={toned} data-testid={`layout-${element.id}`}><LayoutBadge layout={element.layout} /></span>
+        <span class="tag tone" class:shown={toned} data-testid={`tone-${element.id}`} aria-hidden={!toned}>TONE<span class="sr-only">: line-up tone {tone.level} dBFS replaces this output</span></span>
+      </span>
     </span>
   </button>
   <Loudness {group} id={element.id} stereo={element.layout === 'stereo'} onreset={() => resetLoudness(mixer, [element.id])} />
@@ -124,6 +130,20 @@
     gap: 2px;
   }
   .tag.blank {
+    visibility: hidden;
+  }
+  /* The width and the tone share one cell, so either moves nothing. */
+  .second {
+    display: grid;
+    justify-items: end;
+  }
+  .second > * {
+    grid-area: 1 / 1;
+  }
+  .width {
+    display: flex;
+  }
+  .width.hidden {
     visibility: hidden;
   }
   .tag.tone {
