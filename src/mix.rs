@@ -490,12 +490,18 @@ impl Moved {
                             moved.monitor = true;
                             moved.masks = true;
                         }
-                        _ => {
+                        // A write of the whole channel may carry a solo.
+                        None => {
                             moved.rows.insert(s);
                             moved.strips.insert(s);
                             moved.flows.insert(s);
                             moved.monitor = true;
                             moved.masks = true;
+                        }
+                        _ => {
+                            moved.rows.insert(s);
+                            moved.strips.insert(s);
+                            moved.flows.insert(s);
                         }
                     }
                 }
@@ -737,9 +743,9 @@ impl<'a> Mix<'a> {
     ///
     /// The listen sum takes each listening channel's legs at their own
     /// width. PFL is the channel after its strip, before fader, mute and
-    /// pan: [`Tap::PreFader`], centred. AFL is the channel as a bus takes
-    /// it ([`feed`]): [`Tap::Mix`], after fader, mute, VCAs and AFV, at
-    /// its pan, so it is what the channel adds to the mix.
+    /// pan: [`Tap::PreFader`], centred, so a mono channel plays on every
+    /// leg and a stereo one leg to leg. AFL is [`Tap::PostFader`], after
+    /// fader, mute and VCAs and before AFV, at the channel's pan.
     fn monitor(&self, width: usize, g: &mut [f64]) {
         let m = &self.state["monitor"];
         let mut level = gain(num(&m["level"]));
@@ -799,7 +805,7 @@ impl<'a> Mix<'a> {
             let heard = if pfl {
                 p.then_some((Tap::PreFader, 0.0))
             } else {
-                a.then_some((Tap::Mix, c.pan))
+                a.then_some((Tap::PostFader, c.pan))
             };
             let Some((tap, p)) = heard else {
                 continue;
@@ -1058,7 +1064,7 @@ mod tests {
                 let heard = if pfl {
                     p.then_some((Tap::PreFader, 0.0))
                 } else {
-                    a.then(|| (Tap::Mix, num(&state["channels"][&c.id]["pan"]["lr"])))
+                    a.then(|| (Tap::PostFader, num(&state["channels"][&c.id]["pan"]["lr"])))
                 };
                 for i in 0..c.width {
                     let row = match heard {
@@ -1253,9 +1259,9 @@ mod tests {
         );
     }
 
-    /// PFL listens after the strip and before the fader, centred: a
+    /// PFL listens after the strip and before the fader and pan: a
     /// channel with its fader closed is heard on the monitor, and the
-    /// source is not.
+    /// source is not. A hard-panned mono channel is heard centred.
     #[test]
     fn a_pfl_is_heard_on_the_monitor_with_its_fader_closed() {
         let shape = shape();
@@ -1268,10 +1274,34 @@ mod tests {
         let h = std::f64::consts::FRAC_1_SQRT_2;
         assert!(close(m[0][5], h * gain(-6.0)) && close(m[0][6], h * gain(-6.0)));
         assert!(m[1..].iter().all(|r| r[5] == 0.0 && r[6] == 0.0));
+        // Hard right gives the same.
+        s["channels"]["ch1"]["pan"]["lr"] = json!(1);
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][5], h * gain(-6.0)) && close(m[0][6], h * gain(-6.0)));
         // The monitor's own controls follow.
         s["monitor"]["speakerMute"] = json!([false, true]);
         let m = matrix(&shape, &s);
         assert!(close(m[0][5], h * gain(-6.0)) && m[0][6] == 0.0);
+    }
+
+    /// AFL is the channel after fader, mute and VCAs and before AFV: a
+    /// channel whose AFV stage is closed plays at its fader gain, not at
+    /// the off level it adds to a bus.
+    #[test]
+    fn an_afl_is_heard_before_the_afv_stage() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(-6);
+        s["channels"]["ch1"]["pan"]["lr"] = json!(-1);
+        s["afv"]["ch1"]["enabled"] = json!(true);
+        s["afv"]["ch1"]["open"] = json!(false);
+        s["afv"]["ch1"]["offLevel"] = json!(-40);
+        s["monitor"]["level"] = json!(0);
+        s["channels"]["ch1"]["solo"] = json!("afl");
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][5], gain(-6.0)) && m[0][6] == 0.0);
+        // The bus still takes it at the off level.
+        assert!(close(matrix(&shape, &s)[0][0], gain(-6.0 - 40.0)));
     }
 
     /// AFL listens to what the channel adds to the mix: nothing while its
@@ -1357,7 +1387,7 @@ mod tests {
         s["vcas"]["vca1"]["solo"] = json!("pfl");
         s["channels"]["ch1"]["fader"] = json!(-90);
         let m = matrix(&shape, &s);
-        assert!(close(m[0][5], h) && close(m[0][6], h));
+        assert!(close(m[0][5], h) && close(m[0][6], h), "PFL centred");
     }
 
     /// PanState: a channel as wide as the bus maps leg to leg whatever its

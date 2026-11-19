@@ -615,6 +615,18 @@ async fn solos_reach_the_monitor_output_flow() {
     )
     .await;
     mon.expect(ST1[0], ST1[1], "st1 AFL through its VCA").await;
+    // AFL is before the AFV stage: a closed AFV plays at the fader gain.
+    patch(
+        &server,
+        &[
+            ("/afv/st1/enabled", json!(true)),
+            ("/afv/st1/open", json!(false)),
+            ("/afv/st1/offLevel", json!(-40)),
+        ],
+    )
+    .await;
+    mon.expect(ST1[0], ST1[1], "st1 AFL with its AFV closed")
+        .await;
     patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
     mon.expect(pfl, pfl, "ch1 PFL over st1 AFL").await;
     server.stop().await;

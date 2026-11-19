@@ -226,7 +226,7 @@
       ]
     },
     "Solo": {
-      "description": "Listen state of a channel on the monitor: pre-fader listen, after-fader listen (post-fader, before the AFV stage) or off.",
+      "description": "Listen state of a channel on the monitor: pre-fader listen (before fader, mute and pan, so centred), after-fader listen (post-fader, before the AFV stage, at the channel's pan) or off.",
       "type": "string",
       "enum": [
         "off",

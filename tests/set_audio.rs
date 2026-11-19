@@ -35,7 +35,7 @@ fn shape() -> Value {
             { "id": "ch2", "name": "Pres 2", "width": 1, "layout": "mono", "altInput": true },
         ],
         "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
-        "auxes": [], "mixMinus": [], "vcas": [],
+        "auxes": [], "mixMinus": [], "vcas": [{ "id": "vca1", "name": "Music" }],
         "monitorOutputs": [{ "id": "mon", "name": "Monitor", "width": 2, "layout": "stereo" }],
         "ducks": [{ "id": "talk", "name": "Talk" }],
         "outputs": [
@@ -608,7 +608,8 @@ fn every_replicas_meters_follow_the_faders() {
     // The monitor meters what it plays: the programme, ch2's -12 dBFS
     // sine centred at -3 dB, until ch1's PFL takes its place, centred
     // at -3 dB before its closed fader and mute, and the programme again
-    // once every solo is off.
+    // once every solo is off; then a VCA's AFL of ch2, which the
+    // programme no longer carries, plays it at its fader.
     let monitor = [
         (("/monitor/level", json!(0)), FLOOR, "on its silent source"),
         (("/channels/ch2/fader", json!(0)), -1505, "on its source"),
@@ -618,6 +619,24 @@ fn every_replicas_meters_follow_the_faders() {
             ("/channels/ch1/solo", json!("off")),
             -1505,
             "on its source again",
+        ),
+        // ch2 off the programme leaves the source silent; its VCA's AFL
+        // plays it after its fader again.
+        (
+            ("/channels/ch2/routes/pgm", json!(false)),
+            FLOOR,
+            "on its silent source",
+        ),
+        (
+            ("/vcas/vca1/members", json!(["ch2"])),
+            FLOOR,
+            "on its silent source",
+        ),
+        (("/vcas/vca1/solo", json!("afl")), -1505, "on its VCA's AFL"),
+        (
+            ("/vcas/vca1/solo", json!("off")),
+            FLOOR,
+            "on its silent source again",
         ),
     ];
     let steps = (steps.into_iter().map(|s| (CH1, s))).chain(monitor.into_iter().map(|s| (MON, s)));

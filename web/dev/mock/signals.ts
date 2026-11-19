@@ -483,7 +483,8 @@ export class ReplicaMeters {
       tone(mixMinus, this.shape.mixMinus);
     }
 
-    // Monitor feed: the listen sum, PFL over AFL, else the source folded.
+    // Monitor feed: the listen sum, PFL over AFL, else the source folded. PFL is
+    // before the pan, so it plays centred; AFL plays at the channel's pan.
     const monitor = this.shape.monitorOutputs.map((out) => {
       const solo = (id: string) => {
         const own = state.channels[id]!.solo;
@@ -500,7 +501,7 @@ export class ReplicaMeters {
           if (pfl) return 1;
           return st.mute || vcaMuted(id) ? 0 : dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
         };
-        const mix = mixInto(out.layout, heard.map((l) => ({ id: l.id, gain: gain(l.id), pan: state.channels[l.id]!.pan.lr, fr: state.channels[l.id]!.pan.fr, surround: state.channels[l.id]!.pan })));
+        const mix = mixInto(out.layout, heard.map((l) => ({ id: l.id, gain: gain(l.id), ...(pfl ? { pan: 0, fr: 0 } : { pan: state.channels[l.id]!.pan.lr, fr: state.channels[l.id]!.pan.fr, surround: state.channels[l.id]!.pan }) })));
         return { peak: mix.peak.map((v) => r1(Math.max(SILENCE, v + jitter()))) };
       }
       const all: Array<[ElementShape, BusMeter]> = [

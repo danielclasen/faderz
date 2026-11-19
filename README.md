@@ -52,7 +52,8 @@ high-pass, EQ, gate, compressor), faders, mutes, VCA offsets and mutes,
 AFV open and closed with the off level, mono pan and the fold-down of
 wider channels, bus routing, sends, the bus, aux and mix-minus faders and
 mutes, bus and aux polarity, mix-minus exclusions, the monitor's
-source, channel and VCA PFL and AFL listening (PFL over AFL), fold-down,
+source, channel and VCA PFL and AFL listening (PFL over AFL; PFL
+centred before the pan, AFL at the pan before the AFV stage), fold-down,
 level, dim, cut, mono and speaker mutes and solos, and duck groups. The
 rest of the state is kept, shown and replicated but not applied to the
 audio in this version: channel delay, front/rear pan, divergence and LFE
