@@ -290,7 +290,7 @@ const FLOOR: i16 = -12_000;
 async fn the_mix_reaches_the_output_flows_and_the_meters() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     let domain = domain("mix");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data");
+    let data = data("mix");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
@@ -522,7 +522,7 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_solo_reaches_the_monitor_meter() {
     let domain = domain("solo-meter");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-solo-meter");
+    let data = data("solo-meter");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
@@ -582,7 +582,7 @@ async fn a_loudness_reset_restarts_the_measurement() {
     const INTEGRATED: usize = PGM_PEAK + 8;
     const MAX_MOMENTARY: usize = PGM_PEAK + 10;
     let domain = domain("loud-reset");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-loud-reset");
+    let data = data("loud-reset");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
@@ -649,7 +649,7 @@ async fn a_loudness_reset_restarts_the_measurement() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stereo_channels_image_and_balance_reach_the_programme() {
     let domain = domain("image");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-image");
+    let data = data("image");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
@@ -692,7 +692,7 @@ async fn a_stereo_channels_image_and_balance_reach_the_programme() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn solos_reach_the_monitor_output_flow() {
     let domain = domain("solo");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-solo");
+    let data = data("solo");
     let (ch1, ch2, ch2b, st1) = (new_id(), new_id(), new_id(), new_id());
     let (pgm_id, mm_id, mon_id) = (new_id(), new_id(), new_id());
     let _ch1 = Source::start(&domain.0, &ch1, vec![CH1]);
@@ -782,7 +782,7 @@ async fn solos_reach_the_monitor_output_flow() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn channels_read_the_legs_they_select_from_a_wide_flow() {
     let domain = domain("select");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-select");
+    let data = data("select");
     let (a, b, pgm_id, mm_id) = (new_id(), new_id(), new_id(), new_id());
     let va = |ch: usize| (ch + 1) as f32 / 64.0;
     let vb = |ch: usize| -((ch + 1) as f32) / 128.0;
@@ -824,7 +824,7 @@ async fn channels_read_the_legs_they_select_from_a_wide_flow() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_talkback_interrupt_replaces_the_mix_minus_until_released() {
     let domain = domain("talk");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-talk");
+    let data = data("talk");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
@@ -869,7 +869,7 @@ async fn a_talkback_interrupt_replaces_the_mix_minus_until_released() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_routing_reaches_every_output_flow() {
     let domain = domain("routing");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-routing");
+    let data = data("routing");
     let (ch1, ch2) = (new_id(), new_id());
     let _ch1 = Source::start(&domain.0, &ch1, vec![routing::CH1]);
     let _ch2 = Source::start(&domain.0, &ch2, vec![routing::CH2]);
@@ -943,7 +943,7 @@ async fn the_routing_reaches_every_output_flow() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_mono_channels_pan_places_it_in_a_surround_field() {
     let domain = domain("surround-pan");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-surround-pan");
+    let data = data("surround-pan");
     let (src, out51) = (new_id(), new_id());
     let _src = Source::start(&domain.0, &src, vec![0.5]);
     let shape = json!({
@@ -1045,7 +1045,7 @@ async fn a_mono_channels_pan_places_it_in_a_surround_field() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_output_narrower_than_its_bus_writes_the_fold_down() {
     let domain = domain("fold");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-fold");
+    let data = data("fold");
     let (src, out51, out_lr) = (new_id(), new_id(), new_id());
     // L R C LFE Ls Rs, each a distinct power of two.
     let legs = [0.5f32, 0.25, 0.125, 0.0625, 0.03125, 0.015625];
@@ -1116,7 +1116,7 @@ async fn an_output_narrower_than_its_bus_writes_the_fold_down() {
 async fn a_diff_beyond_the_engines_queue_lands_whole() {
     const N: usize = 40;
     let domain = domain("wide");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-wide");
+    let data = data("wide");
     let ids: Vec<String> = (0..N).map(|_| new_id()).collect();
     let pgm_id = new_id();
     let mut shape = shape();
@@ -1162,7 +1162,7 @@ async fn a_diff_beyond_the_engines_queue_lands_whole() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_strip_processes_each_channel() {
     let domain = domain("strip");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-strip");
+    let data = data("strip");
     let ids: Vec<String> = (0..6).map(|_| new_id()).collect();
     let mono =
         |id: &str| json!({ "id": id, "name": id, "width": 1, "layout": "mono", "altInput": false });
@@ -1353,7 +1353,7 @@ async fn next_of(ws: &mut Ws, kind: &str) -> (Value, Vec<String>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_engine_counters_reach_every_connection() {
     let domain = domain("counters");
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-counters");
+    let data = data("counters");
     let flows = Flows {
         ch1: new_id(),
         ch2: new_id(),
@@ -1456,10 +1456,7 @@ async fn a_burst_ducks_the_programme_but_not_the_me(block: u32) {
         r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
     )
     .unwrap();
-    let data = dir(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
-        &format!("data-{name}"),
-    );
+    let data = data(&name);
     let ids: Vec<String> = (0..4).map(|_| new_id()).collect();
     let stereo = |id: &str, source: &str| json!({ "id": id, "name": id, "source": source, "width": 2, "layout": "stereo" });
     let shape = json!({

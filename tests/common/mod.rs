@@ -52,17 +52,27 @@ pub fn dir(base: &Path, name: &str) -> Dir {
     Dir(dir)
 }
 
+/// tmpfs, or the target directory on a host without one.
+pub fn tmpfs() -> &'static Path {
+    let shm = Path::new("/dev/shm");
+    if shm.is_dir() {
+        shm
+    } else {
+        Path::new(env!("CARGO_TARGET_TMPDIR"))
+    }
+}
+
+/// A replica's data directory on tmpfs, named for its test. A replica
+/// fsyncs its log on every commit, and on a disk busy with builds one
+/// fsync can outlast the 2 s a write waits to commit: the write is then
+/// answered 503, not applied.
+pub fn data(name: &str) -> Dir {
+    dir(tmpfs(), &format!("data-{name}"))
+}
+
 /// An MXL domain on tmpfs, with a 1 s history, named for its test.
 pub fn domain(name: &str) -> Dir {
-    let shm = Path::new("/dev/shm");
-    let d = dir(
-        if shm.is_dir() {
-            shm
-        } else {
-            Path::new(env!("CARGO_TARGET_TMPDIR"))
-        },
-        &format!("mxl-{name}"),
-    );
+    let d = dir(tmpfs(), &format!("mxl-{name}"));
     std::fs::write(
         d.0.join("options.json"),
         r#"{"urn:x-mxl:option:history_duration/v1.0": 1000000000}"#,
@@ -303,10 +313,11 @@ pub fn reserved_port() -> u16 {
     }
 }
 
-/// A directory under the target directory, removed when dropped.
+/// A directory on tmpfs for the volumes of a set, removed when dropped:
+/// on a busy disk a replica's fsync can outlast a write's wait, as for
+/// [`data`].
 pub fn scratch(name: &str) -> Dir {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("faderz-set-{}-{name}", std::process::id()));
+    let dir = tmpfs().join(format!("faderz-set-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     Dir(dir)

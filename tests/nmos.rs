@@ -157,7 +157,7 @@ fn input(server: &Server, slot: usize) -> (InputState, String) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn is05_activations_route_the_engine_and_survive_a_restart() {
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "nmos-data");
+    let data = data("nmos");
     let domain = domain("nmos");
     std::fs::write(
         domain.0.join("domain_def.json"),
@@ -362,7 +362,7 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
 /// state, a relative activation shows as relative.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_scheduled_activation_keeps_the_mode_and_requested_time_it_was_staged_with() {
-    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "nmos-asked-data");
+    let data = data("nmos-asked");
     let domain = domain("nmos-asked");
     std::fs::write(
         domain.0.join("domain_def.json"),
