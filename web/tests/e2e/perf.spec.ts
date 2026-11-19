@@ -60,7 +60,13 @@ async function sweep(page: Page, path: string, until: number): Promise<number> {
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
-test('three clients moving faders with meters on and duck groups firing stay under 50 ms tasks, 4 ms patches at p99 and one frame per patch', { tag: '@mock' }, async ({ browser, request }) => {
+// A failed attempt runs once more with a performance trace, which the
+// first attempt runs without: tracing costs time on the page and could
+// cause or hide a long task. The retry does not make the test pass:
+// failOnFlakyTests fails the run either way.
+test.describe.configure({ retries: 1 });
+
+test('three clients moving faders with meters on and duck groups firing stay under 50 ms tasks, 4 ms patches at p99 and one frame per patch', { tag: '@mock' }, async ({ browser, request }, info) => {
   test.setTimeout(60_000);
   expect((await serverState(request)).shape.channels).toHaveLength(64);
   const contexts = await Promise.all([0, 1, 2].map(() => browser.newContext({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 } })));
@@ -85,10 +91,12 @@ test('three clients moving faders with meters on and duck groups firing stay und
       });
     }
     expect((await request.post('/__mock/ducks/script?ms=1000')).ok()).toBe(true);
-    // A performance trace of the window, kept only when a page has a long
-    // task in it, shows what ran in that task.
-    await browser.startTracing(undefined, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing'] });
-    tracing = true;
+    // On a retry, a performance trace of the window, kept only when a
+    // page has a long task in it, shows what ran in that task.
+    if (info.retry > 0) {
+      await browser.startTracing(undefined, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing'] });
+      tracing = true;
+    }
     const starts = await Promise.all(pages.map((p) => p.evaluate(() => ({ t: performance.now(), patches: window.__faderz!.patches }))));
     const until = Date.now() + WINDOW_MS;
     const moves = await Promise.all(pages.map((p, i) => sweep(p, `/channels/ch${i + 1}/fader`, until)));
@@ -116,7 +124,7 @@ test('three clients moving faders with meters on and duck groups firing stay und
       expect(moves[i]!).toBeGreaterThan(20);
       expect(r.patches - starts[i]!.patches).toBeGreaterThan(0);
       expect(r.patchMs.length).toBeGreaterThan(0);
-      if (r.longTasks.length > 0) {
+      if (r.longTasks.length > 0 && tracing) {
         // Tens of MB: written to the test's output directory, which CI
         // uploads on failure, and not copied into the report.
         await writeFile(test.info().outputPath('performance-trace.json'), (await stopTracing())!);

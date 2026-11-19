@@ -69,6 +69,9 @@ export default defineConfig({
   workers: 1,
   timeout: 30_000,
   forbidOnly: !!process.env['CI'],
+  // A test that passes only on a retry fails the run: a retry exists to
+  // collect what the first attempt could not (perf.spec's trace).
+  failOnFlakyTests: true,
   // CI keeps an HTML report to upload when a test fails.
   reporter: process.env['CI'] ? [['list'], ['html', { open: 'never' }]] : [['list']],
   use: {
