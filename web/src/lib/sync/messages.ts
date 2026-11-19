@@ -2,7 +2,7 @@
 // per user action and a tick per animation frame; the worker answers each
 // tick with at most one patch.
 
-import type { Build, Owner, OwnerHandle, Owners, PresentSession, ReplicaStatus, Revision, Selection, Shape, State } from '../contract/types';
+import type { Build, InputHealth, Owner, OwnerHandle, Owners, PresentSession, ReplicaStatus, Revision, Selection, Shape, State } from '../contract/types';
 import type { LinkState, StandbyState } from './machines';
 
 export type ToWorker =
@@ -83,7 +83,7 @@ export interface Patch {
   status?: SyncStatus;
   /** Latest meter frame, flattened (meters/flat.ts); its buffer is transferred. */
   meters?: { replica: string; sequence: number; values: Float32Array };
-  counters?: { replica: string; values: Record<string, number> };
+  counters?: { replica: string; values: Record<string, number>; inputs: InputHealth[] };
   notices?: WorkerNotice[];
   /** What every session has selected, replaced whole when it changes. */
   selections?: Selection[];

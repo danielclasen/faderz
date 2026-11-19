@@ -157,12 +157,17 @@ at once, without the crossfade.
 Every screen is a session. The USERS panel lists the screens and
 surfaces connected to the replica, with what each holds and has
 selected. The ENGINE lamp in the status bar opens the engine's counters
-of the replica serving the screen and shows WARN while one of them has
-grown in the last 10 s.
+of the replica serving the screen, each under a name for people with an
+(i) that explains it, and shows WARN while a counter whose rise is a
+fault (a late output block, a lost input block, a late change) rose in
+the last 10 s. An input that delivers nothing usable is named on the
+lamp and in the counters with the reason: its flow stopped, the set
+took it down, or its blocks came late. The names and explanations are
+those of `api/ws/counters.schema.json`.
 
 ![The USERS panel listing three operators, one holding the Guest 2 fader and one with Lead Vox selected, and two connected control surfaces](docs/screenshots/users.png)
 
-![The engine counters: deadline misses, overrun samples, late input blocks, input wait timeouts, late commands and late AFV changes](docs/screenshots/engine-counters.png)
+![The engine counters by their names for people, each with an (i) that explains it: the faults first, such as late output blocks and late input blocks, then the counters expected to rise at times](docs/screenshots/engine-counters.png)
 
 Below 1400 px of width the strips take the full width and the MASTERS
 key shows the masters over them.

@@ -145,3 +145,35 @@ test('a tap outside About / What\'s new on a phone closes it', async ({ page }) 
   await page.touchscreen.tap(v.width / 2, (r.y + r.height + v.height) / 2);
   await expect(dialog).toBeHidden();
 });
+
+test('explains an engine counter on a tap, with its key, and names the input at fault, within the screen', async ({ page }) => {
+  await live(page);
+  const lamp = page.getByTestId('engine');
+  // The mock prunes VT 2 (st3).
+  await expect(lamp).toHaveText(/^\s*WARN VT 2/, { timeout: 5000 });
+  await lamp.tap();
+  const counters = page.getByRole('region', { name: 'Engine counters' });
+  await expect(counters.getByTestId('engine-faults')).toContainText('Input VT 2 (st3): its flow delivers no audio in time');
+  const info = counters.getByRole('button', { name: 'What Late output blocks means' });
+  // A finger-sized target, though the mark is small.
+  const hit = await info.evaluate((b) => {
+    const after = getComputedStyle(b, '::after');
+    const r = b.getBoundingClientRect();
+    return { w: r.width - parseFloat(after.left) - parseFloat(after.right), h: r.height - parseFloat(after.top) - parseFloat(after.bottom) };
+  });
+  expect(hit.w).toBeGreaterThanOrEqual(44);
+  expect(hit.h).toBeGreaterThanOrEqual(28);
+  await info.tap();
+  await expect(info).toHaveAttribute('aria-expanded', 'true');
+  const help = counters.getByTestId('counter-help');
+  await expect(help).toContainText('Audio blocks the engine finished after their deadline');
+  await expect(help).toContainText('deadline_miss_total');
+  // On screen, the panel scrolling where the phone is short.
+  const p = (await help.boundingBox())!;
+  expect(p.x).toBeGreaterThanOrEqual(0);
+  expect(p.x + p.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width);
+  // A second tap closes it.
+  await info.tap();
+  await expect(help).toHaveCount(0);
+});

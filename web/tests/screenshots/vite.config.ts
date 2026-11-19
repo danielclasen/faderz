@@ -54,7 +54,7 @@ class ShowCluster extends Cluster {
   private routed = 0;
 
   constructor() {
-    super({ automation: false });
+    super({ automation: false, faultyInput: null });
     for (const c of this.shape.channels) {
       c.name = NAMES[c.id] ?? c.name;
       c.source = SOURCES[c.id] ?? c.source;

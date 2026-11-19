@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { handleTag, ownerHandle } from '../../src/lib/net/handle';
-import { engineLamp } from '../../src/lib/counters';
+import { COUNTER_NAMES, counterInfo, engineLamp } from '../../src/lib/counters';
 import { CONSOLE_SESSIONS } from '../../dev/mock/shape';
 import {
   BACKEND,
@@ -1265,20 +1265,22 @@ test('opens the engine counters above the lamp, inside the viewport, at desktop 
 test('shows one engine lamp in the status bar and the counters only on request', { tag: '@meters' }, async ({ page }) => {
   await live(page);
   const lamp = page.getByTestId('engine');
-  await expect(lamp).toHaveText(/ENGINE (OK|WARN \d+)/);
+  await expect(lamp).toHaveText(/ENGINE (OK|WARN \d+)|WARN \S/);
   const width = (await lamp.boundingBox())!.width;
-  await expect(page.locator('footer.bar')).not.toContainText('deadline_miss');
+  await expect(page.locator('footer.bar')).not.toContainText('Late output blocks');
   await lamp.click();
   const counters = page.getByRole('region', { name: 'Engine counters' });
-  // Every total is listed in the panel: none is cut.
-  for (const name of ['deadline_miss', 'overrun_skipped_samples', 'input_late_blocks', 'input_wait_timeout', 'command_late', 'afv_late']) {
-    await expect(counters).toContainText(name);
+  // Every counter is listed in the panel by its name for people: none is cut.
+  for (const name of COUNTER_NAMES) {
+    await expect(counters.locator(`[data-counter="${name}"] .label`)).toHaveText(counterInfo(name).label);
   }
   await lamp.click();
   await expect(counters).toHaveCount(0);
   expect((await lamp.boundingBox())!.width).toBe(width);
-  // OK and WARN with any count, two digits and capped ones included, give
-  // the lamp one width and fit its text: a change moves nothing.
+  // OK, WARN with any count, two digits and capped ones included, and
+  // WARN naming one input or several, a long name included, give the
+  // lamp one width and fit its text: a change moves nothing.
+  const texts = [...[0, 3, 12, 99, 250].map((n) => engineLamp(n)), engineLamp(0, ['VT 2']), engineLamp(1, ['A very long strip name', 'VT 2', 'x'])];
   const sizes = await lamp.evaluate((b, texts) => {
     const text = b.querySelector<HTMLElement>('.fixed')!;
     const was = text.textContent;
@@ -1288,8 +1290,45 @@ test('shows one engine lamp in the status bar and the counters only on request',
     });
     text.textContent = was;
     return out;
-  }, [0, 3, 12, 99, 250].map(engineLamp));
+  }, texts);
   for (const s of sizes) expect(s).toEqual({ w: width, fits: true });
+});
+
+test('names the input at fault and why in the engine lamp and its panel, and explains each counter on a click', { tag: '@mock' }, async ({ page }) => {
+  await live(page);
+  const lamp = page.getByTestId('engine');
+  // The mock prunes VT 2 (st3): the lamp names it within a counters period or two.
+  await expect(lamp).toHaveText(/^\s*WARN VT 2/, { timeout: 5000 });
+  // Its tooltip says why.
+  await expect(lamp).toHaveAttribute('data-tip', /^Input VT 2 \(st3\): its flow delivers no audio in time/);
+  await lamp.click();
+  const counters = page.getByRole('region', { name: 'Engine counters' });
+  await expect(counters.getByTestId('engine-faults').locator('[data-input="st3"]')).toContainText('Input VT 2 (st3): its flow delivers no audio in time');
+  // The silenced blocks rose, amber; the expected ones never are.
+  await expect(counters.locator('[data-counter="input_silenced_blocks_total"]')).toHaveClass(/nz/);
+  await expect(counters.locator('.c.nz')).not.toHaveCount(0);
+  for (const name of COUNTER_NAMES.filter((n) => !counterInfo(n).fault)) {
+    await expect(counters.locator(`[data-counter="${name}"]`)).not.toHaveClass(/nz/);
+  }
+  // A click on (i) explains the counter and names its key; another closes it.
+  const info = counters.getByRole('button', { name: 'What Silenced input blocks means' });
+  await expect(info).toHaveAttribute('aria-expanded', 'false');
+  await info.click();
+  await expect(info).toHaveAttribute('aria-expanded', 'true');
+  const help = counters.getByTestId('counter-help');
+  await expect(help).toContainText(counterInfo('input_silenced_blocks_total').help);
+  // Named among the inputs behind it (the mock adds a late block on another now and then).
+  await expect(help).toContainText(/From (.*, )?VT 2 \(st3\)/);
+  await expect(help).toContainText('input_silenced_blocks_total');
+  // Keyboard: Enter on another (i) moves the explanation there.
+  await counters.getByRole('button', { name: 'What Late output blocks means' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(help).toContainText(counterInfo('deadline_miss_total').help);
+  await expect(counters.getByTestId('counter-help')).toHaveCount(1);
+  // The panel stays inside the viewport with the explanation open.
+  const p = (await counters.boundingBox())!;
+  expect(p.y).toBeGreaterThanOrEqual(0);
+  expect(p.x + p.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
 test('lights PFL amber and every generic on key in the neutral colour, with no lit OFF key', async ({ page, request }) => {
