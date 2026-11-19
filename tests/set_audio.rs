@@ -1405,6 +1405,104 @@ fn a_replica_replaying_the_whole_log_writes_what_its_peers_write() {
     }
 }
 
+/// Posts a tally of `source` through the running replica `first` names,
+/// or the next one, while the set answers otherwise than applied, as
+/// [`write`] does.
+fn post_tally(nodes: &[Option<Node>], first: usize, source: &str, state: &str) {
+    let body = json!({ "source": source, "state": state });
+    let running: Vec<&Node> = (0..REPLICAS)
+        .map(|n| (first + n) % REPLICAS)
+        .filter_map(|n| nodes[n].as_ref())
+        .collect();
+    let mut answers = Vec::new();
+    for attempt in 0..30 {
+        let node = running[attempt % running.len()];
+        let (status, answer) = node
+            .runtime
+            .block_on(post(node.server.api, "/afv/tally", &body));
+        if status == 200 {
+            return;
+        }
+        answers.push(answer);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("{body} not applied: {answers:?}{}", states(nodes));
+}
+
+/// Direct outs, mix-minus exclusions, bus, aux and mix-minus masters,
+/// aux sends, VCAs and the AFV stage a tally drives are replicated
+/// state: through every step of [`routing::steps`], written to one
+/// replica after another, every replica writes the legs the step gives
+/// to its member flow of each output.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_routes_alike() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let ids: Vec<&str> = routing::OUTPUTS.iter().map(|(id, _)| *id).collect();
+    let (set, listeners) = Set::with("routing", routing::shape(), &ids, |domain| {
+        let (ch1, ch2) = (new_id(), new_id());
+        (
+            vec![
+                Source::start(domain, &ch1, vec![routing::CH1]),
+                Source::start(domain, &ch2, vec![routing::CH2]),
+            ],
+            json!({ "ch1": { "flow": ch1 }, "ch2": { "flow": ch2 } }),
+        )
+    });
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    // Each output's member flows, by replica.
+    let flows: Vec<Vec<String>> = (ids.iter())
+        .map(|id| {
+            (set.outputs[id]["flows"].as_array().unwrap().iter())
+                .map(|f| f.as_str().unwrap().to_owned())
+                .collect()
+        })
+        .collect();
+    let near = |leg: &[f32], want: f32| leg.iter().all(|v| (v - want).abs() <= 1e-6);
+    for (i, step) in routing::steps().iter().enumerate() {
+        match &step.change {
+            routing::Change::Patch(changes) => write(&nodes, i, changes),
+            routing::Change::Tally(source, state) => post_tally(&nodes, i, source, state),
+        }
+        for n in 0..REPLICAS {
+            let mut last = Vec::new();
+            // Twice in a row, as an output read before the change was
+            // applied holds its old legs.
+            let mut held = 0;
+            let read = until(20, || {
+                last.clear();
+                let mut all = true;
+                let outputs = (flows.iter()).zip(routing::OUTPUTS);
+                for ((flow, (_, width)), want) in outputs.zip(step.legs.each()) {
+                    let Some(legs) = legs_of(&set.domain.0, &flow[n], width) else {
+                        all = false;
+                        continue;
+                    };
+                    all &= legs.iter().zip(want).all(|(leg, w)| near(leg, *w));
+                    last.push(legs.iter().map(|leg| leg[0]).collect::<Vec<_>>());
+                }
+                held = if all { held + 1 } else { 0 };
+                held == 2
+            });
+            assert!(
+                read,
+                "replica {n}, {}: wanted {:?}, read {last:?}: {}",
+                step.what,
+                step.legs,
+                states(&nodes)
+            );
+        }
+    }
+}
+
 /// An interrupt of the mix-minus output is one replicated command: every
 /// replica's member flow of it carries the talkback channel alone, at
 /// its level (ch1 is 6 dB above ch2) before its closed fader, in place of the mix, alike on all
