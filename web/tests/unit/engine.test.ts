@@ -197,25 +197,33 @@ describe('sync engine: connecting', () => {
     expect(t.engine.status().standbyReplica).toBe('r3');
   });
 
-  /** Primary synced on r1; then `n` standbys each land on r1 and report `report`. */
-  function standbyMisses(n: number, report: ReplicasMessage) {
+  /**
+   * Primary synced on r1; then one standby per step: it lands on r1 and
+   * reports the step's message, or the server drops it once open. Stops
+   * at the first standby not retried after STANDBY_RETRY_MS.
+   */
+  function standbyLandings(steps: ReadonlyArray<ReplicasMessage | 'drop'>) {
     const t = setup();
     t.sockets[0]!.open();
     t.sockets[0]!.deliver(replicas(R1));
     t.sockets[0]!.deliver(snapshot(R1, 1));
-    for (let i = 0; i < n; i++) {
+    for (const [i, step] of steps.entries()) {
       const s = t.sockets.at(-1)!;
       expect(s).not.toBe(t.sockets[0]);
       s.open();
-      s.deliver(report);
+      if (step === 'drop') s.drop();
+      else s.deliver(step);
       expect(s.closed).toBe(true);
       const before = t.sockets.length;
       t.clock.advance(STANDBY_RETRY_MS);
       t.sockets[0]!.deliver({ type: 'ping', replica: R1, t: t.clock.now() });
       if (t.sockets.length === before) return { ...t, retried: i };
     }
-    return { ...t, retried: n };
+    return { ...t, retried: steps.length };
   }
+
+  /** `n` standbys that each land on r1 and report `report`. */
+  const standbyMisses = (n: number, report: ReplicasMessage) => standbyLandings(Array<ReplicasMessage>(n).fill(report));
 
   // A service endpoint routes every connection at random: landing on the
   // primary's replica again and again while another is healthy is chance,
@@ -244,6 +252,21 @@ describe('sync engine: connecting', () => {
       t.clock.advance(1);
       expect(t.sockets).toHaveLength(before + 1);
     }
+  });
+
+  // The cap bounds misses in a row: a failed attempt ends the run, so the
+  // misses after it are retried at once again rather than counted as
+  // failures for the misses before it.
+  it('starts a new run of misses after a failed standby attempt', () => {
+    const miss = replicas(R1);
+    const steps = [...Array<ReplicasMessage>(STANDBY_MISSES).fill(miss), 'drop' as const, ...Array<ReplicasMessage>(STANDBY_MISSES).fill(miss)];
+    const t = standbyLandings(steps);
+    expect(t.retried).toBe(steps.length);
+    const s = t.sockets.at(-1)!;
+    s.open();
+    s.deliver(replicas(R2));
+    s.deliver(resume(R2, 1));
+    expect(t.engine.standbyState).toBe('Ready');
   });
 
   it('sends no meter frames request and no commands on the standby', () => {

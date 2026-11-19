@@ -213,7 +213,9 @@ export class SyncEngine {
   private primaryIndex = 0;
   private primaryAttempts = 0;
   private standbyAttempts = 0;
-  /** Of standbyAttempts, those that landed on the primary's replica by chance (STANDBY_MISSES). */
+  /** Standby attempts since the last synced standby that failed; misses do not count. */
+  private standbyFailures = 0;
+  /** Standbys in a row that landed on the primary's replica by chance (STANDBY_MISSES); a failure ends the run. */
   private standbyMisses = 0;
   /** Offline periods in a row, since the last sync. */
   private offlineRounds = 0;
@@ -604,6 +606,7 @@ export class SyncEngine {
     this.detach(link);
     if (link === this.standby) {
       this.standby = null;
+      this.standbyFailed();
       this.standbyEvent(why === 'dead' ? 'beatsMissed' : 'lost');
       this.scheduleStandby();
       return;
@@ -699,7 +702,7 @@ export class SyncEngine {
 
   private scheduleStandby(): void {
     if (this.standbyState !== 'Idle' || this.cancelStandbyRetry) return;
-    const failures = this.standbyAttempts - this.standbyMisses;
+    const failures = this.standbyFailures;
     const delay =
       failures < STANDBY_TRIES ? STANDBY_RETRY_MS : backoff(STANDBY_BACKOFF_MS, failures - STANDBY_TRIES, RETRY_CAP_MS, this.random);
     this.cancelStandbyRetry = this.clock.schedule(() => {
@@ -742,11 +745,28 @@ export class SyncEngine {
    */
   private missStandby(link: Link): void {
     const reported = link.replicas ?? this.primary?.replicas ?? [];
-    if (this.standbyMisses < STANDBY_MISSES && reported.some((r) => r.healthy && r.id !== link.replica?.id)) this.standbyMisses++;
-    this.dropStandby(link);
+    if (this.standbyMisses < STANDBY_MISSES && reported.some((r) => r.healthy && r.id !== link.replica?.id)) {
+      this.standbyMisses++;
+    } else {
+      // Past the misses, or with no other replica to land on, a landing
+      // on the primary's replica fails without ending the run of them.
+      this.standbyFailures++;
+    }
+    this.letGoStandby(link);
+  }
+
+  /** A standby attempt that failed other than by landing on the primary's replica, which ends a run of misses. */
+  private standbyFailed(): void {
+    this.standbyFailures++;
+    this.standbyMisses = 0;
   }
 
   private dropStandby(link: Link): void {
+    this.standbyFailed();
+    this.letGoStandby(link);
+  }
+
+  private letGoStandby(link: Link): void {
     this.detach(link);
     this.standby = null;
     this.standbyEvent('unsuitable');
@@ -929,6 +949,7 @@ export class SyncEngine {
     if (!this.standbySuitable(link)) return this.missStandby(link);
     this.standbyEvent('synced');
     this.standbyAttempts = 0;
+    this.standbyFailures = 0;
     this.standbyMisses = 0;
     this.checkCommitable();
   }
