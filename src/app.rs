@@ -265,6 +265,34 @@ fn hears(
     metrics.current_leader == Some(id)
 }
 
+/// Each voter as the replicas list shows it, and whether a majority of
+/// them is heard now. Replica `me` is up while `ready`; another is
+/// listed up while heard now (`hears`) or within [`DOWN_AFTER`], but the
+/// majority, which `me`'s own commitable and so a client's failover
+/// follow, counts only those heard now.
+fn listing(
+    voters: &[NodeId],
+    me: NodeId,
+    ready: bool,
+    heard: &mut BTreeMap<NodeId, Instant>,
+    now: Instant,
+    mut hears: impl FnMut(NodeId) -> bool,
+) -> (BTreeMap<NodeId, bool>, bool) {
+    let mut up = BTreeMap::new();
+    let mut heard_now = 0;
+    for &id in voters {
+        let (now_up, listed) = if id == me {
+            (ready, ready)
+        } else {
+            let h = hears(id);
+            (h, up_within(id, h, heard, now))
+        };
+        heard_now += usize::from(now_up);
+        up.insert(id, listed);
+    }
+    (up, 2 * heard_now > voters.len())
+}
+
 impl App {
     pub fn new(
         replica: Arc<Replica<Mixer>>,
@@ -355,19 +383,9 @@ impl App {
         // [`DOWN_AFTER`] is listed up, but the quorum, which this replica's
         // own commitable and so a client's failover follow, counts what is
         // heard now.
-        let mut heard_now: BTreeMap<NodeId, bool> = BTreeMap::new();
-        let mut up: BTreeMap<NodeId, bool> = BTreeMap::new();
-        for &id in &voters {
-            let (now_up, listed) = if id == me {
-                (info.ready, info.ready)
-            } else {
-                let h = hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now);
-                (h, up_within(id, h, &mut heard, now))
-            };
-            heard_now.insert(id, now_up);
-            up.insert(id, listed);
-        }
-        let quorum = 2 * heard_now.values().filter(|&&up| up).count() > voters.len();
+        let (up, quorum) = listing(&voters, me, info.ready, &mut heard, now, |id| {
+            hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now)
+        });
         let mut listed: Vec<(u16, Value)> = Vec::new();
         for &id in &voters {
             let membership::Slot::Audio(ordinal) = membership::slot_of(id) else {
@@ -924,6 +942,24 @@ pub(crate) mod tests {
             "unheard for the window"
         );
         assert!(up_within(2, true, &mut heard, t0 + 2 * DOWN_AFTER));
+    }
+
+    /// A replica that loses every other one stops counting a majority at
+    /// once, so its own commitable and a client's failover do not wait,
+    /// while the list still shows the others up within the grace.
+    #[test]
+    fn a_replica_alone_has_no_quorum_at_once_though_it_lists_the_others_up() {
+        let mut heard = BTreeMap::new();
+        let t0 = Instant::now();
+        let voters = [1, 2, 3];
+        let (up, quorum) = listing(&voters, 1, true, &mut heard, t0, |_| true);
+        assert!(quorum && up.values().all(|&u| u), "{up:?}");
+        let late = t0 + Duration::from_millis(250);
+        let (up, quorum) = listing(&voters, 1, true, &mut heard, late, |_| false);
+        assert!(!quorum, "a quorum of replicas heard a moment ago");
+        assert!(up[&2] && up[&3], "listed down within the grace: {up:?}");
+        let (up, quorum) = listing(&voters, 1, true, &mut heard, t0 + DOWN_AFTER, |_| false);
+        assert!(!quorum && !up[&2] && !up[&3], "{up:?}");
     }
 
     /// The leader hears a follower that trails by a batch while it keeps
