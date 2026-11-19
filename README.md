@@ -73,11 +73,12 @@ front (the centre of the field is the C leg alone) and between the
 surrounds at the rear; `divergence` blends that with a plain pan
 between L and R, none of it at 0 and all of it at 1; `fr` crossfades front and rear, -1 the front alone and 1
 the rear alone; `lfe` is a send of its own onto the LFE leg, silent at
--90 dB. A new channel is at the front, `fr` -1. A state saved before
-the panner keeps its sound: its mono channels, and those of its scenes,
-are loaded at the front with full divergence, the L/R pan they had. A
-stereo channel on a surround bus is balanced by `lr` onto its L and R
-legs alone.
+-90 dB. A new mono channel is at the front (`fr` -1) with full
+divergence, the L/R pan a mono channel had on a surround bus before the
+field; lower `divergence` to use the C leg. A state saved before the
+panner loads its mono channels, and those of its scenes, so, and a log
+replays onto the same initial state on every replica. A stereo channel
+on a surround bus is balanced by `lr` onto its L and R legs alone.
 
 A loudness reset restarts the measurement at the first 100 ms window
 starting at or after the `atIndex` of the delta that counted it, the same

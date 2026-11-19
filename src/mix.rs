@@ -1980,13 +1980,22 @@ mod tests {
         s["channels"]["ch1"]["fader"] = json!(0);
         s["channels"]["ch1"]["routes"]["pgm"] = json!(true);
         // Rows ch1, ch2, st1 L R, sur x6; columns out-51 x6, out-lr x2.
+        // A new mono channel is the L/R pair of the pan before the field.
+        let m = matrix(&shape, &s);
+        let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
+        assert!(
+            (row[0] - h).abs() < 1e-6 && (row[1] - h).abs() < 1e-6 && row[2] == 0.0,
+            "{row:?}"
+        );
+        // No divergence: the centre leg alone, the fold onto Lo and Ro
+        // taking it at -3 dB.
+        s["channels"]["ch1"]["pan"]["divergence"] = json!(0);
         let m = matrix(&shape, &s);
         let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
         assert!(
             (row[2] - 1.0).abs() < 1e-6 && row[0] == 0.0 && row[1] == 0.0,
             "{row:?}"
         );
-        // The fold onto Lo and Ro: the centre at -3 dB.
         assert!(close(m[0][6], h) && close(m[0][7], h), "{m:?}");
         s["channels"]["ch1"]["pan"] = json!({ "lr": 0, "fr": 1, "divergence": 0, "lfe": -6 });
         let m = matrix(&shape, &s);

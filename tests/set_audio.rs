@@ -1282,6 +1282,8 @@ fn every_replica_places_a_mono_channel_in_the_surround_field() {
         ],
     );
     // fr, lr and the legs L R C LFE Ls Rs every replica writes.
+    // A new mono channel is the L/R pair; no divergence puts it in C.
+    write(&nodes, 0, &[("/channels/m/pan/divergence", json!(0))]);
     let steps: [(f64, f64, [f32; 6]); 4] = [
         (-1.0, 0.0, [0.0, 0.0, 0.5, 0.0, 0.0, 0.0]),
         (-1.0, -1.0, [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]),
@@ -1312,6 +1314,92 @@ fn every_replica_places_a_mono_channel_in_the_surround_field() {
                 states(&nodes)
             );
         }
+    }
+}
+
+/// A replica that joins late replays the whole log from its first entry
+/// onto the initial state of the shape, as its peers' states began: the
+/// entries wrote a mono channel's left-right pan on a 5.1 bus and nothing
+/// of the rest of its pan, and every replica writes the same legs, the
+/// L/R pair the pan was before the field.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_replica_replaying_the_whole_log_writes_what_its_peers_write() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "m", "name": "Mic", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 6, "layout": "5.1" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-51", "name": "PGM 5.1", "source": "pgm", "width": 6, "layout": "5.1" },
+        ],
+    });
+    let (set, listeners) = Set::with("replay", shape, &["out-51"], |domain| {
+        let src = new_id();
+        (
+            vec![Source::start(domain, &src, vec![0.5])],
+            json!({ "m": { "flow": src } }),
+        )
+    });
+    let mut listeners: Vec<Option<std::net::TcpListener>> =
+        listeners.into_iter().map(Some).collect();
+    let mut nodes: Vec<Option<Node>> = (0..REPLICAS).map(|_| None).collect();
+    nodes[0] = Some(set.start(0, listeners[0].take()));
+    steady(&nodes, 0);
+    // Entries that wrote the left-right position alone.
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/m/fader", json!(0)),
+            ("/channels/m/routes/pgm", json!(true)),
+            ("/channels/m/pan/lr", json!(0.3)),
+        ],
+    );
+    for n in 1..REPLICAS {
+        nodes[n] = Some(set.start(n, listeners[n].take()));
+    }
+    let voters = |nodes: &[Option<Node>]| {
+        let raft = node(nodes, 0)
+            .server
+            .app
+            .replica
+            .raft()
+            .metrics()
+            .borrow()
+            .clone();
+        raft.membership_config.membership().voter_ids().count()
+    };
+    let grown = until(60, || voters(&nodes) == REPLICAS);
+    assert!(grown, "the set did not grow to three: {}", states(&nodes));
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let theta = 1.3 * std::f32::consts::FRAC_PI_4;
+    let want = [theta.cos(), theta.sin(), 0.0, 0.0, 0.0, 0.0].map(|g| g * 0.5);
+    for n in 0..REPLICAS {
+        let mut last = None;
+        let read = until(30, || {
+            let Some(out) = legs_of(&set.domain.0, &set.members[n], 6) else {
+                return false;
+            };
+            last = Some(out.iter().map(|l| l[0]).collect::<Vec<_>>());
+            out.iter()
+                .zip(want)
+                .all(|(leg, w)| leg.iter().all(|v| (v - w).abs() <= 1e-6))
+        });
+        assert!(
+            read,
+            "replica {n}: wanted {want:?}, read {last:?}: {}",
+            states(&nodes)
+        );
     }
 }
 

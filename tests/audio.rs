@@ -884,10 +884,15 @@ async fn a_mono_channels_pan_places_it_in_a_surround_field() {
     let near = |v: &f32, want: f32| (v - want).abs() <= 1e-6;
     // L R C LFE Ls Rs for each position of the field.
     let lfe = a * 10f32.powf(-6.0 / 20.0);
-    let steps: [(&str, Value, [f32; 6]); 4] = [
+    let steps: [(&str, Value, [f32; 6]); 5] = [
+        (
+            "the L/R pair a new channel is",
+            json!({}),
+            [a * h, a * h, 0.0, 0.0, 0.0, 0.0],
+        ),
         (
             "front centre",
-            json!({ "fr": -1 }),
+            json!({ "divergence": 0 }),
             [0.0, 0.0, a, 0.0, 0.0, 0.0],
         ),
         (
@@ -917,7 +922,9 @@ async fn a_mono_channels_pan_places_it_in_a_surround_field() {
             .iter()
             .map(|(p, v)| (p.as_str(), v.clone()))
             .collect();
-        patch(&server, &writes).await;
+        if !writes.is_empty() {
+            patch(&server, &writes).await;
+        }
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if let Some(b) = wide.recent()

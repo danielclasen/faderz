@@ -4687,6 +4687,35 @@ mod tests {
         assert_eq!(*at(&now, "/channels/ch1/pan/divergence"), json!(0));
     }
 
+    /// The initial state is a function of the shape alone and sounds as
+    /// the pan did before the surround panner: a log of entries that
+    /// wrote the left-right position and nothing else, replayed from its
+    /// first entry onto it, gives the L/R pair, on every replica.
+    #[test]
+    fn a_log_replayed_from_the_start_sounds_as_the_pan_did_before_the_field() {
+        let shape = Shape::parse(&crate::shape::tests::surround()).unwrap();
+        let mut replayed = Mixer::new(shape.clone());
+        set(&mut replayed, "a", 1, "/channels/ch1/fader", json!(0));
+        set(
+            &mut replayed,
+            "a",
+            2,
+            "/channels/ch1/routes/pgm",
+            json!(true),
+        );
+        set(&mut replayed, "a", 3, "/channels/ch1/pan/lr", json!(0.3));
+        let theta = 1.3 * std::f64::consts::FRAC_PI_4;
+        let g = crate::mix::matrix(&shape, replayed.state());
+        let legs: Vec<f64> = g[0][..6].iter().map(|g| f64::from(*g)).collect();
+        let before = [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0];
+        assert!(
+            legs.iter().zip(before).all(|(g, w)| (g - w).abs() < 1e-6),
+            "{legs:?}"
+        );
+        assert_eq!(*at(&replayed, "/channels/ch1/pan/divergence"), json!(1));
+        assert_eq!(*at(&replayed, "/channels/st1/pan/divergence"), json!(0));
+    }
+
     const OWN: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a0f";
 
     /// [`wired`] whose outputs write or merge into [`OWN`].
