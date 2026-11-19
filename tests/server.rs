@@ -34,8 +34,7 @@ fn shape() -> Value {
     })
 }
 
-/// A fresh data directory under the target directory, removed when
-/// dropped.
+/// A fresh data directory, removed when dropped.
 struct Dir(PathBuf);
 
 impl std::ops::Deref for Dir {
