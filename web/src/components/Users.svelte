@@ -83,23 +83,25 @@
   }
   /* The count changes whenever a session elsewhere takes or lets go of a
      control. A button lays out its content as flex items, which are never
-     relayout boundaries, so the text sits in a block of its own, sized for
-     a count of up to three digits, with size and layout containment: a
-     new count lays out that box, not the page. */
+     relayout boundaries, so the text sits in a block of its own with size
+     and layout containment: a new count lays out that box, not the page.
+     The box fits a count of two digits; a third shows centred over the
+     box's edges, inside the key's padding, since paint is not contained,
+     and the header gives the key no more room than two digits take. */
   .count {
     display: block;
   }
   .count .fixed {
-    display: block;
-    width: calc(9ch + 9 * 0.06em);
+    display: flex;
+    justify-content: center;
+    width: calc(8ch + 8 * 0.06em);
     height: 14px;
     line-height: 14px;
-    text-align: center;
     contain: size layout style;
   }
   @media (max-height: 500px) {
     .count .fixed {
-      width: calc(7ch + 7 * 0.06em);
+      width: calc(6ch + 6 * 0.06em);
     }
   }
   /* Opens under the header over the view; it moves nothing. */

@@ -1551,8 +1551,9 @@ test('lists every session connected to the replica in USERS, until it closes', a
   await expect(key).toHaveAttribute('aria-label', `Users ${count}`);
 });
 
-// The count sits in a box of fixed size (Users.svelte), so it has to fit
-// a count of three digits, on a tall screen and on a short one.
+// The count sits in a box of fixed size (Users.svelte), so a count of
+// three digits has to show whole within the key, on a tall screen and on
+// a short one.
 test('shows a USERS count of three digits whole, on a tall and a short screen', { tag: '@mock' }, async ({ page, baseURL }) => {
   const ws = baseURL!.replace(/^http/, 'ws');
   await live(page, `/?endpoints=${ws}/__mock/replicas/r1/api/v1/ws,${ws}/__mock/replicas/r2/api/v1/ws`);
@@ -1561,7 +1562,16 @@ test('shows a USERS count of three digits whole, on a tall and a short screen', 
     const key = page.getByRole('button', { name: /^Users \d+$/ });
     await expect(key).toHaveAttribute('aria-label', /^Users 1\d\d$/);
     const count = key.locator('.fixed');
-    const whole = () => count.evaluate((el) => el.scrollWidth <= el.clientWidth);
+    // The text, which may run over its box, lies within the key's border.
+    const whole = () =>
+      count.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const text = range.getBoundingClientRect();
+        const box = el.closest('button')!.getBoundingClientRect();
+        const border = parseFloat(getComputedStyle(el.closest('button')!).borderLeftWidth);
+        return text.left >= box.left + border && text.right <= box.right - border;
+      });
     await expect(count).toHaveText(/^USERS 1\d\d$/);
     expect(await whole()).toBe(true);
     await page.setViewportSize({ width: 1600, height: 480 });
