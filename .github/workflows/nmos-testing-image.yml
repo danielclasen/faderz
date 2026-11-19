@@ -1,0 +1,87 @@
+name: nmos-testing image
+
+# The AMWA nmos-testing tool at the commit .github/nmos-testing.ref pins,
+# built once and published as
+# ghcr.io/<owner>/faderz-nmos-testing:<commit>, so a CI run pulls it
+# instead of building it (half an hour, most of it fetching release
+# tarballs from GitHub). A push or pull request that changes the pin
+# publishes its image, so the image is there before the change merges;
+# a pull request from a fork cannot push, and its pin is published by
+# running this workflow by hand. An image already published is left as
+# it is.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/nmos-testing.ref
+      - .github/workflows/nmos-testing-image.yml
+  pull_request:
+    paths:
+      - .github/nmos-testing.ref
+      - .github/workflows/nmos-testing-image.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: nmos-testing-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the pinned commit
+        run: |
+          ref=$(cat .github/nmos-testing.ref)
+          [[ $ref =~ ^[0-9a-f]{40}$ ]]
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER}/faderz-nmos-testing:$ref" >> "$GITHUB_ENV"
+          echo "REF=$ref" >> "$GITHUB_ENV"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: published
+        name: Look for the image
+        run: |
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "$IMAGE is published"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.published.outputs.found != 'true'
+        name: Check out nmos-testing
+        run: |
+          git init -q nmos-testing
+          git -C nmos-testing fetch -q --depth 1 https://github.com/AMWA-TV/nmos-testing "$REF"
+          git -C nmos-testing checkout -q FETCH_HEAD
+      - if: steps.published.outputs.found != 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: steps.published.outputs.found != 'true'
+        id: build
+        name: Build and push the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: nmos-testing
+          push: true
+          tags: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.REF }}
+          cache-from: type=gha,scope=nmos-testing
+          cache-to: type=gha,scope=nmos-testing,mode=max
+      # Workflow logs are no evidence the published image is right.
+      - if: steps.published.outputs.found != 'true'
+        name: Pull the published image and start the tool
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker pull "${IMAGE%:*}@$DIGEST"
+          docker run --rm --entrypoint python3 "${IMAGE%:*}@$DIGEST" nmos-test.py --help >/dev/null
