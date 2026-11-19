@@ -543,9 +543,10 @@ fn ch1_peak(node: &Node, skip: usize) -> i16 {
                     continue;
                 }
                 assert_eq!(f[..2], [0x4d, 4], "magic and version");
-                // After the 12-byte header and the replica's name; ch1's
-                // peak is the frame's first value.
-                let at = 12 + usize::from(f[2]);
+                // After the 12-byte header and the replica's name, padded
+                // to an even length; ch1's peak is the frame's first value.
+                let name = usize::from(f[2]);
+                let at = 12 + name + name % 2;
                 return i16::from_le_bytes([f[at], f[at + 1]]);
             }
         }
@@ -555,7 +556,8 @@ fn ch1_peak(node: &Node, skip: usize) -> i16 {
 /// Each replica of a set meters its channels at their taps on the
 /// replicated state, as a single replica does: ch1 meters after its fader
 /// by default, so on every replica it reads its -6 dBFS sine once its
-/// fader opens, digital silence once it closes, and 10 dB less at -10.
+/// fader opens, digital silence once it closes, 10 dB less at -10, and
+/// silence again once muted.
 /// The faders start closed, so a replica metering at the gains it
 /// started with reads silence throughout.
 #[test]
@@ -573,12 +575,26 @@ fn every_replicas_meters_follow_the_faders() {
     for n in 0..REPLICAS {
         steady(&nodes, n);
     }
-    for (fader, want, what) in [
-        (0, -602, "open"),
-        (-90, FLOOR, "closed"),
-        (-10, -1602, "at -10 dB"),
-    ] {
-        write(&nodes, 0, &[("/channels/ch1/fader", json!(fader))]);
+    let steps = [
+        (
+            ("/channels/ch1/fader", json!(0)),
+            -602,
+            "with its fader open",
+        ),
+        (
+            ("/channels/ch1/fader", json!(-90)),
+            FLOOR,
+            "with its fader closed",
+        ),
+        (
+            ("/channels/ch1/fader", json!(-10)),
+            -1602,
+            "with its fader at -10 dB",
+        ),
+        (("/channels/ch1/mute", json!(true)), FLOOR, "muted"),
+    ];
+    for ((path, value), want, what) in steps {
+        write(&nodes, 0, &[(path, value)]);
         for n in 0..REPLICAS {
             let mut last = 0;
             let read = until(10, || {
@@ -589,7 +605,7 @@ fn every_replicas_meters_follow_the_faders() {
             });
             assert!(
                 read,
-                "replica {n}'s ch1 meter with its fader {what}: {last}, not {want}: {}",
+                "replica {n}'s ch1 meter {what}: {last}, not {want}: {}",
                 states(&nodes)
             );
         }
