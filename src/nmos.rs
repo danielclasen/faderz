@@ -892,7 +892,7 @@ impl Conns {
         let port = self.ports[index].port_ref();
         let at = u64::try_from(at.as_nanos())
             .map_err(|_| Fail("activation time out of range".into()))?;
-        let (current, pending) = self.app.replica.store().with_state(|sm| {
+        let (current, pending) = self.app.with_state(|sm| {
             let current = actives(&sm.product, &self.ports[index..=index]).remove(0);
             let pending = (sm.product.scheduled().iter())
                 .find(|s| s.port == port)

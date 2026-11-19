@@ -151,10 +151,12 @@ async fn result(app: &App, ack: &Ack, command_id: bool) -> Value {
 }
 
 async fn get_state(State(app): State<Arc<App>>) -> Response {
-    let document = app.replica.store().with_state(|sm| {
+    // Taken before the state: it reaches samplez's contact lock.
+    let replica = app.replica_ref();
+    let document = app.with_state(|sm| {
         json!({
             "revision": sm.revision,
-            "replica": app.replica_ref(),
+            "replica": replica,
             "shape": sm.product.shape(),
             "state": sm.product.state(),
             "owners": sm.product.owners(),
@@ -199,7 +201,7 @@ async fn patch_state(
                 &json!({ "path": c.path, "value": c.value }),
             )?;
         }
-        let checked = app.replica.store().with_state(|sm| {
+        let checked = app.with_state(|sm| {
             b.changes
                 .iter()
                 .try_for_each(|c| sm.product.check_write(&c.path, &c.value))
@@ -262,10 +264,7 @@ async fn scene_result(
     };
     let ack = run(app, owner, &b.command_id, command).await?;
     let record = match app.answer(&SessionKey::from(owner), &ack) {
-        Some(Answer::Scene { scene }) => app
-            .replica
-            .store()
-            .with_state(|sm| sm.product.scene(&scene).cloned()),
+        Some(Answer::Scene { scene }) => app.with_state(|sm| sm.product.scene(&scene).cloned()),
         _ => None,
     };
     let Some(record) = record else {
@@ -290,11 +289,7 @@ async fn create_scene(
 }
 
 fn known_scene(app: &App, scene: &str) -> Result<(), Response> {
-    if app
-        .replica
-        .store()
-        .with_state(|sm| sm.product.has_scene(scene))
-    {
+    if app.with_state(|sm| sm.product.has_scene(scene)) {
         Ok(())
     } else {
         Err(error(
@@ -469,7 +464,7 @@ async fn reset_loudness(
     let run = async {
         let b: ResetBody = body(&bytes)?;
         valid(|c| &c.id_set, "ids", &json!(b.ids))?;
-        let unknown = app.replica.store().with_state(|sm| {
+        let unknown = app.with_state(|sm| {
             b.ids
                 .iter()
                 .find(|id| !sm.product.shape().is_output_bus(id))
@@ -497,10 +492,7 @@ async fn reset_loudness(
 }
 
 async fn get_consoles(State(app): State<Arc<App>>) -> Response {
-    let consoles = app
-        .replica
-        .store()
-        .with_state(|sm| sm.product.state()["consoles"].clone());
+    let consoles = app.with_state(|sm| sm.product.state()["consoles"].clone());
     Json(consoles).into_response()
 }
 
@@ -555,10 +547,7 @@ async fn put_console(
             app.answer(&SessionKey::from(&owner), &ack),
             Some(Answer::Created)
         );
-        let status = app
-            .replica
-            .store()
-            .with_state(|sm| sm.product.console(&console));
+        let status = app.with_state(|sm| sm.product.console(&console));
         let Some(status) = status else {
             return Err(error(
                 StatusCode::NOT_FOUND,

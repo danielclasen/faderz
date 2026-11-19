@@ -2,6 +2,7 @@
 //! commands in flight, the fan-out of deltas, and the parts of server
 //! messages every route sends.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -9,9 +10,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use samplez_replica::Replica;
 use samplez_replica::entry::{NodeId, SessionKey};
 use samplez_replica::membership;
+use samplez_replica::state_machine::StateMachine;
 use samplez_service::config::AuthMode;
 use samplez_service::metrics::Metrics;
-use samplez_service::replica::{Ack, Begin, Commands, Resolution};
+use samplez_service::replica::{Ack, Begin, Commands, ReplicaInfo, Resolution};
 use samplez_service::ws::{Delta, Frame, Hub, Slot, To};
 use samplez_service::{Identity, Owner, Position, ReplicatedState};
 use serde_json::{Value, json};
@@ -21,6 +23,21 @@ use tokio::time::{Instant, MissedTickBehavior};
 use crate::audio::Audio;
 use crate::config::Set;
 use crate::state::{Answer, Command, Mixer};
+
+thread_local! {
+    /// Whether this thread is inside [`App::with_state`], holding the log
+    /// store's lock.
+    static IN_STATE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Asserts in debug builds that this thread is not inside
+/// [`App::with_state`].
+fn outside_state() {
+    debug_assert!(
+        !IN_STATE.get(),
+        "a call into the replica inside App::with_state: the contact lock under the store lock"
+    );
+}
 
 /// Deltas waiting per client before it is caught up by snapshot instead.
 pub const CLIENT_DELTAS: usize = 1024;
@@ -233,10 +250,38 @@ impl App {
         self.replica.epoch()
     }
 
+    /// Runs `f` on the replicated state, under the log store's lock.
+    /// samplez takes its contact lock and then the store's, so `f` must
+    /// not call into the replica: a call that takes the contact lock
+    /// ([`App::info`], [`App::contact_metrics`]) deadlocks against it.
+    /// Debug builds assert that.
+    pub fn with_state<T>(&self, f: impl FnOnce(&StateMachine<Mixer>) -> T) -> T {
+        struct Leave(bool);
+        impl Drop for Leave {
+            fn drop(&mut self) {
+                IN_STATE.set(self.0);
+            }
+        }
+        let _leave = Leave(IN_STATE.replace(true));
+        self.replica.store().with_state(f)
+    }
+
+    /// The replica's own view of itself; takes samplez's contact lock.
+    fn info(&self) -> ReplicaInfo {
+        outside_state();
+        self.replica.replica()
+    }
+
+    /// The audio replica's contact metrics; takes samplez's contact lock.
+    fn contact_metrics(&self) -> Option<samplez_replica::contact::Metrics> {
+        outside_state();
+        self.replica.contact_metrics()
+    }
+
     /// Model `ReplicaRef`: the replica's role in the contract is leader or
     /// follower; openraft's other states are not leading.
     pub fn replica_ref(&self) -> Value {
-        let role = if self.replica.replica().role == "leader" {
+        let role = if self.info().role == "leader" {
             "leader"
         } else {
             "follower"
@@ -253,7 +298,7 @@ impl App {
     /// replica counting itself when it is ready. Every entry, this
     /// replica's own included, is commitable by that one rule.
     pub fn replicas(&self) -> Value {
-        let info = self.replica.replica();
+        let info = self.info();
         let mut own = self.replica_ref();
         own["healthy"] = json!(info.ready);
         own["commitable"] = json!(info.commitable);
@@ -261,7 +306,7 @@ impl App {
             return json!([own]);
         }
         let metrics = self.replica.raft().metrics().borrow().clone();
-        let contact = self.replica.contact_metrics();
+        let contact = self.contact_metrics();
         let me = self.replica.id();
         let voters: Vec<NodeId> = metrics.membership_config.membership().voter_ids().collect();
         let now = Instant::now();
@@ -329,10 +374,9 @@ impl App {
     /// state's table of refusals and stored scenes.
     pub fn answer(&self, session: &SessionKey, ack: &Ack) -> Option<Answer> {
         match ack.resolution {
-            Resolution::Applied | Resolution::Unchanged | Resolution::Duplicate => self
-                .replica
-                .store()
-                .with_state(|sm| sm.product.answer(session, &ack.command).cloned()),
+            Resolution::Applied | Resolution::Unchanged | Resolution::Duplicate => {
+                self.with_state(|sm| sm.product.answer(session, &ack.command).cloned())
+            }
             _ => None,
         }
     }
@@ -366,8 +410,8 @@ impl App {
     /// engine's inputs and outputs as last read.
     pub fn status(&self) -> Value {
         use samplez_replica::state::ReplicaState as S;
-        let info = self.replica.replica();
-        let contact = self.replica.contact_metrics();
+        let info = self.info();
+        let contact = self.contact_metrics();
         let in_contact = contact.as_ref().map(|m| m.in_contact);
         // None for a replica without an engine, and until the first step.
         let state = (contact.and_then(|m| m.replica?.state)).map(|s| match s {
@@ -474,7 +518,7 @@ impl App {
     /// element the shape has no strip or master for is ignored.
     pub fn select(&self, session: SessionKey, owner: Value, element: Option<&str>) {
         let known = element.is_none_or(|e| {
-            self.replica.store().with_state(|sm| {
+            self.with_state(|sm| {
                 let shape = sm.product.shape();
                 shape.is_channel(e) || shape.is_output_bus(e)
             })
@@ -482,10 +526,7 @@ impl App {
         if !known {
             return;
         }
-        let leased = self
-            .replica
-            .store()
-            .with_state(|sm| sm.leases.contains_key(&session));
+        let leased = self.with_state(|sm| sm.leases.contains_key(&session));
         let changed = {
             let mut selections = self.selections.lock().expect("selections lock poisoned");
             match element {
@@ -624,7 +665,7 @@ impl App {
     /// about a second after it connected, so one that has not held a lease
     /// yet keeps its selection for one lease from when it made it.
     fn lapse_selections(&self) {
-        let leases = self.replica.store().with_state(|sm| sm.leases.clone());
+        let leases = self.with_state(|sm| sm.leases.clone());
         let lapsed = {
             let mut selections = self.selections.lock().expect("selections lock poisoned");
             let before = selections.len();
@@ -652,10 +693,7 @@ impl App {
     /// when `from` asked for it within [`REQUEST_INTERVAL`].
     pub async fn request(&self, from: Owner, asker: Value, path: String) {
         let key = SessionKey::from(&from);
-        let held = self
-            .replica
-            .store()
-            .with_state(|sm| sm.product.owner_of(&path));
+        let held = self.with_state(|sm| sm.product.owner_of(&path));
         if held.is_none_or(|holder| holder == key) {
             return;
         }
@@ -904,12 +942,7 @@ pub(crate) mod tests {
     /// Waits until `leased` holds of the lease of `session`.
     async fn until_lease(app: &App, session: &SessionKey, leased: bool) {
         tokio::time::timeout(Duration::from_secs(5), async {
-            while app
-                .replica
-                .store()
-                .with_state(|sm| sm.leases.contains_key(session))
-                != leased
-            {
+            while app.with_state(|sm| sm.leases.contains_key(session)) != leased {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -952,7 +985,7 @@ pub(crate) mod tests {
         until_lease(&app, &s, true).await;
         app.lapse_selections();
         assert!(selected(&app, &s), "kept while leased");
-        let renewed = app.replica.store().with_state(|sm| sm.leases[&s]);
+        let renewed = app.with_state(|sm| sm.leases[&s]);
         app.replica
             .append(Body::LeaseExpiry {
                 session: s.clone(),
@@ -978,7 +1011,7 @@ pub(crate) mod tests {
         app.select(s.clone(), json!({}), Some("ch1"));
         app.lapse_selections();
         assert!(selected(&app, &s), "kept while leased");
-        let renewed = app.replica.store().with_state(|sm| sm.leases[&s]);
+        let renewed = app.with_state(|sm| sm.leases[&s]);
         app.replica
             .append(Body::LeaseExpiry {
                 session: s.clone(),
@@ -1016,7 +1049,7 @@ pub(crate) mod tests {
         // The lone voter leads before it counts itself: a write before that
         // is refused not applied.
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !app.replica.replica().commitable {
+            while !app.info().commitable {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -1091,6 +1124,32 @@ pub(crate) mod tests {
     /// A session is listed once from its first hello, whatever number of
     /// connections it holds, with the display name of its identity only,
     /// and leaves with its last connection.
+    /// samplez takes its contact lock and then the log store's, so a call
+    /// that takes the contact lock inside [`App::with_state`] deadlocks
+    /// against it; debug builds catch one before it can.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[should_panic(expected = "the contact lock under the store lock")]
+    async fn a_contact_call_under_the_store_lock_is_caught() {
+        let (app, _dir) = app().await;
+        app.with_state(|_| app.replica_ref());
+    }
+
+    /// `GET /state` reads the replica's ref beside the state: it takes
+    /// it before the store lock, as every route does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_state_route_takes_no_contact_lock_under_the_store_lock() {
+        let (app, _dir) = app().await;
+        let response = tower::ServiceExt::oneshot(
+            crate::api::router(app.clone()),
+            axum::http::Request::get("/state")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn presence_lists_a_session_once_by_its_display_name() {
         let (app, dir) = app().await;

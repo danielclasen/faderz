@@ -341,7 +341,7 @@ fn control<'a>(
         Some("touch") => Action::Touch,
         _ => Action::Release,
     };
-    let checked = app.replica.store().with_state(|sm| match action {
+    let checked = app.with_state(|sm| match action {
         Action::Set => sm.product.check_write(&path, &msg["value"]),
         _ if sm.product.exists(&path) => Ok(()),
         _ => Err(state::Answer::NotFound {
