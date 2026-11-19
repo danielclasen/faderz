@@ -1789,6 +1789,9 @@
           "pattern": "^/afv/[a-z][a-z0-9-]{0,31}/open$"
         },
         {
+          "pattern": "^/loudness/[a-z][a-z0-9-]{0,31}/resets$"
+        },
+        {
           "pattern": "^/tally/[A-Za-z0-9 ._:-]{1,64}$"
         },
         {
