@@ -13,7 +13,10 @@ import {
   SYNC_TIMEOUT_CAP_MS,
   SYNC_TIMEOUT_MS,
   SyncEngine,
+  STANDBY_BACKOFF_MS,
+  STANDBY_MISSES,
   STANDBY_RETRY_MS,
+  STANDBY_TRIES,
 } from '../../src/lib/sync/engine';
 import { getAt } from '../../src/lib/state/pointer';
 import { ownerHandle } from '../../src/lib/net/handle';
@@ -192,6 +195,55 @@ describe('sync engine: connecting', () => {
     third.deliver(resume(R3, 1));
     expect(t.engine.standbyState).toBe('Ready');
     expect(t.engine.status().standbyReplica).toBe('r3');
+  });
+
+  /** Primary synced on r1; then `n` standbys each land on r1 and report `report`. */
+  function standbyMisses(n: number, report: ReplicasMessage) {
+    const t = setup();
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 1));
+    for (let i = 0; i < n; i++) {
+      const s = t.sockets.at(-1)!;
+      expect(s).not.toBe(t.sockets[0]);
+      s.open();
+      s.deliver(report);
+      expect(s.closed).toBe(true);
+      const before = t.sockets.length;
+      t.clock.advance(STANDBY_RETRY_MS);
+      t.sockets[0]!.deliver({ type: 'ping', replica: R1, t: t.clock.now() });
+      if (t.sockets.length === before) return { ...t, retried: i };
+    }
+    return { ...t, retried: n };
+  }
+
+  // A service endpoint routes every connection at random: landing on the
+  // primary's replica again and again while another is healthy is chance,
+  // and backing off for it left pages without a standby for 30 s.
+  it('retries a standby at once while it lands on the primary replica and another replica is healthy', () => {
+    const t = standbyMisses(STANDBY_MISSES, replicas(R1));
+    expect(t.retried).toBe(STANDBY_MISSES);
+    const s = t.sockets.at(-1)!;
+    s.open();
+    s.deliver(replicas(R2));
+    s.deliver(resume(R2, 1));
+    expect(t.engine.standbyState).toBe('Ready');
+    expect(t.clock.now()).toBe(STANDBY_MISSES * STANDBY_RETRY_MS);
+  });
+
+  it('backs off a standby that keeps landing on the primary replica past the misses, or when no other is healthy', () => {
+    for (const [report, fast] of [
+      [replicas(R1), STANDBY_MISSES + STANDBY_TRIES],
+      [{ ...replicas(R1), replicas: replicas(R1).replicas.map((r) => ({ ...r, healthy: r.id === 'r1' })) }, STANDBY_TRIES],
+    ] as const) {
+      const t = standbyMisses(fast + 1, report);
+      expect(t.retried).toBe(fast - 1);
+      const before = t.sockets.length;
+      beats(t.clock, STANDBY_BACKOFF_MS - STANDBY_RETRY_MS - 1, [t.sockets[0]!, R1]);
+      expect(t.sockets).toHaveLength(before);
+      t.clock.advance(1);
+      expect(t.sockets).toHaveLength(before + 1);
+    }
   });
 
   it('sends no meter frames request and no commands on the standby', () => {

@@ -93,11 +93,20 @@ export const PRIMARY_ATTEMPTS = 3;
 /** Delay before leaving Offline, doubled per Offline in a row up to the cap. */
 export const OFFLINE_RETRY_MS = 2000;
 export const RETRY_CAP_MS = 15_000;
-/** Standby attempts in a row before the standby backs off. */
+/** Failed standby attempts in a row, misses (STANDBY_MISSES) aside, before the standby backs off. */
 export const STANDBY_TRIES = 4;
 export const STANDBY_RETRY_MS = 100;
 /** First standby backoff, doubled per further failed attempt up to RETRY_CAP_MS. */
 export const STANDBY_BACKOFF_MS = 2000;
+/**
+ * Standbys in a row that landed on the primary's replica while a report
+ * named another healthy one, retried after STANDBY_RETRY_MS without
+ * counting as failed attempts. An endpoint in front of several replicas
+ * routes each connection on its own: with three, 16 landings in a row on
+ * one of them happen once in 43 million. The bound keeps an endpoint that
+ * pins the session to one replica from being asked ten times a second.
+ */
+export const STANDBY_MISSES = 16;
 /** Delay before asking again after an answer older than the client's revision. */
 export const RESYNC_RETRY_MS = 250;
 /**
@@ -204,6 +213,8 @@ export class SyncEngine {
   private primaryIndex = 0;
   private primaryAttempts = 0;
   private standbyAttempts = 0;
+  /** Of standbyAttempts, those that landed on the primary's replica by chance (STANDBY_MISSES). */
+  private standbyMisses = 0;
   /** Offline periods in a row, since the last sync. */
   private offlineRounds = 0;
   /**
@@ -688,10 +699,9 @@ export class SyncEngine {
 
   private scheduleStandby(): void {
     if (this.standbyState !== 'Idle' || this.cancelStandbyRetry) return;
+    const failures = this.standbyAttempts - this.standbyMisses;
     const delay =
-      this.standbyAttempts < STANDBY_TRIES
-        ? STANDBY_RETRY_MS
-        : backoff(STANDBY_BACKOFF_MS, this.standbyAttempts - STANDBY_TRIES, RETRY_CAP_MS, this.random);
+      failures < STANDBY_TRIES ? STANDBY_RETRY_MS : backoff(STANDBY_BACKOFF_MS, failures - STANDBY_TRIES, RETRY_CAP_MS, this.random);
     this.cancelStandbyRetry = this.clock.schedule(() => {
       this.cancelStandbyRetry = null;
       this.startStandby();
@@ -723,6 +733,17 @@ export class SyncEngine {
   /** A ready standby whose replica reports that it can commit. */
   private promotable(): boolean {
     return this.standbyState === 'Ready' && this.commitable(this.standby) === true;
+  }
+
+  /**
+   * Lets go of a standby on the primary's replica. When a report names
+   * another healthy replica, the endpoint could have routed it there: a
+   * miss, up to STANDBY_MISSES in a row, not a failed attempt.
+   */
+  private missStandby(link: Link): void {
+    const reported = link.replicas ?? this.primary?.replicas ?? [];
+    if (this.standbyMisses < STANDBY_MISSES && reported.some((r) => r.healthy && r.id !== link.replica?.id)) this.standbyMisses++;
+    this.dropStandby(link);
   }
 
   private dropStandby(link: Link): void {
@@ -814,7 +835,7 @@ export class SyncEngine {
       case 'replicas':
         link.replicas = msg.replicas;
         if (link === this.standby && this.standbyState !== 'Connecting' && !this.standbySuitable(link)) {
-          return this.dropStandby(link);
+          return this.missStandby(link);
         }
         return this.checkCommitable();
       case 'snapshot':
@@ -905,9 +926,10 @@ export class SyncEngine {
   }
 
   private standbySynced(link: Link): void {
-    if (!this.standbySuitable(link)) return this.dropStandby(link);
+    if (!this.standbySuitable(link)) return this.missStandby(link);
     this.standbyEvent('synced');
     this.standbyAttempts = 0;
+    this.standbyMisses = 0;
     this.checkCommitable();
   }
 
@@ -929,7 +951,7 @@ export class SyncEngine {
     for (const path of new Set([...Object.keys(this.owners), ...this.touches.keys()])) this.reconcile(path);
     this.sendSelection();
     this.transmit();
-    if (this.standby && this.standby.replica && !this.standbySuitable(this.standby)) this.dropStandby(this.standby);
+    if (this.standby && this.standby.replica && !this.standbySuitable(this.standby)) this.missStandby(this.standby);
     this.startStandby();
     this.checkCommitable();
   }
