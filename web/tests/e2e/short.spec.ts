@@ -130,5 +130,5 @@ test('the commit banner shows its whole text to the keyboard on a short screen',
   }
   await expect(banner).toHaveCount(0);
   // The USR key keeps its full name.
-  await expect(page.getByRole('button', { name: /^Users \d+$/ })).toHaveText(/^USR\s+\d+$/);
+  await expect(page.getByRole('button', { name: /^Users \d+(,|$)/ })).toHaveText(/^USR\s+\d+$/);
 });

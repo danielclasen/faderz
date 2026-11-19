@@ -9,9 +9,10 @@
   // row only. Every
   // part has a fixed size and the whole a strict containment, so no
   // reading lays out anything outside it; none of it is a live region.
-  // Focused or pointed at, a line's tip adds its readings of that moment.
+  // Focused, pointed at or tapped, a line's tip, with the whole of every
+  // list, adds its readings of that moment.
   import { onMount } from 'svelte';
-  import { tip } from '../lib/tip';
+  import { showTip, tip } from '../lib/tip';
   import { deepestDepth, duckReach, keyShare, keyingText, keyingWords, liveDuck, reductionShare, summaryReduction } from '../lib/duck';
   import { onAnimationFrame } from '../lib/meters/store';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -65,6 +66,10 @@
       aria-label={g.name}
       onfocus={() => describe(i, depth, d.threshold)}
       onpointerenter={() => describe(i, depth, d.threshold)}
+      onpointerup={(e) => {
+        describe(i, depth, d.threshold);
+        showTip(e.currentTarget, e.pointerType === 'touch');
+      }}
       use:tip={readings[i] ? `${text}. ${readings[i]}` : text}
       data-testid={`duck-summary-${g.id}`}
     >
@@ -108,11 +113,11 @@
   .line {
     flex: none;
     display: grid;
-    grid-template-columns: 13ch minmax(0, 1fr) auto 26px 44px;
+    grid-template-columns: 13ch minmax(0, 1fr) auto 58px 44px;
     grid-template-rows: 16px 15px;
     grid-template-areas:
       'name keys keying keyed kbar'
-      '. ducks gr db bar';
+      '. ducks ducks gr bar';
     align-items: center;
     column-gap: 6px;
   }
@@ -127,7 +132,7 @@
   .keying {
     grid-area: keying;
     height: 100%;
-    width: 14ch;
+    width: 22ch;
     font-family: var(--font-num);
     font-size: 11px;
   }
@@ -147,8 +152,15 @@
     grid-area: gr;
     height: 100%;
   }
+  /* The reduction and its unit share one cell under KEY: the number in
+     a fixed box at its start, dB at its end. */
+  .gr {
+    width: 40px;
+    justify-self: start;
+  }
   .db {
-    grid-area: db;
+    grid-area: gr;
+    justify-self: end;
   }
   .bar {
     grid-area: bar;
@@ -173,8 +185,11 @@
   .tap {
     color: var(--text-dim);
   }
+  /* The targets take the row the outputs leave, so the outputs stand at
+     its end whatever the targets' length: a target switched moves them
+     not. */
   .targets {
-    flex: 0 1 auto;
+    flex: 1 1 0;
     min-width: 2ch;
   }
   .into {
@@ -268,6 +283,14 @@
         'name keys keys keys keyed'
         'ducks ducks gr db .';
       column-gap: 4px;
+    }
+    .gr {
+      width: auto;
+      justify-self: stretch;
+    }
+    .db {
+      grid-area: db;
+      justify-self: start;
     }
     .gr span {
       font-size: 11px;

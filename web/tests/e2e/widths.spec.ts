@@ -217,12 +217,12 @@ test('the header shows status left of a separator and controls right of it, each
           const sep = document.querySelector('header .sep');
           return sep && getComputedStyle(sep).visibility !== 'hidden' ? box(sep) : null;
         })(),
-        consoles: box(document.querySelector('[data-testid="consoles"]')) !== null,
+        consoles: box(document.querySelector('[data-testid="consoles"]')),
       };
     });
     const names = layout.controls.map((c) => c.name);
     // USERS opens the panel that lists the surfaces at every width, and the account pill is always there.
-    if (!names.some((n) => /^Users \d+$/.test(n))) found.push(`${at}: no users key in ${names}`);
+    if (!names.some((n) => /^Users \d+(,|$)/.test(n))) found.push(`${at}: no users key in ${names}`);
     const pill = layout.controls.find((c) => c.name.startsWith('Account'));
     if (!pill) found.push(`${at}: no account pill`);
     // One width for any initials or none: a session arriving moves nothing.
@@ -231,8 +231,10 @@ test('the header shows status left of a separator and controls right of it, each
     const heights = new Set([...layout.status, ...layout.controls].map((c) => c.h));
     if (heights.size !== 1) found.push(`${at}: heights ${JSON.stringify([...layout.status, ...layout.controls])}`);
     // The surfaces show from 1301 px, the separator with them, between status and controls.
-    if (layout.consoles !== width > 1300) found.push(`${at}: surfaces ${layout.consoles}`);
-    if ((layout.sep !== null) !== layout.consoles) found.push(`${at}: separator ${layout.sep !== null}`);
+    if ((layout.consoles !== null) !== width > 1300) found.push(`${at}: surfaces ${layout.consoles !== null}`);
+    if ((layout.sep !== null) !== (layout.consoles !== null)) found.push(`${at}: separator ${layout.sep !== null}`);
+    // The surfaces stand against the divider: the reserved slots, empty mostly, sit left of them.
+    if (layout.sep && layout.consoles && layout.sep.left - layout.consoles.right > 12) found.push(`${at}: ${Math.round(layout.sep.left - layout.consoles.right)} px between the surfaces and the divider`);
     if (layout.sep && layout.statusRight !== null && layout.controlsLeft !== null && !(layout.statusRight <= layout.sep.left && layout.sep.right <= layout.controlsLeft)) {
       found.push(`${at}: separator not between status and controls`);
     }
@@ -244,7 +246,7 @@ test('the users panel lists every control surface with its strips, where the hea
   await page.setViewportSize({ width: 1024, height: 768 });
   await live(page);
   await expect(page.getByTestId('consoles')).toBeHidden();
-  const key = page.getByRole('button', { name: /^Users \d+$/ });
+  const key = page.getByRole('button', { name: /^Users \d+(,|$)/ });
   await key.click();
   await expect(key).toHaveAttribute('aria-expanded', 'true');
   const panel = page.getByRole('region', { name: 'Users' });
@@ -252,6 +254,32 @@ test('the users panel lists every control surface with its strips, where the hea
   await expect(panel.getByTestId('console').first()).toContainText(/(MCU|OSC), (strips \d+-\d+|disconnected)/);
   await key.click();
   await expect(panel).toBeHidden();
+  // The example shape's OSC tablet is disconnected: the key says so, by a dot and in its name.
+  await expect(key).toHaveAccessibleName(/^Users \d+, 1 surface disconnected$/);
+  await expect(page.getByTestId('users-down')).toBeVisible();
+});
+
+test('the surfaces read as a quiet field on the header in either theme, never the near-black well', async ({ page }) => {
+  await live(page);
+  const surfaces = page.getByTestId('consoles');
+  await expect(surfaces).toBeVisible();
+  for (const theme of ['dark', 'light'] as const) {
+    if (theme === 'light') await switchTheme(page, 'light');
+    const [bg, field, well] = await surfaces.evaluate((e) => {
+      const probe = (v: string) => {
+        const d = document.createElement('div');
+        d.style.background = `var(${v})`;
+        document.body.append(d);
+        const c = getComputedStyle(d).backgroundColor;
+        d.remove();
+        return c;
+      };
+      return [getComputedStyle(e).backgroundColor, probe('--panel-2'), probe('--well')];
+    });
+    expect(bg, theme).toBe(field);
+    expect(bg, theme).not.toBe(well);
+  }
+  await switchTheme(page, 'dark');
 });
 
 test('the duck tiles and the Duck view fit every width from 320 px, with no sideways page scroll and no tile text cut', async ({ page }) => {

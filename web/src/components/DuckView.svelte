@@ -1,6 +1,6 @@
 <script lang="ts">
   // Setting up duck groups: per group a column with its mode, detector,
-  // presets and destinations, and per channel the group's TRIG and TARGET
+  // presets and destinations, and per channel the group's KEY and TARGET
   // switches and the depth. The channel grid is one tab stop; the arrows
   // move within it. A phone shows one group at a time, picked above. Up
   // to 1280 px the detector starts folded to its mode keys, so the channel
@@ -49,7 +49,7 @@
       }
     }),
   );
-  /** Cells per group in the channel grid: TRIG, TARGET, depth. */
+  /** Cells per group in the channel grid: KEY, TARGET, depth. */
   const CELLS = 3;
 
   /** Times of a timing preset. */
@@ -192,10 +192,10 @@
                 <div class="fact" role="note" tabindex="0" data-testid={`duck-view-keys-${g.id}`} use:tip={keysText}><span class="k">key:</span> {reach.triggers} <span class="dim">({reach.tap})</span></div>
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                 <div class="fact ducks" role="note" tabindex="0" data-testid={`duck-view-ducks-${g.id}`} use:tip={ducksText}
-                  ><span class="targets"><span class="k">ducks:</span> {reach.targets}</span><span class="into">{' '}<span class="dim">on</span> {reach.into}</span></div
+                  ><span class="k">ducks:</span> {reach.targets} <span class="dim">on</span> <span class="into">{reach.into}</span></div
                 >
                 <div class="fact level" data-testid={`duck-view-keying-${g.id}`}
-                  ><span class="k">level:</span> <span class="reading fixed">{keyingText(key, d.threshold)}</span> <span class="dim">dBFS</span></div
+                  ><span class="k">now:</span> <span class="reading fixed">{keyingText(key, d.threshold)}</span></div
                 >
               </th>
             {/each}
@@ -203,7 +203,7 @@
           <tr class="labels">
             <th scope="col">Channel</th>
             {#each shown as g (g.id)}
-              <th scope="col" class="first" title={`Keys ${g.name}`}>Trig</th>
+              <th scope="col" class="first" title={`Keys ${g.name}`}>Key</th>
               <th scope="col" title={`Lowered by ${g.name}`}>Target</th>
               <th scope="col" title="How far a target is lowered at full duck">Depth (dB)</th>
             {/each}
@@ -433,12 +433,12 @@
   }
   .names th {
     top: 0;
-    height: 84px;
+    height: 96px;
     box-sizing: border-box;
     vertical-align: top;
   }
   .labels th {
-    top: 84px;
+    top: 96px;
     height: 24px;
     box-sizing: border-box;
     border-bottom-color: var(--line-strong);
@@ -456,8 +456,11 @@
   .gtop {
     height: 22px;
   }
-  /* One line each at a fixed height: a trigger or target switched below
-     changes the text, never the header's height. */
+  /* Fixed heights: a trigger or target switched below changes the
+     text, never the header's height. The ducks line wraps to two
+     lines; beyond that it is cut and its tip, on focus, a long touch
+     or hover, has the rest. Two keep the channel rows in view while
+     the detector is folded. */
   /* Sized by the column alone: without inline-size containment a long
      line would widen the fixed group columns. */
   .fact {
@@ -469,19 +472,14 @@
     font-size: 11px;
     font-weight: 400;
   }
-  /* The outputs stay whole; the targets before them give way first. */
   .fact.ducks {
-    display: flex;
-  }
-  .ducks .targets {
-    flex: 0 1 auto;
-    min-width: 2ch;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .ducks .into {
-    flex: none;
-    margin-left: 0.3em;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    height: 32px;
+    line-height: 16px;
+    white-space: normal;
   }
   .fact:focus-visible {
     outline: 2px solid var(--focus);
@@ -498,8 +496,9 @@
      monospace digits (KEYING_WIDTH) with strict containment. */
   .reading {
     display: inline-block;
+    margin-left: 0.3em;
     vertical-align: top;
-    width: 14ch;
+    width: 22ch;
     height: 18px;
     font-family: var(--font-num);
     white-space: pre;

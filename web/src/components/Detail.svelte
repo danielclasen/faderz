@@ -322,7 +322,7 @@
               aria-pressed={g.channels[id]!.trigger}
               aria-label={`${element.name} triggers ${duck.name}`}
               title={refused('trigger') ?? `Lit: ${element.name} keys ${duck.name}`}
-              onclick={() => toggleDuck(duck.id, 'trigger')}>TRIG</button
+              onclick={() => toggleDuck(duck.id, 'trigger')}>KEY</button
             >
             <button {@attach pendingWrite(mixer, target)}
               class="key"

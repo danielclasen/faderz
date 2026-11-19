@@ -33,6 +33,11 @@
   $effect(() => meters.setZones(mixer.state!.metering.zones));
   const shape = $derived(mixer.shape!);
   const kindTag: Record<string, string> = { program: 'PGM', me: 'M&E', cleanFeed: 'CF' };
+  /** The kind's tag, or none where the bus's name already says it ("PGM 5.1", "M&E"). */
+  const kindTagFor = (bus: { name: string; kind: string }) => {
+    const tag = kindTag[bus.kind] ?? '';
+    return bus.name.toUpperCase().split(/\s+/).includes(tag) ? '' : tag;
+  };
   // The band's summary takes the width its tiles leave, where there is
   // enough of it; it shows or hides only as the band's width changes,
   // never with a duck's state.
@@ -60,7 +65,7 @@
       <VcaMaster {vca} />
     {/each}
     {#each shape.buses as bus (bus.id)}
-      <BusMaster group="buses" element={bus} tag={kindTag[bus.kind]} selected={selected === bus.id} {onselect} />
+      <BusMaster group="buses" element={bus} tag={kindTagFor(bus)} selected={selected === bus.id} {onselect} />
     {/each}
     <MonitorSection />
   </div>

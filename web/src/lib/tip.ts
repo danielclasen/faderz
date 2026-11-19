@@ -52,6 +52,16 @@ function hide(node: HTMLElement): void {
   if (box) box.hidden = true;
 }
 
+/**
+ * Shows `node`'s tip on a tap or click, where the label is not a control
+ * of its own: it stays until the pointer leaves, the node loses focus,
+ * Escape, or TOUCH_LINGER_MS after a touch.
+ */
+export function showTip(node: HTMLElement, touch = false): void {
+  show(node);
+  if (touch) setTimeout(() => hide(node), TOUCH_LINGER_MS);
+}
+
 /** `use:tip={text}`: the full text of a label, shown as described above. An empty text shows nothing. */
 export const tip: Action<HTMLElement, string> = (node, text) => {
   node.dataset['tip'] = text;

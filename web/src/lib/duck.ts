@@ -313,17 +313,18 @@ export const KEY_TAPS: Readonly<Record<DuckKeyTap, string>> = {
   postFader: 'post-fader',
 };
 
-/** Characters the key level against the threshold takes, "-18.3 >= -30.0". */
-export const KEYING_WIDTH = 14;
+/** Characters the key level against the threshold takes, "key -18.3 >= thr -30.0". */
+export const KEYING_WIDTH = 22;
 
 /**
- * A group's key level against its threshold, in
- * KEYING_WIDTH characters, "-18.3 >= -30.0" at or over it, "-45.0  < -30.0"
- * under it, "   --    -30.0" while the group reports no key.
+ * A group's key level against its threshold, each named, in
+ * KEYING_WIDTH characters: "key -18.3 >= thr -30.0" at or over it,
+ * "key -45.0  < thr -30.0" under it, "key    --    thr -30.0" while the
+ * group reports no key.
  */
 export function keyingText(key: number | null, threshold: number): string {
   const cmp = key === null ? '  ' : keys(key, threshold) ? '>=' : ' <';
-  return `${keyText(key)} ${cmp} ${fit(threshold.toFixed(1), 5)}`;
+  return `key ${keyText(key)} ${cmp} thr ${fit(threshold.toFixed(1), 5)}`;
 }
 
 /** The same in a sentence, for a tip or a screen reader. */

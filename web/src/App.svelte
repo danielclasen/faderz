@@ -95,9 +95,10 @@
       {/each}
     </nav>
     <!-- Status left, controls right. Every status slot keeps its size
-         whether it shows or not; the surfaces, whose number the shape
-         sets, stand furthest left next to the free space, so they move
-         nothing when they arrive. -->
+         whether it shows or not. The surfaces stand against the divider,
+         the reserved slots left of them next to the free space. The
+         slots come with the state that fills them, as the surfaces do,
+         so the surfaces' arrival moves nothing that was there. -->
     <div class="right">
       <!-- Free header space: the notice line on a short screen, which has
            no status bar. It grows into the room the fixed items leave, so
@@ -106,16 +107,18 @@
         {#if short.current}<NoticeLine />{/if}
       </div>
       <div class="group status-group" role="group" aria-label="Status">
-        <Consoles />
-        <StatusArea />
-        <!-- Reserved: shown or not, the tone lamp moves nothing. -->
-        <span class="tone-slot">
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-          <span class="tone" class:on={toneOn} role="status" data-testid="tone" aria-hidden={!toneOn} use:tip={toneOn ? toneText : ''} tabindex={toneOn ? 0 : -1}
-            >TONE<span class="sr-only">{toneOn ? ` on: ${toneText}` : ''}</span></span
-          >
-        </span>
+        {#if mixer.state}
+          <StatusArea />
+          <!-- Reserved: shown or not, the tone lamp moves nothing. -->
+          <span class="tone-slot">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <span class="tone" class:on={toneOn} role="status" data-testid="tone" aria-hidden={!toneOn} use:tip={toneOn ? toneText : ''} tabindex={toneOn ? 0 : -1}
+              >TONE<span class="sr-only">{toneOn ? ` on: ${toneText}` : ''}</span></span
+            >
+          </span>
+        {/if}
         {#if short.current}<ConnectionKey where="header" />{/if}
+        <Consoles />
       </div>
       <span class="sep" aria-hidden="true"></span>
       <div class="group controls" role="group" aria-label="Controls">

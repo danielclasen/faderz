@@ -4,6 +4,7 @@
   import { TAP_LABEL } from '../lib/audio/taps';
   import type { Layout } from '../lib/contract/types';
   import Matrix from './Matrix.svelte';
+  import LayoutBadge from './LayoutBadge.svelte';
 
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
@@ -52,7 +53,7 @@
           <tr>
             <td>{o.name}</td>
             <td>{#if direct}{direct.name} direct out, {TAP_LABEL[mixer.state!.channels[direct.id]!.directOut.tap]}{:else}{src?.name ?? o.source}{/if}</td>
-            <td class="num">{o.layout}</td>
+            <td class="num">{#if o.layout === 'mono'}mono{:else}<LayoutBadge layout={o.layout} />{/if}</td>
           </tr>
         {/each}
       </tbody>

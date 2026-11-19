@@ -29,6 +29,9 @@
   /** A short screen (App.svelte) or a phone: USR, so the notice line and the header keys keep room. The key shows at every width: below 1301 px the panel is where the surfaces' banks are read. */
   const short = new MediaQuery('(max-height: 500px), (max-width: 700px)');
   const count = $derived(rows.length + consoles.filter((c) => c.connected).length);
+  /** Surfaces configured but not connected: a warning dot on the key, which below 1301 px is the only place they are listed. */
+  const down = $derived(consoles.filter((c) => !c.connected).length);
+  const downText = $derived(down > 0 ? `, ${down} surface${down === 1 ? '' : 's'} disconnected` : '');
   const kindLabel = (kind: string) => (kind === 'ui' ? 'web client' : kind);
   function elementName(id: string): string {
     const s = mixer.shape;
@@ -44,8 +47,8 @@
 </script>
 
 <div class="users">
-  <button class="key users-key" aria-label={`Users ${count}`} aria-expanded={open} aria-controls="users-panel" onclick={() => (open = !open)} title="Who works on this mixer"
-    ><span class="count"><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(count).padStart(2)}</span></span><i class="caret" aria-hidden="true"></i></button
+  <button class="key users-key" aria-label={`Users ${count}${downText}`} aria-expanded={open} aria-controls="users-panel" onclick={() => (open = !open)} title={`Who works on this mixer${downText}`}
+    ><i class="down" class:on={down > 0} aria-hidden="true" data-testid="users-down"></i><span class="count"><span class="fixed">{short.current ? 'USR' : 'USERS'} {String(count).padStart(2)}</span></span><i class="caret" aria-hidden="true"></i></button
   >
   <div class="panel" class:open id="users-panel" role="region" aria-label="Users">
     {#each rows as r (r.handle)}
@@ -77,6 +80,7 @@
   }
   /* A control that opens a panel: a caret says so, turned while open. */
   .users-key {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -85,6 +89,22 @@
   .users-key[aria-expanded='true'] {
     border-color: var(--text-dim);
     color: var(--text);
+  }
+  /* A surface down: a dot in the key's corner, over its edge, so it
+     takes no room and moves nothing. */
+  .down {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warn);
+    box-shadow: 0 0 0 1px var(--panel-2);
+    visibility: hidden;
+  }
+  .down.on {
+    visibility: visible;
   }
   .caret {
     flex: none;

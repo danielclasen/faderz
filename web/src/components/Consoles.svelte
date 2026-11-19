@@ -6,7 +6,7 @@
   const channels = $derived(mixer.shape?.channels.length ?? 0);
 </script>
 
-<!-- A status, not a control: one flat well of a field per surface, its
+<!-- A status, not a control: one flat field per surface, its
      lamp, protocol and the strips its bank is on. Nothing here is
      pressed; the users panel lists the same surfaces at every width. -->
 {#if consoles.length > 0}
@@ -32,8 +32,8 @@
     align-items: stretch;
     height: var(--item-h, 26px);
     border-radius: 3px;
-    background: var(--well);
-    box-shadow: inset 0 0 0 1px var(--line);
+    background: var(--panel-2);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
     font-family: var(--font-num);
     font-size: 10.5px;
   }

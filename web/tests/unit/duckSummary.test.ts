@@ -51,15 +51,16 @@ describe('the duck band summary', () => {
 
   it('reads the key level against the threshold in a fixed width, and says which side it is on', () => {
     for (const key of [-18.34, -30, -45, -120, 0, null]) expect(keyingText(key, -30)).toHaveLength(KEYING_WIDTH);
-    expect(keyingText(-18.34, -30)).toBe('-18.3 >= -30.0');
+    // Both numbers named: a bare pair read as two unexplained levels.
+    expect(keyingText(-18.34, -30)).toBe('key -18.3 >= thr -30.0');
     // At the threshold it keys.
-    expect(keyingText(-30, -30)).toBe('-30.0 >= -30.0');
-    expect(keyingText(-45, -30)).toBe('-45.0  < -30.0');
+    expect(keyingText(-30, -30)).toBe('key -30.0 >= thr -30.0');
+    expect(keyingText(-45, -30)).toBe('key -45.0  < thr -30.0');
     // Compared as read: a level that reads as the threshold keys, in words and numbers alike.
-    expect(keyingText(-30.04, -30)).toBe('-30.0 >= -30.0');
-    expect(keyingText(-30.06, -30)).toBe('-30.1  < -30.0');
-    expect(keyingText(-120, -6)).toBe(' -inf  <  -6.0');
-    expect(keyingText(null, -30)).toBe('   --    -30.0');
+    expect(keyingText(-30.04, -30)).toBe('key -30.0 >= thr -30.0');
+    expect(keyingText(-30.06, -30)).toBe('key -30.1  < thr -30.0');
+    expect(keyingText(-120, -6)).toBe('key  -inf  < thr  -6.0');
+    expect(keyingText(null, -30)).toBe('key    --    thr -30.0');
     expect(keyingWords(-18.34, -30)).toBe('key -18.3 dBFS at or over threshold -30.0 dBFS');
     expect(keyingWords(-45, -30)).toBe('key -45.0 dBFS under threshold -30.0 dBFS');
     expect(keyingWords(null, -30)).toBe('no key level, threshold -30.0 dBFS');

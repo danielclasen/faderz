@@ -353,13 +353,14 @@ it. Beside the masters with a fine pointer, for up to four groups and
 where the tiles leave the band at least 180 px, the band's summary takes
 the rest of it: two rows per group under its name, the first saying
 what keys it, "key: <triggers> (<tap>)", its key level against its
-threshold ("-18.3 >= -30.0"), KEY lit while the key triggers it and the
+threshold ("key -18.3 >= thr -30.0"), KEY lit while the key triggers it and the
 key as a bar against the threshold; the second what it lowers, "ducks:
 <targets> on <outputs>", its gain reduction in dB and as a bar on one
 scale for every group (0 to the deepest depth of any). Narrower than
 420 px the bars and the key level go. The Duck view heads each group
-with the same key and ducks lines and the key level. A line's tooltip, on
-focus or hover, adds its readings of that moment. The band keeps its
+with the same key and ducks lines, the ducks line wrapping to two
+lines, and the key level. A line's tooltip, on focus, hover or a click,
+holds every list whole and adds its readings of that moment. The band keeps its
 height. In the example shape's masters, 776 px wide, the summary shows
 beside up to four groups, and from five not at all. Under 1400 px,
 where the masters lie over the strips, and with a coarse pointer the
@@ -370,7 +371,7 @@ reads the gain reduction in place of DK, or, on a trigger, while a
 group it keys is engaged; it opens the Duck section of its processing
 panel. The
 DUCK view sets up every group: mode, key tap, detector and key filters,
-destinations, and per channel TRIG, TARGET and the depth; up to 1280 px
+destinations, and per channel KEY, TARGET and the depth; up to 1280 px
 the detector starts folded to its mode keys. Its channel grid is one
 tab stop, walked with the arrow keys. The presets LIGHT, HEAVY and
 VOICE write in one atomic PATCH and take a second press within 3 s or a
@@ -399,11 +400,12 @@ every role sees it. Each replica knows only its own connections.
 
 The header's right end holds what the screen shows, then, past a
 divider, what it does. Left of the divider are the status readouts:
-the connected control surfaces in one well, each with its protocol and
+the pending count, a failover, the line-up tone lamp and, against the
+divider, the control surfaces in one field, each with its protocol and
 the strips its bank is on (from 1301 px; below that the USERS panel
-lists them), the pending count, a failover and the line-up tone lamp.
-Right of it are the controls, USERS, LOCK DESK and the account pill,
-all one height (26 px, 32 px to a finger).
+lists them). Right of it are the controls, USERS, LOCK DESK and the
+account pill, all one height (26 px, 32 px to a finger). A dot on
+USERS says a configured surface is disconnected.
 
 A label cut off for lack of room, such as a long channel name, shows
 its full text in a tooltip: after a short hover, on keyboard focus (Tab

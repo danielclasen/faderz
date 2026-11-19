@@ -29,7 +29,7 @@ test('a phone header holds the view menu, the users key and the account pill, on
   await expect(header.getByRole('button', { name: /theme$/ })).toHaveCount(0);
   // The surfaces are read in the users panel here.
   await expect(page.getByTestId('consoles')).toBeHidden();
-  const users = header.getByRole('button', { name: /^Users \d+$/ });
+  const users = header.getByRole('button', { name: /^Users \d+(,|$)/ });
   const account = header.getByTestId('account');
   const W = page.viewportSize()!.width;
   for (const key of [users, account]) {
@@ -74,7 +74,7 @@ test('shows one duck group at a time on a phone, picked from a list, within the 
   // The group says what keys it, what it ducks where, and its level against the threshold.
   await expect(page.getByTestId('duck-view-keys-remote')).toHaveText(/^key: Phone 1, Phone 2 \(/);
   await expect(page.getByTestId('duck-view-ducks-remote')).toHaveText(/^ducks: .* on PGM 5\.1, PGM 2\.0$/);
-  await expect(page.getByTestId('duck-view-keying-remote')).toHaveText(/^level: .* dBFS$/);
+  await expect(page.getByTestId('duck-view-keying-remote')).toHaveText(/^now: key .* thr -30\.0$/);
 });
 
 test('keeps the commit banner readable on its own row when quorum is lost on a phone', { tag: '@mock' }, async ({ page, request }) => {

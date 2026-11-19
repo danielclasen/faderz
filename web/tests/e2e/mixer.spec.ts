@@ -1515,7 +1515,7 @@ test('lists the consoles and every other session with what it holds, each once',
   try {
     await other.command({ type: 'touch', path: '/channels/ch4/fader' });
     await surface.command({ type: 'touch', path: '/channels/ch5/fader' });
-    const key = page.getByRole('button', { name: /^Users \d+$/ });
+    const key = page.getByRole('button', { name: /^Users \d+(,|$)/ });
     // Two connected surfaces, this screen and one web client.
     await expect(key).toHaveText('USERS  4');
     await key.click();
@@ -1541,7 +1541,7 @@ test('lists every session connected to the replica in USERS, until it closes', a
   const ws = baseURL!.replace(/^http/, 'ws');
   const path = BACKEND ? '/' : `/?endpoints=${ws}/__mock/replicas/r1/api/v1/ws,${ws}/__mock/replicas/r2/api/v1/ws`;
   await live(page, path);
-  const key = page.getByRole('button', { name: /^Users \d+$/ });
+  const key = page.getByRole('button', { name: /^Users \d+(,|$)/ });
   await key.click();
   const panel = page.getByRole('region', { name: 'Users' });
   await expect(panel.getByTestId('you')).toContainText(handleTag(ownerHandle(await debug(page, 'session'))));
@@ -1569,7 +1569,7 @@ test('shows a USERS count of three digits whole, on a tall and a short screen', 
   await live(page, `/?endpoints=${ws}/__mock/replicas/r1/api/v1/ws,${ws}/__mock/replicas/r2/api/v1/ws`);
   const clients = await Promise.all(Array.from({ length: 100 }, () => RawClient.open(`${baseURL}/__mock/replicas/r1`)));
   try {
-    const key = page.getByRole('button', { name: /^Users \d+$/ });
+    const key = page.getByRole('button', { name: /^Users \d+(,|$)/ });
     await expect(key).toHaveAttribute('aria-label', /^Users 1\d\d$/);
     const count = key.locator('.fixed');
     // The text, which may run over its box, lies within the key's border.
