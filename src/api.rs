@@ -17,12 +17,13 @@ use axum::{Extension, Json, Router};
 use samplez_replica::entry::SessionKey;
 use samplez_service::replica::{Ack, Begin, Resolution};
 use samplez_service::{Identity, Owner, Role};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::app::{App, now_rfc3339, uuid};
 use crate::contract::{Contract, check, contract};
+use crate::shape::Shape;
 use crate::state::{
     Answer, Command, Console, ConsolePut, Write, default_protocol, default_strips,
     default_transport,
@@ -163,13 +164,22 @@ async fn get_state(State(app): State<Arc<App>>) -> Response {
             sm.product.owners(),
         )
     });
-    Json(json!({
-        "revision": revision,
-        "replica": replica,
-        "shape": &*shape,
-        "state": &*state,
-        "owners": owners,
-    }))
+    /// Model `StateDocument`, serialised from the shared state in place.
+    #[derive(Serialize)]
+    struct Document<'a> {
+        revision: u64,
+        replica: Value,
+        shape: &'a Shape,
+        state: &'a Value,
+        owners: Value,
+    }
+    Json(Document {
+        revision,
+        replica,
+        shape: &shape,
+        state: &state,
+        owners,
+    })
     .into_response()
 }
 
