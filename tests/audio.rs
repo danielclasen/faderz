@@ -930,9 +930,15 @@ async fn a_burst_ducks_the_programme_but_not_the_me(block: u32) {
         shape,
         json!({ "comm": { "flow": ids[0] }, "amb": { "flow": ids[1] } }),
         json!({ "out-pgm": { "flow": ids[2] }, "out-me": { "flow": ids[3] } }),
-        // The edges are read from one window of 2 s: a debug engine on a
-        // loaded host can read an input late at the default margin.
-        json!({ "blockSize": block, "readerMarginSamples": 100 * PER_MS }),
+        // The edges are read from one window of 2 s, which a debug engine
+        // on a loaded host computes whole only with time in hand: inputs
+        // read 100 ms late, and a backlog of 100 ms computed rather than
+        // skipped, where the default of two blocks is 2 ms at block 48.
+        json!({
+            "blockSize": block,
+            "readerMarginSamples": 100 * PER_MS,
+            "maxCatchupBlocks": 100 * PER_MS / u64::from(block),
+        }),
     )
     .await;
     appears(&domain.0, &ids[2]).await;
@@ -974,42 +980,42 @@ async fn a_burst_ducks_the_programme_but_not_the_me(block: u32) {
     let api = api();
     let (hold, release) = (HOLD_MS * PER_MS, RELEASE_MS * PER_MS);
     let near = |v: f32, want: f32| (v - want).abs() <= 1e-6;
-    // Bursts of 0.8 s from 0.5 s on, off the block grid, until one is read
-    // whole: a debug engine on a loaded host can still read a block of an
-    // input late, which leaves it out of both outputs. Such a block is
-    // silence in the M&E, or a commentary on the left leg (both legs
-    // ducked alike, so L + R) other than COMM or silence.
-    let mut read = None;
-    for attempt in 0..3 {
-        let now = time::timestamp_to_index(&api, time::now(&api));
-        let (start, end) = (now + 500 * PER_MS + 7, now + 1300 * PER_MS + 7);
-        burst[1].store(end, Relaxed);
-        burst[0].store(start, Relaxed);
-        let (from, to) = (start - 100 * PER_MS, end + hold + release + 100 * PER_MS);
-        // Written by then, with the 100 ms the clock leads the output by.
-        while time::timestamp_to_index(&api, time::now(&api)) <= to + 200 * PER_MS {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        burst[0].store(u64::MAX, Relaxed);
-        let p = span(&domain.0, &ids[2], from, to);
-        let m = span(&domain.0, &ids[3], from, to);
-        let silent = m.iter().any(|s| s.0 == 0.0 || s.1 == 0.0);
-        let comm = |s: &(f32, f32)| s.0 + s.1;
-        let torn = p
-            .iter()
-            .any(|s| !near(comm(s), 0.0) && !near(comm(s), COMM));
-        // A late commentary block is silence within the burst: whole, the
-        // burst is one run of exactly its length.
-        let on: Vec<usize> = (0..p.len()).filter(|&i| near(comm(&p[i]), COMM)).collect();
-        let whole = on.len() as u64 == end - start
-            && on.first().map(|f| f + on.len() - 1) == on.last().copied();
-        if !silent && !torn && whole {
-            read = Some((p, m));
-            break;
-        }
-        eprintln!("block {block}: burst {attempt} not read whole, once more");
+    let engine = server.audio.as_ref().unwrap().engine();
+    let skipped = || engine.counters().overrun_skipped_samples.load(Relaxed);
+    let skipped_before = skipped();
+    // A burst of 0.8 s from 0.5 s on, off the block grid.
+    let now = time::timestamp_to_index(&api, time::now(&api));
+    let (start, end) = (now + 500 * PER_MS + 7, now + 1300 * PER_MS + 7);
+    burst[1].store(end, Relaxed);
+    burst[0].store(start, Relaxed);
+    let (from, to) = (start - 100 * PER_MS, end + hold + release + 100 * PER_MS);
+    // Written by then, with the 100 ms the clock leads the output by.
+    while time::timestamp_to_index(&api, time::now(&api)) <= to + 200 * PER_MS {
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let (p, m) = read.unwrap_or_else(|| panic!("block {block}: no burst read whole"));
+    // libmxl zero-fills what an overrun skips, in both outputs.
+    assert_eq!(
+        skipped(),
+        skipped_before,
+        "block {block}: samples skipped, the engine was starved for over 100 ms"
+    );
+    let p = span(&domain.0, &ids[2], from, to);
+    let m = span(&domain.0, &ids[3], from, to);
+    // The commentary on the left leg (both legs ducked alike, so L + R)
+    // over exactly the burst's samples, and silence elsewhere.
+    let comm = |s: &(f32, f32)| s.0 + s.1;
+    for (i, s) in p.iter().enumerate() {
+        let want = if (start..end).contains(&(from + i as u64)) {
+            COMM
+        } else {
+            0.0
+        };
+        assert!(
+            near(comm(s), want),
+            "block {block}: sample {i} carries a commentary of {}, not {want}",
+            comm(s)
+        );
+    }
     let after = |what: &str, from: usize, f: &dyn Fn(f32, f32) -> bool| {
         (from..p.len())
             .find(|&i| f(p[i].0, p[i].1))
