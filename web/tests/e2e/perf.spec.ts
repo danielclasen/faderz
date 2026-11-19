@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { PERF_URL } from '../../playwright.config';
 import { faderCenter, live, resetMock, serverState } from './support';
@@ -63,6 +64,12 @@ test('three clients moving faders with meters on and duck groups firing stay und
   test.setTimeout(60_000);
   expect((await serverState(request)).shape.channels).toHaveLength(64);
   const contexts = await Promise.all([0, 1, 2].map(() => browser.newContext({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 } })));
+  let tracing = false;
+  let traced: Buffer | null = null;
+  const stopTracing = async (): Promise<Buffer | null> => {
+    if (tracing && !traced) traced = await browser.stopTracing();
+    return traced;
+  };
   try {
     const pages = await Promise.all(contexts.map((c) => c.newPage()));
     for (const p of pages) await observe(p);
@@ -78,10 +85,15 @@ test('three clients moving faders with meters on and duck groups firing stay und
       });
     }
     expect((await request.post('/__mock/ducks/script?ms=1000')).ok()).toBe(true);
+    // A performance trace of the window, kept only when a page has a long
+    // task in it, shows what ran in that task.
+    await browser.startTracing(undefined, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing'] });
+    tracing = true;
     const starts = await Promise.all(pages.map((p) => p.evaluate(() => ({ t: performance.now(), patches: window.__faderz!.patches }))));
     const until = Date.now() + WINDOW_MS;
     const moves = await Promise.all(pages.map((p, i) => sweep(p, `/channels/ch${i + 1}/fader`, until)));
     await request.post('/__mock/ducks/script?ms=0');
+    await stopTracing();
     for (const p of pages) expect(await p.evaluate(() => (window as unknown as { __duckChanges: number }).__duckChanges)).toBeGreaterThanOrEqual(3);
     for (const [i, p] of pages.entries()) {
       const r = await p.evaluate((t0) => {
@@ -104,6 +116,11 @@ test('three clients moving faders with meters on and duck groups firing stay und
       expect(moves[i]!).toBeGreaterThan(20);
       expect(r.patches - starts[i]!.patches).toBeGreaterThan(0);
       expect(r.patchMs.length).toBeGreaterThan(0);
+      if (r.longTasks.length > 0) {
+        // Tens of MB: written to the test's output directory, which CI
+        // uploads on failure, and not copied into the report.
+        await writeFile(test.info().outputPath('performance-trace.json'), (await stopTracing())!);
+      }
       expect(r.longTasks).toEqual([]);
       // A patch is judged by wall time, which on a shared runner includes
       // time the main thread is runnable but not scheduled: the tail is
@@ -113,6 +130,8 @@ test('three clients moving faders with meters on and duck groups firing stay und
     }
   } finally {
     await request.post('/__mock/ducks/script?ms=0');
+    // A test that fails inside the window leaves no trace running.
+    await stopTracing().catch(() => undefined);
     await Promise.all(contexts.map((c) => c.close()));
   }
 });

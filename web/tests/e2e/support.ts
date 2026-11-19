@@ -1,7 +1,8 @@
 // Shared helpers of the e2e specs: REST and mock controls, page waits,
 // pointer drags, and a raw WebSocket client speaking the contract.
 
-import { expect, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { writeFile } from 'node:fs/promises';
 import WebSocket from 'ws';
 import type { Owner, StateDocument } from '../../src/lib/contract/types';
 import type {} from '../../src/lib/sync/client';
@@ -123,8 +124,31 @@ export async function live(page: Page, path = '/'): Promise<void> {
   if (!BACKEND) await standbyReady(page);
 }
 
+/** How long a page may take to have a live primary and a ready standby. */
+const STANDBY_READY_MS = 20_000;
+
+/**
+ * Waits for a live primary and a ready standby. When none is ready in
+ * time, the page's sync state and the mock's replicas and connections go
+ * into the test's attachments before it fails, while the test still runs.
+ */
 export async function standbyReady(page: Page): Promise<void> {
-  await page.waitForFunction(() => window.__faderz?.standby === 'Ready' && window.__faderz.connection === 'Live');
+  try {
+    await page.waitForFunction(() => window.__faderz?.standby === 'Ready' && window.__faderz.connection === 'Live', undefined, {
+      timeout: STANDBY_READY_MS,
+    });
+  } catch (e) {
+    const sync = await page.evaluate(() => JSON.parse(JSON.stringify(window.__faderz ?? null)) as unknown).catch((x: unknown) => String(x));
+    const mock = async (path: string) => {
+      const res = await page.request.get(path).catch(() => null);
+      return res?.ok() ? ((await res.json()) as unknown) : null;
+    };
+    const body = JSON.stringify({ sync, replicas: await mock('/__mock/replicas'), connections: await mock('/__mock/stats') }, null, 2);
+    const path = test.info().outputPath('standby-not-ready.json');
+    await writeFile(path, body);
+    await test.info().attach('standby-not-ready.json', { path, contentType: 'application/json' });
+    throw e;
+  }
 }
 
 /** Every write the UI made has been answered. */
