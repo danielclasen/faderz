@@ -376,7 +376,7 @@ listener:
   and the WebSocket's `replicas` message, named as the pods are,
   `<StatefulSet>-<ordinal>` (with a `name` that ends in no ordinal, the
   replica's `peers` address, `host:port`), with the leader raft
-  follows. Another replica is healthy while this one is in contact with
+  follows. Another replica is heard while this one is in contact with
   a majority and has had a report from it within the contact window.
   Every entry, this replica's own included, is commitable while it is
   healthy and a majority of the voters is. Without an engine there is
@@ -385,8 +385,10 @@ listener:
   heartbeat arrives within the election timeout), and the leader for a
   follower whose matched log is within 16 entries of its own and that
   has matched all of it within the last 3 s. Either way another
-  replica is listed down only once it has gone unheard for 1 s, so a
-  report a few milliseconds late does not show a live one down.
+  replica is listed healthy until it has gone unheard for 1 s, so a
+  report a few milliseconds late does not show a live one down; the
+  majority a replica's own commitable needs counts the replicas heard
+  now.
 
 ### Engines in a set
 

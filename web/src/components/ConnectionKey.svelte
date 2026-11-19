@@ -185,7 +185,7 @@
           >
             <td class="num"><i aria-hidden="true"></i>{r.id}</td>
             <td>{r.role}</td>
-            <td title={r.healthy ? undefined : 'Not heard for over 1 s'}>{health(r)}</td>
+            <td title={r.healthy ? undefined : r.id === status.primaryReplica ? 'Not ready' : 'Not heard for over 1 s'}>{health(r)}</td>
             <td>{use(r.id)}</td>
           </tr>
         {/each}

@@ -351,18 +351,23 @@ impl App {
         let now = Instant::now();
         let mut caught_up = self.caught_up.lock().expect("caught_up lock poisoned");
         let mut heard = self.heard.lock().expect("heard lock poisoned");
-        let up: BTreeMap<NodeId, bool> = (voters.iter())
-            .map(|&id| {
-                let up = if id == me {
-                    info.ready
-                } else {
-                    let now_heard = hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now);
-                    up_within(id, now_heard, &mut heard, now)
-                };
-                (id, up)
-            })
-            .collect();
-        let quorum = 2 * up.values().filter(|&&up| up).count() > voters.len();
+        // Heard now, and listed: a replica unheard for less than
+        // [`DOWN_AFTER`] is listed up, but the quorum, which this replica's
+        // own commitable and so a client's failover follow, counts what is
+        // heard now.
+        let mut heard_now: BTreeMap<NodeId, bool> = BTreeMap::new();
+        let mut up: BTreeMap<NodeId, bool> = BTreeMap::new();
+        for &id in &voters {
+            let (now_up, listed) = if id == me {
+                (info.ready, info.ready)
+            } else {
+                let h = hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now);
+                (h, up_within(id, h, &mut heard, now))
+            };
+            heard_now.insert(id, now_up);
+            up.insert(id, listed);
+        }
+        let quorum = 2 * heard_now.values().filter(|&&up| up).count() > voters.len();
         let mut listed: Vec<(u16, Value)> = Vec::new();
         for &id in &voters {
             let membership::Slot::Audio(ordinal) = membership::slot_of(id) else {
