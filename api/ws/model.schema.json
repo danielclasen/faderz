@@ -123,6 +123,7 @@
           "$ref": "#/$defs/ReplicaRole"
         },
         "healthy": {
+          "description": "This replica, or another one heard within the last second.",
           "type": "boolean"
         },
         "commitable": {

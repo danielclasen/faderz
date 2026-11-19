@@ -90,6 +90,8 @@ pub struct App {
     /// When each follower last matched all of this leader's log, as
     /// [`replicas`](App::replicas) saw it; read without an engine only.
     caught_up: Mutex<BTreeMap<NodeId, Instant>>,
+    /// When [`replicas`](App::replicas) last heard each other replica.
+    heard: Mutex<BTreeMap<NodeId, Instant>>,
 }
 
 /// A connection counted by [`App::connected`]; dropping it counts it
@@ -181,6 +183,27 @@ const REPLICATION_LAG: u64 = 16;
 /// a stopped one never does again once the log moves on.
 const CAUGHT_UP_WINDOW: Duration = Duration::from_secs(3);
 
+/// How long another replica goes unheard before it is listed down: the
+/// contact layer holds a peer silent after a few milliseconds without a
+/// report, which a scheduling or network hiccup gives a live one.
+const DOWN_AFTER: Duration = Duration::from_secs(1);
+
+/// Whether a replica heard now (`heard_now`) or within [`DOWN_AFTER`]
+/// before `now` is up; `heard` holds when each was last heard.
+fn up_within(
+    id: NodeId,
+    heard_now: bool,
+    heard: &mut BTreeMap<NodeId, Instant>,
+    now: Instant,
+) -> bool {
+    if heard_now {
+        heard.insert(id, now);
+    }
+    heard
+        .get(&id)
+        .is_some_and(|&t| now.duration_since(t) < DOWN_AFTER)
+}
+
 /// Whether a follower that has matched `matched` of a leader whose log
 /// ends at `last` is within [`REPLICATION_LAG`] of it.
 fn within_lag(matched: Option<u64>, last: Option<u64>) -> bool {
@@ -269,6 +292,7 @@ impl App {
             counters: Mutex::default(),
             engine: Mutex::default(),
             caught_up: Mutex::default(),
+            heard: Mutex::default(),
         })
     }
 
@@ -326,12 +350,14 @@ impl App {
         let voters: Vec<NodeId> = metrics.membership_config.membership().voter_ids().collect();
         let now = Instant::now();
         let mut caught_up = self.caught_up.lock().expect("caught_up lock poisoned");
+        let mut heard = self.heard.lock().expect("heard lock poisoned");
         let up: BTreeMap<NodeId, bool> = (voters.iter())
             .map(|&id| {
                 let up = if id == me {
                     info.ready
                 } else {
-                    hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now)
+                    let now_heard = hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now);
+                    up_within(id, now_heard, &mut heard, now)
                 };
                 (id, up)
             })
@@ -875,6 +901,24 @@ pub(crate) mod tests {
         assert!(!hears(3, 1, None, &m, &mut seen, now));
         m.current_leader = None;
         assert!(!hears(2, 1, None, &m, &mut seen, now));
+    }
+
+    /// A replica the contact layer holds silent for a sample stays up, so
+    /// a hiccup of a few milliseconds does not list it down; one unheard
+    /// for the whole window is down, and up again once heard.
+    #[test]
+    fn a_replica_is_down_only_once_unheard_for_the_window() {
+        let mut heard = BTreeMap::new();
+        let t0 = Instant::now();
+        assert!(!up_within(2, false, &mut heard, t0), "never heard");
+        assert!(up_within(2, true, &mut heard, t0));
+        let late = t0 + Duration::from_millis(250);
+        assert!(up_within(2, false, &mut heard, late), "one silent sample");
+        assert!(
+            !up_within(2, false, &mut heard, t0 + DOWN_AFTER),
+            "unheard for the window"
+        );
+        assert!(up_within(2, true, &mut heard, t0 + 2 * DOWN_AFTER));
     }
 
     /// The leader hears a follower that trails by a batch while it keeps

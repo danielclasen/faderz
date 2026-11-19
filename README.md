@@ -384,7 +384,9 @@ listener:
   alone, for as long as raft names one (it drops the name when no
   heartbeat arrives within the election timeout), and the leader for a
   follower whose matched log is within 16 entries of its own and that
-  has matched all of it within the last 3 s.
+  has matched all of it within the last 3 s. Either way another
+  replica is listed down only once it has gone unheard for 1 s, so a
+  report a few milliseconds late does not show a live one down.
 
 ### Engines in a set
 
