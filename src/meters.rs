@@ -13,7 +13,7 @@
 //! The tap gains are those of the state last applied, while the engine
 //! ramps a change from its index and meters in 100 ms windows, so for a
 //! window or so after a fader move the levels lead the audio. A bus, aux, mix-minus or monitor output reads the
-//! meters of the first output it is the source of, or the engine meter
+//! meters of the first full-width output it is the source of, or the engine meter
 //! on matrix columns of its own when no full-width output carries it. So a monitor
 //! output is metered on what it plays, the listen sum while anything
 //! solos ([`crate::mix`]), after its level, dim, cut, mono and speaker
