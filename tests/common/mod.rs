@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod metered;
+pub mod monitor;
 pub mod registry;
 pub mod routing;
 

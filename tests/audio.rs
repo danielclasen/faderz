@@ -937,6 +937,202 @@ async fn the_routing_reaches_every_output_flow() {
     server.stop().await;
 }
 
+/// The monitor output plays its source as the monitor controls set it:
+/// level, dim at its depth, cut, mono, speaker mutes and solos, and a
+/// wider source folded down Lo/Ro or taken L and R alone, through every
+/// step of [`monitor::steps`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_monitor_controls_reach_the_monitor_output_flow() {
+    let domain = domain("monitor");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-monitor");
+    let (st, sur, mon) = (new_id(), new_id(), new_id());
+    let _st = Source::start(&domain.0, &st, monitor::ST.to_vec());
+    let _sur = Source::start(&domain.0, &sur, monitor::SUR.to_vec());
+    let inputs = json!({ "st": { "flow": st }, "sur": { "flow": sur } });
+    let outputs = json!({ "out-mon": { "flow": mon } });
+    let server = start_with(&data.0, &domain.0, monitor::shape(), inputs, outputs).await;
+    appears(&domain.0, &mon).await;
+    let mut out = Reader::new(&domain.0, &mon);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // Each step changes what the monitor plays: the block that reads it
+    // is after the change.
+    for step in monitor::steps() {
+        patch(&server, &step.changes).await;
+        out.expect(step.legs[0], step.legs[1], step.what).await;
+    }
+    server.stop().await;
+}
+
+/// Writes `changes` as [`patch`] does, sent again under the same command
+/// id while the server answers 503, not applied, as a client retries.
+async fn applied(server: &Server, changes: &[(&str, Value)]) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let changes: Vec<Value> = (changes.iter())
+        .map(|(p, v)| json!({ "path": p, "value": v }))
+        .collect();
+    let body =
+        json!({ "commandId": faderz::app::uuid().unwrap(), "changes": &changes }).to_string();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut tcp = TcpStream::connect(server.api).await.unwrap();
+        let request = format!(
+            "PATCH /api/v1/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             X-Samplez-Request: 1\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        tcp.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        tcp.read_to_string(&mut answer).await.unwrap();
+        if answer.starts_with("HTTP/1.1 200") {
+            return;
+        }
+        assert!(
+            answer.starts_with("HTTP/1.1 503") && Instant::now() < deadline,
+            "{changes:?}: {answer}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// POSTs `body` to `path`, sent again while the server answers 503, not
+/// applied, as [`applied`] does: the body of the success answered.
+async fn posted(server: &Server, path: &str, body: &Value) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (status, answer) = post(server.api, path, body).await;
+        if (200..300).contains(&status) {
+            return answer;
+        }
+        assert!(
+            status == 503 && Instant::now() < deadline,
+            "{path} {body}: {status} {answer}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// A scene recall brings back the mix stored in it, and an element made
+/// recall-safe for its fader keeps the fader it has.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scene_recall_brings_the_stored_mix_back() {
+    let domain = domain("scene");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-scene");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let low = 10f32.powf(-20.0 / 20.0);
+    let faders = |db: i32| {
+        [
+            ("/channels/ch1/fader", json!(db)),
+            ("/channels/st1/fader", json!(db)),
+        ]
+    };
+    applied(&server, &[("/channels/ch1/pan/lr", json!(-1))]).await;
+    applied(&server, &faders(0)).await;
+    pgm.expect(CH1 + ST1[0], ST1[1], "the mix stored").await;
+    let id = faderz::app::uuid().unwrap();
+    let stored = posted(
+        &server,
+        "/scenes",
+        &json!({ "commandId": id, "name": "Show" }),
+    )
+    .await;
+    let scene: Value = serde_json::from_str(&stored).unwrap();
+    let path = format!("/scenes/{}/recall", scene["scene"]["id"].as_str().unwrap());
+    async fn recall(server: &Server, path: &str) {
+        let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": 0 });
+        posted(server, path, &body).await;
+    }
+    applied(&server, &faders(-20)).await;
+    pgm.expect((CH1 + ST1[0]) * low, ST1[1] * low, "both faders down")
+        .await;
+    recall(&server, &path).await;
+    pgm.expect(CH1 + ST1[0], ST1[1], "the stored mix recalled")
+        .await;
+    applied(&server, &faders(-20)).await;
+    applied(&server, &[("/recallSafe/st1", json!(["fader"]))]).await;
+    pgm.expect((CH1 + ST1[0]) * low, ST1[1] * low, "both faders down again")
+        .await;
+    recall(&server, &path).await;
+    pgm.expect(CH1 + ST1[0] * low, ST1[1] * low, "st1's fader kept")
+        .await;
+    server.stop().await;
+}
+
+/// A bus, a mix-minus and an aux each meter the tone they carry on its
+/// peak, true peak, RMS and momentary loudness, and a duck group meters
+/// its key, envelope and engagement while its key crosses the threshold,
+/// through every step of [`metered::steps`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn element_and_duck_meters_read_their_signals() {
+    let domain = domain("metered");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-metered");
+    let (tone, dc, key, bed) = (new_id(), new_id(), new_id(), new_id());
+    let (pgm, mm) = (new_id(), new_id());
+    let _tone = Source::sine(&domain.0, &tone, metered::TONE.0, metered::TONE.1);
+    let _dc = Source::start(&domain.0, &dc, vec![metered::DC]);
+    let _key = Source::start(&domain.0, &key, vec![metered::KEY]);
+    // bed reads a flow nobody writes: silent.
+    let inputs = json!({
+        "tone": { "flow": tone },
+        "dc": { "flow": dc },
+        "key": { "flow": key },
+        "bed": { "flow": bed },
+    });
+    let outputs = json!({ "out-pgm": { "flow": pgm }, "out-mm": { "flow": mm } });
+    let server = start_with(&data.0, &domain.0, metered::shape(), inputs, outputs).await;
+    appears(&domain.0, &mm).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    for step in metered::steps() {
+        patch(&server, &step.changes).await;
+        // A momentary loudness takes 400 ms to measure.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let v = meter_values(&server, 1).await;
+            let read = |&(i, want, tol): &(usize, i16, i16)| {
+                (i32::from(v[i]) - i32::from(want)).abs() <= i32::from(tol)
+            };
+            if step.values.iter().all(read) {
+                break;
+            }
+            let wrong: Vec<_> = (step.values.iter())
+                .filter(|w| !read(w))
+                .map(|&(i, want, _)| (i, want, v[i]))
+                .collect();
+            assert!(
+                Instant::now() < deadline,
+                "{}: (index, wanted, read) {wrong:?}",
+                step.what
+            );
+        }
+    }
+    server.stop().await;
+}
+
 /// A mono channel's pan places it in the field of a 5.1 bus: at the
 /// front it is the centre leg alone, divergence spreads it to L and R,
 /// fr takes it to the surrounds, and the LFE send is a gain of its own.
