@@ -742,7 +742,10 @@ impl Config {
         if let (Some(engine), Some(mxl)) = (&config.audio, &config.mxl) {
             config.wiring = (shape.channels.iter().zip(&engine.inputs))
                 .map(|(c, input)| Wiring {
-                    a: input.flow_id.clone(),
+                    a: input
+                        .flow_id
+                        .clone()
+                        .expect("every configured input names a flow"),
                     b: mxl.inputs[&c.id].alt_flow.clone(),
                     domain: input.domain.clone(),
                 })

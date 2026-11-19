@@ -149,7 +149,7 @@ impl Audio {
     ) -> Result<Audio, String> {
         let started_on = mix::selected(shape, &wiring, state);
         for (input, flow) in config.inputs.iter_mut().zip(&started_on) {
-            input.flow_id.clone_from(flow);
+            input.flow_id = Some(flow.clone());
         }
         let block = u64::from(config.block_size);
         let ramp = u64::from(config.ramp_samples);
@@ -181,7 +181,7 @@ impl Audio {
             .iter_mut()
             .zip(mix::selected(shape, &wiring, state))
         {
-            input.flow_id = flow;
+            input.flow_id = Some(flow);
         }
         let (reports, reports_rx) = std::sync::mpsc::sync_channel(64);
         let (statuses, statuses_rx) = std::sync::mpsc::sync_channel(1 << 12);
