@@ -18,6 +18,12 @@ const PATCH_P99_MS = 4;
  * the status bar and the masters take about 25.
  */
 const MUTATIONS_PER_PATCH = 64;
+/**
+ * Bound on the DOM nodes changed between two animation frames, the most
+ * of any frame in the window: a mean over hundreds of patches hides one
+ * patch that rebuilds the console, which this does not.
+ */
+const MUTATIONS_PER_FRAME = 256;
 
 /** Nearest-rank percentile of `xs`, 0 < q <= 1. */
 function percentile(xs: readonly number[], q: number): number {
@@ -33,6 +39,9 @@ interface Entry {
 interface Counts {
   __frames: number;
   __mutations: number;
+  /** DOM nodes changed between each two animation frames, by frame. */
+  __perFrame: number[];
+  __bucket: number;
 }
 
 /** What a page has counted so far, and when. */
@@ -61,7 +70,11 @@ async function observe(page: Page): Promise<void> {
     const c = window as unknown as Counts;
     c.__frames = 0;
     c.__mutations = 0;
+    c.__perFrame = [];
+    c.__bucket = 0;
     const frame = () => {
+      c.__perFrame.push(c.__bucket);
+      c.__bucket = 0;
       c.__frames++;
       requestAnimationFrame(frame);
     };
@@ -70,11 +83,14 @@ async function observe(page: Page): Promise<void> {
       // A node added or removed counts with every node under it.
       const size = (n: Node) => 1 + (n instanceof Element ? n.getElementsByTagName('*').length : 0);
       new MutationObserver((records) => {
+        let n = 0;
         for (const r of records) {
-          if (r.type !== 'childList') c.__mutations++;
-          for (const n of r.addedNodes) c.__mutations += size(n);
-          for (const n of r.removedNodes) c.__mutations += size(n);
+          if (r.type !== 'childList') n++;
+          for (const a of r.addedNodes) n += size(a);
+          for (const d of r.removedNodes) n += size(d);
         }
+        c.__mutations += n;
+        c.__bucket += n;
       }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     });
   });
@@ -163,6 +179,10 @@ test('three clients moving faders with meters on and duck groups firing stay und
           maxPatchMs: window.__faderz!.maxPatchMs,
         };
       }, starts[i]!.t);
+      const maxFrameMutations = await p.evaluate(
+        ([from, to]) => Math.max(0, ...(window as unknown as Counts).__perFrame.slice(from, to)),
+        [starts[i]!.frames, ends[i]!.frames],
+      );
       const patches = ends[i]!.patches - starts[i]!.patches;
       const frames = ends[i]!.frames - starts[i]!.frames;
       const mutationsPerPatch = (ends[i]!.mutations - starts[i]!.mutations) / patches;
@@ -170,7 +190,7 @@ test('three clients moving faders with meters on and duck groups firing stay und
       const p99WindowPatch = percentile(r.patchMs, 0.99);
       test.info().annotations.push({
         type: `page ${i + 1}`,
-        description: JSON.stringify({ moves: moves[i], patches, frames, mutationsPerPatch, p99WindowPatch, maxWindowPatch, maxPatchMs: r.maxPatchMs, longTasks: r.longTasks, loadLongTasks: r.allLongTasks }),
+        description: JSON.stringify({ moves: moves[i], patches, frames, mutationsPerPatch, maxFrameMutations, p99WindowPatch, maxWindowPatch, maxPatchMs: r.maxPatchMs, longTasks: r.longTasks, loadLongTasks: r.allLongTasks }),
       });
       expect(moves[i]!).toBeGreaterThan(20);
       expect(patches).toBeGreaterThan(0);
@@ -183,6 +203,7 @@ test('three clients moving faders with meters on and duck groups firing stay und
       // does not see the second.
       expect(patches).toBeLessThanOrEqual(frames + 1);
       expect(mutationsPerPatch).toBeLessThan(MUTATIONS_PER_PATCH);
+      expect(maxFrameMutations).toBeLessThan(MUTATIONS_PER_FRAME);
       if (r.longTasks.length > 0 && tracing) {
         // Tens of MB: written to the test's output directory, which CI
         // uploads on failure, and not copied into the report.
