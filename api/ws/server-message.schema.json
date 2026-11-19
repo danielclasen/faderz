@@ -167,7 +167,7 @@
       }
     },
     "Delta": {
-      "description": "One entry of the replicated log at global revision `revision`. The server batches the commands that arrive within one processing block into one entry, so a delta may carry changes from several origins; when two commands in it write the same control, the later one wins and only its value is listed. atIndex is the sample index at which the parameter changes take effect on every replica; absent when only ownership changed. origins lists every client command applied in it; absent for server-side changes (tally, console status, lease expiry, REST writes).",
+      "description": "One entry of the replicated log at global revision `revision`. The server batches the commands that arrive within one processing block into one entry, so a delta may carry changes from several origins; when two commands in it write the same control, the later one wins and only its value is listed. atIndex is the sample index at which the parameter changes take effect on every replica; absent when only ownership changed. A delta carries neither changes nor owners when its entry changed nothing a client shows: a control request, which only its holder's connection receives, as a controlRequest message. origins lists every client command applied in it; absent for server-side changes (tally, console status, lease expiry, REST writes).",
       "type": "object",
       "required": [
         "type",
@@ -175,18 +175,6 @@
         "revision"
       ],
       "additionalProperties": false,
-      "anyOf": [
-        {
-          "required": [
-            "changes"
-          ]
-        },
-        {
-          "required": [
-            "owners"
-          ]
-        }
-      ],
       "properties": {
         "type": {
           "const": "delta"

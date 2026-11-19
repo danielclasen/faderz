@@ -1944,11 +1944,6 @@ impl Product for Mixer {
         }
         if !requests.is_empty() {
             delta.insert("requests".into(), json!(requests));
-            // A delta carries changes or owners: a request alone says no
-            // owner changed, for the clients that see it without it.
-            if values.is_empty() && owners.is_empty() {
-                delta.insert("owners".into(), json!([]));
-            }
         }
         Value::Object(delta).to_string()
     }
