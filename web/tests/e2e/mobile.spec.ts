@@ -87,3 +87,17 @@ test('a tap on About / What\'s new in the connection details opens the changelog
   await close.tap();
   await expect(dialog).toBeHidden();
 });
+
+test('a tap outside About / What\'s new on a phone closes it', async ({ page }) => {
+  await live(page);
+  await page.getByRole('button', { name: /^Connection LIVE, details$/ }).tap();
+  await page.getByTestId('build-about').tap();
+  const dialog = page.getByRole('dialog', { name: "About / What's new" });
+  await expect(dialog.getByTestId('about-changelog')).toBeVisible();
+  // Below the dialog, over the backdrop.
+  const r = (await dialog.boundingBox())!;
+  const v = page.viewportSize()!;
+  expect(r.y + r.height).toBeLessThan(v.height - 8);
+  await page.touchscreen.tap(v.width / 2, (r.y + r.height + v.height) / 2);
+  await expect(dialog).toBeHidden();
+});

@@ -3,29 +3,23 @@
   // faderz changelog of that release, as GET /about answers it from the
   // binary. A modal dialog: Escape, the close key or a press outside it
   // closes it, and focus goes back to what opened it.
-  import { about } from '../lib/about.svelte';
+  import { about, latest, type Load } from '../lib/about.svelte';
   import type { About } from '../lib/contract/types';
-  import { parseMarkdown, type Inline } from '../lib/markdown';
+  import { parseMarkdown, plainText, type Inline } from '../lib/markdown';
   import { fetchAbout } from '../lib/state/actions';
 
   let dialog = $state<HTMLDialogElement>();
-  type Load = { kind: 'busy' } | { kind: 'error'; message: string } | { kind: 'done'; about: About };
-  let load = $state<Load>({ kind: 'busy' });
+  let load = $state<Load<About>>({ kind: 'busy' });
   /** The changelog's own title is the dialog's: its releases start at level 2. */
-  const blocks = $derived(load.kind === 'done' ? parseMarkdown(load.about.changelog).filter((b) => b.kind !== 'heading' || b.level > 1) : []);
+  const blocks = $derived(load.kind === 'done' ? parseMarkdown(load.value.changelog).filter((b) => b.kind !== 'heading' || b.level > 1) : []);
   /** A samplez release has notes of its own where a tag names it. */
   const samplezNotes = $derived(
-    load.kind === 'done' && !load.about.build.samplez.includes('+') ? `https://github.com/danielclasen/samplez/releases/tag/v${load.about.build.samplez}` : null,
+    load.kind === 'done' && !load.value.build.samplez.includes('+') ? `https://github.com/danielclasen/samplez/releases/tag/v${load.value.build.samplez}` : null,
   );
 
-  async function fetchIt(): Promise<void> {
-    load = { kind: 'busy' };
-    try {
-      load = { kind: 'done', about: await fetchAbout() };
-    } catch (e) {
-      load = { kind: 'error', message: e instanceof Error ? e.message : String(e) };
-    }
-  }
+  // Only the latest load shows: an older one ending late sets nothing.
+  const loader = latest(fetchAbout, (l) => (load = l));
+  const fetchIt = loader.run;
 
   $effect(() => {
     if (!dialog) return;
@@ -34,7 +28,10 @@
       // Asked each time it opens: a failover may have moved the console to
       // a replica of another build.
       void fetchIt();
-    } else if (!about.open && dialog.open) dialog.close();
+    } else if (!about.open && dialog.open) {
+      loader.cancel();
+      dialog.close();
+    }
   });
 
   /** A press on the backdrop, outside the dialog's box, closes it. */
@@ -62,13 +59,13 @@
       </div>
     {:else}
       <p class="build num" data-testid="about-build">
-        faderz {load.about.build.faderz}, built against samplez
-        {#if samplezNotes}<a href={samplezNotes} target="_blank" rel="noopener noreferrer">{load.about.build.samplez}</a>{:else}{load.about.build.samplez}{/if}
+        faderz {load.value.build.faderz}, built against samplez
+        {#if samplezNotes}<a href={samplezNotes} target="_blank" rel="noopener noreferrer">{load.value.build.samplez}</a>{:else}{load.value.build.samplez}{/if}
       </p>
       <div class="log" data-testid="about-changelog">
         {#each blocks as b, i (i)}
           {#if b.kind === 'heading'}
-            <svelte:element this={`h${Math.min(6, b.level + 1)}`} class="h{b.level}">{@render runs(b.children)}</svelte:element>
+            <svelte:element this={`h${Math.min(6, b.level + 1)}`} class:breaking={/BREAKING CHANGES/i.test(plainText(b.children))}>{@render runs(b.children)}</svelte:element>
           {:else if b.kind === 'list'}
             <ul>
               {#each b.items as item, j (j)}<li>{@render runs(item)}</li>{/each}
@@ -161,11 +158,20 @@
     font-size: 14px;
     font-weight: 600;
   }
+  /* Features, Bug Fixes: section labels in the text colour, set apart
+     by case and tracking rather than by size. */
   .log :global(h4) {
-    margin: 10px 0 2px;
-    color: var(--text-dim);
+    margin: 12px 0 2px;
+    color: var(--text);
     font-size: 12px;
     font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  /* The one an operator must not miss. */
+  .log :global(h4.breaking) {
+    color: var(--mute);
+    font-weight: 700;
   }
   .log :global(ul) {
     margin: 0;

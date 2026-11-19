@@ -219,6 +219,17 @@ test('the version lines open About / What\'s new with the changelog the replica 
   await expect(dialog.getByTestId('about-build')).toHaveText(`faderz ${about.build.faderz}, built against samplez ${about.build.samplez}`);
   await expect(dialog.getByRole('heading', { level: 3 }).first()).toHaveText(`${newest[1]} ${newest[2]}`);
   await expect(dialog.getByRole('heading', { name: 'Changelog' })).toHaveCount(0);
+  // Section labels read in the text colour at the list's size or as
+  // capitals; breaking changes stand out from them.
+  const label = dialog.getByRole('heading', { level: 4, name: 'Features' }).first();
+  const item = dialog.locator('li').first();
+  const style = (l: typeof label) => l.evaluate((e) => { const c = getComputedStyle(e); return { color: c.color, size: parseFloat(c.fontSize), transform: c.textTransform, weight: c.fontWeight }; });
+  const [l, li] = [await style(label), await style(item)];
+  expect(l.color).toBe(li.color);
+  expect(l.size >= li.size || l.transform === 'uppercase').toBe(true);
+  const breaking = dialog.getByRole('heading', { level: 4, name: /BREAKING CHANGES/ }).first();
+  const b = await style(breaking);
+  expect(b.color === l.color && b.weight === l.weight).toBe(false);
   // Every link opens a page of its own, none of them script.
   const hrefs = await dialog.getByTestId('about-changelog').locator('a').evaluateAll((as) => as.map((a) => [a.getAttribute('href'), a.getAttribute('target')]));
   expect(hrefs.length).toBeGreaterThan(10);
