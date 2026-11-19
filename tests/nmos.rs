@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use faderz::config::Config;
 use faderz::server::Server;
+use faderz::state::{Activation, tai_text};
 use samplez::InputState;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -352,6 +353,77 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
     // Attached, it is heard: the meter sees the output.
     activate(&server, &ch1, json!({ "master_enable": true })).await;
     until("ch1 is heard", async || peak().iter().any(|&p| p > 0.0)).await;
+    server.stop().await;
+}
+
+/// A scheduled activation is taken into the state with the mode and
+/// requested time it was staged with, through `/staged` and through
+/// `/bulk`, and fired with them: wherever `/active` is written from the
+/// state, a relative activation shows as relative.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scheduled_activation_keeps_the_mode_and_requested_time_it_was_staged_with() {
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "nmos-asked-data");
+    let domain = domain("nmos-asked");
+    std::fs::write(
+        domain.0.join("domain_def.json"),
+        json!({ "id": DOMAIN, "label": "test" }).to_string(),
+    )
+    .unwrap();
+    let f = Flows {
+        ch1: mxl_id(),
+        ch2: mxl_id(),
+        ch2b: mxl_id(),
+        pgm: mxl_id(),
+    };
+    let other = mxl_id();
+    let _sources = [
+        Source::start(&domain.0, &f.ch1, vec![0.5]),
+        Source::start(&domain.0, &other, vec![0.25]),
+    ];
+    let (_registry, at) = registry::start();
+    let server = start(&data.0, &domain.0, &f, at).await;
+    let ch1 = id_of(&server, "receivers", "Pres 1").await;
+    let ch2 = id_of(&server, "receivers", "Pres 2").await;
+    let asked = |requested: &str, at: u64| Activation {
+        mode: "activate_scheduled_relative".into(),
+        requested: Some(requested.into()),
+        time: tai_text(at),
+    };
+    let fired = |channel: &str| {
+        (server.app.replica.store()).with_state(|sm| {
+            (sm.product.receiver(channel))
+                .and_then(|(c, _)| c.cloned())
+                .and_then(|c| c.activation)
+        })
+    };
+    let params = |requested: &str| {
+        json!({
+            "transport_params": [{ "mxl_flow_id": other }],
+            "activation": { "mode": "activate_scheduled_relative", "requested_time": requested },
+        })
+    };
+
+    let path = format!("{CONNECTION}/receivers/{ch1}/staged");
+    let (status, body) = request(server.nmos, "PATCH", &path, Some(&params("0:300000000"))).await;
+    assert_eq!(status, 202, "{body}");
+    until("the schedule is state", async || scheduled(&server) == 1).await;
+    let s = (server.app.replica.store()).with_state(|sm| sm.product.scheduled()[0].clone());
+    assert_eq!(s.active.activation, Some(asked("0:300000000", s.at)));
+    until("the schedule fired", async || scheduled(&server) == 0).await;
+    assert_eq!(fired("ch1"), Some(asked("0:300000000", s.at)));
+
+    let bulk = json!([{ "id": ch2, "params": params("0:400000000") }]);
+    let path = "/x-nmos/connection/v1.2/bulk/receivers";
+    let (status, body) = request(server.nmos, "POST", path, Some(&bulk)).await;
+    assert_eq!(status, 200, "{body}");
+    until("the bulk schedule is state", async || {
+        scheduled(&server) == 1
+    })
+    .await;
+    let s = (server.app.replica.store()).with_state(|sm| sm.product.scheduled()[0].clone());
+    assert_eq!(s.active.activation, Some(asked("0:400000000", s.at)));
+    until("the bulk schedule fired", async || scheduled(&server) == 0).await;
+    assert_eq!(fired("ch2"), Some(asked("0:400000000", s.at)));
     server.stop().await;
 }
 

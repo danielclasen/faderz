@@ -345,8 +345,9 @@ impl Node {
             }
         };
         // What a scheduled activation is asked for with, kept for the
-        // schedule samplez-nmos hands over while serving the request.
-        if method == axum::http::Method::PATCH {
+        // schedule samplez-nmos hands over while serving the request: a
+        // PATCH of `/staged`, a POST of `/bulk`.
+        if method == axum::http::Method::PATCH || method == axum::http::Method::POST {
             let params: Vec<(usize, &serde_json::Value)> = match single {
                 Some(index) => vec![(index, &value)],
                 None => {
@@ -363,9 +364,15 @@ impl Node {
                 }
             };
             let mut asked = self.conns.asked.lock().expect("asked lock poisoned");
+            // An activation of any other mode, a cancel among them,
+            // leaves nothing asked; staged params alone change nothing.
             for (index, params) in params {
-                if let Some(a) = scheduled_request(params) {
-                    asked[index] = Some(a);
+                if params
+                    .get("activation")
+                    .and_then(|a| a.get("mode"))
+                    .is_some()
+                {
+                    asked[index] = scheduled_request(params);
                 }
             }
         }
@@ -904,21 +911,29 @@ impl Conns {
             }
             Scheduling::Take => {
                 // The request staged here with it, so a fired one shows
-                // the mode and requested time it was asked with.
-                let asked =
-                    (self.asked.lock().expect("asked lock poisoned")[index].take()).map(|a| {
-                        Activation {
-                            time: tai_text(at),
-                            ..a
-                        }
-                    });
-                self.submit(|attempt| Command::Schedule {
-                    id: id(attempt),
-                    port: port.clone(),
-                    active: connection(active, asked.clone()),
-                    at,
-                })
-                .await
+                // the mode and requested time it was asked with. It is
+                // kept until the schedule is state: samplez-nmos hands a
+                // schedule over again when this fails.
+                let staged = self.asked.lock().expect("asked lock poisoned")[index].clone();
+                let asked = staged.clone().map(|a| Activation {
+                    time: tai_text(at),
+                    ..a
+                });
+                let taken = self
+                    .submit(|attempt| Command::Schedule {
+                        id: id(attempt),
+                        port: port.clone(),
+                        active: connection(active, asked.clone()),
+                        at,
+                    })
+                    .await;
+                if taken.is_ok() {
+                    let mut now = self.asked.lock().expect("asked lock poisoned");
+                    if now[index] == staged {
+                        now[index] = None;
+                    }
+                }
+                taken
             }
         }
     }
@@ -1110,8 +1125,6 @@ fn port_of(path: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// Whether a staging request's `activation` asks for a cancel: `mode`
-/// given and null.
 /// The mode and requested time a staging request's `params` schedule an
 /// activation with; none for an immediate one, a cancel or none at all.
 fn scheduled_request(params: &serde_json::Value) -> Option<Activation> {
@@ -1130,6 +1143,8 @@ fn scheduled_request(params: &serde_json::Value) -> Option<Activation> {
     })
 }
 
+/// Whether a staging request's `activation` asks for a cancel: `mode`
+/// given and null.
 fn cancels(params: &serde_json::Value) -> bool {
     params
         .get("activation")

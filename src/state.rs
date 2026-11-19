@@ -792,6 +792,10 @@ impl Mixer {
         // The mode and requested time of the request that scheduled it,
         // when the schedule carries them: a relative activation stays
         // relative on `/active`. Without them it was asked for at `at`.
+        // A replica of a release before this takes a schedule with them
+        // and fires it as absolute all the same, so during a rolling
+        // upgrade `/active` can show either until every replica runs
+        // this release; the activation itself is the same on all.
         let at = tai_text(s.at);
         let (mode, requested) = match &s.active.activation {
             Some(a) => (a.mode.clone(), a.requested.clone()),
