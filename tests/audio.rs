@@ -603,6 +603,23 @@ async fn solos_reach_the_monitor_output_flow() {
     mon.expect(0.0, 0.0, "ch1 AFL with its fader closed").await;
     patch(&server, &[("/channels/ch1/solo", json!("off"))]).await;
     mon.expect(ST1[0], ST1[1], "the source again").await;
+    // The AFV stage lowers st1 on the source once the tally closes it.
+    patch(
+        &server,
+        &[
+            ("/afv/st1/enabled", json!(true)),
+            ("/afv/st1/offLevel", json!(-40)),
+            ("/afv/st1/source", json!("cam1")),
+        ],
+    )
+    .await;
+    tally(&server, "cam1", "preview").await;
+    mon.expect(
+        ST1[0] * 0.01,
+        ST1[1] * 0.01,
+        "the source with st1's AFV closed",
+    )
+    .await;
     // AFL is after the fader, not after the routes.
     patch(&server, &[("/channels/st1/routes/pgm", json!(false))]).await;
     mon.expect(0.0, 0.0, "st1 off the source").await;
@@ -614,19 +631,8 @@ async fn solos_reach_the_monitor_output_flow() {
         ],
     )
     .await;
+    // Before the AFV stage: its closed AFV does not lower it.
     mon.expect(ST1[0], ST1[1], "st1 AFL through its VCA").await;
-    // AFL is before the AFV stage: a closed AFV plays at the fader gain.
-    patch(
-        &server,
-        &[
-            ("/afv/st1/enabled", json!(true)),
-            ("/afv/st1/open", json!(false)),
-            ("/afv/st1/offLevel", json!(-40)),
-        ],
-    )
-    .await;
-    mon.expect(ST1[0], ST1[1], "st1 AFL with its AFV closed")
-        .await;
     patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
     mon.expect(pfl, pfl, "ch1 PFL over st1 AFL").await;
     server.stop().await;

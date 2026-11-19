@@ -195,6 +195,25 @@ pub async fn patch(server: &Server, changes: &[(&str, Value)]) {
     assert!(answer.starts_with("HTTP/1.1 200"), "{changes:?}: {answer}");
 }
 
+/// POST one source's tally change to the server.
+pub async fn tally(server: &Server, source: &str, state: &str) {
+    let body = json!({ "source": source, "state": state }).to_string();
+    let mut tcp = TcpStream::connect(server.api).await.unwrap();
+    let request = format!(
+        "POST /api/v1/afv/tally HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         X-Samplez-Request: 1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    tcp.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    tcp.read_to_string(&mut answer).await.unwrap();
+    assert!(
+        answer.starts_with("HTTP/1.1 200"),
+        "{source} {state}: {answer}"
+    );
+}
+
 /// GET `path` from `addr`: status and body.
 pub async fn get(addr: std::net::SocketAddr, path: &str) -> (u16, String) {
     let mut tcp = TcpStream::connect(addr).await.unwrap();
