@@ -797,8 +797,10 @@ impl Drops {
 /// following, or one lost to an election, is appended again while this
 /// replica leads and the applied log does not hold it, first after
 /// `write_timeout`, within which an append is ordered or given up, then
-/// at twice the interval up to [`RETRY_CAP`] times it ([`Unapplied`]). Runs on a
-/// thread of its own until the engine stops or the replica is gone.
+/// at twice the interval up to [`RETRY_CAP`] times it ([`Unapplied`]). A
+/// report made while following that `engine` no longer agrees with is
+/// dropped. Runs on a thread of its own until the engine stops or the
+/// replica is gone.
 pub fn report_inputs(
     reports: Receiver<Report>,
     replica: Weak<Replica<Mixer>>,
@@ -893,8 +895,8 @@ impl Unapplied {
     /// that the local engine no longer agrees with (`engine_up` says
     /// whether it reads a slot, none while it cannot tell) is dropped as
     /// well: the engine took the input up or down again without a report,
-    /// as it does where the log already holds that, and appending it
-    /// would put a stale state into the log. Returns when the next one is
+    /// which it does where the log already holds that state, and
+    /// appending the report would put a stale state into the log. Returns when the next one is
     /// due.
     fn retry(
         &mut self,
