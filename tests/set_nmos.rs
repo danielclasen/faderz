@@ -201,6 +201,24 @@ impl Node {
             .block_on(request(self.server.nmos, method, path, body))
     }
 
+    /// [`Node::nmos`], again while the replica answers that the set has
+    /// no leader: after an election a follower answers so until it has
+    /// heard the new leader, and a client tries again.
+    fn nmos_led(&self, method: &str, path: &str, body: Option<&Value>) -> (u16, Value) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let (status, answer) = self.nmos(method, path, body);
+            let leaderless = status == 503
+                && answer["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("no leader"));
+            if !leaderless || Instant::now() >= deadline {
+                return (status, answer);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     fn leads(&self) -> bool {
         let r = self.ops("/readyz").1["replica"].clone();
         r["leader"] == r["id"]
@@ -1019,7 +1037,7 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
     let next = next.unwrap();
     let follower = survivors.iter().copied().find(|&n| n != next).unwrap();
     for n in survivors {
-        let (status, staged) = node(&nodes, n).nmos("GET", &path, None);
+        let (status, staged) = node(&nodes, n).nmos_led("GET", &path, None);
         assert_eq!(status, 200, "{staged}");
         assert_eq!(
             staged["activation"]["mode"], "activate_scheduled_absolute",
@@ -1037,17 +1055,18 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         );
     }
     let (status, _) =
-        node(&nodes, follower).nmos("PATCH", &path, Some(&json!({ "master_enable": true })));
+        node(&nodes, follower).nmos_led("PATCH", &path, Some(&json!({ "master_enable": true })));
     assert_eq!(status, 423, "a pending activation locks /staged");
-    let (status, body) = node(&nodes, follower).nmos("PATCH", &path, Some(&cancel));
+    let (status, body) = node(&nodes, follower).nmos_led("PATCH", &path, Some(&cancel));
     assert_eq!(status, 200, "{body}");
     let gone = until(5, || {
         survivors.iter().all(|&n| node(&nodes, n).scheduled() == 0)
     });
     assert!(gone, "the cancel did not reach the state");
-    let (_, staged) = node(&nodes, next).nmos("GET", &path, None);
+    let (_, staged) = node(&nodes, next).nmos_led("GET", &path, None);
     assert!(staged["activation"]["mode"].is_null(), "{staged}");
-    let (status, body) = node(&nodes, follower).nmos("PATCH", &path, Some(&absolute(&ch2_flow)));
+    let (status, body) =
+        node(&nodes, follower).nmos_led("PATCH", &path, Some(&absolute(&ch2_flow)));
     assert_eq!(status, 202, "{body}");
     let fired = until(20, || {
         survivors.iter().all(|&n| {
