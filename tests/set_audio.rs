@@ -121,6 +121,8 @@ impl Set {
         let ports = (listeners.iter())
             .map(|l| l.local_addr().unwrap().port())
             .collect();
+        // The first output asked for, whatever order the map keeps.
+        let first = outputs[0];
         let flows = |_: &&str| -> Vec<String> { (0..REPLICAS).map(|_| new_id()).collect() };
         let outputs: serde_json::Map<String, Value> = (outputs.iter())
             .map(|id| ((*id).to_owned(), json!({ "flows": flows(id) })))
@@ -130,7 +132,7 @@ impl Set {
                 .map(|f| f.as_str().unwrap().to_owned())
                 .collect()
         };
-        let members = flows_of(outputs.values().next().unwrap());
+        let members = flows_of(&outputs[first]);
         let mm_members = outputs.get("out-mm").map(flows_of).unwrap_or_default();
         let set = Set {
             tls: certificates(&at.0, REPLICAS),
