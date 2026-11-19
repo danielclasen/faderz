@@ -25,6 +25,51 @@ describe('mock surround panner', () => {
   });
 });
 
+describe('mock surround panner law', () => {
+  const power = (m: number[][]) => m.reduce((sum, row, d) => sum + (LAYOUT_LABELS['5.1'][d] === 'LFE' ? 0 : row[0]!), 0);
+
+  it('keeps constant power over the field, on 5.1 and 7.1', () => {
+    for (const dst of ['5.1', '7.1'] as const) {
+      for (let lr = -1; lr <= 1; lr += 0.25) {
+        for (let fr = -1; fr <= 1; fr += 0.25) {
+          for (const divergence of [0, 0.4, 1]) {
+            const m = legMatrix('mono', dst, lr, fr, { divergence });
+            const total = m.reduce((sum, row, d) => sum + (LAYOUT_LABELS[dst][d] === 'LFE' ? 0 : row[0]!), 0);
+            expect(total).toBeCloseTo(1);
+          }
+        }
+      }
+    }
+    expect(power(legMatrix('mono', '5.1', 0.3, 0.2))).toBeCloseTo(1);
+  });
+
+  it('pans pairwise at the front and between the surrounds at the rear', () => {
+    const half = legMatrix('mono', '5.1', -0.5, -1);
+    expect(half[leg('L')]![0]).toBeCloseTo(0.5);
+    expect(half[leg('C')]![0]).toBeCloseTo(0.5);
+    const rear = legMatrix('mono', '5.1', 0, 1);
+    expect(rear[leg('Ls')]![0]).toBeCloseTo(0.5);
+    expect(rear[leg('Rs')]![0]).toBeCloseTo(0.5);
+    expect(rear[leg('C')]![0]).toBeCloseTo(0);
+    const middle = legMatrix('mono', '5.1', 0, 0);
+    expect(middle[leg('C')]![0]).toBeCloseTo(0.5);
+    expect(middle[leg('Ls')]![0]).toBeCloseTo(0.25);
+  });
+
+  it('balances a stereo source and applies its image first', () => {
+    const balanced = legMatrix('stereo', 'stereo', -0.5, -1);
+    expect(balanced[0]![0]).toBeCloseTo(1);
+    expect(balanced[1]![1]).toBeCloseTo(0.25);
+    const left = legMatrix('stereo', 'stereo', 0, -1, {}, 'leftToBoth');
+    expect(left[0]![0]).toBeCloseTo(1);
+    expect(left[1]![0]).toBeCloseTo(1);
+    expect(left[1]![1]).toBeCloseTo(0);
+    const swapped = legMatrix('stereo', 'stereo', 0, -1, {}, 'swap');
+    expect(swapped[0]![1]).toBeCloseTo(1);
+    expect(swapped[0]![0]).toBeCloseTo(0);
+  });
+});
+
 describe('mock stereo image', () => {
   it('feeds one leg to both or swaps the legs', () => {
     expect(applyImage('normal', [-10, -20])).toEqual([-10, -20]);
