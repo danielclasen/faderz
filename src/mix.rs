@@ -233,8 +233,9 @@ impl Place {
 ///
 /// - Front: `lr` pans pairwise between adjacent speakers, L and C for
 ///   the left half, C and R for the right, so the centre of the field
-///   is the C leg alone. `divergence` moves the C leg's power to L and
-///   R in equal parts, none at 0 and all of it at 1.
+///   is the C leg alone. `divergence` blends that law with a plain
+///   constant-power pan between L and R, the phantom image: none of it
+///   at 0, all of it at 1, a power split between.
 /// - Rear: `lr` pans between the surrounds Ls and Rs; on 7.1 the side
 ///   pair and the rear pair take half the power each.
 /// - `fr` crossfades the front into the rear, -1 the front alone, 1
@@ -261,11 +262,11 @@ fn surround(to: usize, j: usize, place: &Place) -> f64 {
             (0.0, a, b)
         };
         let (keep, spread) = pair(place.divergence);
-        let half = centre * spread / std::f64::consts::SQRT_2;
+        let (phantom_l, phantom_r) = pair((lr + 1.0) / 2.0);
         match j {
-            0 => libm::sqrt(left * left + half * half),
-            1 => libm::sqrt(right * right + half * half),
-            2 => centre * keep,
+            0 => libm::sqrt(keep * keep * left * left + spread * spread * phantom_l * phantom_l),
+            1 => libm::sqrt(keep * keep * right * right + spread * spread * phantom_r * phantom_r),
+            2 => keep * centre,
             _ => 0.0,
         }
     };
@@ -1876,7 +1877,18 @@ mod tests {
             legs_of(6, &place(0.5, -1.0, 0.0)),
             [0.0, h, h, 0.0, 0.0, 0.0],
         );
-        // Divergence: the centre's power to L and R in equal parts.
+        // Full divergence is a plain constant-power pan between L and R,
+        // as a mono channel was panned onto a surround bus before the
+        // field.
+        let quarter = std::f64::consts::FRAC_PI_4;
+        for lr in [-1.0, -0.5, 0.0, 0.3, 1.0] {
+            let theta = (lr + 1.0) * quarter;
+            is(
+                legs_of(6, &place(lr, -1.0, 1.0)),
+                [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0],
+            );
+        }
+        // Between, the centre's power goes to L and R.
         is(
             legs_of(6, &place(0.0, -1.0, 1.0)),
             [h, h, 0.0, 0.0, 0.0, 0.0],

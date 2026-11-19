@@ -109,9 +109,14 @@ function surroundGains(dst: Layout, lr: number, fr: number, surround: SurroundPa
   };
   const p = clamp(lr);
   const [left, centre, right] = p <= 0 ? [...pair(p + 1), 0] as [number, number, number] : [0, ...pair(p)] as [number, number, number];
+  // Divergence blends the pairwise front with a plain L/R pan.
   const [keep, spread] = pair(surround.divergence ?? 0);
-  const half = (centre * spread) / Math.SQRT2;
-  const front = { L: Math.hypot(left, half), R: Math.hypot(right, half), C: centre * keep };
+  const [phantomL, phantomR] = pair((p + 1) / 2);
+  const front = {
+    L: Math.hypot(keep * left, spread * phantomL),
+    R: Math.hypot(keep * right, spread * phantomR),
+    C: keep * centre,
+  };
   const [rl, rr] = pair((p + 1) / 2);
   const rear: Record<string, number> = dst === '7.1'
     ? { Ls: rl / Math.SQRT2, Rs: rr / Math.SQRT2, Lrs: rl / Math.SQRT2, Rrs: rr / Math.SQRT2 }

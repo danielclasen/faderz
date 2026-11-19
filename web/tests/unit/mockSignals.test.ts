@@ -56,6 +56,16 @@ describe('mock surround panner law', () => {
     expect(middle[leg('Ls')]![0]).toBeCloseTo(0.25);
   });
 
+  it('is a plain constant-power L/R pan at full divergence', () => {
+    for (const lr of [-1, -0.5, 0, 0.3, 1]) {
+      const m = legMatrix('mono', '5.1', lr, -1, { divergence: 1 });
+      const theta = ((lr + 1) * Math.PI) / 4;
+      expect(m[leg('L')]![0]).toBeCloseTo(Math.cos(theta) ** 2);
+      expect(m[leg('R')]![0]).toBeCloseTo(Math.sin(theta) ** 2);
+      expect(m[leg('C')]![0]).toBeCloseTo(0);
+    }
+  });
+
   it('balances a stereo source and applies its image first', () => {
     const balanced = legMatrix('stereo', 'stereo', -0.5, -1);
     expect(balanced[0]![0]).toBeCloseTo(1);

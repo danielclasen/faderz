@@ -29,8 +29,12 @@ pub const DERIVATION_VERSION: u32 = 4;
 /// the state, which binaries before it read from the top level: they
 /// refuse it as missing their fields rather than load part of it. 3
 /// adds the IS-05 connections ([`Ports`]), which a binary reading 2
-/// would drop.
-const FORMAT: u32 = 3;
+/// would drop; 4 moves a mono channel's pan to the values that keep its
+/// sound under the surround panner ([`migrate_pan`]).
+const FORMAT: u32 = 4;
+/// The layout before the surround panner: read with a mono channel's
+/// pan migrated.
+const FORMAT_BEFORE_FIELD: u32 = 3;
 /// The layout before [`Ports`], read as one without connections.
 const FORMAT_WITHOUT_PORTS: u32 = 2;
 
@@ -1953,15 +1957,19 @@ impl Product for Mixer {
     /// before formats were kept is read as it was written.
     fn load(&mut self, saved: &[u8]) -> Result<(), String> {
         let value: Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
-        let saved: Saved = match value.get("format") {
+        let before_field = value.get("format").is_none_or(|f| *f != FORMAT);
+        let mut saved: Saved = match value.get("format") {
             None => serde_json::from_value(value).map_err(|e| e.to_string())?,
-            Some(f) if *f == FORMAT || *f == FORMAT_WITHOUT_PORTS => {
+            Some(f) if *f == FORMAT || *f == FORMAT_BEFORE_FIELD || *f == FORMAT_WITHOUT_PORTS => {
                 let snapshot: Snapshot =
                     serde_json::from_value(value).map_err(|e| e.to_string())?;
                 snapshot.mixer
             }
             Some(f) => return Err(format!("snapshot format {f}: this binary reads {FORMAT}")),
         };
+        if before_field {
+            migrate_pan(&mut saved);
+        }
         self.seqs = saved
             .seqs
             .iter()
@@ -1991,6 +1999,34 @@ impl Product for Mixer {
         self.rewire();
         self.derive();
         Ok(())
+    }
+}
+
+/// Before the surround panner a mono channel on a surround bus reached
+/// the L and R legs by `pan.lr` alone, at constant power, and
+/// `pan.fr`, `divergence` and `lfe` were stored and never heard. A state
+/// saved then keeps its sound: the mono channels of its state and of
+/// its scenes are set to the values the panner gives that law, the front
+/// (`fr` -1) with all the divergence (a plain L/R pan) and the LFE send
+/// off.
+fn migrate_pan(saved: &mut Saved) {
+    let mono: Vec<String> = (saved.shape.channels.iter())
+        .filter(|c| c.width == 1)
+        .map(|c| c.id.clone())
+        .collect();
+    let fix = |channels: &mut Value| {
+        for id in &mono {
+            let pan = channels.get_mut(id).and_then(|c| c.get_mut("pan"));
+            if let Some(pan) = pan.and_then(Value::as_object_mut) {
+                pan.insert("fr".into(), json!(-1));
+                pan.insert("divergence".into(), json!(1));
+                pan.insert("lfe".into(), json!(-90));
+            }
+        }
+    };
+    fix(&mut saved.state["channels"]);
+    for (_, scene) in &mut saved.scenes {
+        fix(&mut scene["channels"]);
     }
 }
 
@@ -4592,6 +4628,63 @@ mod tests {
         let mut back = wired();
         back.load(&serde_json::to_vec(&v).unwrap()).unwrap();
         assert_eq!(back.targets(), wired().targets());
+    }
+
+    /// A state saved before the surround panner sounds the same after:
+    /// a mono channel on a 5.1 bus reaches L and R by its `lr` alone, at
+    /// constant power, as it did while `fr`, `divergence` and `lfe` were
+    /// stored and never heard. A scene stored then recalls the same, and
+    /// a snapshot of this format keeps what it holds.
+    #[test]
+    fn a_state_saved_before_the_surround_panner_keeps_its_sound() {
+        let shape = Shape::parse(&crate::shape::tests::surround()).unwrap();
+        let mut m = Mixer::new(shape.clone());
+        set(&mut m, "a", 1, "/channels/ch1/fader", json!(0));
+        set(&mut m, "a", 2, "/channels/ch1/routes/pgm", json!(true));
+        set(&mut m, "a", 3, "/channels/ch1/pan/lr", json!(0.3));
+        let scene = store(&mut m, "c1", None, "Opening");
+        let saved = m.save();
+        // What the engine derived before: L and R by lr, nothing else.
+        let theta = 1.3 * std::f64::consts::FRAC_PI_4;
+        let before = [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0];
+        let legs = |m: &Mixer| -> Vec<f64> {
+            let g = crate::mix::matrix(&shape, m.state());
+            g[0][..6].iter().map(|g| f64::from(*g)).collect()
+        };
+        let close = |got: Vec<f64>| {
+            assert!(
+                got.iter().zip(before).all(|(g, w)| (g - w).abs() < 1e-6),
+                "{got:?} vs {before:?}"
+            );
+        };
+        // As a binary before the panner saved it: format 3, the pan at
+        // its old initial values.
+        let mut old: Value = serde_json::from_slice(&saved).unwrap();
+        old["format"] = json!(FORMAT_BEFORE_FIELD);
+        let pan = json!({ "lr": 0.3, "fr": 0, "divergence": 0, "lfe": -90 });
+        old["mixer"]["state"]["channels"]["ch1"]["pan"] = pan.clone();
+        for stored in old["mixer"]["scenes"].as_array_mut().unwrap() {
+            stored[1]["channels"]["ch1"]["pan"] = pan.clone();
+        }
+        let mut back = Mixer::new(shape.clone());
+        back.load(&serde_json::to_vec(&old).unwrap()).unwrap();
+        close(legs(&back));
+        // The stored scene recalls the same.
+        set(&mut back, "a", 4, "/channels/ch1/pan/lr", json!(-1));
+        let recalled = Command::Recall {
+            id: "r1".into(),
+            scene,
+            at: "2026-11-19T00:00:00Z".into(),
+        };
+        rest(&mut back, recalled);
+        close(legs(&back));
+        // A stereo channel is as it was; a format-4 snapshot is kept.
+        assert_eq!(*at(&back, "/channels/st1/pan/lr"), json!(0));
+        let mut kept: Value = serde_json::from_slice(&saved).unwrap();
+        kept["mixer"]["state"]["channels"]["ch1"]["pan"] = pan;
+        let mut now = Mixer::new(shape);
+        now.load(&serde_json::to_vec(&kept).unwrap()).unwrap();
+        assert_eq!(*at(&now, "/channels/ch1/pan/divergence"), json!(0));
     }
 
     const OWN: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a0f";
