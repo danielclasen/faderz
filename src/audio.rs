@@ -75,6 +75,15 @@ pub fn timing(engine: &samplez::Config, set: &Set) -> Timing {
     }
 }
 
+/// The flow each channel reads at start, as the state sets it: none for a
+/// channel IS-05 detached, so the engine opens no reader for it.
+fn start_flows(shape: &Shape, view: &mix::EngineView, state: &Value) -> Vec<Option<String>> {
+    (mix::selected(shape, &view.wiring, state).into_iter())
+        .zip(&view.detached)
+        .map(|(flow, detached)| (!detached).then_some(flow))
+        .collect()
+}
+
 pub struct Audio {
     engine: Arc<Engine>,
     /// The engine follows a set's replicated log: nothing is sent to it
@@ -82,7 +91,9 @@ pub struct Audio {
     replicated: bool,
     shape: Shape,
     /// The flow each channel's input read when the engine started.
-    started_on: Vec<String>,
+    started_on: Vec<Option<String>>,
+    /// Each output's enable when the engine started.
+    started_enabled: Vec<bool>,
     block: u64,
     /// The engine's ramp length, samples.
     ramp: u64,
@@ -147,19 +158,23 @@ impl Audio {
         mut config: samplez::Config,
         process: ProcessStatus,
         shape: &Shape,
-        wiring: Vec<mix::Wiring>,
+        view: mix::EngineView,
         state: &Value,
         ops: Ops,
     ) -> Result<Audio, String> {
-        let started_on = mix::selected(shape, &wiring, state);
+        let started_on = start_flows(shape, &view, state);
         for (input, flow) in config.inputs.iter_mut().zip(&started_on) {
             input.flow_id.clone_from(flow);
+        }
+        for (output, enabled) in config.outputs.iter_mut().zip(&view.outputs) {
+            output.enabled = *enabled;
         }
         let block = u64::from(config.block_size);
         let ramp = u64::from(config.ramp_samples);
         let engine = Engine::start(config, process, None).map_err(|e| format!("engine: {e}"))?;
         let mut audio = Audio::new(Arc::new(engine), shape, state, ops);
         (audio.started_on, audio.block, audio.ramp) = (started_on, block, ramp);
+        audio.started_enabled = view.outputs;
         Ok(audio)
     }
 
@@ -174,7 +189,7 @@ impl Audio {
         mut config: samplez::Config,
         process: ProcessStatus,
         shape: &Shape,
-        wiring: Vec<mix::Wiring>,
+        view: mix::EngineView,
         state: &Value,
         ops: Ops,
         set: &Set,
@@ -183,9 +198,12 @@ impl Audio {
         for (input, flow) in config
             .inputs
             .iter_mut()
-            .zip(mix::selected(shape, &wiring, state))
+            .zip(start_flows(shape, &view, state))
         {
             input.flow_id = flow;
+        }
+        for (output, enabled) in config.outputs.iter_mut().zip(&view.outputs) {
+            output.enabled = *enabled;
         }
         let (reports, reports_rx) = std::sync::mpsc::sync_channel(64);
         let (statuses, statuses_rx) = std::sync::mpsc::sync_channel(1 << 12);
@@ -216,6 +234,7 @@ impl Audio {
             engine,
             replicated: false,
             started_on: Vec::new(),
+            started_enabled: Vec::new(),
             block: 0,
             ramp: 0,
             shape: shape.clone(),
@@ -284,8 +303,8 @@ impl Audio {
                 .into_iter()
                 .map(|row| vec![0.0; row.len()])
                 .collect(),
-            routed: self.started_on.iter().cloned().map(Some).collect(),
-            outputs: vec![true; self.shape.outputs.len()],
+            routed: self.started_on.clone(),
+            outputs: self.started_enabled.clone(),
             strips: self
                 .shape
                 .channels

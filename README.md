@@ -499,13 +499,12 @@ neither, or two that differ, stops faderz at start.
 - Only the leader registers the Node, and only while a quorum of the
   set acknowledges it; a leader cut off from the others may still post
   for up to a second while the new one registers. A replica of a set of
-  more that stops leaves the Node registered for the next leader; a set
-  of one deletes it.
-- At start the engine opens every channel's selected flow and creates
-  every output's flow before it takes the connections from the state:
-  the flow of a disabled sender is there for that moment, and a
-  detached channel's flow is read but not mixed, as its gains apply
-  only after it is detached.
+  more that stops leaves the Node registered, and the next leader
+  continues that registration under the same ids; a set of one deletes
+  it.
+- At start the engine reads and writes what the state holds: a
+  detached channel opens no reader and a disabled sender's output
+  creates no flow.
 - The listener is unauthenticated (no IS-10), and its activations
   re-route inputs and start and stop outputs.
 

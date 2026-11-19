@@ -237,6 +237,10 @@ impl Node {
             },
             heartbeat: Duration::from_secs(nmos.heartbeat_s),
             registries: nmos.registry.url.iter().cloned().collect(),
+            // A set's leaders take turns under one Node id: a new leader
+            // continues the registration its predecessor left, so the
+            // Node stays registered through a hand-over.
+            continue_held: config.set.is_some(),
             dns_sd_domain: nmos.registry.dns_sd_domain.clone(),
         };
         let node = samplez_nmos::Nmos::new(model, cfg, conns.clone(), &store, SystemTai)
@@ -1413,6 +1417,7 @@ mod tests {
             heartbeat: Duration::from_secs(5),
             registries: Vec::new(),
             dns_sd_domain: None,
+            continue_held: false,
         };
         let nmos = samplez_nmos::Nmos::new(
             model,

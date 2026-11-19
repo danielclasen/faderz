@@ -290,15 +290,16 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
             "{port}"
         );
     }
-    until("ch1 is detached after the restart", async || {
-        input(&server, 0).0 == InputState::Detached
-    })
-    .await;
+    // The engine starts as the state left it, from its first status on:
+    // ch1 detached with no reader opened, the disabled output with no
+    // flow created, not even for a moment.
+    assert_eq!(input(&server, 0).0, InputState::Detached, "ch1 at start");
+    for _ in 0..40 {
+        assert!(!flow.exists(), "the disabled output's flow was created");
+        assert_eq!(input(&server, 0).0, InputState::Detached);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     until("ch2 reads input b", async || input(&server, 1).1 == f.ch2b).await;
-    until("the disabled output stays disabled", async || {
-        !flow.exists()
-    })
-    .await;
 
     // A scheduled activation cancelled before its time never fires, and
     // the state holds it no longer.

@@ -153,17 +153,15 @@ impl Server {
             Some(engine) => {
                 let process = process.unwrap_or_else(|| samplez::rt::setup_process(&engine.rt));
                 let (live, revision) = audio::state_of(&state);
-                // The leg flows IS-05 activations named, which the state
-                // keeps.
-                let wiring = state
-                    .store()
-                    .with_state(|sm| sm.product.engine_view().wiring);
+                // The leg flows IS-05 activations named, the detached
+                // channels and the outputs' enable, which the state keeps.
+                let view = state.store().with_state(|sm| sm.product.engine_view());
                 let audio = match &config.set {
                     None => Audio::start(
                         engine.clone(),
                         process,
                         &shape,
-                        wiring,
+                        view.clone(),
                         &live,
                         ops_state.clone(),
                     )?,
@@ -172,7 +170,7 @@ impl Server {
                             engine.clone(),
                             process,
                             &shape,
-                            wiring,
+                            view.clone(),
                             &live,
                             ops_state.clone(),
                             set,
