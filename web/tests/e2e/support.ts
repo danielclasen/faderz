@@ -151,7 +151,6 @@ export async function standbyReady(page: Page): Promise<void> {
   }
 }
 
-/** Every write the UI made has been answered. */
 /**
  * Waits until every write the page made has been answered. The outbox
  * lives in the sync worker: right after a click the page's status does

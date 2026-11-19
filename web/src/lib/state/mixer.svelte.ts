@@ -271,18 +271,21 @@ export class MixerStore {
     this.post({ type: 'tick' });
   }
 
-  /** The page message that carried the latest command and the messages
-   *  the worker had processed by the last patch: the worker's status
-   *  covers that command once the second reaches the first. A command
-   *  changes the outbox, so a patch follows its processing. */
+  /** The number of the page message that carried the latest command,
+   *  and the number of messages the worker had processed by the last
+   *  patch: the worker's status covers that command once the second
+   *  reaches the first. The worker answers every command with a patch. */
   get messages(): { commanded: number; processed: number } {
     return { commanded: this.commanded, processed: this.processed };
   }
 
   private post(msg: ToWorker): void {
+    // Numbered as the worker counts them: a message sent before the
+    // worker is attached never reaches it.
+    if (!this.port) return;
     this.posted++;
     if (msg.type === 'set' || msg.type === 'touch' || msg.type === 'release') this.commanded = this.posted;
-    this.port?.post(msg);
+    this.port.post(msg);
   }
 
   // ---- worker patches ------------------------------------------------------

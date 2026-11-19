@@ -177,7 +177,7 @@ export class SyncEngine {
   /** The element selected on this screen, sent again on every new primary. */
   private selection: string | null = null;
   private selectionsDirty = false;
-  /** A command (set, touch or release) came in since the last patch, which then goes out. */
+  /** Whether a command (a set, touch or release) came in since the last patch; the next patch then goes out. */
   private commanded = false;
   private presenceDirty = false;
 
@@ -1100,8 +1100,8 @@ export class SyncEngine {
   private postPatch(): void {
     const patch: Patch = { type: 'patch', input: this.inputs, changes: [], owners: [] };
     const transfer: Transferable[] = [];
-    // A command is answered by a patch even when it changed nothing the
-    // page shows, so the page knows its outbox covers it.
+    // A command is answered by a patch even when it changed nothing that
+    // the page shows, so the page knows that its outbox covers it.
     let any = this.commanded;
     this.commanded = false;
     if (this.snapshotPending && this.state && this.shape) {
