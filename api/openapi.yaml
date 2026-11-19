@@ -355,7 +355,9 @@ paths:
       summary: Reset integrated loudness and LRA of buses, auxes or mix-minus outputs.
       description: |
         Restarts the measurement of each output: integrated loudness, LRA
-        and the momentary and short-term maxima. A paused measurement stays
+        and the momentary and short-term maxima, at the `atIndex` of the
+        delta that counts the reset in `/loudness/{id}/resets`, the same
+        sample on every replica. A paused measurement stays
         paused; start and pause are writes of /loudness/{id}/running
         (model.schema.json LoudnessMeasurement).
       parameters:

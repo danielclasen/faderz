@@ -66,6 +66,11 @@ A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is
 released.
 
+A loudness reset restarts the measurement at the first 100 ms window
+starting at or after the `atIndex` of the delta that counted it, the same
+sample on every replica. A replica that applies the delta after the
+engine's earliest index restarts it there instead and logs it.
+
 An output may be narrower than the element it names as its `source`: it
 then writes the source folded down, 5.1 and 7.1 onto stereo by the ITU-R
 BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1
@@ -442,7 +447,7 @@ committed.
 | `POST /api/v1/scenes`, `PUT` and `DELETE /api/v1/scenes/{id}` | store, overwrite or rename, and delete scenes |
 | `POST /api/v1/scenes/{id}/recall` | recall a scene |
 | `POST /api/v1/afv/tally`, `PUT /api/v1/afv/tally` | one source's tally change, or the full tally state |
-| `POST /api/v1/loudness/reset` | restart the loudness measurement of outputs |
+| `POST /api/v1/loudness/reset` | restart the loudness measurement of outputs: counts a reset in `/loudness/<id>/resets`, and every replica's engine restarts the measurement at that delta's `atIndex` |
 | `GET /api/v1/consoles`, `PUT` and `DELETE /api/v1/consoles/{id}` | the control surfaces |
 | `GET /api/v1/ws` | the WebSocket: commands, deltas, meters, counters and presence |
 | `GET /api/v1/session`, `POST /api/v1/login`, `GET /api/v1/login`, `POST /api/v1/logout` | sign-in |
