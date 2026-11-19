@@ -215,11 +215,15 @@ impl Layout {
                         (false, _) => NULL,
                     });
                 }
-                // Loudness scales with the power, g squared.
+                // Loudness scales with the power, g squared; a tap that
+                // passes nothing reads silence, as its peak does, once the
+                // input is measured.
                 let gain_db = 20.0 * g.log10();
-                put(input
-                    .and_then(|m| m.momentary)
-                    .map_or(NULL, |l| centi(l + gain_db)));
+                put(match input.and_then(|m| m.momentary) {
+                    Some(_) if g <= 0.0 => FLOOR,
+                    Some(l) => centi(l + gain_db),
+                    None => NULL,
+                });
                 continue;
             }
             let m = match source {
@@ -498,7 +502,8 @@ mod tests {
 
     /// A channel's meter follows its meterTap: the gain of a post-fader
     /// tap scales the levels and the momentary loudness by the power; a
-    /// closed fader reads silence and no loudness.
+    /// closed fader reads silence in both, and an input not measured yet
+    /// reads no loudness whatever its tap.
     #[test]
     fn a_channel_meter_takes_its_tap_gain() {
         let shape = Shape::parse(&small()).unwrap();
@@ -516,7 +521,16 @@ mod tests {
         let f = layout.frame("r1", 0, &r);
         let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
         assert_eq!([v(0), v(2)], [-1204, -2602]);
-        assert_eq!([v(3), v(5)], [FLOOR, NULL]);
+        assert_eq!([v(3), v(5)], [FLOOR, FLOOR]);
+        // An input not measured yet has no loudness, closed or not.
+        let unmeasured = input(vec![0.5], None);
+        let r = Readings {
+            inputs: vec![&unmeasured, &unmeasured, &st1],
+            ..r
+        };
+        let f = layout.frame("r1", 0, &r);
+        let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
+        assert_eq!([v(2), v(5)], [NULL, NULL]);
         assert_eq!([v(6), v(7), v(10)], [-602, -1204, -2000]);
     }
 

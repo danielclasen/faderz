@@ -235,7 +235,7 @@
       ]
     },
     "Tap": {
-      "description": "Pick-up point in a channel: input is the selected input before trim, preFader follows the processing before the fader, postFader follows fader and mute, before the AFV stage.",
+      "description": "Pick-up point in a channel: input is the selected input before trim, preFader follows the processing before the fader, but the engine meters a channel after its strip and has no tap before it, so input reads as preFader (trim, filters and dynamics included), postFader follows fader and mute, before the AFV stage.",
       "type": "string",
       "enum": [
         "input",
