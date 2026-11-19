@@ -3929,10 +3929,18 @@ mod tests {
                 15 => (format!("/afv/{ch}/offLevel"), json!(-(next(60) as f64))),
                 16 => ("/monitor/source".into(), json!(sources[next(5) as usize])),
                 17 => {
-                    let key =
-                        ["level", "dim", "cut", "mono", "downmix", "talkbackDim"][next(6) as usize];
+                    let key = [
+                        "level",
+                        "dim",
+                        "cut",
+                        "mono",
+                        "downmix",
+                        "talkbackDim",
+                        "dimDepth",
+                    ][next(7) as usize];
                     let value = match key {
                         "level" => db,
+                        "dimDepth" => json!(next(40) as f64),
                         "downmix" => json!(["lr", "loRo"][next(2) as usize]),
                         _ => flag,
                     };

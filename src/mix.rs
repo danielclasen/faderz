@@ -1283,21 +1283,85 @@ mod tests {
         let m = matrix(&shape, &s);
         assert!(close(m[0][3], h) && close(m[0][4], h), "{m:?}");
         assert!(
-            (1..4).all(|row| m[row][3] == 0.0 && m[row][4] == 0.0),
+            (1..4).all(|row| close(m[row][3], 0.0) && close(m[row][4], 0.0)),
             "{m:?}"
         );
         // The programme and the monitor still carry the mix.
-        assert!(close(m[1][0], h) && m[0][0] == 0.0, "{m:?}");
+        assert!(close(m[1][0], h) && close(m[0][0], 0.0), "{m:?}");
         s["channels"]["ch1"]["pan"]["lr"] = json!(-1);
         s["mixMinus"]["mm1"]["fader"] = json!(-6);
         let m = matrix(&shape, &s);
-        assert!(close(m[0][3], gain(-6.0)) && m[0][4] == 0.0, "{m:?}");
+        assert!(close(m[0][3], gain(-6.0)) && close(m[0][4], 0.0), "{m:?}");
         s["mixMinus"]["mm1"]["mute"] = json!(true);
         assert!(
             matrix(&shape, &s)
                 .iter()
-                .all(|r| r[3] == 0.0 && r[4] == 0.0)
+                .all(|r| close(r[3], 0.0) && close(r[4], 0.0))
         );
+    }
+
+    /// A wider source, or a narrower mix-minus, folds as the mix path
+    /// folds it: with the source alone open at 0 dB, the interrupted
+    /// column is the one the mix carries.
+    #[test]
+    fn an_interrupt_folds_its_source_as_the_mix_does() {
+        for (source, width, layout) in
+            [("st1", 2, "stereo"), ("st1", 1, "mono"), ("ch1", 1, "mono")]
+        {
+            let mut s = small();
+            s["mixMinus"][0]["width"] = json!(width);
+            s["mixMinus"][0]["layout"] = json!(layout);
+            s["outputs"] = json!([
+                { "id": "o-mm", "name": "N-1", "source": "mm1", "width": width, "layout": layout },
+            ]);
+            let shape = Shape::parse(&s).unwrap();
+            let mut state = shape.initial_state();
+            state["channels"][source]["fader"] = json!(0);
+            let mix = matrix(&shape, &state);
+            state["mixMinus"]["mm1"]["interrupt"] = json!({ "source": source, "active": true });
+            let talk = matrix(&shape, &state);
+            // The output's own columns; the monitor, dimmed while
+            // talking, follows later.
+            let own = |m: &[Vec<f32>]| -> Vec<Vec<f32>> {
+                m.iter().map(|r| r[..width].to_vec()).collect()
+            };
+            assert_eq!(own(&talk), own(&mix), "{source} onto {layout}");
+            assert!(
+                own(&talk).iter().flatten().any(|&g| g > 0.1),
+                "{source}: {talk:?}"
+            );
+        }
+        // Stereo onto stereo: each leg onto its own.
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": "st1", "active": true });
+        let m = matrix(&shape, &s);
+        assert!(close(m[2][3], 1.0) && close(m[3][4], 1.0), "{m:?}");
+        assert!(close(m[2][4], 0.0) && close(m[3][3], 0.0), "{m:?}");
+        assert!(close(m[0][3], 0.0) && close(m[1][3], 0.0), "{m:?}");
+    }
+
+    /// A write to an interrupt, or to the whole mix-minus, moves the
+    /// monitor while talkbackDim is on, and not with it off; the leaf
+    /// writes the contract takes and the objects above them alike.
+    #[test]
+    fn an_interrupt_write_moves_the_monitor_only_with_talkback_dim() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        for path in [
+            "/mixMinus/mm1",
+            "/mixMinus/mm1/interrupt",
+            "/mixMinus/mm1/interrupt/source",
+            "/mixMinus/mm1/interrupt/active",
+        ] {
+            let of = |s: &Value| Moved::of(&shape, s, &Value::Null, [path]);
+            assert!(of(&s).monitor, "{path}");
+            assert!(of(&s).elements.contains("mm1"), "{path}");
+            s["monitor"]["talkbackDim"] = json!(false);
+            assert!(!of(&s).monitor, "{path} with talkbackDim off");
+            s["monitor"]["talkbackDim"] = json!(true);
+        }
+        assert!(!Moved::of(&shape, &s, &Value::Null, ["/mixMinus/mm1/fader"]).monitor);
     }
 
     /// A closed or muted fader does not silence the talkback: the
@@ -1329,7 +1393,7 @@ mod tests {
         ));
         s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": "ch2", "active": true });
         let talk = matrix(&shape, &s);
-        assert!(talk[0][3] == 0.0 && talk[1][3] > 0.5, "{talk:?}");
+        assert!(close(talk[0][3], 0.0) && talk[1][3] > 0.5, "{talk:?}");
         s["mixMinus"]["mm1"]["interrupt"]["active"] = json!(false);
         assert_eq!(matrix(&shape, &s), mix);
         s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": null, "active": true });
