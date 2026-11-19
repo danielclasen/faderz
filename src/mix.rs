@@ -8,9 +8,10 @@
 //! offsets and mutes, AFV open or closed, pan of a mono leg and the
 //! fold-down of a wider channel, bus routes, sends
 //! and their levels, bus, aux and mix-minus faders, mutes and polarity,
-//! the mix-minus exclusions, and the monitor's source or the channel and
-//! VCA PFL and AFL listens, downmix, level, dim, cut, mono and speaker
-//! mutes and solos. Everything else in the
+//! the mix-minus exclusions and talkback interrupts, and the monitor's
+//! source or the channel and VCA PFL and AFL listens, downmix, level,
+//! dim, talkback dim, cut, mono and speaker mutes and solos. Everything
+//! else in the
 //! state is the input's strip ([`crate::strip`]), a duck group
 //! ([`crate::duck`]) or is kept and not applied. [`targets`] adds the
 //! strips, the duck groups and their masks, and each input's flow.
@@ -54,6 +55,22 @@ fn num(v: &Value) -> f64 {
 
 fn on(v: &Value) -> bool {
     v.as_bool().unwrap_or(false)
+}
+
+/// The channel mix-minus `id` carries in place of its mix while its
+/// talkback interrupt is active, per model `Interrupt`; an interrupt with
+/// no source changes nothing.
+fn talkback<'a>(state: &'a Value, id: &str) -> Option<&'a str> {
+    let interrupt = &state["mixMinus"][id]["interrupt"];
+    on(&interrupt["active"])
+        .then(|| interrupt["source"].as_str())
+        .flatten()
+}
+
+/// Whether a mix-minus of `shape` carries its talkback, which dims the
+/// monitor when `talkbackDim` is on.
+fn talking(shape: &Shape, state: &Value) -> bool {
+    (shape.mix_minus.iter()).any(|m| talkback(state, &m.id).is_some())
 }
 
 /// Where a channel's signal is taken.
@@ -534,6 +551,10 @@ impl Moved {
                 }
                 (Some("buses" | "auxes" | "mixMinus"), Some(id)) => {
                     moved.elements.insert(id.to_owned());
+                    // An interrupt dims the monitor while talkbackDim is on.
+                    moved.monitor |= group == Some("mixMinus")
+                        && matches!(key, None | Some("interrupt"))
+                        && on(&state["monitor"]["talkbackDim"]);
                 }
                 (Some("monitor"), _) => {
                     moved.monitor = true;
@@ -633,8 +654,9 @@ enum Kind<'a> {
     Channel,
     Bus,
     Aux,
-    /// Its bus and the channels it excludes.
-    MixMinus(&'a str, &'a Value),
+    /// Its bus, the channels it excludes and the channel its talkback
+    /// interrupt carries in their place ([`talkback`]).
+    MixMinus(&'a str, &'a Value, Option<&'a str>),
     Monitor,
     Other,
 }
@@ -695,7 +717,11 @@ impl<'a> Mix<'a> {
         } else if shape.auxes.iter().any(|a| a.id == id) {
             Kind::Aux
         } else if let Some(m) = shape.mix_minus.iter().find(|m| m.id == id) {
-            Kind::MixMinus(&m.bus, &self.state["mixMinus"][id]["exclude"])
+            Kind::MixMinus(
+                &m.bus,
+                &self.state["mixMinus"][id]["exclude"],
+                talkback(self.state, id),
+            )
         } else if shape.monitor_outputs.iter().any(|m| m.id == id) {
             Kind::Monitor
         } else {
@@ -738,8 +764,9 @@ impl<'a> Mix<'a> {
     /// The monitor output: while any channel or VCA solos the listen sum
     /// ([`solos`]), else its source; that signal's legs onto the
     /// monitor's, folded down by `downmix` when it is wider, then level,
-    /// dim, cut, mono (the sum of the folded legs) and the speaker mutes
-    /// and solos.
+    /// dim (also while a mix-minus carries its talkback and `talkbackDim`
+    /// is on), cut, mono (the sum of the folded legs) and the speaker
+    /// mutes and solos.
     ///
     /// The listen sum takes each listening channel's legs at their own
     /// width. PFL is the channel after its strip, before fader, mute and
@@ -749,7 +776,7 @@ impl<'a> Mix<'a> {
     fn monitor(&self, width: usize, g: &mut [f64]) {
         let m = &self.state["monitor"];
         let mut level = gain(num(&m["level"]));
-        if on(&m["dim"]) {
+        if on(&m["dim"]) || on(&m["talkbackDim"]) && talking(self.shape, self.state) {
             level *= gain(-num(&m["dimDepth"]));
         }
         if on(&m["cut"]) {
@@ -845,7 +872,9 @@ fn feed(c: &Chan<'_>, kind: &Kind<'_>, id: &str) -> Option<(Tap, f64, f64)> {
             };
             Some((tap, gain(num(&send["level"])), num(&send["pan"])))
         }
-        Kind::MixMinus(bus, exclude) => {
+        // The talkback alone, after its strip and before its fader.
+        Kind::MixMinus(_, _, Some(talk)) => (c.id == *talk).then_some((Tap::PreFader, 1.0, c.pan)),
+        Kind::MixMinus(bus, exclude, None) => {
             let excluded = exclude
                 .as_array()
                 .is_some_and(|e| e.iter().any(|e| e == c.id));
@@ -900,7 +929,9 @@ mod tests {
     /// the per-channel and per-element factors were taken once: the
     /// reference the single-replica engine path was sent.
     mod before {
-        use super::super::{Tap, channel, gain, listens, num, on, pan, solos, width_of};
+        use super::super::{
+            Tap, channel, gain, listens, num, on, pan, solos, talkback, talking, width_of,
+        };
         use crate::shape::Shape;
         use serde_json::Value;
 
@@ -980,6 +1011,9 @@ mod tests {
                 return on(&s["on"]).then_some((tap, gain(num(&s["level"])), num(&s["pan"])));
             }
             let m = shape.mix_minus.iter().find(|m| m.id == id)?;
+            if let Some(talk) = talkback(state, id) {
+                return (channel == talk).then_some((Tap::PreFader, 1.0, pan));
+            }
             let excluded = state["mixMinus"][id]["exclude"]
                 .as_array()
                 .is_some_and(|e| e.iter().any(|e| e == channel));
@@ -1012,7 +1046,7 @@ mod tests {
         fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
             let m = &state["monitor"];
             let mut level = gain(num(&m["level"]));
-            if on(&m["dim"]) {
+            if on(&m["dim"]) || on(&m["talkbackDim"]) && talking(shape, state) {
                 level *= gain(-num(&m["dimDepth"]));
             }
             if on(&m["cut"]) {
@@ -1233,6 +1267,101 @@ mod tests {
         let h = std::f64::consts::FRAC_1_SQRT_2;
         assert_eq!(m[0][3], 0.0);
         assert!(close(m[1][3], h));
+    }
+
+    /// Model `Interrupt`: while active, the mix-minus output carries its
+    /// source channel alone, after its strip and before its fader, panned
+    /// as the channel is, at the mix-minus fader and mute.
+    #[test]
+    fn an_interrupt_replaces_the_mix_minus_with_its_source_before_the_fader() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch2"]["fader"] = json!(0);
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": "ch1", "active": true });
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][3], h) && close(m[0][4], h), "{m:?}");
+        assert!(
+            (1..4).all(|row| m[row][3] == 0.0 && m[row][4] == 0.0),
+            "{m:?}"
+        );
+        // The programme and the monitor still carry the mix.
+        assert!(close(m[1][0], h) && m[0][0] == 0.0, "{m:?}");
+        s["channels"]["ch1"]["pan"]["lr"] = json!(-1);
+        s["mixMinus"]["mm1"]["fader"] = json!(-6);
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][3], gain(-6.0)) && m[0][4] == 0.0, "{m:?}");
+        s["mixMinus"]["mm1"]["mute"] = json!(true);
+        assert!(
+            matrix(&shape, &s)
+                .iter()
+                .all(|r| r[3] == 0.0 && r[4] == 0.0)
+        );
+    }
+
+    /// A closed or muted fader does not silence the talkback: the
+    /// interrupt taps before the fader.
+    #[test]
+    fn an_interrupt_carries_its_source_with_the_fader_closed() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["mute"] = json!(true);
+        s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": "ch1", "active": true });
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let m = matrix(&shape, &s);
+        assert!(close(m[0][3], h) && close(m[0][4], h), "{m:?}");
+    }
+
+    /// Released, or active with no source, the mix-minus carries its mix
+    /// again, bit for bit.
+    #[test]
+    fn a_released_interrupt_restores_the_mix() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(-6);
+        s["channels"]["ch2"]["fader"] = json!(0);
+        s["mixMinus"]["mm1"]["exclude"] = json!(["ch2"]);
+        let mix = matrix(&shape, &s);
+        assert!(close(
+            mix[0][3],
+            gain(-6.0) * std::f64::consts::FRAC_1_SQRT_2
+        ));
+        s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": "ch2", "active": true });
+        let talk = matrix(&shape, &s);
+        assert!(talk[0][3] == 0.0 && talk[1][3] > 0.5, "{talk:?}");
+        s["mixMinus"]["mm1"]["interrupt"]["active"] = json!(false);
+        assert_eq!(matrix(&shape, &s), mix);
+        s["mixMinus"]["mm1"]["interrupt"] = json!({ "source": null, "active": true });
+        assert_eq!(matrix(&shape, &s), mix);
+    }
+
+    /// Model `MonitorState.talkbackDim`: the monitor dims by its dim depth
+    /// while a mix-minus carries its talkback, once with dim on as well,
+    /// and not with talkbackDim off.
+    #[test]
+    fn talkback_dims_the_monitor_while_an_interrupt_is_active() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["monitor"]["level"] = json!(0);
+        assert_eq!(s["monitor"]["talkbackDim"], json!(true));
+        assert!(close(matrix(&shape, &s)[2][5], 1.0));
+        s["mixMinus"]["mm1"]["interrupt"]["active"] = json!(true);
+        assert!(
+            close(matrix(&shape, &s)[2][5], 1.0),
+            "no source, no talkback"
+        );
+        s["mixMinus"]["mm1"]["interrupt"]["source"] = json!("ch1");
+        assert!(close(matrix(&shape, &s)[2][5], gain(-20.0)));
+        s["monitor"]["dim"] = json!(true);
+        assert!(close(matrix(&shape, &s)[2][5], gain(-20.0)));
+        s["monitor"]["dim"] = json!(false);
+        s["monitor"]["talkbackDim"] = json!(false);
+        assert!(close(matrix(&shape, &s)[2][5], 1.0));
+        s["monitor"]["talkbackDim"] = json!(true);
+        s["mixMinus"]["mm1"]["interrupt"]["active"] = json!(false);
+        assert!(close(matrix(&shape, &s)[2][5], 1.0));
     }
 
     #[test]
@@ -1527,7 +1656,7 @@ mod tests {
                 let ch = channels[next(3) as usize];
                 let db = json!(next(1200) as f64 / 10.0 - 100.0);
                 let flag = json!(next(2) == 0);
-                let (path, value) = match next(17) {
+                let (path, value) = match next(19) {
                     0 => (format!("/channels/{ch}/fader"), db),
                     1 => (format!("/channels/{ch}/mute"), flag),
                     2 => (
@@ -1577,7 +1706,12 @@ mod tests {
                         ),
                         json!(["off", "off", "off", "pfl", "afl"][next(5) as usize]),
                     ),
-                    _ => match next(8) {
+                    16 => (
+                        "/mixMinus/mm1/interrupt/source".into(),
+                        if next(2) == 0 { json!(null) } else { json!(ch) },
+                    ),
+                    17 => ("/mixMinus/mm1/interrupt/active".into(), flag),
+                    _ => match next(9) {
                         0 => (
                             "/monitor/source".into(),
                             json!(["pgm", "cf", "aux1", "mm1"][next(4) as usize]),
@@ -1591,6 +1725,7 @@ mod tests {
                             json!(["lr", "itu"][next(2) as usize]),
                         ),
                         6 => (format!("/monitor/speakerMute/{}", next(2)), flag),
+                        7 => ("/monitor/talkbackDim".into(), flag),
                         _ => (format!("/monitor/speakerSolo/{}", next(2)), flag),
                     },
                 };
