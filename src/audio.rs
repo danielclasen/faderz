@@ -355,6 +355,29 @@ impl Audio {
         }
     }
 
+    /// Keeps the meter taps on a set's replicated state. A set's engine
+    /// follows the log through samplez-replica and [`Audio::follow`] does not
+    /// run, so nothing else updates them: without this every post-fader meter
+    /// stays at the fader, mute and VCA gains the replica started with. Wakes
+    /// on each applied revision, and every second besides, so a revision a
+    /// rebuild moved backwards cannot stall it. Never returns.
+    pub async fn follow_taps(&self, replica: &Replica<Mixer>, mut revision: u64) {
+        loop {
+            tokio::select! {
+                () = replica.applied(revision + 1) => {}
+                () = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
+            let (taps, at) = replica.store().with_state(|sm| {
+                (
+                    mix::meter_taps(&self.shape, sm.product.state()),
+                    sm.revision,
+                )
+            });
+            revision = at;
+            *self.taps.lock().expect("taps lock poisoned") = taps;
+        }
+    }
+
     /// Sends the engine every strip parameter, duck setting, duck mask and
     /// coefficient of `state`'s targets ([`mix::targets`]) that differs
     /// from what it was sent, and a route for every channel whose selected
