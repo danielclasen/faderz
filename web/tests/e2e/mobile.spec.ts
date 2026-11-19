@@ -146,7 +146,9 @@ test('a tap outside About / What\'s new on a phone closes it', async ({ page }) 
   await expect(dialog).toBeHidden();
 });
 
-test('explains an engine counter on a tap, with its key, and names the input at fault, within the screen', async ({ page }) => {
+// It reads the mock's engine counters and its pruned VT 2; a backend run
+// has no engine and so no counters, and leaves it out.
+test('explains an engine counter on a tap, with its key, and names the input at fault, within the screen', { tag: '@mock' }, async ({ page }) => {
   await live(page);
   const lamp = page.getByTestId('engine');
   // The mock prunes VT 2 (st3).
