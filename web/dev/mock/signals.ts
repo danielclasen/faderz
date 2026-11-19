@@ -485,7 +485,7 @@ export class ReplicaMeters {
         const send = state.channels[c.id]!.sends[a.id];
         if (!send?.on) return [];
         const base = send.pre ? 1 : post(c.id);
-        return [{ id: c.id, gain: base * dbToGain(send.level), pan: send.pan, fr: 0 }];
+        return [{ id: c.id, gain: base * dbToGain(send.level), pan: send.pan, fr: -1, surround: { divergence: 1 } }];
       });
       const st = state.auxes[a.id]!;
       auxes.push(busMeter(a.id, a.layout, mixInto(a.layout, contributions), st.fader, st.mute, st.limiter));
@@ -538,7 +538,7 @@ export class ReplicaMeters {
           if (pfl) return 1;
           return st.mute || vcaMuted(id) ? 0 : dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
         };
-        const mix = mixInto(out.layout, heard.map((l) => ({ id: l.id, gain: gain(l.id), ...(pfl ? { pan: 0, fr: -1, image: state.channels[l.id]!.image } : { pan: state.channels[l.id]!.pan.lr, fr: state.channels[l.id]!.pan.fr, surround: state.channels[l.id]!.pan, image: state.channels[l.id]!.image }) })));
+        const mix = mixInto(out.layout, heard.map((l) => ({ id: l.id, gain: gain(l.id), ...(pfl ? { pan: 0, fr: -1, surround: { divergence: 1 }, image: state.channels[l.id]!.image } : { pan: state.channels[l.id]!.pan.lr, fr: state.channels[l.id]!.pan.fr, surround: state.channels[l.id]!.pan, image: state.channels[l.id]!.image }) })));
         const peak = mix.peak.map((v) => r1(Math.max(SILENCE, v + jitter())));
         return { peak: out.layout === 'stereo' ? applyImage(state.monitor.image, peak) : peak };
       }

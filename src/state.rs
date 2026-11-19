@@ -2005,10 +2005,12 @@ impl Product for Mixer {
 /// Before the surround panner a mono channel on a surround bus reached
 /// the L and R legs by `pan.lr` alone, at constant power, and
 /// `pan.fr`, `divergence` and `lfe` were stored and never heard. A state
-/// saved then keeps its sound: the mono channels of its state and of
-/// its scenes are set to the values the panner gives that law, the front
-/// (`fr` -1) with all the divergence (a plain L/R pan) and the LFE send
-/// off.
+/// saved then keeps its sound: of the mono channels of its state and of
+/// its scenes, a `fr` or `divergence` still at the old initial 0 is set
+/// to the new initial value, the front (`fr` -1) with all the divergence
+/// (a plain L/R pan). A value somebody wrote is kept, as a log replayed
+/// from its first entry keeps it, so a replica that loads this snapshot
+/// and one that replays the log hold the same state.
 fn migrate_pan(saved: &mut Saved) {
     let mono: Vec<String> = (saved.shape.channels.iter())
         .filter(|c| c.width == 1)
@@ -2018,9 +2020,11 @@ fn migrate_pan(saved: &mut Saved) {
         for id in &mono {
             let pan = channels.get_mut(id).and_then(|c| c.get_mut("pan"));
             if let Some(pan) = pan.and_then(Value::as_object_mut) {
-                pan.insert("fr".into(), json!(-1));
-                pan.insert("divergence".into(), json!(1));
-                pan.insert("lfe".into(), json!(-90));
+                for (leaf, old, new) in [("fr", 0, -1), ("divergence", 0, 1)] {
+                    if pan.get(leaf) == Some(&json!(old)) {
+                        pan.insert(leaf.into(), json!(new));
+                    }
+                }
             }
         }
     };
@@ -4662,6 +4666,9 @@ mod tests {
         let mut old: Value = serde_json::from_slice(&saved).unwrap();
         old["format"] = json!(FORMAT_BEFORE_FIELD);
         let pan = json!({ "lr": 0.3, "fr": 0, "divergence": 0, "lfe": -90 });
+        // A value somebody wrote is kept: it was never heard, and a log
+        // replayed from its first entry keeps it too.
+        let written = json!({ "lr": 0.3, "fr": 0.5, "divergence": 0, "lfe": -6 });
         old["mixer"]["state"]["channels"]["ch1"]["pan"] = pan.clone();
         for stored in old["mixer"]["scenes"].as_array_mut().unwrap() {
             stored[1]["channels"]["ch1"]["pan"] = pan.clone();
@@ -4685,6 +4692,16 @@ mod tests {
         let mut now = Mixer::new(shape);
         now.load(&serde_json::to_vec(&kept).unwrap()).unwrap();
         assert_eq!(*at(&now, "/channels/ch1/pan/divergence"), json!(0));
+        // A format-3 snapshot keeps what was written, and moves only the
+        // old initial values.
+        let mut old: Value = serde_json::from_slice(&saved).unwrap();
+        old["format"] = json!(FORMAT_BEFORE_FIELD);
+        old["mixer"]["state"]["channels"]["ch1"]["pan"] = written;
+        let mut back = Mixer::new(Shape::parse(&crate::shape::tests::surround()).unwrap());
+        back.load(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(*at(&back, "/channels/ch1/pan/fr"), json!(0.5));
+        assert_eq!(*at(&back, "/channels/ch1/pan/divergence"), json!(1));
+        assert_eq!(*at(&back, "/channels/ch1/pan/lfe"), json!(-6));
     }
 
     /// The initial state is a function of the shape alone and sounds as

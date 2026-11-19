@@ -75,8 +75,10 @@ between L and R, none of it at 0 and all of it at 1; `fr` crossfades front and r
 the rear alone; `lfe` is a send of its own onto the LFE leg, silent at
 -90 dB. A new mono channel is at the front (`fr` -1) with full
 divergence, the L/R pan a mono channel had on a surround bus before the
-field; lower `divergence` to use the C leg. A state saved before the
-panner loads its mono channels, and those of its scenes, so, and a log
+field; lower `divergence` to use the C leg. A send, a direct out and a
+PFL listen put a mono channel there too, as the L/R pair. A state saved before the
+panner loads its mono channels, and those of its scenes, so unless a
+value was written, and a log
 replays onto the same initial state on every replica. A stereo channel
 on a surround bus is balanced by `lr` onto its L and R legs alone.
 

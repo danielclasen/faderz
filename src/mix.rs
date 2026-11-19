@@ -201,12 +201,13 @@ struct Place {
 }
 
 impl Place {
-    /// Centred at the front, no spread, no LFE: where a send, a direct
-    /// out and a PFL listen put a signal.
+    /// Centred at the front with full divergence, no LFE: the L/R pair a
+    /// mono signal was on a surround element before the field, where a
+    /// send, a direct out and a PFL listen put it.
     const FRONT: Place = Place {
         lr: 0.0,
         fr: -1.0,
-        divergence: 0.0,
+        divergence: 1.0,
         lfe: -90.0,
     };
 
@@ -2005,6 +2006,56 @@ mod tests {
             "{row:?}"
         );
         assert!((row[3] - gain(-6.0)).abs() < 1e-6, "the LFE send: {row:?}");
+    }
+
+    /// A mono channel's send, its PFL and its AFL on a surround element
+    /// keep the L/R pair they were before the field: a send and a PFL
+    /// by the position they have, the AFL by the channel's own place.
+    #[test]
+    fn sends_and_listens_of_a_mono_channel_stay_the_lr_pair_on_a_surround_element() {
+        let mut v = crate::shape::tests::surround();
+        v["auxes"] = json!([{ "id": "aux1", "name": "IFB", "width": 6, "layout": "5.1" }]);
+        v["monitorOutputs"] = json!([{ "id": "mon", "name": "Mon", "width": 6, "layout": "5.1" }]);
+        v["outputs"] = json!([
+            { "id": "o-aux", "name": "IFB", "source": "aux1", "width": 6, "layout": "5.1" },
+            { "id": "o-mon", "name": "Mon", "source": "mon", "width": 6, "layout": "5.1" },
+        ]);
+        let shape = Shape::parse(&v).unwrap();
+        let mut s = shape.initial_state();
+        s["channels"]["ch1"]["fader"] = json!(0);
+        s["channels"]["ch1"]["sends"]["aux1"] =
+            json!({ "on": true, "level": 0, "pan": 0.3, "pre": false });
+        s["monitor"]["level"] = json!(0);
+        let pair = |lr: f64| {
+            let theta = (lr + 1.0) * std::f64::consts::FRAC_PI_4;
+            [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0]
+        };
+        let legs = |m: &[Vec<f32>], first: usize| -> Vec<f64> {
+            m[0][first..first + 6]
+                .iter()
+                .map(|g| f64::from(*g))
+                .collect()
+        };
+        let is = |got: Vec<f64>, want: [f64; 6]| {
+            assert!(
+                got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6),
+                "{got:?} vs {want:?}"
+            );
+        };
+        // Columns: o-aux x6, o-mon x6.
+        is(legs(&matrix(&shape, &s), 0), pair(0.3));
+        // PFL: centred whatever the channel's pan.
+        s["channels"]["ch1"]["pan"]["lr"] = json!(-0.5);
+        s["channels"]["ch1"]["solo"] = json!("pfl");
+        is(legs(&matrix(&shape, &s), 6), pair(0.0));
+        // AFL: at the channel's place; with its divergence lowered the
+        // centre leg takes it.
+        s["channels"]["ch1"]["solo"] = json!("afl");
+        is(legs(&matrix(&shape, &s), 6), pair(-0.5));
+        s["channels"]["ch1"]["pan"]["divergence"] = json!(0);
+        s["channels"]["ch1"]["pan"]["lr"] = json!(0);
+        let got = legs(&matrix(&shape, &s), 6);
+        is(got, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
