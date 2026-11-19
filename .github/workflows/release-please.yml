@@ -3,6 +3,13 @@ name: release-please
 # A push to main updates the release PR. A release is cut only for the
 # release PR's own merge commit, once CI has passed on it, and publishes
 # the images that CI run built and checked.
+#
+# Publishing that failed after the release was cut is retried by
+# re-running the failed jobs of this workflow's run while the CI run's
+# image artifacts last (7 days), or at any time by running this
+# workflow by hand with the release's tag and the id of a passing CI run
+# of a push to main of the tagged commit; that CI run's artifacts must
+# not have expired, or re-running its image jobs renews them.
 on:
   push:
     branches: [main]
@@ -10,37 +17,46 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, v<version> or faderz-bridge-v<version>
+        required: true
+      run-id:
+        description: Id of the passing CI run of a push to main of the tagged commit
+        required: true
 
 permissions: {}
 
 jobs:
   # Tags and GitHub releases for a merged release PR. The CI run must be
   # a push to main of that merge commit: a passing run of a later commit
-  # does not vouch for it. A release PR whose merge commit failed CI stays
-  # pending until a re-run of that CI run passes.
+  # does not vouch for it, and the images it built must be there to
+  # publish. A release PR whose merge commit failed CI stays pending
+  # until a re-run of that CI run passes.
   release:
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success'
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
       pull-requests: write
       issues: write
     env:
       HAS_RELEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
     outputs:
-      sha: ${{ github.event.workflow_run.head_sha }}
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.version }}
       # The bridge package's outputs carry its path as a prefix; the root
       # package's above carry none.
       bridge_release_created: ${{ steps.release.outputs['bridge--release_created'] }}
       bridge_tag_name: ${{ steps.release.outputs['bridge--tag_name'] }}
-      bridge_version: ${{ steps.release.outputs['bridge--version'] }}
     steps:
       - name: Report a missing release token
         if: env.HAS_RELEASE_TOKEN != 'true'
@@ -49,15 +65,25 @@ jobs:
           opened with GITHUB_TOKEN, so CI does not run on them and tags
           created here trigger no tag workflows."
       - id: pending
-        name: Find the release PR this commit merged
+        name: Find the release PR this commit merged, and the images CI built of it
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN: ${{ github.event.workflow_run.id }}
         run: |
           pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" \
-            -q '[.[] | select(.merged_at != null and any(.labels[]; .name == "autorelease: pending"))][0].number // empty')
+            -q '[.[] | select(.merge_commit_sha == env.SHA and any(.labels[]; .name == "autorelease: pending"))][0].number // empty')
+          echo "release PR merged as $SHA: ${pr:-none}"
+          if [ -z "$pr" ]; then exit 0; fi
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/artifacts" \
+            -q '[.artifacts[] | select(.expired | not) | .name] | join(" ")')
+          for a in faderz-image faderz-bridge-image; do
+            case " $artifacts " in
+              *" $a "*) ;;
+              *) echo "::error::CI run $RUN holds no $a artifact to publish"; exit 1 ;;
+            esac
+          done
           echo "pr=$pr" >> "$GITHUB_OUTPUT"
-          echo "release PR merged by $SHA: ${pr:-none}"
       - id: release
         if: steps.pending.outputs.pr != ''
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
@@ -92,12 +118,67 @@ jobs:
           manifest-file: .release-please-manifest.json
           skip-github-release: true
 
+  # What to publish, from which CI run: the releases just cut, or the tag
+  # and run given by hand, checked as the release job checks them.
+  plan:
+    needs: release
+    if: >-
+      always() && (github.event_name == 'workflow_dispatch' ||
+      needs.release.outputs.release_created == 'true' ||
+      needs.release.outputs.bridge_release_created == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run_id: ${{ steps.plan.outputs.run_id }}
+      sha: ${{ steps.plan.outputs.sha }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      bridge_tag: ${{ steps.plan.outputs.bridge_tag }}
+      bridge_version: ${{ steps.plan.outputs.bridge_version }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RELEASED: ${{ needs.release.outputs.release_created == 'true' && needs.release.outputs.tag_name || '' }}
+          BRIDGE_RELEASED: ${{ needs.release.outputs.bridge_release_created == 'true' && needs.release.outputs.bridge_tag_name || '' }}
+          WR_RUN: ${{ github.event.workflow_run.id }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_RUN: ${{ inputs.run-id }}
+        run: |
+          set -o pipefail
+          if [ "$EVENT" = workflow_dispatch ]; then
+            run=$INPUT_RUN
+            tags=$INPUT_TAG
+          else
+            run=$WR_RUN
+            tags="$RELEASED $BRIDGE_RELEASED"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" \
+            -q '[.path, .event, .head_branch, .conclusion, .head_repository.full_name, .head_sha] | join(" ")' > run.txt
+          read -r path event branch conclusion repo sha < run.txt
+          test "$path $event $branch $conclusion $repo" = ".github/workflows/ci.yml push main success $GITHUB_REPOSITORY"
+          echo "run_id=$run" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          for tag in $tags; do
+            test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" -q .sha)" = "$sha"
+            case $tag in
+              faderz-bridge-v*) echo "bridge_tag=$tag" "bridge_version=${tag#faderz-bridge-v}" ;;
+              v*) echo "tag=$tag" "version=${tag#v}" ;;
+              *) echo "::error::$tag is no release tag of this repository"; exit 1 ;;
+            esac | tr ' ' '\n' >> "$GITHUB_OUTPUT"
+          done
+          cat "$GITHUB_OUTPUT"
+
   # Tags pushed by this workflow trigger no tag workflows, so publishing
   # runs here, on the release it just created, from the image the CI run
   # of the tagged commit built.
   image:
-    needs: release
-    if: needs.release.outputs.release_created == 'true'
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.tag != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -105,14 +186,14 @@ jobs:
       contents: read
       packages: write
     env:
-      VERSION: ${{ needs.release.outputs.version }}
-      TAG: ${{ needs.release.outputs.tag_name }}
-      SHA: ${{ needs.release.outputs.sha }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      SHA: ${{ needs.plan.outputs.sha }}
       IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.release.outputs.tag_name }}
+          ref: ${{ needs.plan.outputs.tag }}
           persist-credentials: false
       - name: Check the tag is the commit CI passed on and carries the release version
         run: |
@@ -121,7 +202,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: faderz-image
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ needs.plan.outputs.run_id }}
           github-token: ${{ github.token }}
       - name: Load the image and check its version and revision
         run: |
@@ -153,16 +234,17 @@ jobs:
   # The binary for standalone use, taken from the published image, so the
   # asset and the image carry one build.
   binary:
-    needs: [release, image]
+    needs: [plan, image]
+    if: ${{ !cancelled() && needs.image.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
       packages: read
     env:
-      VERSION: ${{ needs.release.outputs.version }}
+      VERSION: ${{ needs.plan.outputs.version }}
       IMAGE: ghcr.io/${{ github.repository }}
-      TAG: ${{ needs.release.outputs.tag_name }}
+      TAG: ${{ needs.plan.outputs.tag }}
     steps:
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -197,8 +279,8 @@ jobs:
           test "$("./faderz-$VERSION-x86_64-linux" --version)" = "faderz $VERSION"
 
   bridge-image:
-    needs: release
-    if: needs.release.outputs.bridge_release_created == 'true'
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.bridge_tag != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -206,13 +288,13 @@ jobs:
       contents: read
       packages: write
     env:
-      VERSION: ${{ needs.release.outputs.bridge_version }}
-      SHA: ${{ needs.release.outputs.sha }}
+      VERSION: ${{ needs.plan.outputs.bridge_version }}
+      SHA: ${{ needs.plan.outputs.sha }}
       IMAGE: ghcr.io/${{ github.repository_owner }}/faderz-bridge
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.release.outputs.bridge_tag_name }}
+          ref: ${{ needs.plan.outputs.bridge_tag }}
           persist-credentials: false
       - name: Check the tag is the commit CI passed on and carries the release version
         run: |
@@ -221,7 +303,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: faderz-bridge-image
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ needs.plan.outputs.run_id }}
           github-token: ${{ github.token }}
       - name: Load the image and check its version and revision
         run: |
@@ -252,16 +334,17 @@ jobs:
   # The binary for standalone use, taken from the published image, so the
   # asset and the image carry one build.
   bridge-binary:
-    needs: [release, bridge-image]
+    needs: [plan, bridge-image]
+    if: ${{ !cancelled() && needs.bridge-image.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
       packages: read
     env:
-      VERSION: ${{ needs.release.outputs.bridge_version }}
+      VERSION: ${{ needs.plan.outputs.bridge_version }}
       IMAGE: ghcr.io/${{ github.repository_owner }}/faderz-bridge
-      TAG: ${{ needs.release.outputs.bridge_tag_name }}
+      TAG: ${{ needs.plan.outputs.bridge_tag }}
     steps:
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
