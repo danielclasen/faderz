@@ -681,6 +681,49 @@ async fn channels_read_the_legs_they_select_from_a_wide_flow() {
     server.stop().await;
 }
 
+/// A talkback interrupt puts its source channel on the mix-minus output
+/// in place of the mix, before the channel's closed fader, and leaves the
+/// programme alone; released, the output carries the mix again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_talkback_interrupt_replaces_the_mix_minus_until_released() {
+    let domain = domain("talk");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-talk");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.mm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    let mut mm = Reader::new(&domain.0, &flows.mm);
+    // ch1's fader stays closed; hard left, so the talkback is exact.
+    patch(
+        &server,
+        &[
+            ("/channels/st1/fader", json!(0)),
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/mixMinus/mm1/interrupt/source", json!("ch1")),
+        ],
+    )
+    .await;
+    mm.expect(ST1[0], ST1[1], "the mix-minus carries the mix")
+        .await;
+    patch(&server, &[("/mixMinus/mm1/interrupt/active", json!(true))]).await;
+    mm.expect(CH1, 0.0, "the talkback alone, before its closed fader")
+        .await;
+    pgm.expect(ST1[0], ST1[1], "the programme without the talkback")
+        .await;
+    patch(&server, &[("/mixMinus/mm1/interrupt/active", json!(false))]).await;
+    mm.expect(ST1[0], ST1[1], "the mix back on release").await;
+    server.stop().await;
+}
+
 /// A diff larger than the changes the engine holds at once waits for
 /// room and lands whole.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

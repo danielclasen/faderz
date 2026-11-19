@@ -51,16 +51,16 @@ The engine applies the channel strip (trim, leg trim, polarity,
 high-pass, EQ, gate, compressor), faders, mutes, VCA offsets and mutes,
 AFV open and closed with the off level, mono pan and the fold-down of
 wider channels, bus routing, sends, the bus, aux and mix-minus faders and
-mutes, bus and aux polarity, mix-minus exclusions, the monitor's
-source, channel and VCA PFL and AFL listening (PFL over AFL; PFL
-centred before the pan, AFL at the pan before the AFV stage), fold-down,
-level, dim, cut, mono and speaker mutes and solos, and duck groups. The
-rest of the state is kept, shown and replicated but not applied to the
-audio in this version: channel delay, front/rear pan, divergence and LFE
-send, the stereo image setting of a channel and of the monitor, the monitor's talkback dim, bus and aux
-processing (EQ, dynamics, limiter, delay), the line-up tone, mix-minus
-talkback interrupts, the AFV rise, hold and fall times, and the scene
-crossfade time.
+mutes, bus and aux polarity, mix-minus exclusions and talkback
+interrupts, the monitor's source, channel and VCA PFL and AFL listening
+(PFL over AFL; PFL centred before the pan, AFL at the pan before the AFV
+stage), fold-down, level, dim, talkback dim, cut, mono and speaker mutes
+and solos, and duck groups. The rest of the state is kept, shown and
+replicated but not applied to the audio in this version: channel delay,
+front/rear pan, divergence and LFE send, the stereo image setting of a
+channel and of the monitor, bus and aux processing (EQ, dynamics,
+limiter, delay), the line-up tone, the AFV rise, hold and fall times,
+and the scene crossfade time.
 
 ## The console
 
