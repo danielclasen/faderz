@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/danielclasen/faderz/compare/v0.3.2...v0.4.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **nmos:** snapshots carry format 3 with the connections, which faderz 0.2.0 and earlier refuse; DERIVATION_VERSION 2 keeps replicas of both versions out of one set.
+
+### Features
+
+* **nmos:** register channels and outputs and take IS-05 over MXL ([#63](https://github.com/danielclasen/faderz/issues/63)) ([b4bc68d](https://github.com/danielclasen/faderz/commit/b4bc68d827c03c1c79a75add0e3c5b7701b7ad21))
+
+
+### Bug Fixes
+
+* **app:** list every replica of the set in the replicas message ([#82](https://github.com/danielclasen/faderz/issues/82)) ([571ab29](https://github.com/danielclasen/faderz/commit/571ab29e0f314707eba3682e3ba5b11157ce1928))
+* **audio:** drop a follower's input report its engine took back ([#78](https://github.com/danielclasen/faderz/issues/78)) ([39dde77](https://github.com/danielclasen/faderz/commit/39dde77ce92592b42da9bff3952365defbe6effc))
+* **web:** retry a standby that landed on the primary's replica at once ([#86](https://github.com/danielclasen/faderz/issues/86)) ([f110759](https://github.com/danielclasen/faderz/commit/f110759ede7a4dc9b2df51828d952e34afbb9f04))
+
 ## [0.3.2](https://github.com/danielclasen/faderz/compare/v0.3.1...v0.3.2) (2026-11-19)
 
 
