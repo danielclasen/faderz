@@ -297,7 +297,10 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
     // ch2's input a reads a flow nobody writes: silent.
     let server = start(&data.0, &domain.0, &flows).await;
+    // The engine creates the output flows one after another: out-mm can
+    // appear after out-pgm.
     appears(&domain.0, &flows.pgm).await;
+    appears(&domain.0, &flows.mm).await;
     let mut pgm = Reader::new(&domain.0, &flows.pgm);
     let mut mm = Reader::new(&domain.0, &flows.mm);
     pgm.expect(0.0, 0.0, "every fader closed").await;
