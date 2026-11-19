@@ -214,6 +214,61 @@ async fn a_write_to_one_replica_reaches_the_clients_of_another() {
     }
 }
 
+/// A control request reaches the holder's connection on another replica:
+/// the holder touches a control on replica 2, a client of replica 0 asks
+/// for it, and the holder's connection on replica 2 gets the request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_control_request_reaches_the_holder_on_another_replica() {
+    let at = scratch("request");
+    let servers = start_set(&at.0, Arc::default()).await;
+    formed(&servers).await;
+    let path = "/channels/ch1/fader";
+    let mut holder = client(&servers[2], "session-h-0123456789abcdef").await;
+    // A leader change while it is ordered answers it not applied: sent
+    // again.
+    let mut held = false;
+    for seq in 1..=5 {
+        let id = faderz::app::uuid().unwrap();
+        let touch = json!({ "type": "touch", "id": id, "seq": seq, "path": path });
+        holder.send(Message::text(touch.to_string())).await.unwrap();
+        let answered = tokio::time::timeout(Duration::from_secs(15), answer(&mut holder, &id))
+            .await
+            .expect("an answer within 15 s");
+        if answered["type"] == "delta" {
+            held = true;
+            break;
+        }
+    }
+    assert!(held, "the touch was not applied");
+    let mut asker = client(&servers[0], "session-a-0123456789abcdef").await;
+    let asked = tokio::spawn(async move {
+        // Read throughout, so its pings are answered.
+        loop {
+            let m = next_of(&mut asker, "").await;
+            assert_ne!(m["type"], "controlRequest", "the asker is not the holder");
+        }
+    });
+    let request = json!({ "type": "request", "path": path });
+    // Sent from a client of replica 0; the asker's own connection is read
+    // by the task above, so another one of the same session sends it.
+    let mut sender = client(&servers[0], "session-s-0123456789abcdef").await;
+    sender
+        .send(Message::text(request.to_string()))
+        .await
+        .unwrap();
+    let got = tokio::time::timeout(
+        Duration::from_secs(10),
+        next_of(&mut holder, "controlRequest"),
+    )
+    .await
+    .expect("the request on the holder's replica within 10 s");
+    assert_eq!(got["path"], path, "{got}");
+    asked.abort();
+    for server in servers {
+        server.stop().await;
+    }
+}
+
 /// The `replicas` message of a set lists all three, by the names the
 /// pods have, with the leader among them. A set without an engine has
 /// raft's view alone: the leader hears a follower that has matched its

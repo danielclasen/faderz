@@ -288,7 +288,7 @@ fn on_message<'a>(
         "request" => {
             let (app, asker) = (app.clone(), owner_record(&connect.owner, &client_kind));
             let (from, path) = (
-                SessionKey::from(&connect.owner),
+                connect.owner.clone(),
                 msg["path"].as_str().unwrap_or_default().to_owned(),
             );
             tokio::spawn(async move { app.request(from, asker, path).await });

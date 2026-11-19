@@ -123,6 +123,14 @@ pub enum Command {
         id: String,
         ids: Vec<String>,
     },
+    /// A WebSocket `request`: the holder of `path`, whichever replica its
+    /// connection is on, is told `from` asks for it. `from` is the
+    /// asker's owner record.
+    ControlRequest {
+        id: String,
+        path: String,
+        from: Value,
+    },
 }
 
 impl Command {
@@ -142,7 +150,8 @@ impl Command {
             | Command::Schedule { id, .. }
             | Command::Unschedule { id, .. }
             | Command::Fire { id, .. }
-            | Command::ResetLoudness { id, .. } => id,
+            | Command::ResetLoudness { id, .. }
+            | Command::ControlRequest { id, .. } => id,
         }
     }
 }
@@ -360,6 +369,10 @@ pub struct Edits {
     owners: Vec<(String, Value)>,
     /// The delta's `origins` entry: client commands only.
     origin: Option<Value>,
+    /// Control requests the replicas deliver to the holder's connection,
+    /// whichever replica it is on; the server takes them out of the
+    /// delta before the clients see it.
+    requests: Vec<Value>,
 }
 
 /// The holder of a touched control.
@@ -1185,6 +1198,7 @@ impl Mixer {
                     values: self.write(off),
                     owners: vec![(path.to_owned(), Value::Null)],
                     origin,
+                    ..Edits::default()
                 }
             }
             Action::Set => {
@@ -1470,6 +1484,24 @@ impl Mixer {
             .map(|(name, state)| (format!("/tally/{}", escape(&name)), Value::String(state)))
             .collect();
         changed(self.write(written))
+    }
+
+    /// Puts a request for `path` from `asker` in the log, addressed to the
+    /// control's holder: nothing when nobody else holds it. Every replica
+    /// applies it, and the one the holder's primary connection is on
+    /// delivers it ([`crate::app::App::publish`]).
+    fn control_request(&self, asker: &SessionKey, path: &str, from: &Value) -> Effect<Edits> {
+        let Some(holder) = self.owner_of(path) else {
+            return Effect::Unchanged;
+        };
+        if holder == *asker {
+            return Effect::Unchanged;
+        }
+        let to = json!({ "principal": holder.principal, "session": holder.session });
+        Effect::Changed(Edits {
+            requests: vec![json!({ "path": path, "from": from, "to": to })],
+            ..Edits::default()
+        })
     }
 
     /// Counts one more reset in each of `ids`' measurements
@@ -1785,6 +1817,9 @@ impl Product for Mixer {
             Command::Unschedule { port, .. } => self.unschedule(port),
             Command::Fire { id, schedule } => self.fire(&session, id, schedule, ctx),
             Command::ResetLoudness { id, ids } => self.reset_loudness(&session, id, ids),
+            Command::ControlRequest { path, from, .. } => {
+                self.control_request(&session, path, from)
+            }
         }
     }
 
@@ -1859,6 +1894,7 @@ impl Product for Mixer {
             values: self.write(written),
             owners: held.into_iter().map(|p| (p, Value::Null)).collect(),
             origin: None,
+            ..Edits::default()
         })
     }
 
@@ -1876,7 +1912,9 @@ impl Product for Mixer {
         let mut values: Vec<&(String, Value)> = Vec::new();
         let mut owners: Vec<&(String, Value)> = Vec::new();
         let mut origins = Vec::new();
+        let mut requests: Vec<&Value> = Vec::new();
         for c in changes {
+            requests.extend(&c.change.requests);
             for v in &c.change.values {
                 values.retain(|(p, _)| *p != v.0);
                 values.push(v);
@@ -1903,6 +1941,14 @@ impl Product for Mixer {
         }
         if !origins.is_empty() {
             delta.insert("origins".into(), Value::Array(origins));
+        }
+        if !requests.is_empty() {
+            delta.insert("requests".into(), json!(requests));
+            // A delta carries changes or owners: a request alone says no
+            // owner changed, for the clients that see it without it.
+            if values.is_empty() && owners.is_empty() {
+                delta.insert("owners".into(), json!([]));
+            }
         }
         Value::Object(delta).to_string()
     }
@@ -4688,6 +4734,46 @@ mod tests {
             assert_eq!(*at(&replayed, &format!("{pan}/spread")), json!(1));
             assert_eq!(*at(&replayed, &format!("{pan}/lfeSend")), json!(-90));
         }
+    }
+
+    /// A control request is ordered only for a control somebody else
+    /// holds, and carries the holder it is for and the asker's record;
+    /// it changes no value and no owner.
+    #[test]
+    fn a_control_request_names_the_holder_it_is_for() {
+        let mut m = mixer();
+        let path = "/channels/ch1/fader";
+        let ask = |m: &mut Mixer, session: &str| {
+            let request = Command::ControlRequest {
+                id: format!("q-{session}"),
+                path: path.into(),
+                from: json!({ "name": session }),
+            };
+            m.apply(
+                &origin(session),
+                &serde_json::to_vec(&request).unwrap(),
+                &Apply::default(),
+            )
+        };
+        assert_eq!(ask(&mut m, "b"), Effect::Unchanged, "nobody holds it");
+        touch(&mut m, "a", 1, path);
+        assert_eq!(
+            ask(&mut m, "a"),
+            Effect::Unchanged,
+            "the holder asks itself"
+        );
+        let Effect::Changed(edits) = ask(&mut m, "b") else {
+            panic!("a request for a held control");
+        };
+        assert!(edits.values.is_empty() && edits.owners.is_empty());
+        assert_eq!(
+            edits.requests,
+            vec![json!({
+                "path": path,
+                "from": { "name": "b" },
+                "to": { "principal": "anonymous", "session": "a" },
+            })]
+        );
     }
 
     const OWN: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a0f";

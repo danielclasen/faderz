@@ -11,16 +11,16 @@ use samplez_replica::entry::{NodeId, SessionKey};
 use samplez_replica::membership;
 use samplez_service::config::AuthMode;
 use samplez_service::metrics::Metrics;
-use samplez_service::replica::{Ack, Commands, Resolution};
+use samplez_service::replica::{Ack, Begin, Commands, Resolution};
 use samplez_service::ws::{Delta, Frame, Hub, Slot, To};
-use samplez_service::{Identity, Position, ReplicatedState};
+use samplez_service::{Identity, Owner, Position, ReplicatedState};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::audio::Audio;
 use crate::config::Set;
-use crate::state::{Answer, Mixer};
+use crate::state::{Answer, Command, Mixer};
 
 /// Deltas waiting per client before it is caught up by snapshot instead.
 pub const CLIENT_DELTAS: usize = 1024;
@@ -423,7 +423,10 @@ impl App {
                         Some(deltas) => {
                             for d in deltas {
                                 last = d.revision;
-                                let text = self.delta_message(d.revision, &d.text);
+                                let body = self
+                                    .deliver_requests(&d.text)
+                                    .unwrap_or_else(|| d.text.to_string());
+                                let text = self.delta_message(d.revision, &body);
                                 self.hub.publish(Frame::Delta(Delta { text: text.into(), ..d }));
                             }
                             self.published.send_replace(last);
@@ -637,46 +640,65 @@ impl App {
         }
     }
 
-    /// Hands `from`'s request for `path` to the primary connections of
-    /// the session that owns it, once the delta that made it the owner
-    /// is published, so the request never reaches a client ahead of the
-    /// ownership it is about. Nothing when nobody else owns it, or when
-    /// `from` asked for it within [`REQUEST_INTERVAL`].
-    pub async fn request(&self, from: SessionKey, asker: Value, path: String) {
-        let Some((owner, revision)) = self
+    /// Orders `from`'s request for `path` into the replicated log, where
+    /// every replica applies it after the delta that made the holder the
+    /// owner, so the request never reaches a client ahead of the
+    /// ownership it is about, and the replica the holder's primary
+    /// connection is on hands it to it ([`App::publish`]), whichever
+    /// replica the asker is on. Nothing when nobody else owns it, or
+    /// when `from` asked for it within [`REQUEST_INTERVAL`].
+    pub async fn request(&self, from: Owner, asker: Value, path: String) {
+        let key = SessionKey::from(&from);
+        let held = self
             .replica
             .store()
-            .with_state(|sm| sm.product.owner_of(&path).map(|owner| (owner, sm.revision)))
-        else {
-            return;
-        };
-        if owner == from {
+            .with_state(|sm| sm.product.owner_of(&path));
+        if held.is_none_or(|holder| holder == key) {
             return;
         }
         {
             let mut requests = self.requests.lock().expect("requests lock poisoned");
             let now = Instant::now();
             requests.retain(|_, at| now.duration_since(*at) < REQUEST_INTERVAL);
-            if requests.insert((from, path.clone()), now).is_some() {
+            if requests.insert((key, path.clone()), now).is_some() {
                 return;
             }
         }
-        let mut published = self.published.subscribe();
-        if published.wait_for(|p| *p >= revision).await.is_err() {
-            return;
-        }
-        let text = json!({
-            "type": "controlRequest",
-            "replica": self.replica_ref(),
-            "path": path,
-            "from": asker,
-        })
-        .to_string();
-        let to = To::Primary {
-            principal: &owner.principal,
-            session: &owner.session,
+        let Ok(id) = uuid() else { return };
+        let command = Command::ControlRequest {
+            id: id.clone(),
+            path,
+            from: asker,
         };
-        self.hub.send(to, Frame::Text(text.into()));
+        if let Begin::New(pending) = self.commands.begin(&from, &id) {
+            let body = serde_json::to_vec(&command).expect("a command serializes");
+            let _ = pending.submit(body.into()).await;
+        }
+    }
+
+    /// Hands the control requests a delta carries to the primary
+    /// connections of their holders on this replica, and returns the
+    /// delta the clients see, without them.
+    fn deliver_requests(&self, text: &str) -> Option<String> {
+        let mut delta: Value = serde_json::from_str(text).ok()?;
+        let requests = delta.as_object_mut()?.remove("requests")?;
+        for r in requests.as_array().into_iter().flatten() {
+            let (Some(principal), Some(session)) =
+                (r["to"]["principal"].as_str(), r["to"]["session"].as_str())
+            else {
+                continue;
+            };
+            let message = json!({
+                "type": "controlRequest",
+                "replica": self.replica_ref(),
+                "path": r["path"],
+                "from": r["from"],
+            })
+            .to_string();
+            let to = To::Primary { principal, session };
+            self.hub.send(to, Frame::Text(message.into()));
+        }
+        Some(delta.to_string())
     }
 }
 
@@ -951,11 +973,16 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A control request goes out only once the delta that made its
-    /// holder the owner is published, never ahead of it.
+    /// A control request is ordered into the log after the touch that
+    /// made its holder the owner, and handed to the holder's primary
+    /// connection once the replica applied it, never ahead of the
+    /// ownership it is about.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_control_request_waits_for_the_owning_delta() {
+    async fn a_control_request_reaches_the_holder_after_the_owning_delta() {
         let (app, dir) = app().await;
+        let app = app.clone();
+        let publishing = app.clone();
+        tokio::spawn(async move { publishing.publish().await });
         let holder = owner("s-a");
         let path = "/channels/ch1/fader";
         let id = uuid().unwrap();
@@ -976,6 +1003,8 @@ pub(crate) mod tests {
         })
         .await
         .expect("commitable");
+        let queue = app.hub.subscribe(&holder);
+        queue.set_primary(true);
         let Begin::New(pending) = app.commands.begin(&holder, &id) else {
             panic!("a new command");
         };
@@ -983,28 +1012,33 @@ pub(crate) mod tests {
             .submit(serde_json::to_vec(&touch).unwrap().into())
             .await
             .unwrap();
+        app.request(owner("s-b"), json!({ "name": "b" }), path.into())
+            .await;
+        // The holder gets the touch's delta, then the request.
+        let request = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let Popped::Frame(Frame::Text(text)) = queue.pop().await else {
+                    continue;
+                };
+                if text.as_str().contains(r#""type":"controlRequest""#) {
+                    return text;
+                }
+                assert!(
+                    !text.as_str().contains(r#""requests""#),
+                    "the request is not shown to the clients: {text}"
+                );
+            }
+        })
+        .await
+        .expect("the request reaches its holder");
+        let message: Value = serde_json::from_str(request.as_str()).unwrap();
+        assert_eq!(message["path"], path);
+        assert_eq!(message["from"]["name"], "b");
+        // The holder asking itself, or asking again within the interval, orders nothing.
         let revision = app.replica.revision();
-        assert!(*app.published.borrow() < revision);
-        let queue = app.hub.subscribe(&holder);
-        queue.set_primary(true);
-        let asker = app.clone();
-        tokio::spawn(async move {
-            let from = SessionKey::from(&owner("s-b"));
-            asker.request(from, json!({}), path.into()).await;
-        });
-        let early = tokio::time::timeout(Duration::from_millis(300), queue.pop()).await;
-        assert!(early.is_err(), "nothing before the delta is published");
-        app.published.send_replace(revision);
-        let popped = tokio::time::timeout(Duration::from_secs(5), queue.pop())
-            .await
-            .expect("the request once the delta is published");
-        let Popped::Frame(Frame::Text(text)) = popped else {
-            panic!("a text frame");
-        };
-        assert!(
-            text.as_str().contains(r#""type":"controlRequest""#),
-            "{text}"
-        );
+        app.request(holder.clone(), json!({}), path.into()).await;
+        app.request(owner("s-b"), json!({}), path.into()).await;
+        assert_eq!(app.replica.revision(), revision);
         let _ = std::fs::remove_dir_all(dir);
     }
 
