@@ -326,7 +326,8 @@ listener:
   no contact and only raft's view: a follower vouches for the leader
   alone, for as long as raft names one (it drops the name when no
   heartbeat arrives within the election timeout), and the leader for a
-  follower whose matched log is within 16 entries of its own.
+  follower whose matched log is within 16 entries of its own and that
+  has matched all of it within the last 3 s.
 
 ### Engines in a set
 

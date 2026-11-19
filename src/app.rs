@@ -54,6 +54,9 @@ pub struct App {
     /// The engine's inputs and outputs last read ([`App::count`]); none
     /// without an engine.
     engine: Mutex<Option<Value>>,
+    /// When each follower last matched all of this leader's log, as
+    /// [`replicas`](App::replicas) saw it; read without an engine only.
+    caught_up: Mutex<BTreeMap<NodeId, Instant>>,
 }
 
 /// A connection counted by [`App::connected`]; dropping it counts it
@@ -137,6 +140,11 @@ pub fn member_names(set: &Set, name: &str) -> Vec<String> {
 /// would flap during a burst of writes.
 const REPLICATION_LAG: u64 = 16;
 
+/// How long ago a follower may last have matched the leader's whole log
+/// and still count as heard: a live one does between batches of writes,
+/// a stopped one never does again once the log moves on.
+const CAUGHT_UP_WINDOW: Duration = Duration::from_secs(3);
+
 /// Whether a follower that has matched `matched` of a leader whose log
 /// ends at `last` is within [`REPLICATION_LAG`] of it.
 fn within_lag(matched: Option<u64>, last: Option<u64>) -> bool {
@@ -161,12 +169,15 @@ fn ordinal_of(id: NodeId) -> u16 {
 /// shows: a follower hears the leader it follows, for as long as raft
 /// names one (it drops the name when the election timeout passes without
 /// a heartbeat); the leader hears a follower whose matched log is within
-/// [`REPLICATION_LAG`] entries of its own.
+/// [`REPLICATION_LAG`] entries of its own and that has matched all of it
+/// within [`CAUGHT_UP_WINDOW`] (`caught_up` holds when it last did).
 fn hears(
     id: NodeId,
     me: NodeId,
     contact: Option<&samplez_replica::contact::Metrics>,
     metrics: &openraft::RaftMetrics<NodeId, openraft::BasicNode>,
+    caught_up: &mut BTreeMap<NodeId, Instant>,
+    now: Instant,
 ) -> bool {
     if let Some(contact) = contact {
         return contact.in_contact
@@ -176,7 +187,11 @@ fn hears(
         let matched = (metrics.replication.as_ref())
             .and_then(|r| r.get(&id).copied().flatten())
             .map(|log| log.index);
-        return within_lag(matched, metrics.last_log_index);
+        if matched.is_some() && matched == metrics.last_log_index {
+            caught_up.insert(id, now);
+        }
+        return within_lag(matched, metrics.last_log_index)
+            && (caught_up.get(&id)).is_some_and(|&t| now.duration_since(t) < CAUGHT_UP_WINDOW);
     }
     metrics.current_leader == Some(id)
 }
@@ -207,6 +222,7 @@ impl App {
             requests: Mutex::default(),
             counters: Mutex::default(),
             engine: Mutex::default(),
+            caught_up: Mutex::default(),
         })
     }
 
@@ -245,12 +261,14 @@ impl App {
         let contact = self.replica.contact_metrics();
         let me = self.replica.id();
         let voters: Vec<NodeId> = metrics.membership_config.membership().voter_ids().collect();
+        let now = Instant::now();
+        let mut caught_up = self.caught_up.lock().expect("caught_up lock poisoned");
         let up: BTreeMap<NodeId, bool> = (voters.iter())
             .map(|&id| {
                 let up = if id == me {
                     info.ready
                 } else {
-                    hears(id, me, contact.as_ref(), &metrics)
+                    hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now)
                 };
                 (id, up)
             })
@@ -742,22 +760,44 @@ pub(crate) mod tests {
     }
 
     /// A follower hears the leader raft names, and nothing once raft has
-    /// dropped the name (the leader went silent); the leader hears only
-    /// a follower within the lag window.
+    /// dropped the name (the leader went silent).
     #[test]
     fn the_leader_is_heard_while_raft_names_it() {
         let mut m = openraft::RaftMetrics::new_initial(1);
+        let mut seen = BTreeMap::new();
+        let now = Instant::now();
         m.current_leader = Some(2);
-        assert!(hears(2, 1, None, &m));
-        assert!(!hears(3, 1, None, &m));
+        assert!(hears(2, 1, None, &m, &mut seen, now));
+        assert!(!hears(3, 1, None, &m, &mut seen, now));
         m.current_leader = None;
-        assert!(!hears(2, 1, None, &m));
+        assert!(!hears(2, 1, None, &m, &mut seen, now));
+    }
+
+    /// The leader hears a follower that trails by a batch while it keeps
+    /// catching up, and stops hearing one that has not matched the whole
+    /// log for the window, though it still trails by little.
+    #[test]
+    fn a_follower_that_stops_catching_up_is_not_heard() {
+        let mut m = openraft::RaftMetrics::new_initial(1);
+        let mut seen = BTreeMap::new();
+        let at = |index| openraft::LogId::new(openraft::CommittedLeaderId::new(1, 1), index);
+        let t0 = Instant::now();
         m.current_leader = Some(1);
         m.last_log_index = Some(100);
-        let at = |index| openraft::LogId::new(openraft::CommittedLeaderId::new(1, 1), index);
-        m.replication = Some(BTreeMap::from([(2, Some(at(95))), (3, Some(at(10)))]));
-        assert!(hears(2, 1, None, &m));
-        assert!(!hears(3, 1, None, &m));
+        m.replication = Some(BTreeMap::from([(2, Some(at(100))), (3, Some(at(10)))]));
+        assert!(hears(2, 1, None, &m, &mut seen, t0));
+        assert!(!hears(3, 1, None, &m, &mut seen, t0), "far behind");
+        m.last_log_index = Some(105);
+        m.replication = Some(BTreeMap::from([(2, Some(at(100)))]));
+        assert!(hears(
+            2,
+            1,
+            None,
+            &m,
+            &mut seen,
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(!hears(2, 1, None, &m, &mut seen, t0 + CAUGHT_UP_WINDOW));
     }
     use crate::contract::{check, contract};
     use crate::replica;
