@@ -271,6 +271,21 @@ async fn meter_values(server: &Server, skip: usize) -> Vec<i16> {
     }
 }
 
+/// The values of the first meter frame of which `done` holds, within
+/// 10 s: a meter reads a change once the 100 ms window it falls in is
+/// over, and a momentary loudness once 400 ms were metered without a
+/// slice missed since.
+async fn meters_until(server: &Server, what: &str, done: impl Fn(&[i16]) -> bool) -> Vec<i16> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let v = meter_values(server, 1).await;
+        if done(&v) {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "{what}: {v:?}");
+    }
+}
+
 /// Values of the meter frame: ch1 3, ch2 3, st1 5, then pgm 14, mm1 14
 /// and the monitor 2; the shape has no duck group.
 const CH1_PEAK: usize = 0;
@@ -386,29 +401,30 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     patch(&server, &[("/channels/ch1/mute", json!(true))]).await;
     pgm.expect(-ST1[0], ST1[1], "ch1 muted").await;
     patch(&server, &[("/channels/ch1/meterTap", json!("preFader"))]).await;
-    // The meters cover a 100 ms window: the first frames are skipped.
-    let v = meter_values(&server, 5).await;
     // -0.25: -12.04 dB FS.
     let near = |v: i16, want: i16| (v - want).abs() <= 2;
-    assert!(near(v[PGM_PEAK], -1204), "pgm left peak in {v:?}");
     // Every channel is metered, no direct out needed: ch1 muted but at
     // its pre-fader tap, st1 at 0.25 on both legs, and ch2 on its silent
-    // input reads silence, not nothing. The monitor has no output.
-    assert!(near(v[CH1_PEAK], -602), "ch1 peak in {v:?}");
-    assert!(
-        near(v[ST1_PEAK], -1204) && near(v[ST1_PEAK + 1], -1204),
-        "{v:?}"
-    );
-    assert_eq!(v[CH2_PEAK], FLOOR, "{v:?}");
-    assert!(v[MON_PEAK] != i16::MIN, "{v:?}");
-    let ch1_loudness = v[CH1_MOMENTARY];
-    assert!(ch1_loudness != i16::MIN && ch1_loudness != FLOOR, "{v:?}");
+    // input reads silence, not nothing; ch1's loudness is measured. The
+    // monitor has no output.
+    meters_until(&server, "the meters at ch1's pre-fader tap", |v| {
+        near(v[PGM_PEAK], -1204)
+            && near(v[CH1_PEAK], -602)
+            && near(v[ST1_PEAK], -1204)
+            && near(v[ST1_PEAK + 1], -1204)
+            && v[CH2_PEAK] == FLOOR
+            && v[MON_PEAK] != i16::MIN
+            && v[CH1_MOMENTARY] != i16::MIN
+            && v[CH1_MOMENTARY] != FLOOR
+    })
+    .await;
     // At a post-fader tap the muted channel reads silence, its loudness
     // too.
     patch(&server, &[("/channels/ch1/meterTap", json!("postFader"))]).await;
-    let v = meter_values(&server, 5).await;
-    assert_eq!(v[CH1_PEAK], FLOOR, "ch1 peak post-fader in {v:?}");
-    assert_eq!(v[CH1_MOMENTARY], FLOOR, "ch1 loudness post-fader in {v:?}");
+    meters_until(&server, "ch1 muted at its post-fader tap", |v| {
+        v[CH1_PEAK] == FLOOR && v[CH1_MOMENTARY] == FLOOR
+    })
+    .await;
 
     patch(&server, &[("/channels/st1/routes/pgm", json!(false))]).await;
     pgm.expect(0.0, 0.0, "st1 off the program bus").await;
