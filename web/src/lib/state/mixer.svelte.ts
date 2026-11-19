@@ -51,6 +51,7 @@ export const INITIAL_STATUS: SyncStatus = {
   standbyReplica: null,
   pendingKeys: [],
   replicas: [],
+  build: null,
   revision: 0,
   outbox: 0,
   failover: null,

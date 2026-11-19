@@ -2,7 +2,7 @@
 // per user action and a tick per animation frame; the worker answers each
 // tick with at most one patch.
 
-import type { Owner, OwnerHandle, Owners, PresentSession, ReplicaStatus, Revision, Selection, Shape, State } from '../contract/types';
+import type { Build, Owner, OwnerHandle, Owners, PresentSession, ReplicaStatus, Revision, Selection, Shape, State } from '../contract/types';
 import type { LinkState, StandbyState } from './machines';
 
 export type ToWorker =
@@ -43,6 +43,8 @@ export interface SyncStatus {
   /** Keys (discrete controls) with a write not answered yet. */
   pendingKeys: string[];
   replicas: ReplicaStatus[];
+  /** What the primary connection's replica was built from, once it said. */
+  build: Build | null;
   revision: Revision;
   /** Unanswered commands plus writes held by the rate limiter. */
   outbox: number;

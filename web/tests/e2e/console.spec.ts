@@ -184,6 +184,25 @@ test('names the signed-in user by initials in a pill at the header end, with Sig
   await expect.poll(() => logouts).toEqual(['POST']);
 });
 
+test('names what the serving replica was built from in the connection details and under the account menu', async ({ page, request }) => {
+  const { build } = (await (await request.get('/api/v1/replicas')).json()) as { build: { faderz: string; samplez: string } };
+  expect(build.faderz).toMatch(/^\d+\.\d+\.\d+/);
+  expect(build.samplez).toMatch(/^\d+\.\d+\.\d+/);
+  await signedIn(page);
+  await live(page);
+  await page.getByRole('button', { name: /^Connection LIVE, details$/ }).click();
+  await expect(page.getByTestId('build-faderz')).toHaveText(build.faderz);
+  await expect(page.getByTestId('build-samplez')).toHaveText(build.samplez);
+  await page.keyboard.press('Escape');
+  await page.getByTestId('account').click();
+  const menu = page.getByRole('menu', { name: 'Account' });
+  await expect(menu.getByTestId('account-build')).toHaveText(`faderz ${build.faderz} samplez ${build.samplez}`);
+  // Below the entries, and none of them.
+  await expect(menu.getByRole('menuitem').last()).toHaveText('Sign out');
+  const last = (await menu.getByRole('menuitem').last().boundingBox())!;
+  expect((await menu.getByTestId('account-build').boundingBox())!.y).toBeGreaterThanOrEqual(last.y + last.height);
+});
+
 test('the pill fits the header from 320 px beside every other header control, a locked desk key included', async ({ page }) => {
   await signedIn(page);
   await live(page);

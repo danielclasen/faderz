@@ -16,6 +16,7 @@ import type {
   Owner,
   Owners,
   ReplicaRef,
+  Build,
   ReplicaStatus,
   PresentSession,
   Selection,
@@ -142,6 +143,7 @@ type Role = 'primary' | 'standby';
 class Link {
   replica: ReplicaRef | null = null;
   replicas: ReplicaStatus[] | null = null;
+  build: Build | null = null;
   /** The latest selections this connection reported (Selections); only the primary's are shown. */
   selections: Selection[] | null = null;
   /** The sessions connected to this connection's replica (Presence); only the primary's are shown. */
@@ -854,6 +856,7 @@ export class SyncEngine {
       }
       case 'replicas':
         link.replicas = msg.replicas;
+        link.build = msg.build;
         if (link === this.standby && this.standbyState !== 'Connecting' && !this.standbySuitable(link)) {
           return this.missStandby(link);
         }
@@ -1130,6 +1133,7 @@ export class SyncEngine {
       standbyReplica: this.standby?.replica?.id ?? null,
       pendingKeys: this.outbox.discreteSetPaths(),
       replicas: this.primary?.replicas ?? this.standby?.replicas ?? [],
+      build: this.primary?.build ?? null,
       revision: this.revision,
       outbox: this.outbox.size + this.limiter.size,
       failover: this.failoverInfo,

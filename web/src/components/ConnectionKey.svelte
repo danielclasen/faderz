@@ -161,6 +161,8 @@
       <dt>Leader</dt><dd class="num">{quorum.leader ?? 'unknown'}</dd>
       <dt>Session</dt><dd class="num" data-testid="session-detail">{handleTag(status.handle)}</dd>
       <dt>Endpoint</dt><dd class="num">{mixer.endpoint ?? '-'}</dd>
+      <dt>faderz</dt><dd class="num" data-testid="build-faderz" title={`The faderz version ${status.primaryReplica ?? '-'} runs`}>{status.build?.faderz ?? '-'}</dd>
+      <dt>samplez</dt><dd class="num" data-testid="build-samplez" title={`The samplez release ${status.primaryReplica ?? '-'} was built against`}>{status.build?.samplez ?? '-'}</dd>
     </dl>
     <table class="replicas" aria-label="Replicas" data-testid="replicas">
       <thead><tr><th scope="col">Replica</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">This screen</th></tr></thead>

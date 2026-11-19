@@ -2,7 +2,8 @@
   // The signed-in user at the header's right end: a pill with the user's
   // initials that opens a menu. The menu names the role, and the user
   // only where that is no email address; its entries are a list of
-  // settings, then Sign out.
+  // settings, then Sign out; under them, what the serving replica was
+  // built from.
   import { tick } from 'svelte';
   import { getAuth } from '../lib/auth.svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
@@ -142,6 +143,12 @@
       {#each entries as entry (entry.id)}
         <button class="item" role="menuitem" tabindex="-1" data-entry={entry.id} onclick={() => choose(entry)}>{entry.label}</button>
       {/each}
+      {#if mixer.status.build}
+        <div class="build num" role="presentation" data-testid="account-build">
+          <span>faderz {mixer.status.build.faderz}</span>
+          <span>samplez {mixer.status.build.samplez}</span>
+        </div>
+      {/if}
     </div>
   {/if}
 {/if}
@@ -234,6 +241,16 @@
     background: var(--panel-2);
     outline: none;
     box-shadow: inset 0 0 0 1px var(--focus);
+  }
+  .build {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 8px 2px;
+    margin-top: 4px;
+    border-top: 1px solid var(--line);
+    color: var(--text-faint);
+    font-size: 10px;
+    line-height: 14px;
   }
   @media (pointer: coarse) {
     .pill {

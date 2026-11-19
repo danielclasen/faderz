@@ -389,6 +389,23 @@ describe('sync engine: heartbeat and failure detection', () => {
     expect(engine.link).toBe('Live');
   });
 
+  it('names the build of the primary replica, and after a failover that of the promoted one', () => {
+    const t = setup();
+    expect(t.engine.status().build).toBeNull();
+    t.sockets[0]!.open();
+    t.sockets[0]!.deliver(replicas(R1));
+    t.sockets[0]!.deliver(snapshot(R1, 10));
+    const standby = t.sockets[1]!;
+    standby.open();
+    standby.deliver(replicas(R2));
+    standby.deliver(resume(R2, 10));
+    // The standby's replica said its build: the status still names the primary's.
+    expect(t.engine.status().build).toEqual({ faderz: '0.4.1', samplez: '0.12.3' });
+    t.sockets[0]!.drop();
+    standby.deliver(resume(R2, 10));
+    expect(t.engine.status()).toMatchObject({ primaryReplica: 'r2', build: { faderz: '0.4.2', samplez: '0.12.3' } });
+  });
+
   it('fails over when the serving replica reports it cannot commit and the standby still can a moment later', () => {
     const { clock, engine, primary, standby } = live();
     primary.deliver(replicas(R1, ['r1']));
