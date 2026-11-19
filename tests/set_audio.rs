@@ -1472,10 +1472,11 @@ fn every_replica_routes_alike() {
             routing::Change::Patch(changes) => write(&nodes, i, changes),
             routing::Change::Tally(source, state) => post_tally(&nodes, i, source, state),
         }
+        std::thread::sleep(routing::SETTLE);
         for n in 0..REPLICAS {
             let mut last = Vec::new();
-            // Twice in a row, as an output read before the change was
-            // applied holds its old legs.
+            // Twice in a row, so a block written while a ramp was still
+            // moving does not pass a step.
             let mut held = 0;
             let read = until(20, || {
                 last.clear();

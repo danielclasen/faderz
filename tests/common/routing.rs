@@ -4,7 +4,15 @@
 //! aux, a mix-minus, a VCA and ch1's direct out; and a sequence of
 //! changes, each with the legs every output carries after it.
 
+use std::time::Duration;
+
 use serde_json::{Value, json};
+
+/// How long after a change returns an output is first read: longer than
+/// the readers stay behind the clock and the engine's gain ramp, so a
+/// step that leaves an output alone reads it after the change, not
+/// before.
+pub const SETTLE: Duration = Duration::from_millis(300);
 
 /// What ch1 and ch2 write into their flows.
 pub const CH1: f32 = 0.5;
@@ -225,6 +233,13 @@ pub fn steps() -> Vec<Step> {
     step(
         "the send level",
         &[("/channels/ch1/sends/aux1/level", json!(-6))],
+        l,
+    );
+    let centre = CH1 * g(-6.0) * std::f32::consts::FRAC_1_SQRT_2;
+    l.aux = [centre, centre];
+    step(
+        "the send panned to the centre at constant power",
+        &[("/channels/ch1/sends/aux1/pan", json!(0))],
         l,
     );
     l.aux = [0.0, CH1 * g(-6.0)];

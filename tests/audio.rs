@@ -899,8 +899,9 @@ async fn the_routing_reaches_every_output_flow() {
             routing::Change::Patch(changes) => patch(&server, changes).await,
             routing::Change::Tally(source, state) => tally(&server, source, state).await,
         }
-        // Twice in a row: an output read before the change was applied
-        // holds its old legs, which a step may wrongly leave alone.
+        tokio::time::sleep(routing::SETTLE).await;
+        // Twice in a row, so a block written while a ramp was still
+        // moving does not pass a step.
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut held = 0;
         loop {
