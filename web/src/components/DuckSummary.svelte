@@ -74,7 +74,9 @@
       <span class="bar" aria-hidden="true"><i class:on={gr > 0} style:transform={`scaleX(${reductionShare(gr, scale)})`}></i></span>
       <span class="lbl keyed" class:on={engaged[i]} data-testid={`duck-summary-keyed-${g.id}`}>KEY</span>
       <span class="keybar" aria-hidden="true" data-testid={`duck-summary-key-${g.id}`}
-        ><i class:on={engaged[i]} style:transform={`scaleX(${keyShare(keys[i] ?? null)})`}></i><b style:left={`${keyShare(d.threshold) * 100}%`}></b></span
+        ><i class:on={engaged[i]} style:transform={`scaleX(${keyShare(keys[i] ?? null)})`}></i><i
+          class="threshold"
+          style:transform={`translateX(${keyShare(d.threshold) * 100}%)`}><b></b></i></span
       >
     </div>
   {/each}
@@ -170,11 +172,18 @@
     background: var(--well-duck);
   }
   /* The threshold on the key's scale, edged in the well's colour so it
-     shows over a lit fill too. */
+     shows over a lit fill too. A bar-wide box moved by transform, as the
+     loudness target is: a new threshold changes no layout. */
+  .keybar i.threshold {
+    position: absolute;
+    inset: 0;
+    background: none;
+  }
   .keybar b {
     position: absolute;
     top: 0;
     bottom: 0;
+    left: 0;
     width: 2px;
     margin-left: -1px;
     background: var(--well-mark);
