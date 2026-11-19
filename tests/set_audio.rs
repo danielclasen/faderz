@@ -1351,7 +1351,11 @@ fn a_replica_replaying_the_whole_log_writes_what_its_peers_write() {
     let mut listeners: Vec<Option<std::net::TcpListener>> =
         listeners.into_iter().map(Some).collect();
     let mut nodes: Vec<Option<Node>> = (0..REPLICAS).map(|_| None).collect();
-    nodes[0] = Some(set.start(0, listeners[0].take()));
+    // The set forms on the first replica, the second a learner it grows
+    // by once a third has joined.
+    for n in 0..2 {
+        nodes[n] = Some(set.start(n, listeners[n].take()));
+    }
     steady(&nodes, 0);
     // Entries that wrote the left-right position alone.
     write(
@@ -1363,9 +1367,7 @@ fn a_replica_replaying_the_whole_log_writes_what_its_peers_write() {
             ("/channels/m/pan/lr", json!(0.3)),
         ],
     );
-    for n in 1..REPLICAS {
-        nodes[n] = Some(set.start(n, listeners[n].take()));
-    }
+    nodes[2] = Some(set.start(2, listeners[2].take()));
     let voters = |nodes: &[Option<Node>]| {
         let raft = node(nodes, 0)
             .server

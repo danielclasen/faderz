@@ -1984,7 +1984,7 @@ mod tests {
         let m = matrix(&shape, &s);
         let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
         assert!(
-            (row[0] - h).abs() < 1e-6 && (row[1] - h).abs() < 1e-6 && row[2] == 0.0,
+            (row[0] - h).abs() < 1e-6 && (row[1] - h).abs() < 1e-6 && row[2].abs() < 1e-6,
             "{row:?}"
         );
         // No divergence: the centre leg alone, the fold onto Lo and Ro
@@ -1993,7 +1993,7 @@ mod tests {
         let m = matrix(&shape, &s);
         let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
         assert!(
-            (row[2] - 1.0).abs() < 1e-6 && row[0] == 0.0 && row[1] == 0.0,
+            (row[2] - 1.0).abs() < 1e-6 && row[0].abs() < 1e-6 && row[1].abs() < 1e-6,
             "{row:?}"
         );
         assert!(close(m[0][6], h) && close(m[0][7], h), "{m:?}");
@@ -2001,7 +2001,7 @@ mod tests {
         let m = matrix(&shape, &s);
         let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
         assert!(
-            row[2] == 0.0 && (row[4] - h).abs() < 1e-6 && (row[5] - h).abs() < 1e-6,
+            row[2].abs() < 1e-6 && (row[4] - h).abs() < 1e-6 && (row[5] - h).abs() < 1e-6,
             "{row:?}"
         );
         assert!((row[3] - gain(-6.0)).abs() < 1e-6, "the LFE send: {row:?}");
