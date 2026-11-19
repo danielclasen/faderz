@@ -1142,8 +1142,8 @@ mod tests {
     /// reference the single-replica engine path was sent.
     mod before {
         use super::super::{
-            Image, Tap, channel, gain, listens, num, on, pan_image, solos, talkback, talking,
-            width_of,
+            Image, Place, Tap, channel, gain, listens, num, on, pan_image, solos, talkback,
+            talking, width_of,
         };
         use crate::shape::Shape;
         use serde_json::Value;
@@ -1830,7 +1830,7 @@ mod tests {
         }
     }
 
-    fn place(lr: f64, fr: f64, divergence: f64) -> Place {
+    fn field(lr: f64, fr: f64, divergence: f64) -> Place {
         Place {
             lr,
             fr,
@@ -1858,23 +1858,23 @@ mod tests {
         };
         // L R C LFE Ls Rs.
         is(
-            legs_of(6, &place(0.0, -1.0, 0.0)),
+            legs_of(6, &field(0.0, -1.0, 0.0)),
             [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
         );
         is(
-            legs_of(6, &place(-1.0, -1.0, 0.0)),
+            legs_of(6, &field(-1.0, -1.0, 0.0)),
             [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         );
         is(
-            legs_of(6, &place(1.0, -1.0, 0.0)),
+            legs_of(6, &field(1.0, -1.0, 0.0)),
             [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
         );
         is(
-            legs_of(6, &place(-0.5, -1.0, 0.0)),
+            legs_of(6, &field(-0.5, -1.0, 0.0)),
             [h, 0.0, h, 0.0, 0.0, 0.0],
         );
         is(
-            legs_of(6, &place(0.5, -1.0, 0.0)),
+            legs_of(6, &field(0.5, -1.0, 0.0)),
             [0.0, h, h, 0.0, 0.0, 0.0],
         );
         // Full divergence is a plain constant-power pan between L and R,
@@ -1884,37 +1884,37 @@ mod tests {
         for lr in [-1.0, -0.5, 0.0, 0.3, 1.0] {
             let theta = (lr + 1.0) * quarter;
             is(
-                legs_of(6, &place(lr, -1.0, 1.0)),
+                legs_of(6, &field(lr, -1.0, 1.0)),
                 [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0],
             );
         }
         // Between, the centre's power goes to L and R.
         is(
-            legs_of(6, &place(0.0, -1.0, 1.0)),
+            legs_of(6, &field(0.0, -1.0, 1.0)),
             [h, h, 0.0, 0.0, 0.0, 0.0],
         );
         let (c, l) = (libm::cos(0.25 * std::f64::consts::FRAC_PI_2), 0.0);
         let half = libm::sin(0.25 * std::f64::consts::FRAC_PI_2) * h;
         is(
-            legs_of(6, &place(0.0, -1.0, 0.25)),
+            legs_of(6, &field(0.0, -1.0, 0.25)),
             [half, half, c, l, 0.0, 0.0],
         );
         // The rear: the surrounds alone, panned between them.
         is(
-            legs_of(6, &place(0.0, 1.0, 0.0)),
+            legs_of(6, &field(0.0, 1.0, 0.0)),
             [0.0, 0.0, 0.0, 0.0, h, h],
         );
         is(
-            legs_of(6, &place(-1.0, 1.0, 0.0)),
+            legs_of(6, &field(-1.0, 1.0, 0.0)),
             [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
         );
         is(
-            legs_of(6, &place(1.0, 1.0, 0.0)),
+            legs_of(6, &field(1.0, 1.0, 0.0)),
             [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         );
         // fr crossfades at constant power: half the power each.
         is(
-            legs_of(6, &place(0.0, 0.0, 0.0)),
+            legs_of(6, &field(0.0, 0.0, 0.0)),
             [0.0, 0.0, h, 0.0, 0.5, 0.5],
         );
     }
@@ -1928,20 +1928,20 @@ mod tests {
         for (lr, fr, d) in [(0.0, -1.0, 0.0), (-1.0, 1.0, 1.0), (0.3, 0.2, 0.6)] {
             let p = Place {
                 lfe: -6.0,
-                ..place(lr, fr, d)
+                ..field(lr, fr, d)
             };
             assert!((surround(6, 3, &p) - gain(-6.0)).abs() < 1e-12);
             assert!((surround(8, 3, &p) - gain(-6.0)).abs() < 1e-12);
-            assert_eq!(surround(6, 3, &place(lr, fr, d)), 0.0, "-90 is off");
+            assert_eq!(surround(6, 3, &field(lr, fr, d)), 0.0, "-90 is off");
         }
         // L R C LFE Ls Rs Lrs Rrs.
-        let got = legs_of(8, &place(-1.0, 1.0, 0.0));
+        let got = legs_of(8, &field(-1.0, 1.0, 0.0));
         let want = [0.0, 0.0, 0.0, 0.0, h, 0.0, h, 0.0];
         assert!(
             got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-12),
             "{got:?}"
         );
-        let got = legs_of(8, &place(0.0, 1.0, 0.0));
+        let got = legs_of(8, &field(0.0, 1.0, 0.0));
         assert!(
             (got[4] - 0.5).abs() < 1e-12 && (got[7] - 0.5).abs() < 1e-12,
             "{got:?}"
@@ -1958,7 +1958,7 @@ mod tests {
                     for d in (0..=10).map(|n| f64::from(n) / 10.0) {
                         let power: f64 = (0..to)
                             .filter(|&j| j != 3)
-                            .map(|j| surround(to, j, &place(lr, fr, d)).powi(2))
+                            .map(|j| surround(to, j, &field(lr, fr, d)).powi(2))
                             .sum();
                         assert!(
                             (power - 1.0).abs() < 1e-9,
