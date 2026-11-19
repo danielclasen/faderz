@@ -376,9 +376,9 @@ mod tests {
             ],
         );
         // Rows ch1, ch2, st1 L R, sur x6; columns out-51 x6, out-lr x2,
-        // then the meters of cf x2, aux1 and mon x2.
+        // then the meters of cf x2, aux1 and mon x2, which follows pgm.
         let m = masks(&shape, &state);
-        assert_eq!(m[4..], [[1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]; 6]);
+        assert_eq!(m[4..], [[1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1]; 6]);
         assert!(m[..4].iter().flatten().all(|&b| b == 0));
         assert_eq!(columns(&shape), (0..13).collect::<Vec<_>>());
     }
