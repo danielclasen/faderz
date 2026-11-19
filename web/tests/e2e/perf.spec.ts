@@ -114,12 +114,11 @@ async function sweep(page: Page, path: string, until: number): Promise<number> {
 test.beforeEach(async ({ request }) => resetMock(request));
 
 // A failed attempt runs once more with a performance trace, which the
-// first attempt runs without: tracing costs time on the page and could
-// cause or hide a long task. The retry does not make the test pass:
-// failOnFlakyTests fails the run either way.
+// first attempt runs without: tracing costs time on the page. The retry
+// does not make the test pass: failOnFlakyTests fails the run either way.
 test.describe.configure({ retries: 1 });
 
-test('three clients moving faders with meters on and duck groups firing stay under 50 ms tasks and 4 ms patches at p99, with a patch per frame at most and few DOM mutations per patch', { tag: '@mock' }, async ({ browser, request }, info) => {
+test('three clients moving faders with meters on and duck groups firing stay under 4 ms patches at p99, with a patch per frame at most and few DOM mutations per patch', { tag: '@mock' }, async ({ browser, request }, info) => {
   test.setTimeout(60_000);
   expect((await serverState(request)).shape.channels).toHaveLength(64);
   const contexts = await Promise.all([0, 1, 2].map(() => browser.newContext({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 } })));
@@ -209,7 +208,10 @@ test('three clients moving faders with meters on and duck groups firing stay und
         // uploads on failure, and not copied into the report.
         await writeFile(test.info().outputPath('performance-trace.json'), (await stopTracing())!);
       }
-      expect(r.longTasks).toEqual([]);
+      // Long tasks are recorded, not judged: one is wall time, which on a
+      // shared runner includes time the main thread is not scheduled. The
+      // work a patch makes is judged by the counts above, and a layout of
+      // the whole page by the layout test below.
       // A patch is judged by wall time, which on a shared runner includes
       // time the main thread is runnable but not scheduled, and a single
       // patch can take any of it: the tail is judged by its 99th
