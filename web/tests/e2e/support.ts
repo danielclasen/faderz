@@ -152,7 +152,15 @@ export async function standbyReady(page: Page): Promise<void> {
 }
 
 /** Every write the UI made has been answered. */
+/**
+ * Waits until every write the page made has been answered. The outbox
+ * lives in the sync worker: right after a click the page's status does
+ * not hold the click's write yet, so it waits first for a patch from a
+ * worker that processed everything the page had sent.
+ */
 export async function settled(page: Page): Promise<void> {
+  const posted = await page.evaluate(() => window.__faderz!.posted);
+  await page.waitForFunction((n) => window.__faderz!.processed >= n, posted);
   await expect(page.getByTestId('pending')).toHaveCount(0);
   await page.waitForFunction(() => window.__faderz?.outbox === 0);
 }

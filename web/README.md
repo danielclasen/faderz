@@ -221,7 +221,9 @@ it.
 `window.__faderz` is a read-only view of the sync state for tests:
 `connection`, `standby`, `primaryReplica`, `standbyReplica`, `session`
 (dev builds only: the session id is a credential), `revision`,
-`outbox`, `failovers`, `lastFailover`, `replicas`, `touching`,
+`outbox`, `posted` and `processed` (the messages the page sent the sync
+worker and those it had processed by its last patch: `outbox` covers a
+write once `processed` reaches the `posted` count after it), `failovers`, `lastFailover`, `replicas`, `touching`,
 `meterReplica`, `meterCredits`, `ticking`, `lastPatchMs`, `maxPatchMs`
 and `patches`.
 
