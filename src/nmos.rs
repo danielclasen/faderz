@@ -213,8 +213,9 @@ impl Node {
                 instances: Mutex::default(),
             }),
             seen: Mutex::new(vec![0; model.senders.len() + model.receivers.len()]),
+            // Every port's `/active` starts as the state holds it.
             foreign: (0..model.senders.len() + model.receivers.len())
-                .map(|_| AtomicBool::new(false))
+                .map(|_| AtomicBool::new(true))
                 .collect(),
             asked: Mutex::new(vec![None; model.senders.len() + model.receivers.len()]),
             instance: crate::app::uuid().map_err(|e| format!("nmos: {e}"))?,

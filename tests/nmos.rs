@@ -291,6 +291,12 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
             "{port}"
         );
     }
+    // And the activation that made them, not none until a port changes.
+    for port in [&ch1, &pgm] {
+        let activation = &active(&server, port).await["activation"];
+        assert_eq!(activation["mode"], "activate_immediate", "{port}");
+        assert!(activation["activation_time"].is_string(), "{port}");
+    }
     // The engine starts as the state left it, from its first status on:
     // ch1 detached with no reader opened, the disabled output with no
     // flow created, not even for a moment.
