@@ -5,6 +5,7 @@
   import { follow, type Placement } from '../lib/anchor';
   import { quorumOf } from '../lib/quorum';
   import { tip } from '../lib/tip';
+  import { handleTag } from '../lib/net/handle';
 
   /** In the status bar the details open upward; on a short screen the key sits in the header and they open downward. */
   let { where = 'bar' }: { where?: 'bar' | 'header' } = $props();
@@ -34,13 +35,13 @@
   const quorum = $derived(quorumOf(status.replicas, status.primaryReplica));
   /** Quorum says nothing while the link transmits no commands: the slot shows why writes are off instead. */
   const transmitting = $derived(TRANSMITTING.has(status.link));
-  /** How much of the quorum's text the header has room for: the word, its initial, or the initial and no count once lost. */
+  /** How much of the quorum's text the header has room for: the word, its initial, or once lost on a phone the word on two lines without the count. */
   const size = $derived(short.current || phone.current ? 'tight' : wide.current ? 'full' : 'brief');
   const quorumText = $derived.by(() => {
     if (quorum.commitable === null) return '';
     const count = `${quorum.commitableCount}/${quorum.total}`;
     if (quorum.commitable) return size === 'full' ? `QUORUM ${count}` : `Q ${count}`;
-    return size === 'full' ? `NO QUORUM ${count}` : size === 'brief' ? `NO Q ${count}` : 'NO Q';
+    return size === 'full' ? `NO QUORUM ${count}` : size === 'brief' ? `NO Q ${count}` : 'NO QUORUM';
   });
   const quorumTip = $derived.by(() => {
     const q = quorum;
@@ -121,6 +122,7 @@
         <button
           class="quorum fixed"
           class:lost={!quorum.commitable}
+          class:stack={size === 'tight' && quorum.commitable === false}
           class:degraded={quorum.commitable && quorum.commitableCount < quorum.total}
           data-testid="quorum"
           data-quorum={quorum.commitable ? (quorum.commitableCount < quorum.total ? 'degraded' : 'held') : 'lost'}
@@ -157,6 +159,8 @@
         {#if quorum.commitable === null}-{:else}{quorum.commitable ? 'held' : 'lost'}, {quorum.commitableCount} of {quorum.total} can commit, {quorum.needed} needed{/if}
       </dd>
       <dt>Leader</dt><dd class="num">{quorum.leader ?? 'unknown'}</dd>
+      <dt>Session</dt><dd class="num" data-testid="session-detail">{handleTag(status.handle)}</dd>
+      <dt>Endpoint</dt><dd class="num">{mixer.endpoint ?? '-'}</dd>
     </dl>
     <table class="replicas" aria-label="Replicas" data-testid="replicas">
       <thead><tr><th scope="col">Replica</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">This screen</th></tr></thead>
@@ -281,6 +285,17 @@
     border-radius: 0 3px 3px 0;
     color: var(--text-dim);
     cursor: pointer;
+  }
+  /* A lost quorum on a phone: the words on two lines in the 18 px key. */
+  .quorum.stack {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 2px;
+    white-space: normal;
+    font-size: 8.5px;
+    line-height: 9px;
+    letter-spacing: 0;
   }
   .quorum:focus-visible {
     outline: 2px solid var(--focus);

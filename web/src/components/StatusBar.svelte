@@ -87,6 +87,7 @@
     role="note"
     tabindex="0"
     data-testid="session"
+    aria-label={`Session ${handleTag(mixer.status.handle)} ${mixer.endpoint ?? ''}`}
     use:tip={`${handleTag(mixer.status.handle)} ${mixer.endpoint ?? ''}: session tag, as other clients name this screen, and primary endpoint`}
     ><span class="tag">{handleTag(mixer.status.handle)}</span> {mixer.endpoint ?? ''}</span
   >
@@ -222,6 +223,19 @@
     }
     .notices {
       flex: 0 1 36%;
+    }
+    /* While the commit banner holds the notice line it takes a row of its
+       own above the bar, the whole width, so its words stay readable. */
+    .bar:has(:global([data-testid='commit-banner'])) {
+      flex-wrap: wrap;
+      height: auto;
+      padding-top: 3px;
+      padding-bottom: 3px;
+      row-gap: 3px;
+    }
+    .bar:has(:global([data-testid='commit-banner'])) .notices {
+      order: -1;
+      flex: 1 0 100%;
     }
   }
   /* Short screens: the bar gives its row to the faders; notices show in
