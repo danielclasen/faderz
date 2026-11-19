@@ -274,6 +274,8 @@ async fn meter_values(server: &Server, skip: usize) -> Vec<i16> {
 /// Values of the meter frame: ch1 3, ch2 3, st1 5, then pgm 14, mm1 14
 /// and the monitor 2; the shape has no duck group.
 const CH1_PEAK: usize = 0;
+/// A channel's peaks are followed by its momentary loudness.
+const CH1_MOMENTARY: usize = 2;
 const CH2_PEAK: usize = 3;
 const ST1_PEAK: usize = 6;
 const PGM_PEAK: usize = 11;
@@ -399,10 +401,14 @@ async fn the_mix_reaches_the_output_flows_and_the_meters() {
     );
     assert_eq!(v[CH2_PEAK], FLOOR, "{v:?}");
     assert!(v[MON_PEAK] != i16::MIN, "{v:?}");
-    // At a post-fader tap the muted channel reads silence.
+    let ch1_loudness = v[CH1_MOMENTARY];
+    assert!(ch1_loudness != i16::MIN && ch1_loudness != FLOOR, "{v:?}");
+    // At a post-fader tap the muted channel reads silence, its loudness
+    // too.
     patch(&server, &[("/channels/ch1/meterTap", json!("postFader"))]).await;
     let v = meter_values(&server, 5).await;
     assert_eq!(v[CH1_PEAK], FLOOR, "ch1 peak post-fader in {v:?}");
+    assert_eq!(v[CH1_MOMENTARY], FLOOR, "ch1 loudness post-fader in {v:?}");
 
     patch(&server, &[("/channels/st1/routes/pgm", json!(false))]).await;
     pgm.expect(0.0, 0.0, "st1 off the program bus").await;

@@ -406,14 +406,17 @@ export class ReplicaMeters {
       const legs = input.map((l, i) => l + st.trim + (st.legTrim[i] ?? 0) + (st.comp.enabled ? st.comp.makeup - 2 : 0));
       channelLevels.set(c.id, legs);
       const fader = st.mute || vcaMuted(c.id) ? SILENCE : effectiveGainDb(st.fader, vcaOffsets(c.id));
-      const tapped =
-        st.meterTap === 'input' ? input : st.meterTap === 'preFader' ? legs : legs.map((l) => (fader <= SILENCE ? SILENCE : l + fader));
+      // The engine meters a channel after its strip, so the input tap
+      // reads as the pre-fader one.
+      const closed = st.meterTap === 'postFader' && fader <= SILENCE;
+      const tapped = st.meterTap === 'postFader' ? legs.map((l) => (closed ? SILENCE : l + fader)) : legs;
       const direct =
         st.directOut.tap === 'input' ? input : st.directOut.tap === 'preFader' ? legs : legs.map((l) => (fader <= SILENCE ? SILENCE : l + fader));
       channels.push({
         peak: tapped.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
         truePeak: direct.map((l) => r1(l + 9.5 + Math.random() * 3 + jitter())),
-        momentary: legLoudness(c.layout, tapped),
+        // A closed tap reads silence once the input is measured.
+        momentary: closed && legLoudness(c.layout, legs) !== null ? SILENCE : legLoudness(c.layout, tapped),
       });
     }
     const postGains = new Map<string, number>();
