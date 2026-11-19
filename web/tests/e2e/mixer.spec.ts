@@ -483,6 +483,10 @@ test('sets the loudness target from the setup view and judges integrated loudnes
 test('sets the LFE send and the stereo image of a channel from the processing panel', async ({ page, request }) => {
   await live(page);
   await page.locator('[data-channel="st1"] .head').click();
+  // A stereo channel is balanced by its pan; the surround panner's controls act on a mono one and are not offered.
+  await expect(page.getByLabel('LFE', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Music front rear')).toHaveCount(0);
+  await expect(page.getByText('Pan balances a stereo channel')).toBeVisible();
   await page.getByRole('radio', { name: 'Right to both', exact: true }).click();
   await settled(page);
   expect((await serverState(request)).state.channels['st1']!.image).toBe('rightToBoth');

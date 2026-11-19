@@ -174,9 +174,13 @@
       {/if}
       {#if ch && element.width <= 2}
         <div class="pan-row"><span class="lbl">Pan</span><Pan path={p('pan', 'lr')} label={`${element.name} pan`} /></div>
-        <div class="pan-row"><span class="lbl">F/R</span><Pan path={p('pan', 'fr')} label={`${element.name} front rear`} left="F" right="R" /></div>
-        <Param path={p('pan', 'divergence')} label="Diverg" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
-        <Param path={p('pan', 'lfe')} label="LFE" min={-90} max={10} fader format={(v) => formatDb(v)} />
+        {#if element.width === 1}
+          <div class="pan-row"><span class="lbl">F/R</span><Pan path={p('pan', 'fr')} label={`${element.name} front rear`} left="F" right="R" /></div>
+          <Param path={p('pan', 'divergence')} label="Diverg" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
+          <Param path={p('pan', 'lfe')} label="LFE" min={-90} max={10} fader format={(v) => formatDb(v)} />
+        {:else}
+          <p class="note" title="Front/rear, divergence and the LFE send place a mono channel in the field of a surround bus. A stereo channel is balanced by Pan onto the left and right legs.">Pan balances a stereo channel; front/rear, divergence and LFE are for a mono one.</p>
+        {/if}
       {:else if ch}
         <p class="note">{element.layout} maps leg to leg on {element.layout} buses and folds down (Lo/Ro) on narrower ones.</p>
       {/if}
