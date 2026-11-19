@@ -242,7 +242,7 @@ impl Place {
 ///   the rear alone, and the middle half of each.
 /// - The LFE leg takes the `lfe` send as an independent gain, silent at
 ///   -90 dB; it is no part of the pan.
-fn surround(to: usize, j: usize, place: &Place) -> f64 {
+fn field_gain(to: usize, j: usize, place: &Place) -> f64 {
     use std::f64::consts::FRAC_PI_2;
     let lr = place.lr.clamp(-1.0, 1.0);
     if j == 3 {
@@ -324,10 +324,10 @@ impl Image {
 }
 
 /// [`pan`] of a signal at `place`, a mono one onto a surround element by
-/// [`surround`].
+/// [`field_gain`].
 fn pan_place(from: usize, to: usize, i: usize, j: usize, place: &Place) -> f64 {
     if from == 1 && to >= 6 {
-        surround(to, j, place)
+        field_gain(to, j, place)
     } else {
         pan(from, to, i, j, place.lr)
     }
@@ -1840,7 +1840,7 @@ mod tests {
     }
 
     fn legs_of(to: usize, p: &Place) -> Vec<f64> {
-        (0..to).map(|j| surround(to, j, p)).collect()
+        (0..to).map(|j| field_gain(to, j, p)).collect()
     }
 
     /// The surround panner's law points on 5.1: the front of the field
@@ -1930,9 +1930,9 @@ mod tests {
                 lfe: -6.0,
                 ..field(lr, fr, d)
             };
-            assert!((surround(6, 3, &p) - gain(-6.0)).abs() < 1e-12);
-            assert!((surround(8, 3, &p) - gain(-6.0)).abs() < 1e-12);
-            assert_eq!(surround(6, 3, &field(lr, fr, d)), 0.0, "-90 is off");
+            assert!((field_gain(6, 3, &p) - gain(-6.0)).abs() < 1e-12);
+            assert!((field_gain(8, 3, &p) - gain(-6.0)).abs() < 1e-12);
+            assert_eq!(field_gain(6, 3, &field(lr, fr, d)), 0.0, "-90 is off");
         }
         // L R C LFE Ls Rs Lrs Rrs.
         let got = legs_of(8, &field(-1.0, 1.0, 0.0));
@@ -1958,7 +1958,7 @@ mod tests {
                     for d in (0..=10).map(|n| f64::from(n) / 10.0) {
                         let power: f64 = (0..to)
                             .filter(|&j| j != 3)
-                            .map(|j| surround(to, j, &field(lr, fr, d)).powi(2))
+                            .map(|j| field_gain(to, j, &field(lr, fr, d)).powi(2))
                             .sum();
                         assert!(
                             (power - 1.0).abs() < 1e-9,
