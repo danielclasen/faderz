@@ -2,30 +2,13 @@
   import { getMixer } from '../lib/state/mixer.svelte';
   import { handleTag } from '../lib/net/handle';
   import NoticeLine from './NoticeLine.svelte';
+  import ConnectionKey from './ConnectionKey.svelte';
   import { MediaQuery } from 'svelte/reactivity';
   import { onMount } from 'svelte';
   import { tip } from '../lib/tip';
   import { CounterRates, WARN_WINDOW_MS, engineLamp } from '../lib/counters';
-  import { getAuth } from '../lib/auth.svelte';
+  import { follow, type Placement } from '../lib/anchor';
   const mixer = getMixer();
-  // Absent where the status bar is mounted without the sign-in state.
-  const auth = getAuth() as ReturnType<typeof getAuth> | undefined;
-  /** Who is signed in, where a mode names anybody or has a role to show. */
-  const who = $derived.by(() => {
-    const s = auth?.session;
-    if (!s?.role || s.mode === 'none') return null;
-    return `${s.user ?? 'token'} (${s.role})`;
-  });
-  const canSignOut = $derived(auth?.session?.role != null && (auth.session.mode === 'token' || auth.session.mode === 'oidc'));
-  async function leave(): Promise<void> {
-    if (!auth) return;
-    try {
-      const next = await auth.signOut();
-      if (next) location.assign(next);
-    } catch (e) {
-      mixer.notify('error', e instanceof Error ? e.message : String(e));
-    }
-  }
   /** Same query as the header's: on a short screen the notices show there. */
   const short = new MediaQuery('max-height: 500px');
   const counters = $derived(Object.entries(mixer.counters));
@@ -42,31 +25,14 @@
   });
   const name = (n: string) => n.replace(/_total$/, '');
 
-  /** Least room between the counters and the viewport's edges, px. */
-  const EDGE = 8;
   let button = $state<HTMLButtonElement>();
   let panel = $state<HTMLDivElement>();
-  let place = $state({ left: EDGE, bottom: 28 });
-  /** Above the button, centred on it, moved in where that runs off the viewport. */
-  function anchor(): void {
-    if (!button || !panel) return;
-    const b = button.getBoundingClientRect();
-    const view = document.documentElement;
-    const centred = b.left + b.width / 2 - panel.offsetWidth / 2;
-    const left = Math.max(EDGE, Math.min(centred, view.clientWidth - EDGE - panel.offsetWidth));
-    place = { left, bottom: view.clientHeight - b.top + 4 };
-  }
+  let place = $state<Placement>({ left: 0, bottom: 28 });
+  // Above the lamp, centred on it, moved in where that runs off the
+  // viewport; its width follows the counters' names and values.
   $effect(() => {
-    if (!open || !panel) return;
-    anchor();
-    // Its width follows the counters' names and values.
-    const sized = new ResizeObserver(anchor);
-    sized.observe(panel);
-    window.addEventListener('resize', anchor);
-    return () => {
-      sized.disconnect();
-      window.removeEventListener('resize', anchor);
-    };
+    if (!open || !button || !panel) return;
+    return follow(button, panel, 'above', 'centre', (p) => (place = p));
   });
 
   // While the commit banner holds the notice line, notices wait unseen:
@@ -79,8 +45,8 @@
 </script>
 
 <footer class="bar">
-  <!-- Notices take this fixed line, never an overlay on the controls. -->
-  <div class="notices">{#if !short.current}<NoticeLine />{/if}</div>
+  <!-- The engine lamp, the connection key and the session and endpoint
+       first, at the left edge, where they stay put; the notices follow. -->
   <div class="engine-wrap">
     <button
       bind:this={button}
@@ -102,7 +68,7 @@
         role="region"
         aria-label="Engine counters"
         style:left="{place.left}px"
-        style:bottom="{place.bottom}px"
+        style:bottom="{place.bottom ?? 0}px"
       >
         <div class="head">Counters from {mixer.countersReplica ?? '-'}, totals</div>
         {#each counters as [n, value] (n)}
@@ -111,21 +77,21 @@
       </div>
     {/if}
   </div>
-  {#if who}
-    <span class="who" data-testid="user">{who}</span>
-    {#if canSignOut}<button class="out" onclick={leave}>Sign out</button>{/if}
-  {/if}
+  <!-- The link lamp, the quorum and the connection details, right of the engine. -->
+  {#if !short.current}<ConnectionKey where="bar" />{/if}
   <!-- A fixed box with left-aligned text: the endpoint empties while
        reconnecting and comes back, and nothing moves. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <span
-    class="right num"
+    class="session num"
     role="note"
     tabindex="0"
     data-testid="session"
     use:tip={`${handleTag(mixer.status.handle)} ${mixer.endpoint ?? ''}: session tag, as other clients name this screen, and primary endpoint`}
     ><span class="tag">{handleTag(mixer.status.handle)}</span> {mixer.endpoint ?? ''}</span
   >
+  <!-- Notices take this fixed line, never an overlay on the controls. -->
+  <div class="notices">{#if !short.current}<NoticeLine />{/if}</div>
 </footer>
 
 <style>
@@ -142,29 +108,22 @@
     overflow: hidden;
     white-space: nowrap;
   }
+  /* Fingers: the keys keep their look; the bar is as tall as a 44 px
+     hit area, which the engine lamp and the connection keys reach
+     beyond their borders. */
   @media (pointer: coarse) {
     .bar {
-      height: 32px;
+      height: 44px;
     }
     .bar .engine {
       height: 26px;
+      position: relative;
     }
-  }
-  .who {
-    flex: none;
-    color: var(--text-dim);
-  }
-  .out {
-    all: unset;
-    flex: none;
-    padding: 0 4px;
-    border: 1px solid var(--line-strong);
-    border-radius: 3px;
-    color: var(--text-dim);
-    cursor: pointer;
-  }
-  .out:focus-visible {
-    outline: 2px solid var(--focus);
+    .bar .engine::after {
+      content: '';
+      position: absolute;
+      inset: -9px 0;
+    }
   }
   .engine-wrap {
     position: relative;
@@ -200,7 +159,7 @@
     background: var(--warn);
   }
   /* Opens upward over the view, outside the bar's clipping; it moves
-     nothing. Fixed, so placed over its button by anchor(). */
+     nothing. Fixed, so placed over its button by follow(). */
   .counters {
     position: fixed;
     z-index: 40;
@@ -238,9 +197,8 @@
   .c.nz b {
     color: var(--warn);
   }
-  .right {
-    flex: 0 0 min(34ch, 40%);
-    margin-left: auto;
+  .session {
+    flex: 0 0 min(34ch, 30%);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -251,17 +209,19 @@
     min-width: 0;
   }
   /* Phones: the session box keeps the tag (its tooltip has the endpoint),
-     so the notices keep their room; the engine lamp, sized for counts up
-     to 99+, still leaves a free stretch before the session box. */
+     so the notices keep their room. */
   @media (max-width: 700px) {
     .bar {
       gap: 8px;
+      /* The dev mock key, which floats over the bar's right end, sets it. */
+      padding-right: calc(10px + var(--mock-reserve, 0px));
+    }
+    .session {
+      flex: 0 0 8ch;
+      min-width: 0;
     }
     .notices {
-      flex-basis: 36%;
-    }
-    .right {
-      flex-basis: 8ch;
+      flex: 0 1 36%;
     }
   }
   /* Short screens: the bar gives its row to the faders; notices show in

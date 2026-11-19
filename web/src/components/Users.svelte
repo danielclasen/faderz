@@ -26,8 +26,8 @@
     Object.entries(mixer.owners)
       .filter(([, o]) => o?.kind === 'console' && o.handle === handle)
       .map(([p]) => p);
-  /** A short screen (App.svelte): USR, so the notice line keeps room. */
-  const short = new MediaQuery('max-height: 500px');
+  /** A short screen (App.svelte) or a phone: USR, so the notice line and the header keys keep room. */
+  const short = new MediaQuery('(max-height: 500px), (max-width: 700px)');
   const count = $derived(rows.length + consoles.filter((c) => c.connected).length);
   const kindLabel = (kind: string) => (kind === 'ui' ? 'web client' : kind);
   function elementName(id: string): string {

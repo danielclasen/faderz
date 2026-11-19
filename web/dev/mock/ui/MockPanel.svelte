@@ -67,20 +67,28 @@
 </aside>
 
 <style>
-  /* In the free stretch of the status bar between the engine lamp and the
-     session; where that bar is narrow or gone, over the bank bar's
-     BANKS title instead, clear of every control and readout. A phone
-     has no BANKS title: there the key keeps to the status bar, just
-     before the session box (8ch, after a gap of 8 px). */
+  /* The status bar keeps this much of its right end free for the key,
+     from the first paint, so the key's mounting moves nothing. */
+  :global(:root) {
+    --mock-reserve: 84px;
+  }
+  /* At the right end of the status bar, past the notice line, clear of
+     every control and readout; where that bar is gone (short screens),
+     over the bank bar's BANKS title instead. */
   .mock {
     position: fixed;
-    right: 320px;
+    right: 10px;
     bottom: 3px;
     z-index: 30;
     font: 11px var(--font-num);
     color: #111;
   }
-  @media (max-width: 900px), (max-height: 500px) {
+  @media (pointer: coarse) {
+    .mock {
+      bottom: 7px;
+    }
+  }
+  @media (max-height: 500px) {
     .mock {
       right: auto;
       bottom: auto;
@@ -96,24 +104,12 @@
     }
   }
   @media (max-width: 700px) and (min-height: 501px) {
-    .mock {
-      top: auto;
-      left: auto;
-      right: calc(18px + 8ch * 10.5 / 11);
-      bottom: 3px;
-    }
     .body {
       position: fixed;
-      top: auto;
       left: 4px;
       right: 4px;
       bottom: 40px;
       width: auto;
-    }
-  }
-  @media (max-width: 700px) and (min-height: 501px) and (pointer: coarse) {
-    .mock {
-      bottom: 7px;
     }
   }
   .toggle {

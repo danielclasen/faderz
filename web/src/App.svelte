@@ -11,6 +11,7 @@
   import ScenesView from './components/ScenesView.svelte';
   import SetupView from './components/SetupView.svelte';
   import StatusArea from './components/StatusArea.svelte';
+  import ConnectionKey from './components/ConnectionKey.svelte';
   import Consoles from './components/Consoles.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import AheadBanner from './components/AheadBanner.svelte';
@@ -20,6 +21,7 @@
   import Users from './components/Users.svelte';
   import TouchInfo from './components/TouchInfo.svelte';
   import SignIn from './components/SignIn.svelte';
+  import Account from './components/Account.svelte';
 
   const mixer = getMixer();
   /** A phone in landscape: notices move from the status bar into the header. */
@@ -104,6 +106,7 @@
       </div>
       <Consoles />
       <StatusArea />
+      {#if short.current}<ConnectionKey where="header" />{/if}
       <Users />
       <!-- Reserved: shown or not, the tone lamp moves nothing. -->
       <span class="tone-slot">
@@ -116,6 +119,7 @@
       <button class="key theme" onclick={toggleTheme} aria-label={`Switch to ${theme.value === 'dark' ? 'light' : 'dark'} theme`}>
         {theme.value === 'dark' ? 'LIGHT' : 'DARK'}
       </button>
+      <Account />
     </div>
   </header>
 
@@ -285,6 +289,13 @@
       display: none;
     }
   }
+  /* Below 1200 px the signed-in user's pill takes the theme key's room:
+     its menu switches the theme, as Setup does. */
+  @media (max-width: 1199px) {
+    .top:has(:global([data-testid='account'])) .theme {
+      display: none;
+    }
+  }
   /* Short screens (a phone in landscape): one header row of 36 px with
      the view menu, the notices and the connection state; the status bar
      is gone, so the faders get the height. */
@@ -404,10 +415,11 @@
     height: 100%;
     color: var(--text-dim);
   }
-  /* Short screens: narrower gaps on the right, so the notice line in
-     the one header row has room for its text. After the .right rule,
-     which it overrides. */
-  @media (max-height: 500px) {
+  /* Short screens and phones: narrower gaps on the right, so the notice
+     line in the one header row has room for its text, and a locked desk's
+     key and the user's pill fit beside the connection state. After the
+     .right rule, which it overrides. */
+  @media (max-height: 500px), (max-width: 700px) {
     .right {
       gap: 6px;
     }

@@ -345,7 +345,8 @@ test('without a replica that can commit the client stays put, keeps its controls
   for (const r of others) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
 
   const quorum = page.getByTestId('quorum');
-  await expect(quorum).toHaveText('NO Q');
+  await expect(quorum).toHaveText('NO QUORUM 0/3');
+  await expect(quorum).toHaveAttribute('data-quorum', 'lost');
   await expect(quorum).toHaveAttribute('data-commitable', 'false');
   const banner = page.getByTestId('commit-banner');
   await expect(banner).toBeVisible();
@@ -385,7 +386,8 @@ test('without a replica that can commit the client stays put, keeps its controls
   expect(await debug(page, 'standbyReplica')).toBe(standby);
 
   for (const r of others) expect((await request.post(`/__mock/replicas/${r}/heal`)).ok()).toBe(true);
-  await expect(quorum).toHaveText('Q');
+  await expect(quorum).toHaveText('QUORUM 3/3');
+  await expect(quorum).toHaveAttribute('data-quorum', 'held');
   await expect(banner).toHaveCount(0);
   await mute.click();
   await settled(page);
@@ -421,7 +423,7 @@ test('with every replica down the client disables every write control and sends 
   await request.post('/__mock/audit/reset');
   for (const r of REPLICAS) expect((await request.post(`/__mock/replicas/${r}/restore`)).ok()).toBe(true);
   await expect.poll(() => debug(page, 'connection'), { timeout: 10_000 }).toBe('Live');
-  await expect(lock).toHaveText('Q');
+  await expect(lock).toHaveText('QUORUM 3/3');
   await expect(slider).toHaveAttribute('aria-disabled', 'false');
   await settled(page);
   expect((await audit(request)).entries).toEqual([]);

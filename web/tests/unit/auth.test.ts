@@ -6,6 +6,7 @@ import { AuthStore, authContext } from '../../src/lib/auth.svelte';
 import { MixerStore, mixerContext } from '../../src/lib/state/mixer.svelte';
 import SignIn from '../../src/components/SignIn.svelte';
 import StatusBar from '../../src/components/StatusBar.svelte';
+import Account from '../../src/components/Account.svelte';
 
 const BASE = 'http://mixer.example/api/v1';
 
@@ -80,7 +81,7 @@ describe('signing in and out', () => {
   });
 });
 
-function mountWith(component: typeof SignIn | typeof StatusBar, auth: AuthStore, mixer = new MixerStore()) {
+function mountWith(component: typeof SignIn | typeof StatusBar | typeof Account, auth: AuthStore, mixer = new MixerStore()) {
   mixer.attach({ post: () => {} });
   const target = document.createElement('div');
   document.body.append(target);
@@ -150,20 +151,49 @@ describe('the sign-in prompt', () => {
   });
 });
 
-describe('the signed-in user in the status bar', () => {
-  it('shows who and offers to sign out', async () => {
+describe('the signed-in user in the header', () => {
+  it('shows initials, names no email address, and signs out from its menu', async () => {
     const { f, calls } = fakeFetch({
-      'GET /api/v1/session': session({ mode: 'oidc', user: 'alice', role: 'operator' }),
+      'GET /api/v1/session': session({ mode: 'oidc', user: 'jane.doe@example.org', role: 'operator' }),
       'POST /api/v1/logout': () => json({ redirect: null }),
     });
     const auth = new AuthStore(BASE, f);
     await auth.refresh();
-    const { target, done } = mountWith(StatusBar, auth);
-    expect(target.querySelector('[data-testid="user"]')?.textContent).toBe('alice (operator)');
-    const out = [...target.querySelectorAll('button')].find((b) => b.textContent === 'Sign out')!;
-    out.click();
+    const { target, done } = mountWith(Account, auth);
+    const pill = target.querySelector<HTMLButtonElement>('[data-testid="account"]')!;
+    expect(pill.textContent).toBe('JD');
+    expect(pill.getAttribute('aria-label')).toBe('Account, operator');
+    pill.click();
+    flushSync();
+    await tick();
+    expect(target.innerHTML).not.toContain('example.org');
+    expect(target.innerHTML).not.toContain('jane.doe');
+    const items = [...target.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(items.map((b) => b.textContent)).toEqual(['Switch to light theme', 'Sign out']);
+    items[1]!.click();
     await settle();
     expect(calls.some((c) => c.method === 'POST' && c.path === '/api/v1/logout')).toBe(true);
+    done();
+  });
+
+  it('names a user whose name is no email address', async () => {
+    const { f } = fakeFetch({ 'GET /api/v1/session': session({ mode: 'oidc', user: 'alice', role: 'viewer' }) });
+    const auth = new AuthStore(BASE, f);
+    await auth.refresh();
+    const { target, done } = mountWith(Account, auth);
+    expect(target.querySelector('[data-testid="account"]')?.getAttribute('aria-label')).toBe('Account alice, viewer');
+    done();
+  });
+
+  it('offers no sign out in proxy mode, where the proxy signs in', async () => {
+    const { f } = fakeFetch({ 'GET /api/v1/session': session({ mode: 'proxy', user: 'bob', role: 'operator' }) });
+    const auth = new AuthStore(BASE, f);
+    await auth.refresh();
+    const { target, done } = mountWith(Account, auth);
+    target.querySelector<HTMLButtonElement>('[data-testid="account"]')!.click();
+    flushSync();
+    await tick();
+    expect([...target.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent)).toEqual(['Switch to light theme']);
     done();
   });
 
@@ -171,8 +201,18 @@ describe('the signed-in user in the status bar', () => {
     const { f } = fakeFetch({ 'GET /api/v1/session': session({ mode: 'none', user: null, role: 'operator' }) });
     const auth = new AuthStore(BASE, f);
     await auth.refresh();
+    const { target, done } = mountWith(Account, auth);
+    expect(target.querySelector('[data-testid="account"]')).toBeNull();
+    done();
+  });
+
+  it('leaves the status bar to the engine, the session and the notices', async () => {
+    const { f } = fakeFetch({ 'GET /api/v1/session': session({ mode: 'oidc', user: 'alice', role: 'operator' }) });
+    const auth = new AuthStore(BASE, f);
+    await auth.refresh();
     const { target, done } = mountWith(StatusBar, auth);
-    expect(target.querySelector('[data-testid="user"]')).toBeNull();
+    expect(target.textContent).not.toContain('alice');
+    expect([...target.querySelectorAll('button')].some((b) => b.textContent === 'Sign out')).toBe(false);
     done();
   });
 });

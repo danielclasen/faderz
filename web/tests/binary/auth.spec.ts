@@ -13,7 +13,7 @@ const WRITE = { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' };
 async function signIn(page: Page, mode: string): Promise<void> {
   if (mode === 'oidc') {
     await page.goto('/');
-    await expect(page.getByTestId('user')).toHaveText('alice (operator)');
+    await expect(page.getByTestId('account')).toHaveAccessibleName('Account alice, operator');
     return;
   }
   if (mode !== 'token') return;
@@ -114,8 +114,9 @@ test('prompts for the token when not signed in', { tag: '@token' }, async ({ pag
   await expect(prompt).toBeHidden();
   // The link retries every 2 s, and now gets through.
   await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 10_000 });
-  await expect(page.getByTestId('user')).toHaveText('token (operator)');
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByTestId('account')).toHaveAccessibleName('Account token, operator');
+  await page.getByTestId('account').click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
   await expect(prompt).toBeVisible();
 });
 
@@ -124,12 +125,14 @@ test('signs in at the OpenID provider and out again', { tag: '@oidc' }, async ({
   // Through the provider and back to the page it started from.
   await expect(page).toHaveURL(/\/\?endpoints=/);
   await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
-  await expect(page.getByTestId('user')).toHaveText('alice (operator)');
+  await expect(page.getByTestId('account')).toHaveText('A');
+  await expect(page.getByTestId('account')).toHaveAccessibleName('Account alice, operator');
   const session = await (await page.request.get('/api/v1/session')).json();
   expect(session).toEqual({ mode: 'oidc', user: 'alice', role: 'operator' });
   // Out at the provider too, which sends the browser back; a page that
   // just went to sign in shows the prompt rather than going again.
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByTestId('account').click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
   await expect(page.getByTestId('signin')).toBeVisible();
   expect((await page.request.get('/api/v1/state')).status()).toBe(401);
 });

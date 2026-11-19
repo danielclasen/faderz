@@ -40,7 +40,7 @@ with the detector, hold and envelope its settings give.
 - `FADERZ_BACKEND=<url>`, such as `http://127.0.0.1:8080`, loads no
   mock: `/api/v1`, WebSocket included, goes to that faderz server.
 
-The striped MOCK button in the status bar kills, hangs, partitions and
+The striped MOCK button at the right end of the status bar kills, hangs, partitions and
 restores replicas. The same controls answer JSON under `/__mock`:
 
 | Method and path | Effect |
@@ -130,7 +130,7 @@ revision above the committed one in the same epoch), applies nothing:
 the link shows AHEAD, a banner over the view names both revisions,
 nothing is retried, and TAKE CLUSTER STATE loads the cluster's snapshot.
 
-Every write control is `aria-disabled` and sends nothing while the link transmits no commands (connecting, offline, failing over, ahead), when the status area shows LOCK and names the reason in its title (`src/lib/state/writes.ts`). While the serving replica cannot commit, the status area shows NO Q and the controls stay usable: the notice line says CHANGES NOT COMMITTING - audio continues, with the number of writes pending, and every key pressed meanwhile shows its state desaturated inside a dashed edge until its write commits or expires (`src/lib/pending.ts`, which every key that writes uses). Notices raised meanwhile wait and are timed once the line shows them again. REST writes are answered 503 then and change nothing. TALK starts no talk then, and a press on a latched TALK sends only the release, so the key stays latched until the state says the talk is off; a lit TALK never looks disabled. A command answered 503 (not applied), unanswered when a snapshot answers a hello or resync sent after it or answers none, or unanswered when its connection fails, is sent again with its id; otherwise one without an answer is not sent again, as the server answers every command it reads. One still unanswered 3 s after it was issued is dropped with a notice, and its control shows the committed value again.
+Every write control is `aria-disabled` and sends nothing while the link transmits no commands (connecting, offline, failing over, ahead), when the the connection key shows LOCK and names the reason in its title (`src/lib/state/writes.ts`). The connection key in the status bar, right of the engine lamp (in the header on a short screen), carries the quorum beside the link state: QUORUM with the number of replicas that can commit out of the set (Q below 1200 px), amber while that is fewer than all, and a tooltip on hover or keyboard focus (a tap opens the details instead) naming the counts, the majority needed, the leader, the replica serving this screen and any replica down; the link key and the quorum open the connection details above it (below it in the header), with the revision, primary, standby, meter source, quorum and leader, and each replica's role and state. While the serving replica cannot commit, the quorum reads NO QUORUM (NO Q) and the controls stay usable: the notice line says CHANGES NOT COMMITTING - audio continues, with the number of writes pending, and every key pressed meanwhile shows its state desaturated inside a dashed edge until its write commits or expires (`src/lib/pending.ts`, which every key that writes uses). Notices raised meanwhile wait and are timed once the line shows them again. REST writes are answered 503 then and change nothing. TALK starts no talk then, and a press on a latched TALK sends only the release, so the key stays latched until the state says the talk is off; a lit TALK never looks disabled. A command answered 503 (not applied), unanswered when a snapshot answers a hello or resync sent after it or answers none, or unanswered when its connection fails, is sent again with its id; otherwise one without an answer is not sent again, as the server answers every command it reads. One still unanswered 3 s after it was issued is dropped with a notice, and its control shows the committed value again.
 The LOCK DESK key in the header does the same on one screen: a 0.5 s
 hold locks it, another unlocks it. A phone shows the key only while
 the desk is locked.
@@ -163,9 +163,14 @@ while it is down the
 page reads the session again (then every 5 s), so an ended session brings the
 prompt back, or in `oidc` mode goes to the sign-in again (within the
 same 30 s guard); a REST request answered 401 reads the session again
-too. The status bar names the user and role, and in `token` and
-`oidc` mode offers Sign out (`POST /api/v1/logout`), which in `oidc`
-mode continues to the provider's end-session endpoint when it has one.
+too. The pill at the header's right end shows the user's initials,
+never an email address, and opens a menu that names the role (and the
+user, where that is no email address), switches the theme, and in
+`token` and `oidc` mode offers Sign out (`POST /api/v1/logout`), which
+in `oidc` mode continues to the provider's end-session endpoint when it
+has one. Below 1200 px the menu takes the theme key's place. The status
+bar starts with the ENGINE lamp and the session tag and endpoint, then
+the notice line.
 A viewer's write controls are locked with the reason "signed in as a
 viewer"; the server refuses a viewer's writes either way.
 
