@@ -1126,9 +1126,6 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A session is listed once from its first hello, whatever number of
-    /// connections it holds, with the display name of its identity only,
-    /// and leaves with its last connection.
     /// samplez takes its contact lock and then the log store's, so a call
     /// that takes the contact lock inside [`App::with_state`] deadlocks
     /// against it; debug builds catch one before it can.
@@ -1156,6 +1153,9 @@ pub(crate) mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
     }
 
+    /// A session is listed once from its first hello, whatever number of
+    /// connections it holds, with the display name of its identity only,
+    /// and leaves with its last connection.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn presence_lists_a_session_once_by_its_display_name() {
         let (app, dir) = app().await;

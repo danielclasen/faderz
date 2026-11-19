@@ -1627,7 +1627,8 @@ fn every_replica_answers_its_state_routes_while_the_set_commits() {
         })
         .collect();
     let mut i = 0;
-    while Instant::now() < until {
+    // Ends with a reader that failed: a write to a hung replica would not.
+    while Instant::now() < until && readers.iter().all(|r| !r.is_finished()) {
         write(
             &nodes,
             i,
