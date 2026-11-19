@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.4](https://github.com/danielclasen/faderz/compare/v0.4.3...v0.4.4) (2026-11-19)
+
+
+### Features
+
+* show the faderz and samplez versions the serving replica runs ([#116](https://github.com/danielclasen/faderz/issues/116)) ([e5b28c3](https://github.com/danielclasen/faderz/commit/e5b28c3bc3f93cdaced9fb2f13ff888c6af6bebd))
+
+
+### Bug Fixes
+
+* **api:** never take the replica's contact lock under the store lock ([#112](https://github.com/danielclasen/faderz/issues/112)) ([ee959b7](https://github.com/danielclasen/faderz/commit/ee959b72537ccd6730c09cb572f66f2d027345b4))
+* **nmos:** retry a refused Fire under fresh ids ([6678d82](https://github.com/danielclasen/faderz/commit/6678d829fc7f3affca97db136f41113048b82502))
+* **nmos:** show the state's activation in /active after a restart ([6678d82](https://github.com/danielclasen/faderz/commit/6678d829fc7f3affca97db136f41113048b82502))
+* **nmos:** take a /bulk cancel only for its own item answered 2xx ([6678d82](https://github.com/danielclasen/faderz/commit/6678d829fc7f3affca97db136f41113048b82502))
+
+
+### Performance Improvements
+
+* **state:** hold the store lock for a pointer copy, not the state ([#115](https://github.com/danielclasen/faderz/issues/115)) ([1bd1063](https://github.com/danielclasen/faderz/commit/1bd1063fd2f309549a1736f36707c6271db7e61d))
+
 ## [0.4.3](https://github.com/danielclasen/faderz/compare/v0.4.2...v0.4.3) (2026-11-19)
 
 
