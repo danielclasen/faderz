@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { PERF_URL } from '../../playwright.config';
-import { faderCenter, live, resetMock, serverState } from './support';
+import { RawClient, faderCenter, live, resetMock, serverState } from './support';
 
 // Runs against the 64-channel mock server (playwright.config.ts). Tracing
 // is off: its DOM snapshot after every action runs on the page's main thread.
@@ -152,6 +152,43 @@ test('three clients moving faders with meters on and duck groups firing stay und
     // A test that fails inside the window leaves no trace running.
     await stopTracing().catch(() => undefined);
     await Promise.all(contexts.map((c) => c.close()));
+  }
+});
+
+interface TraceEvent {
+  name: string;
+  ph: string;
+  args?: { beginData?: { partialLayout?: boolean; totalObjects?: number } };
+}
+
+// A layout from the document down walks every strip of the console, tens
+// of milliseconds on a loaded runner: the test above saw it as a long task
+// whenever another client's touch showed or hid a fader's owner label or
+// changed the header's user count. Each is laid out in a box of its own,
+// so a touch and a release lay out those boxes, not the page.
+test('another client touching and releasing a fader lays out no more than its boxes', { tag: '@mock' }, async ({ page, browser }) => {
+  await live(page);
+  const other = await RawClient.open(PERF_URL);
+  const owner = page.locator('[data-path="/channels/ch2/fader"] [data-testid="owner"]');
+  const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  try {
+    await frames();
+    await browser.startTracing(page, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline'] });
+    for (let i = 0; i < 3; i++) {
+      await other.command({ type: 'touch', path: '/channels/ch2/fader' });
+      await expect(owner).toBeVisible();
+      await frames();
+      await other.command({ type: 'release', path: '/channels/ch2/fader' });
+      await expect(owner).toHaveCount(0);
+      await frames();
+    }
+    const events = (JSON.parse((await browser.stopTracing()).toString()) as { traceEvents: TraceEvent[] }).traceEvents;
+    const layouts = events.filter((e) => e.name === 'Layout' && e.ph === 'X');
+    expect(layouts.length).toBeGreaterThan(0);
+    // Objects of each layout from the document down.
+    expect(layouts.filter((e) => e.args?.beginData?.partialLayout === false).map((e) => e.args?.beginData?.totalObjects)).toEqual([]);
+  } finally {
+    other.close();
   }
 });
 

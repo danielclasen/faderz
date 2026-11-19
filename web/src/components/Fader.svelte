@@ -163,9 +163,11 @@
     data-path={path}
   >
     <div class="slot"></div>
-    {#if owner}
-      <span class="owner" class:mine data-testid="owner" data-owner-kind={owner.kind}>{mixer.ownerShort(owner)}</span>
-    {/if}
+    <span class="owner-slot">
+      {#if owner}
+        <span class="owner" class:mine data-testid="owner" data-owner-kind={owner.kind}>{mixer.ownerShort(owner)}</span>
+      {/if}
+    </span>
     {#each FADER_MARKS as mark (mark)}
       <i class="tick" class:unity={mark === 0} style:bottom="calc({dbToPosition(mark)} * (100% - 34px) + 17px)"></i>
     {/each}
@@ -211,12 +213,17 @@
     color: var(--text-dim);
     font-weight: 600;
   }
-  .owner {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
+  .owner-slot {
+    display: flex;
+    justify-content: center;
+    position: relative;
     z-index: 2;
+    height: 12px;
+    pointer-events: none;
+    contain: size layout style;
+  }
+  .owner {
+    flex: none;
     max-width: 60px;
     overflow: hidden;
     text-overflow: ellipsis;
