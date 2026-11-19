@@ -1211,8 +1211,8 @@ impl Config {
         for n in 0..members.first().map_or(1, Vec::len) {
             for ((output, flows), o) in outputs.iter_mut().zip(&members).zip(&shape.outputs) {
                 output["flowId"] = json!(flows[n]);
-                // A member flow reads as a member, whose it is, while the
-                // output's NMOS sender keeps the output's own name.
+                // A member flow's label names its replica; the output's
+                // NMOS sender keeps the output's own name.
                 if flows.len() > 1 {
                     output["label"] = json!(format!("{} (replica {n})", o.name));
                 }
