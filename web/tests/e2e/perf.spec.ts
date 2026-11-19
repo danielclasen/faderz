@@ -10,8 +10,14 @@ test.use({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 }, trace: 'o
 const WINDOW_MS = 5000;
 /** Bound on the 99th percentile of patch time in the window, ms. */
 const PATCH_P99_MS = 4;
-/** No single patch may take a whole frame at 60 Hz, ms. */
-const PATCH_CEILING_MS = 16;
+/**
+ * Bound on the DOM nodes a patch changes, averaged over the window: an
+ * attribute or text change counts one, a node added or removed one per
+ * node in it. Fewer than one per input channel of the 64, so a patch
+ * that rebuilds or updates every strip fails it; three moving faders,
+ * the status bar and the masters take about 25.
+ */
+const MUTATIONS_PER_PATCH = 64;
 
 /** Nearest-rank percentile of `xs`, 0 < q <= 1. */
 function percentile(xs: readonly number[], q: number): number {
@@ -24,10 +30,22 @@ interface Entry {
   duration: number;
 }
 
+interface Counts {
+  __frames: number;
+  __mutations: number;
+}
+
+/** What a page has counted so far, and when. */
+function counts(): { t: number; patches: number; frames: number; mutations: number } {
+  const c = window as unknown as Counts;
+  return { t: performance.now(), patches: window.__faderz!.patches, frames: c.__frames, mutations: c.__mutations };
+}
+
 /**
  * Records every main-thread long task and every patch measure from page
- * start. Only the window is judged: start-up work, such as the first
- * snapshot and the young-generation GC that follows it, runs once.
+ * start, and counts animation frames and DOM mutation records. Only the
+ * window is judged: start-up work, such as the first snapshot and the
+ * young-generation GC that follows it, runs once.
  */
 async function observe(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -40,6 +58,25 @@ async function observe(page: Page): Promise<void> {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries()) if (e.name === 'faderz:patch') w.__patches.push({ start: e.startTime, duration: e.duration });
     }).observe({ type: 'measure', buffered: true });
+    const c = window as unknown as Counts;
+    c.__frames = 0;
+    c.__mutations = 0;
+    const frame = () => {
+      c.__frames++;
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    addEventListener('DOMContentLoaded', () => {
+      // A node added or removed counts with every node under it.
+      const size = (n: Node) => 1 + (n instanceof Element ? n.getElementsByTagName('*').length : 0);
+      new MutationObserver((records) => {
+        for (const r of records) {
+          if (r.type !== 'childList') c.__mutations++;
+          for (const n of r.addedNodes) c.__mutations += size(n);
+          for (const n of r.removedNodes) c.__mutations += size(n);
+        }
+      }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    });
   });
 }
 
@@ -66,7 +103,7 @@ test.beforeEach(async ({ request }) => resetMock(request));
 // failOnFlakyTests fails the run either way.
 test.describe.configure({ retries: 1 });
 
-test('three clients moving faders with meters on and duck groups firing stay under 50 ms tasks, 4 ms patches at p99 and one frame per patch', { tag: '@mock' }, async ({ browser, request }, info) => {
+test('three clients moving faders with meters on and duck groups firing stay under 50 ms tasks and 4 ms patches at p99, with a patch per frame at most and few DOM mutations per patch', { tag: '@mock' }, async ({ browser, request }, info) => {
   test.setTimeout(60_000);
   expect((await serverState(request)).shape.channels).toHaveLength(64);
   const contexts = await Promise.all([0, 1, 2].map(() => browser.newContext({ baseURL: PERF_URL, viewport: { width: 1600, height: 1000 } })));
@@ -108,9 +145,10 @@ test('three clients moving faders with meters on and duck groups firing stay und
       });
       tracing = true;
     }
-    const starts = await Promise.all(pages.map((p) => p.evaluate(() => ({ t: performance.now(), patches: window.__faderz!.patches }))));
+    const starts = await Promise.all(pages.map((p) => p.evaluate(counts)));
     const until = Date.now() + WINDOW_MS;
     const moves = await Promise.all(pages.map((p, i) => sweep(p, `/channels/ch${i + 1}/fader`, until)));
+    const ends = await Promise.all(pages.map((p) => p.evaluate(counts)));
     await request.post('/__mock/ducks/script?ms=0');
     await stopTracing();
     for (const p of pages) expect(await p.evaluate(() => (window as unknown as { __duckChanges: number }).__duckChanges)).toBeGreaterThanOrEqual(3);
@@ -122,19 +160,29 @@ test('three clients moving faders with meters on and duck groups firing stay und
           longTasks: w.__longTasks.filter(inWindow).map((e) => e.duration),
           allLongTasks: w.__longTasks.map((e) => e.duration),
           patchMs: w.__patches.filter(inWindow).map((e) => e.duration),
-          patches: window.__faderz!.patches,
           maxPatchMs: window.__faderz!.maxPatchMs,
         };
       }, starts[i]!.t);
+      const patches = ends[i]!.patches - starts[i]!.patches;
+      const frames = ends[i]!.frames - starts[i]!.frames;
+      const mutationsPerPatch = (ends[i]!.mutations - starts[i]!.mutations) / patches;
       const maxWindowPatch = Math.max(...r.patchMs);
       const p99WindowPatch = percentile(r.patchMs, 0.99);
       test.info().annotations.push({
         type: `page ${i + 1}`,
-        description: JSON.stringify({ moves: moves[i], patches: r.patches - starts[i]!.patches, p99WindowPatch, maxWindowPatch, maxPatchMs: r.maxPatchMs, longTasks: r.longTasks, loadLongTasks: r.allLongTasks }),
+        description: JSON.stringify({ moves: moves[i], patches, frames, mutationsPerPatch, p99WindowPatch, maxWindowPatch, maxPatchMs: r.maxPatchMs, longTasks: r.longTasks, loadLongTasks: r.allLongTasks }),
       });
       expect(moves[i]!).toBeGreaterThan(20);
-      expect(r.patches - starts[i]!.patches).toBeGreaterThan(0);
+      expect(patches).toBeGreaterThan(0);
       expect(r.patchMs.length).toBeGreaterThan(0);
+      // What a patch costs the page is judged first by counts a slow
+      // runner does not change: the page answers each animation frame's
+      // tick with at most one patch, one in flight as the window opens,
+      // and a patch changes the nodes of what it changes, not the
+      // console. The patch measure ends before the DOM is updated, so it
+      // does not see the second.
+      expect(patches).toBeLessThanOrEqual(frames + 1);
+      expect(mutationsPerPatch).toBeLessThan(MUTATIONS_PER_PATCH);
       if (r.longTasks.length > 0 && tracing) {
         // Tens of MB: written to the test's output directory, which CI
         // uploads on failure, and not copied into the report.
@@ -142,10 +190,10 @@ test('three clients moving faders with meters on and duck groups firing stay und
       }
       expect(r.longTasks).toEqual([]);
       // A patch is judged by wall time, which on a shared runner includes
-      // time the main thread is runnable but not scheduled: the tail is
-      // judged by its 99th percentile, and every patch by one frame.
+      // time the main thread is runnable but not scheduled, and a single
+      // patch can take any of it: the tail is judged by its 99th
+      // percentile, and the slowest patch is recorded, not judged.
       expect(p99WindowPatch).toBeLessThan(PATCH_P99_MS);
-      expect(maxWindowPatch).toBeLessThan(PATCH_CEILING_MS);
     }
   } finally {
     await request.post('/__mock/ducks/script?ms=0');
