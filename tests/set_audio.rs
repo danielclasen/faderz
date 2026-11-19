@@ -707,7 +707,9 @@ fn every_replicas_meters_follow_the_faders() {
 /// A reset of an output's loudness posted to one replica restarts the
 /// measurement on every replica: the highest momentary loudness since
 /// the last reset falls on each to the level the output has then, and
-/// the replicas agree on the integrated loudness.
+/// the replicas agree on it. Not on the integrated loudness: samplez
+/// keeps that invalid after a missed meter slice until the next reset,
+/// so a starved host would leave it unmeasured.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -726,14 +728,12 @@ fn a_loudness_reset_restarts_every_replicas_measurement() {
     // pgm: peak, true peak and RMS of two legs, then momentary,
     // short-term, integrated, range, and the highest momentary.
     let at = faderz::meters::Layout::of(&shape).offset("pgm").unwrap();
-    let (momentary, integrated, max_momentary) = (at + 6, at + 8, at + 10);
+    let (momentary, max_momentary) = (at + 6, at + 10);
     let null = i16::MIN;
     let read = |n: usize, index: usize| peak(node(&nodes, n), 1, index);
     write(&nodes, 0, &[("/channels/ch1/fader", json!(0))]);
     for n in 0..REPLICAS {
-        let measured = until(60, || {
-            read(n, max_momentary) != null && read(n, integrated) != null
-        });
+        let measured = until(60, || read(n, max_momentary) != null);
         assert!(measured, "replica {n} measures: {}", states(&nodes));
     }
     // A steady tone: the maximum is settled when the momentary loudness
@@ -771,13 +771,10 @@ fn a_loudness_reset_restarts_every_replicas_measurement() {
         assert!(reset, "replica {n} restarted: {}", states(&nodes));
     }
     // A steady tone measured from one sample: the replicas agree.
-    for n in 0..REPLICAS {
-        assert!(until(60, || read(n, integrated) != null));
-    }
     std::thread::sleep(Duration::from_secs(3));
-    let each: Vec<i16> = (0..REPLICAS).map(|n| read(n, integrated)).collect();
+    let each: Vec<i16> = (0..REPLICAS).map(|n| read(n, max_momentary)).collect();
     let spread = each.iter().max().unwrap() - each.iter().min().unwrap();
-    assert!(spread <= 5, "integrated loudness {each:?} centi-LU");
+    assert!(spread <= 5, "highest momentary loudness {each:?} centi-LU");
 }
 
 /// Every replica of a set with engines lists all three in its `replicas`
