@@ -494,9 +494,7 @@ jobs:
   # reason.
   nmos:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      NMOS_TESTING: b21639f3a187c0e027bb7894fbe0c21d22285dfb
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -509,24 +507,19 @@ jobs:
           load: true
           tags: faderz:nmos
           cache-from: type=gha,scope=image
-      - name: Check out nmos-testing
+      # Published by nmos-testing-image.yml for the pinned commit.
+      - name: Pull the nmos-testing image
         run: |
-          git init -q nmos-testing
-          git -C nmos-testing fetch -q --depth 1 https://github.com/AMWA-TV/nmos-testing "$NMOS_TESTING"
-          git -C nmos-testing checkout -q FETCH_HEAD
-      - name: Build the nmos-testing image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: nmos-testing
-          load: true
-          tags: nmos-testing:ci
-          cache-from: type=gha,scope=nmos-testing
-          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=nmos-testing,mode=max' || '' }}
+          image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/faderz-nmos-testing:$(cat .github/nmos-testing.ref)
+          docker pull "$image"
+          docker tag "$image" nmos-testing:ci
       # faderz reads CLOCK_TAI, the tool computes TAI from UTC: absolute
       # activations meet only with the kernel's TAI offset set.
       - name: Set the kernel TAI offset
         run: sudo python3 tests/nmos/set-tai-offset.py 37
+      # About three times the suites' usual run, so a hung suite fails here.
       - name: Run the suites
+        timeout-minutes: 8
         run: tests/nmos/conformance.sh faderz:nmos nmos-testing:ci nmos-results
       - name: Gate on the results
         run: |
