@@ -38,15 +38,17 @@
   const element = $derived(channel ?? shape.buses.find((b) => b.id === id) ?? shape.auxes.find((a) => a.id === id)!);
   const st = $derived(mixer.state![group][id] as ChannelState | BusState);
   // Front/rear, divergence and the LFE send place a mono channel in the field of
-  // a bus of more than two legs, so they act only when it feeds one.
+  // a bus or mix-minus of more than two legs, or of a monitor of more than two
+  // legs through its AFL, so they act only when it reaches one; a send to an aux
+  // and a PFL keep the L/R pair.
   const feedsSurround = $derived.by(() => {
     if (group !== 'channels') return false;
     const c = st as ChannelState;
     const wide = (w: number) => w > 2;
     return (
       shape.buses.some((b) => wide(b.width) && c.routes[b.id]) ||
-      shape.auxes.some((a) => wide(a.width) && c.sends[a.id]?.on) ||
-      shape.mixMinus.some((m) => wide(m.width) && c.routes[m.bus])
+      shape.mixMinus.some((m) => wide(m.width) && c.routes[m.bus]) ||
+      shape.monitorOutputs.some((m) => wide(m.width))
     );
   });
   const ch = $derived(channel ? (st as ChannelState) : null);
@@ -191,9 +193,9 @@
           <Param path={p('pan', 'divergence')} label="Diverg" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
           <Param path={p('pan', 'lfe')} label="LFE" min={-90} max={10} fader format={(v) => formatDb(v)} />
         {:else if element.width === 1}
-          <p class="note" title="Front/rear, divergence and the LFE send place a mono channel in the field of a surround bus. This channel feeds no bus, aux or mix-minus of more than two legs.">Front/rear, divergence and LFE act when this channel feeds a 5.1 or 7.1 bus.</p>
+          <p class="note">Front/rear, divergence and LFE act on a surround bus: route this channel to one.</p>
         {:else}
-          <p class="note" title="Front/rear, divergence and the LFE send place a mono channel in the field of a surround bus. A stereo channel is balanced by Pan onto the left and right legs.">Pan balances a stereo channel; front/rear, divergence and LFE are for a mono one.</p>
+          <p class="note">Front/rear, divergence and LFE are mono-channel controls.</p>
         {/if}
       {:else if ch}
         <p class="note">{element.layout} maps leg to leg on {element.layout} buses and folds down (Lo/Ro) on narrower ones.</p>

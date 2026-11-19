@@ -2010,7 +2010,8 @@ impl Product for Mixer {
 /// to the new initial value, the front (`fr` -1) with all the divergence
 /// (a plain L/R pan). A value somebody wrote is kept, as a log replayed
 /// from its first entry keeps it, so a replica that loads this snapshot
-/// and one that replays the log hold the same state.
+/// and one that replays the log hold the same state, but for a value
+/// written equal to the old initial 0, which no snapshot tells from it.
 fn migrate_pan(saved: &mut Saved) {
     let mono: Vec<String> = (saved.shape.channels.iter())
         .filter(|c| c.width == 1)
@@ -4693,7 +4694,8 @@ mod tests {
         now.load(&serde_json::to_vec(&kept).unwrap()).unwrap();
         assert_eq!(*at(&now, "/channels/ch1/pan/divergence"), json!(0));
         // A format-3 snapshot keeps what was written, and moves only the
-        // old initial values.
+        // old initial values: the divergence 0 here is one, whether
+        // written or not.
         let mut old: Value = serde_json::from_slice(&saved).unwrap();
         old["format"] = json!(FORMAT_BEFORE_FIELD);
         old["mixer"]["state"]["channels"]["ch1"]["pan"] = written;

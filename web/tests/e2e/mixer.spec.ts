@@ -486,7 +486,7 @@ test('sets the LFE send and the stereo image of a channel from the processing pa
   // A stereo channel is balanced by its pan; the surround panner's controls act on a mono one and are not offered.
   await expect(page.getByLabel('LFE', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Music front rear')).toHaveCount(0);
-  await expect(page.getByText('Pan balances a stereo channel')).toBeVisible();
+  await expect(page.getByText('Front/rear, divergence and LFE are mono-channel controls.')).toBeVisible();
   await page.getByRole('radio', { name: 'Right to both', exact: true }).click();
   await settled(page);
   expect((await serverState(request)).state.channels['st1']!.image).toBe('rightToBoth');
@@ -496,7 +496,7 @@ test('sets the LFE send and the stereo image of a channel from the processing pa
   await page.locator('[data-channel="ch1"] .head').click();
   // A mono channel that feeds no bus of more than two legs has no field to be placed in.
   await expect(page.getByLabel('LFE', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('Front/rear, divergence and LFE act when this channel feeds a 5.1 or 7.1 bus.')).toBeVisible();
+  await expect(page.getByText('Front/rear, divergence and LFE act on a surround bus: route this channel to one.')).toBeVisible();
   await patch(request, '/channels/ch1/routes/pgm51', true);
   await expect(page.getByLabel('LFE', { exact: true })).toBeVisible();
   await patch(request, '/channels/ch1/pan/lfe', -12);
