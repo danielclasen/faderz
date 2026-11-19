@@ -1819,19 +1819,20 @@ mod tests {
         assert!(close(m[0][5], h) && close(m[0][6], h), "PFL centred");
     }
 
-    /// PanState: a channel as wide as the bus maps leg to leg whatever its
-    /// pan; only a mono channel pans.
+    /// PanState: a mono channel pans at constant power, a stereo one on a
+    /// stereo bus balances its legs without crossing them.
     #[test]
-    fn a_stereo_channel_ignores_pan_and_a_mono_one_pans_hard_right() {
+    fn a_stereo_channel_balances_and_a_mono_one_pans_hard_right() {
         let shape = shape();
         let mut s = shape.initial_state();
         s["channels"]["st1"]["fader"] = json!(0);
         s["channels"]["ch1"]["fader"] = json!(0);
-        for p in [0.5, 1.0, -1.0] {
+        for p in [0.5, 1.0, -1.0, 0.0] {
             s["channels"]["st1"]["pan"]["lr"] = json!(p);
             let m = matrix(&shape, &s);
-            assert!(close(m[2][0], 1.0) && close(m[2][1], 0.0), "pan {p}");
-            assert!(close(m[3][0], 0.0) && close(m[3][1], 1.0), "pan {p}");
+            let (l, r) = ((1.0f64 - p).min(1.0), (1.0f64 + p).min(1.0));
+            assert!(close(m[2][0], l) && close(m[2][1], 0.0), "pan {p}");
+            assert!(close(m[3][0], 0.0) && close(m[3][1], r), "pan {p}");
         }
         s["channels"]["ch1"]["pan"]["lr"] = json!(1);
         let m = matrix(&shape, &s);
