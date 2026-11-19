@@ -1542,3 +1542,23 @@ describe('sync engine: slow and lossy links', () => {
     expect(standby.ofType('promote')).toHaveLength(1);
   });
 });
+
+describe('acknowledging commands', () => {
+  // The page reads its outbox from the patches: a command that changes
+  // nothing it shows, here a release of a control never touched, is
+  // still answered by a patch carrying its input, or the page could not
+  // tell its outbox covers it.
+  it('answers a command that changes nothing shown with a patch', () => {
+    const t = live();
+    t.tick();
+    expect(t.tick()).toBeNull();
+    const before = t.patches.length;
+    t.engine.input({ type: 'release', path: '/channels/ch1/fader' });
+    expect(t.patches.length).toBe(before);
+    const p = t.tick();
+    expect(p).not.toBeNull();
+    // The empty tick, the release and the tick after it.
+    expect(p!.input).toBe(t.patches[before - 1]!.input + 3);
+    expect(t.tick()).toBeNull();
+  });
+});

@@ -86,6 +86,8 @@ export class MixerStore {
 
   private port: Port | null = null;
   private posted = 0;
+  /** The page message that carried the latest command (set, touch or release). */
+  private commanded = 0;
   /** The page messages the worker had processed by the last patch. */
   private processed = 0;
   /** Writes by page message number; a patch built before that message does not overwrite them. */
@@ -269,15 +271,17 @@ export class MixerStore {
     this.post({ type: 'tick' });
   }
 
-  /** Messages this page sent the worker and those the worker had
-   *  processed by the last patch: the worker's status covers what was
-   *  sent once the second reaches the first. */
-  get messages(): { posted: number; processed: number } {
-    return { posted: this.posted, processed: this.processed };
+  /** The page message that carried the latest command and the messages
+   *  the worker had processed by the last patch: the worker's status
+   *  covers that command once the second reaches the first. A command
+   *  changes the outbox, so a patch follows its processing. */
+  get messages(): { commanded: number; processed: number } {
+    return { commanded: this.commanded, processed: this.processed };
   }
 
   private post(msg: ToWorker): void {
     this.posted++;
+    if (msg.type === 'set' || msg.type === 'touch' || msg.type === 'release') this.commanded = this.posted;
     this.port?.post(msg);
   }
 

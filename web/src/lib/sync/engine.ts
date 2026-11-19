@@ -177,6 +177,8 @@ export class SyncEngine {
   /** The element selected on this screen, sent again on every new primary. */
   private selection: string | null = null;
   private selectionsDirty = false;
+  /** A command (set, touch or release) came in since the last patch, which then goes out. */
+  private commanded = false;
   private presenceDirty = false;
 
   private readonly clock: Clock;
@@ -340,6 +342,7 @@ export class SyncEngine {
       return;
     }
     this.inputs++;
+    if (msg.type === 'set' || msg.type === 'touch' || msg.type === 'release') this.commanded = true;
     switch (msg.type) {
       case 'set':
         this.localValue.set(msg.path, msg.value);
@@ -1097,7 +1100,10 @@ export class SyncEngine {
   private postPatch(): void {
     const patch: Patch = { type: 'patch', input: this.inputs, changes: [], owners: [] };
     const transfer: Transferable[] = [];
-    let any = false;
+    // A command is answered by a patch even when it changed nothing the
+    // page shows, so the page knows its outbox covers it.
+    let any = this.commanded;
+    this.commanded = false;
     if (this.snapshotPending && this.state && this.shape) {
       this.snapshotPending = false;
       patch.snapshot = { shape: this.shape, state: this.state, owners: this.owners };
