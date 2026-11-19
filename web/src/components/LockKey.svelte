@@ -64,10 +64,12 @@
     touch-action: none;
   }
   /* One width for both texts, so a change moves nothing. "LOCK DESK"
-     tells it apart from the red LOCK of a link that sends no commands. */
+     tells it apart from the red LOCK of a link that sends no commands.
+     The key's letter spacing follows every character, the last one
+     included, so the width counts it nine times. */
   .label {
     display: inline-block;
-    width: 9ch;
+    width: calc(9ch + 9 * 0.06em);
     text-align: center;
   }
   /* Phones: the header holds the connection state and the tone lamp; a
@@ -117,7 +119,7 @@
   }
   @media (max-height: 500px) {
     .label {
-      width: 6ch;
+      width: calc(6ch + 6 * 0.06em);
     }
   }
 </style>

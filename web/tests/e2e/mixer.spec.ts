@@ -771,7 +771,7 @@ test('a latched talk stopped while writes are locked never shows as unlatched wh
   const primary = (await debug(page, 'primaryReplica'))!;
   const others = REPLICAS.filter((r) => r !== primary);
   for (const r of others) expect((await request.post(`/__mock/replicas/${r}/partition`)).ok()).toBe(true);
-  await expect(page.getByTestId('quorum')).toHaveText('NO Q');
+  await expect(page.getByTestId('quorum')).toHaveAttribute('data-quorum', 'lost');
   // The press sends the release, which the server applies once it can
   // commit; without quorum the session's lease also runs out. Either way
   // the key stays latched until the state says the talk is off.
@@ -1961,8 +1961,11 @@ test('keeps the tile band to one row, scrolling within it when more groups than 
   const { tile } = await duckTile(page, request);
   const band = page.getByRole('group', { name: 'Duck groups', exact: true });
   const one = (await tile.boundingBox())!.height;
-  // Six more tiles of the same make, as a shape with eight groups has.
+  // Six more tiles of the same make, as a shape with eight groups has;
+  // with eight the band shows no summary beside them (summaryFits).
   await band.evaluate((b) => {
+    for (const c of [...b.children]) if (c.classList.contains('summary')) c.remove();
+    b.classList.remove('summary');
     for (let i = 0; i < 6; i++) b.append(b.firstElementChild!.cloneNode(true));
   });
   const m = await band.evaluate((b) => ({ ch: b.clientHeight, sh: b.scrollHeight }));

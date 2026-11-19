@@ -195,7 +195,7 @@
         <h3 class="panel-title">EQ</h3>
         <button {@attach pendingWrite(mixer, p('eq', 'enabled'))} class="key" aria-disabled={mixer.locked} aria-pressed={flag('eq', 'enabled')} onclick={() => toggle('eq', 'enabled')}>EQ IN</button>
       </div>
-      <EqCurve eq={st.eq} hpf={ch?.hpf ?? null} width={300} height={96} grid />
+      <EqCurve eq={st.eq} hpf={ch?.hpf ?? null} width={300} height={96} grid fill />
       <div class="bands">
         {#each st.eq.bands as band, i (i)}
           <div class="band">

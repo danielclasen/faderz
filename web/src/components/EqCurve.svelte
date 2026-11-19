@@ -9,8 +9,10 @@
     height?: number;
     range?: number;
     grid?: boolean;
+    /** As wide as its container: `width` then sets the drawing's units, stretched to fit. */
+    fill?: boolean;
   }
-  let { eq, hpf = null, width = 60, height = 20, range = 18, grid = false }: Props = $props();
+  let { eq, hpf = null, width = 60, height = 20, range = 18, grid = false, fill = false }: Props = $props();
 
   const freqs = logFrequencies(64);
   const points = $derived.by(() => {
@@ -27,7 +29,16 @@
   const decades = [100, 1000, 10000].map((f) => (Math.log10(f / 20) / 3) * width);
 </script>
 
-<svg class="curve" class:active viewBox={`0 0 ${width} ${height}`} {width} {height} aria-hidden="true">
+<svg
+  class="curve"
+  class:active
+  class:fill
+  viewBox={`0 0 ${width} ${height}`}
+  width={fill ? '100%' : width}
+  {height}
+  preserveAspectRatio={fill ? 'none' : undefined}
+  aria-hidden="true"
+>
   {#if grid}
     {#each decades as x (x)}<line x1={x} x2={x} y1="0" y2={height} class="grid" />{/each}
   {/if}
@@ -40,6 +51,10 @@
     display: block;
     background: var(--well);
     border-radius: 2px;
+  }
+  /* Stretched sideways: the lines keep their width on screen. */
+  .fill * {
+    vector-effect: non-scaling-stroke;
   }
   .zero,
   .grid {

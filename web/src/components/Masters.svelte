@@ -90,9 +90,11 @@
      wrap, so the band never widens the masters and narrows the strips. */
   /* One row of tiles at most: more groups than fit scroll within it,
      so the band never takes more of the faders' travel. */
+  /* Its bottom border is inside its border box: one row of tiles is the
+     tiles' height and that border. */
   .ducks {
     --tile-h: 162px;
-    max-height: var(--tile-h);
+    max-height: calc(var(--tile-h) + 1px);
     overflow-y: auto;
     overscroll-behavior: contain;
     contain: inline-size;
