@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KEY_WIDTH, SUMMARY_MIN_W, TILE_W, duckReach, keyShare, keyText, reductionShare, summaryFits, summaryReduction } from '../../src/lib/duck';
+import { KEYING_WIDTH, KEY_TAPS, KEY_WIDTH, SUMMARY_MIN_W, TILE_W, duckReach, keyShare, keyText, keyingText, keyingWords, reductionShare, summaryFits, summaryReduction } from '../../src/lib/duck';
 import type { DuckState } from '../../src/lib/contract/types';
 import { exampleShape, initialState } from '../../dev/mock/shape';
 
@@ -27,17 +27,42 @@ describe('the duck band summary', () => {
     expect(summaryFits(776, 5, false, false)).toBe(false);
   });
 
-  it('names the outputs a group lowers and its targets, in shape order, and says when there are none', () => {
+  it('names what keys a group and where, what it lowers and in which outputs, in shape order, and says when there are none', () => {
     const d = comm();
-    const targets = shape.channels.filter((c) => d.channels[c.id]?.target).map((c) => c.name);
+    const named = (key: 'trigger' | 'target') => shape.channels.filter((c) => d.channels[c.id]?.[key]).map((c) => c.name).join(', ');
     const into = [...shape.buses, ...shape.auxes, ...shape.mixMinus].filter((e) => d.destinations[e.id]).map((e) => e.name);
-    expect(targets.length).toBeGreaterThan(0);
-    expect(duckReach(shape, d)).toEqual({ targets: targets.join(', '), into: into.join(', ') });
+    expect(named('trigger')).not.toBe('');
+    expect(named('target')).not.toBe('');
+    // A trigger never shows as a target: the band once read as if the
+    // targets keyed the group.
+    expect(duckReach(shape, d)).toEqual({ triggers: named('trigger'), tap: KEY_TAPS[d.keyTap], targets: named('target'), into: into.join(', ') });
     const none = comm({
-      channels: Object.fromEntries(Object.entries(d.channels).map(([id, m]) => [id, { ...m, target: false }])),
+      channels: Object.fromEntries(Object.entries(d.channels).map(([id, m]) => [id, { ...m, trigger: false, target: false }])),
       destinations: Object.fromEntries(Object.keys(d.destinations).map((id) => [id, false])),
     });
-    expect(duckReach(shape, none)).toEqual({ targets: 'no targets', into: 'no outputs' });
+    expect(duckReach(shape, none)).toMatchObject({ triggers: 'no triggers', targets: 'no targets', into: 'no outputs' });
+  });
+
+  it('names every key tap the model has', () => {
+    expect(duckReach(shape, comm({ keyTap: 'preFaderOpen' })).tap).toBe('pre-fader, while open');
+    expect(duckReach(shape, comm({ keyTap: 'preFader' })).tap).toBe('pre-fader');
+    expect(duckReach(shape, comm({ keyTap: 'postFader' })).tap).toBe('post-fader');
+  });
+
+  it('reads the key level against the threshold in a fixed width, and says which side it is on', () => {
+    for (const key of [-18.34, -30, -45, -120, 0, null]) expect(keyingText(key, -30)).toHaveLength(KEYING_WIDTH);
+    expect(keyingText(-18.34, -30)).toBe('-18.3 >= -30.0');
+    // At the threshold it keys.
+    expect(keyingText(-30, -30)).toBe('-30.0 >= -30.0');
+    expect(keyingText(-45, -30)).toBe('-45.0  < -30.0');
+    // Compared as read: a level that reads as the threshold keys, in words and numbers alike.
+    expect(keyingText(-30.04, -30)).toBe('-30.0 >= -30.0');
+    expect(keyingText(-30.06, -30)).toBe('-30.1  < -30.0');
+    expect(keyingText(-120, -6)).toBe(' -inf  <  -6.0');
+    expect(keyingText(null, -30)).toBe('   --    -30.0');
+    expect(keyingWords(-18.34, -30)).toBe('key -18.3 dBFS at or over threshold -30.0 dBFS');
+    expect(keyingWords(-45, -30)).toBe('key -45.0 dBFS under threshold -30.0 dBFS');
+    expect(keyingWords(null, -30)).toBe('no key level, threshold -30.0 dBFS');
   });
 
   it('reads the key level in a fixed width, -inf from -100 dBFS down as other level readouts', () => {

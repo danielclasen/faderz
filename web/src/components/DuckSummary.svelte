@@ -1,16 +1,18 @@
 <script lang="ts">
   // The rest of the masters' duck band, beside the tiles: per group two
-  // rows. The first has its name, the outputs it lowers and its gain
-  // reduction in dB; the second the targets it lowers in them, the
-  // reduction as a bar, KEY lit while the key triggers it, and the key as
-  // a bar against its threshold. Narrower than 300 px the
-  // reduction bar goes. Every part has a fixed size and the whole a strict
-  // containment, so no reading lays out anything outside it; none of it
-  // is a live region. Focused or pointed at, a line's tip adds its
-  // readings of that moment.
+  // rows, the group's name heading both. The first says what keys it,
+  // "key: <triggers> (<tap>)", its key level against its threshold, KEY
+  // lit while the key triggers it, and the key as a bar against the
+  // threshold; the second what it lowers, "ducks: <targets> on
+  // <outputs>", its gain reduction in dB and as a bar. Narrower than
+  // 420 px the bars and the key level go and the name heads the first
+  // row only. Every
+  // part has a fixed size and the whole a strict containment, so no
+  // reading lays out anything outside it; none of it is a live region.
+  // Focused or pointed at, a line's tip adds its readings of that moment.
   import { onMount } from 'svelte';
   import { tip } from '../lib/tip';
-  import { deepestDepth, duckReach, keyShare, keyText, liveDuck, reductionShare, summaryReduction } from '../lib/duck';
+  import { deepestDepth, duckReach, keyShare, keyingText, keyingWords, liveDuck, reductionShare, summaryReduction } from '../lib/duck';
   import { onAnimationFrame } from '../lib/meters/store';
   import { getMixer } from '../lib/state/mixer.svelte';
 
@@ -39,9 +41,9 @@
   );
   /** Each line's readings when it took focus or the pointer: they change per meter frame, its tip only then. */
   let readings = $state<string[]>([]);
-  function describe(i: number, depth: number): void {
+  function describe(i: number, depth: number, threshold: number): void {
     const gr = depth * (envelopes[i] ?? 0);
-    readings[i] = `Reduction ${summaryReduction(gr).trim()} dB, key ${keyText(keys[i] ?? null).trim()} dBFS${engaged[i] ? ', keyed' : ''}`;
+    readings[i] = `Reduction ${summaryReduction(gr).trim()} dB, ${keyingWords(keys[i] ?? null, threshold)}${engaged[i] ? ', keyed' : ''}`;
   }
 </script>
 
@@ -51,33 +53,36 @@
     {@const reach = duckReach(shape, d)}
     {@const depth = deepestDepth(d)}
     {@const gr = depth * (envelopes[i] ?? 0)}
-    {@const text = `${g.name}: lowers ${reach.targets} in ${reach.into}`}
+    {@const text = `${g.name}. key: ${reach.triggers} (${reach.tap}). ducks: ${reach.targets} on ${reach.into}`}
     <!-- One tab stop per group, named by the group: its tip, the description
-         while it shows, carries the whole of a name, outputs or targets cut
-         off and the readings when it took focus or the pointer. -->
+         while it shows, carries the whole of a name, triggers, targets or
+         outputs cut off and the readings when it took focus or the pointer. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
       class="line"
       role="note"
       tabindex="0"
       aria-label={g.name}
-      onfocus={() => describe(i, depth)}
-      onpointerenter={() => describe(i, depth)}
+      onfocus={() => describe(i, depth, d.threshold)}
+      onpointerenter={() => describe(i, depth, d.threshold)}
       use:tip={readings[i] ? `${text}. ${readings[i]}` : text}
       data-testid={`duck-summary-${g.id}`}
     >
       <span class="name">{g.name}</span>
-      <span class="into" data-testid={`duck-summary-into-${g.id}`}>{reach.into}</span>
-      <span class="gr" data-testid={`duck-summary-gr-${g.id}`}><span class="fixed" class:on={gr > 0}>{summaryReduction(gr)}</span></span>
-      <span class="lbl db">dB</span>
-      <span class="targets">{reach.targets}</span>
-      <span class="bar" aria-hidden="true"><i class:on={gr > 0} style:transform={`scaleX(${reductionShare(gr, scale)})`}></i></span>
+      <span class="fact keys" data-testid={`duck-summary-keys-${g.id}`}><span class="k">key:</span> {reach.triggers} <span class="tap">({reach.tap})</span></span>
+      <span class="keying" data-testid={`duck-summary-keying-${g.id}`}><span class="fixed" class:on={engaged[i]}>{keyingText(keys[i] ?? null, d.threshold)}</span></span>
       <span class="lbl keyed" class:on={engaged[i]} data-testid={`duck-summary-keyed-${g.id}`}>KEY</span>
       <span class="keybar" aria-hidden="true" data-testid={`duck-summary-key-${g.id}`}
         ><i class:on={engaged[i]} style:transform={`scaleX(${keyShare(keys[i] ?? null)})`}></i><i
           class="threshold"
           style:transform={`translateX(${keyShare(d.threshold) * 100}%)`}><b></b></i></span
       >
+      <span class="fact ducks" data-testid={`duck-summary-ducks-${g.id}`}
+        ><span class="targets"><span class="k">ducks:</span> {reach.targets}</span><span class="into" data-testid={`duck-summary-into-${g.id}`}>{' '}on {reach.into}</span></span
+      >
+      <span class="gr" data-testid={`duck-summary-gr-${g.id}`}><span class="fixed" class:on={gr > 0}>{summaryReduction(gr)}</span></span>
+      <span class="lbl db">dB</span>
+      <span class="bar" aria-hidden="true"><i class:on={gr > 0} style:transform={`scaleX(${reductionShare(gr, scale)})`}></i></span>
     </div>
   {/each}
 </div>
@@ -97,25 +102,46 @@
     contain: strict;
     container-type: inline-size;
   }
-  /* Two rows a group. The outputs take the first row's width but the
-     name and the reduction, the targets the second's but the reduction
-     bar, KEY and the key bar. */
+  /* Two rows a group under its name: what keys it and why, then what it
+     lowers and by how much. The readings and the bars stand in columns
+     of their own, so every group's line up. */
   .line {
     flex: none;
     display: grid;
-    grid-template-columns: 13ch minmax(0, 1fr) 40px 42px auto 44px;
-    grid-template-rows: 18px 15px;
+    grid-template-columns: 13ch minmax(0, 1fr) auto 26px 44px;
+    grid-template-rows: 16px 15px;
     grid-template-areas:
-      'name into into gr db .'
-      'tgt tgt bar key . kbar';
+      'name keys keying keyed kbar'
+      '. ducks gr db bar';
     align-items: center;
     column-gap: 6px;
   }
   .name {
     grid-area: name;
+    font-weight: 600;
   }
-  .into {
-    grid-area: into;
+  .keys {
+    grid-area: keys;
+  }
+  /* Sized in its own monospace digits: KEYING_WIDTH characters. */
+  .keying {
+    grid-area: keying;
+    height: 100%;
+    width: 14ch;
+    font-family: var(--font-num);
+    font-size: 11px;
+  }
+  .keyed {
+    grid-area: keyed;
+    justify-self: start;
+  }
+  .keybar {
+    grid-area: kbar;
+  }
+  .ducks {
+    grid-area: ducks;
+    display: flex;
+    min-width: 0;
   }
   .gr {
     grid-area: gr;
@@ -124,33 +150,38 @@
   .db {
     grid-area: db;
   }
-  .targets {
-    grid-area: tgt;
-    font-size: 11px;
-  }
   .bar {
     grid-area: bar;
   }
-  .keyed {
-    grid-area: key;
-    justify-self: start;
-  }
-  .keybar {
-    grid-area: kbar;
-  }
   .name,
-  .into,
+  .keys,
   .targets {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .name,
-  .into {
+  .fact {
+    font-size: 11px;
+    color: var(--text);
+  }
+  /* The labels say what each row is; the outputs never shrink, the
+     targets before them give way first. */
+  .k {
+    color: var(--text-dim);
     font-weight: 600;
   }
-  .targets {
+  .tap {
     color: var(--text-dim);
+  }
+  .targets {
+    flex: 0 1 auto;
+    min-width: 2ch;
+  }
+  .into {
+    flex: none;
+    margin-left: 0.3em;
+    white-space: nowrap;
+    font-weight: 600;
   }
   .bar,
   .keybar {
@@ -191,11 +222,12 @@
       -1px 0 0 var(--well),
       1px 0 0 var(--well);
   }
-  /* The reduction changes per meter frame: a block of fixed size with
+  /* The readings change per meter frame: a block of fixed size with
      strict containment in its cell lays out nothing outside it, which a
      grid item of its own does not do. Colour only: a weight change would
      lay it out again. */
-  .gr span {
+  .gr span,
+  .keying span {
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -203,8 +235,13 @@
     font-weight: 600;
     color: var(--text-dim);
     contain: strict;
+    white-space: pre;
   }
-  .gr span.on {
+  .keying span {
+    font-weight: 400;
+  }
+  .gr span.on,
+  .keying span.on {
     color: var(--text);
   }
   .lbl {
@@ -220,21 +257,24 @@
     background: var(--duck);
     color: var(--duck-ink);
   }
-  /* Narrower: the outputs take the whole first row but the name, and the
-     reduction moves to the second, which drops its bar. */
-  /* 300 px of summary, less its padding: the container's content box. */
-  @container (width < 284px) {
+  /* Narrower: the name heads the key row only, the ducks row takes the
+     whole width but its reduction and KEY, and the bars and the key
+     level go; the tip carries the level. 420 px of summary, less its
+     padding: the container's content box. */
+  @container (width < 404px) {
     .line {
-      grid-template-columns: 8ch minmax(0, 1fr) 42px auto auto 32px;
+      grid-template-columns: 8ch minmax(0, 1fr) 36px auto auto;
       grid-template-areas:
-        'name into into into into into'
-        'tgt tgt gr db key kbar';
+        'name keys keys keys keyed'
+        'ducks ducks gr db .';
       column-gap: 4px;
     }
     .gr span {
       font-size: 11px;
     }
-    .bar {
+    .keying,
+    .bar,
+    .keybar {
       display: none;
     }
   }

@@ -351,13 +351,14 @@ triggers it; it sets the threshold, and its key meter row shows the key
 level against it. More groups than fit one row of tiles scroll within
 it. Beside the masters with a fine pointer, for up to four groups and
 where the tiles leave the band at least 180 px, the band's summary takes
-the rest of it: two rows per group, the first with its name, the buses,
-auxes and mix-minus outputs it lowers and its gain reduction in dB, the
-second with the targets it lowers in them, the reduction as a bar on one
-scale for every group (0 to the deepest depth of any), KEY lit while
-the key triggers it and the key as a bar against its threshold.
-Narrower than 300 px the outputs take the whole first row, the
-reduction moves to the second and its bar goes. A line's tooltip, on
+the rest of it: two rows per group under its name, the first saying
+what keys it, "key: <triggers> (<tap>)", its key level against its
+threshold ("-18.3 >= -30.0"), KEY lit while the key triggers it and the
+key as a bar against the threshold; the second what it lowers, "ducks:
+<targets> on <outputs>", its gain reduction in dB and as a bar on one
+scale for every group (0 to the deepest depth of any). Narrower than
+420 px the bars and the key level go. The Duck view heads each group
+with the same key and ducks lines and the key level. A line's tooltip, on
 focus or hover, adds its readings of that moment. The band keeps its
 height. In the example shape's masters, 776 px wide, the summary shows
 beside up to four groups, and from five not at all. Under 1400 px,

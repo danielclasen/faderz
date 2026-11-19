@@ -211,3 +211,49 @@ test('keeps one tab stop in the Duck view grid when the groups shown change', as
   for (let i = 0; i < 40 && !(await page.evaluate(() => !!document.activeElement?.closest('tbody.members'))); i++) await page.keyboard.press('Tab');
   expect(await page.evaluate(() => !!document.activeElement?.closest('tbody.members'))).toBe(true);
 });
+
+/** "-18.3 >= -30.0": the comparison a keying reading states holds for its two numbers. */
+function keyingHolds(text: string): boolean {
+  const m = /^\s*(-inf|--|-?\d+\.\d)\s+(>=|<)?\s*(-?\d+\.\d)\s*$/.exec(text);
+  if (!m) return false;
+  if (m[1] === '--') return m[2] === undefined;
+  const key = m[1] === '-inf' ? -Infinity : Number(m[1]);
+  return (key >= Number(m[3])) === (m[2] === '>=');
+}
+
+test('each duck group says what keys it at which tap, what it ducks on which outputs, and its key level against the threshold', { tag: '@mock' }, async ({ page, request }) => {
+  await live(page);
+  const band = page.getByTestId('duck-summary');
+  await expect(band).toBeVisible();
+  // The triggers are named as the key, never as what the group lowers.
+  await expect(page.getByTestId('duck-summary-keys-comm')).toHaveText('key: Pres 1, Pres 2 (pre-fader, while open)');
+  await expect(page.getByTestId('duck-summary-ducks-comm')).toHaveText(/^ducks: Amb 1, .* on PGM 5\.1, PGM 2\.0$/);
+  await expect(page.getByTestId('duck-summary-ducks-comm')).not.toContainText('Pres 1');
+  await expect(page.getByTestId('duck-summary-keys-remote')).toHaveText(/^key: Phone 1, Phone 2 \(/);
+  const keying = page.getByTestId('duck-summary-keying-comm');
+  await expect(keying).toHaveText(/-30\.0\s*$/);
+  // A reading arrives with the meter frames, its comparison true to its numbers.
+  await expect.poll(async () => keyingHolds((await keying.textContent()) ?? ''), { timeout: 5000 }).toBe(true);
+  await expect(keying).not.toHaveText(/^\s*--/, { timeout: 5000 });
+  // A changed tap, trigger and threshold read at once, in the band and in the Duck view.
+  try {
+    await patch(request, '/ducks/comm/keyTap', 'postFader');
+    await patch(request, '/ducks/comm/channels/ch2/trigger', false);
+    await patch(request, '/ducks/comm/threshold', -24);
+    await expect(page.getByTestId('duck-summary-keys-comm')).toHaveText('key: Pres 1 (post-fader)');
+    await expect(keying).toHaveText(/-24\.0\s*$/);
+    await page.getByRole('button', { name: 'Duck', exact: true }).click();
+    await expect(page.getByTestId('duck-view-keys-comm')).toHaveText('key: Pres 1 (post-fader)');
+    const ducks = page.getByTestId('duck-view-ducks-comm');
+    await expect(ducks).toHaveText(/^ducks: Amb 1, .* on PGM 5\.1, PGM 2\.0$/);
+    // The outputs show whole in the 212 px column; the targets give way.
+    expect(await ducks.locator('.into').evaluate((e) => e.scrollWidth <= e.clientWidth + 0.5 && e.getBoundingClientRect().right <= e.parentElement!.getBoundingClientRect().right + 0.5)).toBe(true);
+    const level = page.getByTestId('duck-view-keying-comm');
+    await expect(level).toHaveText(/^level: .*-24\.0 dBFS$/);
+    await expect.poll(async () => keyingHolds(((await level.locator('.reading').textContent()) ?? '')), { timeout: 5000 }).toBe(true);
+  } finally {
+    await patch(request, '/ducks/comm/keyTap', 'preFaderOpen');
+    await patch(request, '/ducks/comm/channels/ch2/trigger', true);
+    await patch(request, '/ducks/comm/threshold', -30);
+  }
+});

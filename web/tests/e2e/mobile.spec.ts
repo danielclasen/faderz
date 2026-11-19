@@ -63,6 +63,10 @@ test('shows one duck group at a time on a phone, picked from a list, within the 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width);
   const table = (await page.getByRole('table', { name: 'Duck groups' }).boundingBox())!;
   expect(table.x + table.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  // The group says what keys it, what it ducks where, and its level against the threshold.
+  await expect(page.getByTestId('duck-view-keys-remote')).toHaveText(/^key: Phone 1, Phone 2 \(/);
+  await expect(page.getByTestId('duck-view-ducks-remote')).toHaveText(/^ducks: .* on PGM 5\.1, PGM 2\.0$/);
+  await expect(page.getByTestId('duck-view-keying-remote')).toHaveText(/^level: .* dBFS$/);
 });
 
 test('keeps the commit banner readable on its own row when quorum is lost on a phone', { tag: '@mock' }, async ({ page, request }) => {

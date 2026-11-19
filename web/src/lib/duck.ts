@@ -4,7 +4,7 @@
 // decide; the frames tell how far it is in (envelope) and whether the key
 // triggers it (engaged).
 
-import type { DuckMeter, DuckMode, DuckShape, DuckState, Shape, State } from './contract/types';
+import type { DuckKeyTap, DuckMeter, DuckMode, DuckShape, DuckState, Shape, State } from './contract/types';
 import { fit } from './format';
 import { STALE_MS } from './meters/layer';
 import type { MeterStore } from './meters/store';
@@ -272,8 +272,8 @@ export class DuckPress {
 /** Width of a duck tile in the masters band, px, and the gap after it. */
 export const TILE_W = 141;
 /**
- * The least width the band's summary takes, px; narrower than 300 px
- * it drops the reduction bar (DuckSummary.svelte). Each group takes two
+ * The least width the band's summary takes, px; narrower than 420 px
+ * it drops the bars and the key level (DuckSummary.svelte). Each group takes two
  * rows, so the band's height holds SUMMARY_MAX_GROUPS of them.
  */
 export const SUMMARY_MIN_W = 180;
@@ -290,12 +290,51 @@ export function summaryFits(width: number, groups: number, coarse: boolean, narr
   return !coarse && !narrow && groups > 0 && groups <= SUMMARY_MAX_GROUPS && width - groups * TILE_W >= SUMMARY_MIN_W;
 }
 
-/** What a group lowers and where, by name: its destinations (buses, auxes, mix-minus outputs) and its targets, each in shape order. */
-export function duckReach(shape: Shape, d: DuckState): { targets: string; into: string } {
-  const targets = shape.channels.filter((c) => d.channels[c.id]?.target).map((c) => c.name);
+/**
+ * What keys a group, what it lowers and where, by name: its triggers,
+ * the tap its key is taken at, its targets and its destinations (buses,
+ * auxes, mix-minus outputs), each in shape order.
+ */
+export function duckReach(shape: Shape, d: DuckState): { triggers: string; tap: string; targets: string; into: string } {
+  const named = (key: 'trigger' | 'target') => shape.channels.filter((c) => d.channels[c.id]?.[key]).map((c) => c.name);
   const into = [...shape.buses, ...shape.auxes, ...shape.mixMinus].filter((e) => d.destinations[e.id]).map((e) => e.name);
-  return { targets: targets.join(', ') || 'no targets', into: into.join(', ') || 'no outputs' };
+  return {
+    triggers: named('trigger').join(', ') || 'no triggers',
+    tap: KEY_TAPS[d.keyTap],
+    targets: named('target').join(', ') || 'no targets',
+    into: into.join(', ') || 'no outputs',
+  };
 }
+
+/** Where a trigger channel is keyed, in words (model.schema.json DuckKeyTap). */
+export const KEY_TAPS: Readonly<Record<DuckKeyTap, string>> = {
+  preFaderOpen: 'pre-fader, while open',
+  preFader: 'pre-fader',
+  postFader: 'post-fader',
+};
+
+/** Characters the key level against the threshold takes, "-18.3 >= -30.0". */
+export const KEYING_WIDTH = 14;
+
+/**
+ * A group's key level against its threshold, in
+ * KEYING_WIDTH characters, "-18.3 >= -30.0" at or over it, "-45.0  < -30.0"
+ * under it, "   --    -30.0" while the group reports no key.
+ */
+export function keyingText(key: number | null, threshold: number): string {
+  const cmp = key === null ? '  ' : keys(key, threshold) ? '>=' : ' <';
+  return `${keyText(key)} ${cmp} ${fit(threshold.toFixed(1), 5)}`;
+}
+
+/** The same in a sentence, for a tip or a screen reader. */
+export function keyingWords(key: number | null, threshold: number): string {
+  const thr = `threshold ${threshold.toFixed(1)} dBFS`;
+  if (key === null) return `no key level, ${thr}`;
+  return `key ${keyText(key).trim()} dBFS ${keys(key, threshold) ? 'at or over' : 'under'} ${thr}`;
+}
+
+/** The key at or over the threshold, both as read at one decimal, so the words never contradict the numbers. */
+const keys = (key: number, threshold: number) => Math.round(key * 10) >= Math.round(threshold * 10);
 
 /** Characters a key level readout takes, "-23.4" or "-inf". */
 export const KEY_WIDTH = 5;
