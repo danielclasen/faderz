@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.5](https://github.com/danielclasen/faderz/compare/v0.4.4...v0.4.5) (2026-11-19)
+
+
+### Features
+
+* explain the engine counters and name the input at fault ([#123](https://github.com/danielclasen/faderz/issues/123)) ([58e4132](https://github.com/danielclasen/faderz/commit/58e41321587740ce65d3ea46560712170898adf6))
+* show the running build's changelog in About / What's new ([#124](https://github.com/danielclasen/faderz/issues/124)) ([8291c36](https://github.com/danielclasen/faderz/commit/8291c36878f430f4e77e69900c7a63f1e17e8556))
+* **web:** group the header into status and controls ([7d7b570](https://github.com/danielclasen/faderz/commit/7d7b5703ad2c7081d2c09cc7d152758901b39760))
+* **web:** say what keys each duck group and what it ducks ([7d7b570](https://github.com/danielclasen/faderz/commit/7d7b5703ad2c7081d2c09cc7d152758901b39760))
+* **web:** show each bus's width where it is named ([7d7b570](https://github.com/danielclasen/faderz/commit/7d7b5703ad2c7081d2c09cc7d152758901b39760))
+
 ## [0.4.4](https://github.com/danielclasen/faderz/compare/v0.4.3...v0.4.4) (2026-11-19)
 
 
