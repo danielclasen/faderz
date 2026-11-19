@@ -518,29 +518,9 @@ impl Mixer {
         wiring: Vec<Wiring>,
         own: BTreeSet<String>,
     ) -> Factory<Mixer> {
-        Mixer::factory_for(shape, declared, wiring, own, false)
-    }
-
-    /// [`Mixer::factory`] for a volume that may hold a log written before
-    /// the surround panner (`legacy`): that log is replayed onto an
-    /// initial state whose mono channels pan as they did then
-    /// ([`migrate_pan`]), so the entries, which write leaves, rebuild the
-    /// state they were written against.
-    pub fn factory_for(
-        shape: Shape,
-        declared: Vec<Console>,
-        wiring: Vec<Wiring>,
-        own: BTreeSet<String>,
-        legacy: bool,
-    ) -> Factory<Mixer> {
         Arc::new(move || {
             let mut m = Mixer::configured(shape.clone(), declared.clone(), wiring.clone());
             m.own.clone_from(&own);
-            if legacy {
-                let mono = mono_channels(&shape);
-                set_legacy_pan(&mut m.state["channels"], &mono);
-                m.derive();
-            }
             m
         })
     }
@@ -2030,31 +2010,23 @@ impl Product for Mixer {
 /// (`fr` -1) with all the divergence (a plain L/R pan) and the LFE send
 /// off.
 fn migrate_pan(saved: &mut Saved) {
-    let mono = mono_channels(&saved.shape);
-    set_legacy_pan(&mut saved.state["channels"], &mono);
-    for (_, scene) in &mut saved.scenes {
-        set_legacy_pan(&mut scene["channels"], &mono);
-    }
-}
-
-/// The ids of the mono channels of `shape`.
-fn mono_channels(shape: &Shape) -> Vec<String> {
-    (shape.channels.iter())
+    let mono: Vec<String> = (saved.shape.channels.iter())
         .filter(|c| c.width == 1)
         .map(|c| c.id.clone())
-        .collect()
-}
-
-/// Sets the pan of the `mono` channels among `channels` to the values
-/// that keep what they sounded before the surround panner.
-fn set_legacy_pan(channels: &mut Value, mono: &[String]) {
-    for id in mono {
-        let pan = channels.get_mut(id).and_then(|c| c.get_mut("pan"));
-        if let Some(pan) = pan.and_then(Value::as_object_mut) {
-            pan.insert("fr".into(), json!(-1));
-            pan.insert("divergence".into(), json!(1));
-            pan.insert("lfe".into(), json!(-90));
+        .collect();
+    let fix = |channels: &mut Value| {
+        for id in &mono {
+            let pan = channels.get_mut(id).and_then(|c| c.get_mut("pan"));
+            if let Some(pan) = pan.and_then(Value::as_object_mut) {
+                pan.insert("fr".into(), json!(-1));
+                pan.insert("divergence".into(), json!(1));
+                pan.insert("lfe".into(), json!(-90));
+            }
         }
+    };
+    fix(&mut saved.state["channels"]);
+    for (_, scene) in &mut saved.scenes {
+        fix(&mut scene["channels"]);
     }
 }
 
@@ -4713,45 +4685,6 @@ mod tests {
         let mut now = Mixer::new(shape);
         now.load(&serde_json::to_vec(&kept).unwrap()).unwrap();
         assert_eq!(*at(&now, "/channels/ch1/pan/divergence"), json!(0));
-    }
-
-    /// The log of a volume written before the surround panner is replayed
-    /// onto the initial state it was written against: its entries write
-    /// leaves, so the leaves they never wrote must read as they did.
-    #[test]
-    fn a_legacy_volumes_log_replays_onto_the_pan_it_was_written_against() {
-        let shape = Shape::parse(&crate::shape::tests::surround()).unwrap();
-        let legacy =
-            Mixer::factory_for(shape.clone(), Vec::new(), Vec::new(), BTreeSet::new(), true)();
-        let fresh = Mixer::factory_for(
-            shape.clone(),
-            Vec::new(),
-            Vec::new(),
-            BTreeSet::new(),
-            false,
-        )();
-        // The entries of that log wrote the left-right position alone.
-        let mut replayed = legacy;
-        set(&mut replayed, "a", 1, "/channels/ch1/fader", json!(0));
-        set(
-            &mut replayed,
-            "a",
-            2,
-            "/channels/ch1/routes/pgm",
-            json!(true),
-        );
-        set(&mut replayed, "a", 3, "/channels/ch1/pan/lr", json!(0.3));
-        let theta = 1.3 * std::f64::consts::FRAC_PI_4;
-        let g = crate::mix::matrix(&shape, replayed.state());
-        let legs: Vec<f64> = g[0][..6].iter().map(|g| f64::from(*g)).collect();
-        let before = [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0];
-        assert!(
-            legs.iter().zip(before).all(|(g, w)| (g - w).abs() < 1e-6),
-            "{legs:?}"
-        );
-        // A new volume starts at the front centre, a stereo channel as it was.
-        assert_eq!(*at(&fresh, "/channels/ch1/pan/divergence"), json!(0));
-        assert_eq!(*at(&replayed, "/channels/st1/pan/divergence"), json!(0));
     }
 
     const OWN: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a0f";

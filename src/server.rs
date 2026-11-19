@@ -83,14 +83,11 @@ impl Server {
         let estimate: Estimate = Arc::new(replica::tai_samples);
         let ops_state = Ops::default();
         let dir = &config.replica.data_dir;
-        // A log written before the surround panner replays onto the pan it
-        // was written against.
-        let mixer = Mixer::factory_for(
+        let mixer = Mixer::factory(
             shape.clone(),
             config.consoles.clone(),
             config.wiring.clone(),
             config.own_flows(),
-            replica::legacy_volume(dir),
         );
         let product = mixer().config_hash();
         let (state, peer, kube, write_timeout) = match &config.set {
@@ -142,8 +139,6 @@ impl Server {
                 (Arc::new(state), Some((tls, tcp)), kube, write_timeout)
             }
         };
-        // Opened with the migration in place: this volume is no longer legacy.
-        replica::mark_volume(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let peer_addr = match &peer {
             Some((_, tcp)) => Some(tcp.local_addr().map_err(|e| e.to_string())?),
             None => None,
