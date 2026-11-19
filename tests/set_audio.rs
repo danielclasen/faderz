@@ -730,17 +730,16 @@ fn a_loudness_reset_restarts_every_replicas_measurement() {
     let null = i16::MIN;
     let read = |n: usize, index: usize| peak(node(&nodes, n), 1, index);
     write(&nodes, 0, &[("/channels/ch1/fader", json!(0))]);
-    let mut loud = i16::MAX;
     for n in 0..REPLICAS {
         let measured = until(60, || {
-            let max = read(n, max_momentary);
-            if max != null {
-                loud = loud.min(max);
-            }
-            max != null && read(n, integrated) != null
+            read(n, max_momentary) != null && read(n, integrated) != null
         });
         assert!(measured, "replica {n} measures: {}", states(&nodes));
     }
+    // The maximum of a steady tone settles within a few windows.
+    std::thread::sleep(Duration::from_secs(3));
+    let loud = (0..REPLICAS).map(|n| read(n, max_momentary)).max().unwrap();
+    assert!(loud != null);
     // 20 dB down: every maximum holds, the momentary levels follow.
     write(&nodes, 0, &[("/channels/ch1/fader", json!(-20))]);
     for n in 0..REPLICAS {
