@@ -316,7 +316,10 @@ impl Shape {
                         "comp": comp,
                         "dynamicsBeforeEq": false,
                         "delay": 0,
-                        "pan": { "lr": 0, "fr": -1, "divergence": u8::from(c.width == 1), "lfe": -90 },
+                        "pan": {
+                            "lr": 0, "fr": 0, "divergence": 0, "lfe": -90,
+                            "frontRear": -1, "spread": 1, "lfeSend": -90,
+                        },
                         "image": "normal",
                         "fader": -90,
                         "mute": false,

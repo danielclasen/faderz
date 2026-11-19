@@ -188,7 +188,7 @@ export function initialState(shape: Shape): State {
       comp: { enabled: i < 6, threshold: -18, ratio: 3, attack: 10, release: 150, makeup: i < 6 ? 3 : 0 },
       dynamicsBeforeEq: false,
       delay: 0,
-      pan: { lr: mic && i >= 2 && i < 6 ? [-0.3, 0.3, -0.15, 0.15][i - 2]! : 0, fr: -1, divergence: mic ? 1 : 0, lfe: -90 },
+      pan: { lr: mic && i >= 2 && i < 6 ? [-0.3, 0.3, -0.15, 0.15][i - 2]! : 0, fr: 0, divergence: 0, lfe: -90, frontRear: -1, spread: 1, lfeSend: -90 },
       image: 'normal',
       fader: FADERS[c.id] ?? -90,
       mute: c.id === 'ch23' || c.id === 'ch24',

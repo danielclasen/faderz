@@ -499,11 +499,11 @@ test('sets the LFE send and the stereo image of a channel from the processing pa
   await expect(page.getByText('Front/rear, divergence and LFE act on a surround bus: route this channel to one.')).toBeVisible();
   await patch(request, '/channels/ch1/routes/pgm51', true);
   await expect(page.getByLabel('LFE', { exact: true })).toBeVisible();
-  await patch(request, '/channels/ch1/pan/lfe', -12);
-  await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuetext', '-12.0');
+  await patch(request, '/channels/ch1/pan/lfeSend', -12);
+  await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfeSend"]')).toHaveAttribute('aria-valuetext', '-12.0');
   // On the fader taper, as the Aux view's send levels: -12 dB sits at 47.5 % of the travel.
-  await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfe"]')).toHaveAttribute('aria-valuenow', /^4[78]$/);
-  await patch(request, '/channels/ch1/pan/lfe', -90);
+  await expect(page.locator('[role="slider"][data-path="/channels/ch1/pan/lfeSend"]')).toHaveAttribute('aria-valuenow', /^4[78]$/);
+  await patch(request, '/channels/ch1/pan/lfeSend', -90);
   await patch(request, '/channels/ch1/routes/pgm51', true);
 });
 

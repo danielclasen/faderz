@@ -68,19 +68,21 @@ released.
 A mono channel on a 5.1 or 7.1 bus is panned in the field of the ITU-R
 BS.775 layout (L -30, C 0, R +30, Ls -110, Rs +110 degrees; 7.1 takes
 its sides at +-90 and its rear surrounds at +-135), every law at
-constant power: `lr` pans pairwise between adjacent speakers at the
+constant power: `pan.lr` pans pairwise between adjacent speakers at the
 front (the centre of the field is the C leg alone) and between the
-surrounds at the rear; `divergence` blends that with a plain pan
-between L and R, none of it at 0 and all of it at 1; `fr` crossfades front and rear, -1 the front alone and 1
-the rear alone; `lfe` is a send of its own onto the LFE leg, silent at
--90 dB. A new mono channel is at the front (`fr` -1) with full
-divergence, the L/R pan a mono channel had on a surround bus before the
-field; lower `divergence` to use the C leg. A send, a direct out and a
-PFL listen put a mono channel there too, as the L/R pair. A state saved before the
-panner loads its mono channels, and those of its scenes, so unless a
-value was written, and a log
-replays onto the same initial state on every replica. A stereo channel
-on a surround bus is balanced by `lr` onto its L and R legs alone.
+surrounds at the rear; `pan.spread` blends that with a plain pan between
+L and R, none of it at 0 and all of it at 1; `pan.frontRear` crossfades
+front and rear, -1 the front alone and 1 the rear alone; `pan.lfeSend`
+is a send of its own onto the LFE leg, silent at -90 dB. A new channel
+is at the front (`frontRear` -1) with full spread and no LFE send, the
+L/R pan a mono channel had on a surround bus before the field; lower
+`spread` to use the C leg. A send, a direct out and a PFL listen put a
+mono channel there too, as the L/R pair. The state is a function of the
+log alone: the older `pan.fr`, `pan.divergence` and `pan.lfe` are
+deprecated, stored and never read, so a snapshot, a snapshot an older
+binary saved and a log replayed from its first entry hold the same state
+and nothing sounds different after an upgrade. A stereo channel on a
+surround bus is balanced by `pan.lr` onto its L and R legs alone.
 
 A loudness reset restarts the measurement at the first 100 ms window
 starting at or after the `atIndex` of the delta that counted it, the same

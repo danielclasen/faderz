@@ -29,12 +29,8 @@ pub const DERIVATION_VERSION: u32 = 4;
 /// the state, which binaries before it read from the top level: they
 /// refuse it as missing their fields rather than load part of it. 3
 /// adds the IS-05 connections ([`Ports`]), which a binary reading 2
-/// would drop; 4 moves a mono channel's pan to the values that keep its
-/// sound under the surround panner ([`migrate_pan`]).
-const FORMAT: u32 = 4;
-/// The layout before the surround panner: read with a mono channel's
-/// pan migrated.
-const FORMAT_BEFORE_FIELD: u32 = 3;
+/// would drop.
+const FORMAT: u32 = 3;
 /// The layout before [`Ports`], read as one without connections.
 const FORMAT_WITHOUT_PORTS: u32 = 2;
 
@@ -1957,19 +1953,15 @@ impl Product for Mixer {
     /// before formats were kept is read as it was written.
     fn load(&mut self, saved: &[u8]) -> Result<(), String> {
         let value: Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
-        let before_field = value.get("format").is_none_or(|f| *f != FORMAT);
-        let mut saved: Saved = match value.get("format") {
+        let saved: Saved = match value.get("format") {
             None => serde_json::from_value(value).map_err(|e| e.to_string())?,
-            Some(f) if *f == FORMAT || *f == FORMAT_BEFORE_FIELD || *f == FORMAT_WITHOUT_PORTS => {
+            Some(f) if *f == FORMAT || *f == FORMAT_WITHOUT_PORTS => {
                 let snapshot: Snapshot =
                     serde_json::from_value(value).map_err(|e| e.to_string())?;
                 snapshot.mixer
             }
             Some(f) => return Err(format!("snapshot format {f}: this binary reads {FORMAT}")),
         };
-        if before_field {
-            migrate_pan(&mut saved);
-        }
         self.seqs = saved
             .seqs
             .iter()
@@ -1999,39 +1991,6 @@ impl Product for Mixer {
         self.rewire();
         self.derive();
         Ok(())
-    }
-}
-
-/// Before the surround panner a mono channel on a surround bus reached
-/// the L and R legs by `pan.lr` alone, at constant power, and
-/// `pan.fr`, `divergence` and `lfe` were stored and never heard. A state
-/// saved then keeps its sound: of the mono channels of its state and of
-/// its scenes, a `fr` or `divergence` still at the old initial 0 is set
-/// to the new initial value, the front (`fr` -1) with all the divergence
-/// (a plain L/R pan). A value somebody wrote is kept, as a log replayed
-/// from its first entry keeps it, so a replica that loads this snapshot
-/// and one that replays the log hold the same state, but for a value
-/// written equal to the old initial 0, which no snapshot tells from it.
-fn migrate_pan(saved: &mut Saved) {
-    let mono: Vec<String> = (saved.shape.channels.iter())
-        .filter(|c| c.width == 1)
-        .map(|c| c.id.clone())
-        .collect();
-    let fix = |channels: &mut Value| {
-        for id in &mono {
-            let pan = channels.get_mut(id).and_then(|c| c.get_mut("pan"));
-            if let Some(pan) = pan.and_then(Value::as_object_mut) {
-                for (leaf, old, new) in [("fr", 0, -1), ("divergence", 0, 1)] {
-                    if pan.get(leaf) == Some(&json!(old)) {
-                        pan.insert(leaf.into(), json!(new));
-                    }
-                }
-            }
-        }
-    };
-    fix(&mut saved.state["channels"]);
-    for (_, scene) in &mut saved.scenes {
-        fix(&mut scene["channels"]);
     }
 }
 
@@ -4635,21 +4594,30 @@ mod tests {
         assert_eq!(back.targets(), wired().targets());
     }
 
-    /// A state saved before the surround panner sounds the same after:
-    /// a mono channel on a 5.1 bus reaches L and R by its `lr` alone, at
-    /// constant power, as it did while `fr`, `divergence` and `lfe` were
-    /// stored and never heard. A scene stored then recalls the same, and
-    /// a snapshot of this format keeps what it holds.
+    /// The state is a function of the log: a snapshot, one an older
+    /// binary saved without the surround position included, and a log
+    /// replayed from its first entry hold the same state, whatever the
+    /// log wrote, the deprecated `fr` among it, which the panner never
+    /// reads. A mono channel on a surround bus sounds as it did before
+    /// the field, the L/R pair of its `lr`.
     #[test]
-    fn a_state_saved_before_the_surround_panner_keeps_its_sound() {
+    fn a_snapshot_and_a_replayed_log_hold_the_same_state() {
         let shape = Shape::parse(&crate::shape::tests::surround()).unwrap();
-        let mut m = Mixer::new(shape.clone());
-        set(&mut m, "a", 1, "/channels/ch1/fader", json!(0));
-        set(&mut m, "a", 2, "/channels/ch1/routes/pgm", json!(true));
-        set(&mut m, "a", 3, "/channels/ch1/pan/lr", json!(0.3));
-        let scene = store(&mut m, "c1", None, "Opening");
-        let saved = m.save();
-        // What the engine derived before: L and R by lr, nothing else.
+        let writes = [
+            ("/channels/ch1/fader", json!(0)),
+            ("/channels/ch1/routes/pgm", json!(true)),
+            ("/channels/ch1/pan/lr", json!(0.3)),
+            // The deprecated leaves an old console could write.
+            ("/channels/ch1/pan/fr", json!(0)),
+            ("/channels/ch1/pan/divergence", json!(0)),
+            ("/channels/ch1/pan/lfe", json!(-6)),
+        ];
+        let mut replayed = Mixer::new(shape.clone());
+        for (n, (path, value)) in writes.into_iter().enumerate() {
+            set(&mut replayed, "a", n as u64 + 1, path, value);
+        }
+        let scene = store(&mut replayed, "c1", None, "Opening");
+        let saved = replayed.save();
         let theta = 1.3 * std::f64::consts::FRAC_PI_4;
         let before = [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0];
         let legs = |m: &Mixer| -> Vec<f64> {
@@ -4662,23 +4630,30 @@ mod tests {
                 "{got:?} vs {before:?}"
             );
         };
-        // As a binary before the panner saved it: format 3, the pan at
-        // its old initial values.
+        close(legs(&replayed));
+        // A snapshot of this binary.
+        let mut loaded = Mixer::new(shape.clone());
+        loaded.load(&saved).unwrap();
+        assert_eq!(loaded.text(), replayed.text());
+        close(legs(&loaded));
+        // One an older binary saved: no surround position in it or in its scenes.
         let mut old: Value = serde_json::from_slice(&saved).unwrap();
-        old["format"] = json!(FORMAT_BEFORE_FIELD);
-        let pan = json!({ "lr": 0.3, "fr": 0, "divergence": 0, "lfe": -90 });
-        // A value somebody wrote is kept: it was never heard, and a log
-        // replayed from its first entry keeps it too.
-        let written = json!({ "lr": 0.3, "fr": 0.5, "divergence": 0, "lfe": -6 });
-        old["mixer"]["state"]["channels"]["ch1"]["pan"] = pan.clone();
+        let strip = |channels: &mut Value| {
+            let pan = channels["ch1"]["pan"].as_object_mut().unwrap();
+            for leaf in ["frontRear", "spread", "lfeSend"] {
+                pan.remove(leaf);
+            }
+        };
+        strip(&mut old["mixer"]["state"]["channels"]);
         for stored in old["mixer"]["scenes"].as_array_mut().unwrap() {
-            stored[1]["channels"]["ch1"]["pan"] = pan.clone();
+            strip(&mut stored[1]["channels"]);
         }
         let mut back = Mixer::new(shape.clone());
         back.load(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(back.text(), replayed.text());
         close(legs(&back));
         // The stored scene recalls the same.
-        set(&mut back, "a", 4, "/channels/ch1/pan/lr", json!(-1));
+        set(&mut back, "b", 1, "/channels/ch1/pan/lr", json!(-1));
         let recalled = Command::Recall {
             id: "r1".into(),
             scene,
@@ -4686,53 +4661,14 @@ mod tests {
         };
         rest(&mut back, recalled);
         close(legs(&back));
-        // A stereo channel is as it was; a format-4 snapshot is kept.
-        assert_eq!(*at(&back, "/channels/st1/pan/lr"), json!(0));
-        let mut kept: Value = serde_json::from_slice(&saved).unwrap();
-        kept["mixer"]["state"]["channels"]["ch1"]["pan"] = pan;
-        let mut now = Mixer::new(shape);
-        now.load(&serde_json::to_vec(&kept).unwrap()).unwrap();
-        assert_eq!(*at(&now, "/channels/ch1/pan/divergence"), json!(0));
-        // A format-3 snapshot keeps what was written, and moves only the
-        // old initial values: the divergence 0 here is one, whether
-        // written or not.
-        let mut old: Value = serde_json::from_slice(&saved).unwrap();
-        old["format"] = json!(FORMAT_BEFORE_FIELD);
-        old["mixer"]["state"]["channels"]["ch1"]["pan"] = written;
-        let mut back = Mixer::new(Shape::parse(&crate::shape::tests::surround()).unwrap());
-        back.load(&serde_json::to_vec(&old).unwrap()).unwrap();
-        assert_eq!(*at(&back, "/channels/ch1/pan/fr"), json!(0.5));
-        assert_eq!(*at(&back, "/channels/ch1/pan/divergence"), json!(1));
-        assert_eq!(*at(&back, "/channels/ch1/pan/lfe"), json!(-6));
-    }
-
-    /// The initial state is a function of the shape alone and sounds as
-    /// the pan did before the surround panner: a log of entries that
-    /// wrote the left-right position and nothing else, replayed from its
-    /// first entry onto it, gives the L/R pair, on every replica.
-    #[test]
-    fn a_log_replayed_from_the_start_sounds_as_the_pan_did_before_the_field() {
-        let shape = Shape::parse(&crate::shape::tests::surround()).unwrap();
-        let mut replayed = Mixer::new(shape.clone());
-        set(&mut replayed, "a", 1, "/channels/ch1/fader", json!(0));
-        set(
-            &mut replayed,
-            "a",
-            2,
-            "/channels/ch1/routes/pgm",
-            json!(true),
-        );
-        set(&mut replayed, "a", 3, "/channels/ch1/pan/lr", json!(0.3));
-        let theta = 1.3 * std::f64::consts::FRAC_PI_4;
-        let g = crate::mix::matrix(&shape, replayed.state());
-        let legs: Vec<f64> = g[0][..6].iter().map(|g| f64::from(*g)).collect();
-        let before = [libm::cos(theta), libm::sin(theta), 0.0, 0.0, 0.0, 0.0];
-        assert!(
-            legs.iter().zip(before).all(|(g, w)| (g - w).abs() < 1e-6),
-            "{legs:?}"
-        );
-        assert_eq!(*at(&replayed, "/channels/ch1/pan/divergence"), json!(1));
-        assert_eq!(*at(&replayed, "/channels/st1/pan/divergence"), json!(0));
+        // The initial state has the surround position at the front, full
+        // spread and no LFE send, a stereo channel's included.
+        for ch in ["ch1", "st1"] {
+            let pan = format!("/channels/{ch}/pan");
+            assert_eq!(*at(&replayed, &format!("{pan}/frontRear")), json!(-1));
+            assert_eq!(*at(&replayed, &format!("{pan}/spread")), json!(1));
+            assert_eq!(*at(&replayed, &format!("{pan}/lfeSend")), json!(-90));
+        }
     }
 
     const OWN: &str = "0d7f6b8e-4a2c-4e8f-9b1a-2c3d4e5f6a0f";

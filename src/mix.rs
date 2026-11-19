@@ -190,8 +190,10 @@ pub fn pan(from: usize, to: usize, i: usize, j: usize, pan: f64) -> f64 {
 }
 
 /// Where a channel sits in the field its panner places it in (model
-/// `PanState`): `lr` left to right and `fr` front to rear, both -1 to 1,
-/// the front `divergence` and the `lfe` send in dB.
+/// `PanState`): `lr` left to right, `frontRear` front to rear (`fr`
+/// here), both -1 to 1, the front `spread` (`divergence` here) and the
+/// `lfeSend` (`lfe`) in dB. The model's `fr`, `divergence` and `lfe` are
+/// deprecated and never read.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Place {
     lr: f64,
@@ -219,9 +221,9 @@ impl Place {
     fn of(pan: &Value) -> Place {
         Place {
             lr: num(&pan["lr"]),
-            fr: num(&pan["fr"]),
-            divergence: num(&pan["divergence"]),
-            lfe: num(&pan["lfe"]),
+            fr: num(&pan["frontRear"]),
+            divergence: num(&pan["spread"]),
+            lfe: num(&pan["lfeSend"]),
         }
     }
 }
@@ -1990,7 +1992,7 @@ mod tests {
         );
         // No divergence: the centre leg alone, the fold onto Lo and Ro
         // taking it at -3 dB.
-        s["channels"]["ch1"]["pan"]["divergence"] = json!(0);
+        s["channels"]["ch1"]["pan"]["spread"] = json!(0);
         let m = matrix(&shape, &s);
         let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
         assert!(
@@ -1998,7 +2000,8 @@ mod tests {
             "{row:?}"
         );
         assert!(close(m[0][6], h) && close(m[0][7], h), "{m:?}");
-        s["channels"]["ch1"]["pan"] = json!({ "lr": 0, "fr": 1, "divergence": 0, "lfe": -6 });
+        s["channels"]["ch1"]["pan"] =
+            json!({ "lr": 0, "frontRear": 1, "spread": 0, "lfeSend": -6 });
         let m = matrix(&shape, &s);
         let row: Vec<f64> = m[0][..6].iter().map(|g| f64::from(*g)).collect();
         assert!(
@@ -2052,7 +2055,7 @@ mod tests {
         // centre leg takes it.
         s["channels"]["ch1"]["solo"] = json!("afl");
         is(legs(&matrix(&shape, &s), 6), pair(-0.5));
-        s["channels"]["ch1"]["pan"]["divergence"] = json!(0);
+        s["channels"]["ch1"]["pan"]["spread"] = json!(0);
         s["channels"]["ch1"]["pan"]["lr"] = json!(0);
         let got = legs(&matrix(&shape, &s), 6);
         is(got, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);

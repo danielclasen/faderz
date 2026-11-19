@@ -812,7 +812,7 @@
       "maximum": 0
     },
     "PanState": {
-      "description": "lr is the left/right position; fr the front/rear position, divergence the front spread and lfe the send level into the LFE leg, used by the panner of a mono channel on surround buses: the field is the ITU-R BS.775 layout (L -30, C 0, R +30, Ls -110, Rs +110 degrees; 7.1 sides at +-90 and rear surrounds at +-135) and every law is constant power. lr pans pairwise between adjacent speakers at the front, so the centre of the field is the C leg alone, and between the surrounds at the rear (on 7.1 the side and the rear pair take half the power each); divergence blends that with a plain constant-power pan between L and R, none of it at 0 (a centred source in the C leg alone), all of it at 1 (the L/R phantom image alone), a power split between; fr -1 is the front alone, 1 the rear alone, 0 half the power each. The LFE leg takes the lfe send as a gain of its own (-90 is off), outside the pan. A new mono channel is at fr -1 with divergence 1, the L/R pair; lower divergence to use the C leg. The send is a gain only: faderz applies no filter to it. A stereo channel on a bus of two legs or more is balanced by lr and takes the L and R legs alone, fr, divergence and lfe being the panner's of a mono channel: the opposite leg is lowered linearly, to silence at the edge, and the near leg stays at unity, so the centre passes both legs. pan is otherwise ignored for channels whose width equals the bus width, which map leg to leg by label. A channel wider than the bus folds down: 5.1 and 7.1 to stereo by the ITU-R BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1 to 5.1 by summing each side and back surround pair at -3 dB.",
+      "description": "lr is the left/right position of every channel: a mono channel's pan, a stereo channel's balance. frontRear, spread and lfeSend place a mono channel in the field of a surround bus: the field is the ITU-R BS.775 layout (L -30, C 0, R +30, Ls -110, Rs +110 degrees; 7.1 sides at +-90 and rear surrounds at +-135) and every law is constant power. lr pans pairwise between adjacent speakers at the front, so the centre of the field is the C leg alone, and between the surrounds at the rear (on 7.1 the side and the rear pair take half the power each); spread blends that with a plain constant-power pan between L and R, none of it at 0 (a centred source in the C leg alone), all of it at 1 (the L/R phantom image alone), a power split between; frontRear -1 is the front alone, 1 the rear alone, 0 half the power each. The LFE leg takes the lfeSend send as a gain of its own (-90 is off), outside the pan. A new channel is at the front with full spread and no LFE send: the L/R pair, as a mono channel was on a surround bus before the field; lower spread to use the C leg. The send is a gain only: faderz applies no filter to it. A stereo channel on a bus of two legs or more is balanced by lr and takes the L and R legs alone, fr, divergence and lfe being the panner's of a mono channel: the opposite leg is lowered linearly, to silence at the edge, and the near leg stays at unity, so the centre passes both legs. pan is otherwise ignored for channels whose width equals the bus width, which map leg to leg by label. A channel wider than the bus folds down: 5.1 and 7.1 to stereo by the ITU-R BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1 to 5.1 by summing each side and back surround pair at -3 dB. fr, divergence and lfe are deprecated: they were stored and never heard, the panner does not read them, and they stay so that states and scenes saved before the field load unchanged.",
       "type": "object",
       "required": [
         "lr",
@@ -826,12 +826,24 @@
           "$ref": "#/$defs/Pan"
         },
         "fr": {
-          "$ref": "#/$defs/Pan"
+          "$ref": "#/$defs/Pan",
+          "deprecated": true
         },
         "divergence": {
-          "$ref": "#/$defs/Divergence"
+          "$ref": "#/$defs/Divergence",
+          "deprecated": true
         },
         "lfe": {
+          "$ref": "#/$defs/FaderDb",
+          "deprecated": true
+        },
+        "frontRear": {
+          "$ref": "#/$defs/Pan"
+        },
+        "spread": {
+          "$ref": "#/$defs/Divergence"
+        },
+        "lfeSend": {
           "$ref": "#/$defs/FaderDb"
         }
       }
@@ -1720,7 +1732,7 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|color|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|color|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe|frontRear|spread|lfeSend)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
@@ -1762,7 +1774,7 @@
           "pattern": "^/(channels|buses|auxes|mixMinus)/[a-z][a-z0-9-]{0,31}/fader$"
         },
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|hpf/freq|pan/(lr|fr|divergence|lfe)|sends/[a-z][a-z0-9-]{0,31}/(level|pan))$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|hpf/freq|pan/(lr|fr|divergence|lfe|frontRear|spread|lfeSend)|sends/[a-z][a-z0-9-]{0,31}/(level|pan))$"
         },
         {
           "pattern": "^/(channels|buses|auxes)/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup)|delay)$"
@@ -2100,7 +2112,7 @@
             "properties": {
               "path": {
                 "type": "string",
-                "pattern": "(/pan/(lr|fr)|/sends/[a-z][a-z0-9-]{0,31}/pan)$"
+                "pattern": "(/pan/(lr|fr|frontRear)|/sends/[a-z][a-z0-9-]{0,31}/pan)$"
               }
             }
           },
@@ -2371,7 +2383,7 @@
             "properties": {
               "path": {
                 "type": "string",
-                "pattern": "/pan/divergence$"
+                "pattern": "/pan/(divergence|spread)$"
               }
             }
           },
@@ -2388,7 +2400,7 @@
             "properties": {
               "path": {
                 "type": "string",
-                "pattern": "/pan/lfe$"
+                "pattern": "/pan/(lfe|lfeSend)$"
               }
             }
           },

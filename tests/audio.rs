@@ -892,22 +892,22 @@ async fn a_mono_channels_pan_places_it_in_a_surround_field() {
         ),
         (
             "front centre",
-            json!({ "divergence": 0 }),
+            json!({ "spread": 0 }),
             [0.0, 0.0, a, 0.0, 0.0, 0.0],
         ),
         (
             "full divergence",
-            json!({ "divergence": 1 }),
+            json!({ "spread": 1 }),
             [a * h, a * h, 0.0, 0.0, 0.0, 0.0],
         ),
         (
             "rear",
-            json!({ "divergence": 0, "fr": 1 }),
+            json!({ "spread": 0, "frontRear": 1 }),
             [0.0, 0.0, 0.0, 0.0, a * h, a * h],
         ),
         (
             "lfe send",
-            json!({ "fr": -1, "lfe": -6 }),
+            json!({ "frontRear": -1, "lfeSend": -6 }),
             [0.0, 0.0, a, lfe, 0.0, 0.0],
         ),
     ];

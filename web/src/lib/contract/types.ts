@@ -124,11 +124,18 @@ export interface Comp {
 }
 export interface PanState {
   lr: number;
+  /** Deprecated: stored, never heard. */
   fr: number;
-  /** 0 discrete centre .. 1 phantom centre. */
+  /** Deprecated: stored, never heard. */
   divergence: number;
-  /** LFE send, dB; -90 off. */
+  /** Deprecated: stored, never heard. */
   lfe: number;
+  /** Front -1 to rear 1, of a mono channel on a surround bus. */
+  frontRear?: number;
+  /** 0 discrete centre .. 1 phantom centre. */
+  spread?: number;
+  /** LFE send, dB; -90 off. */
+  lfeSend?: number;
 }
 export type StereoImage = 'normal' | 'leftToBoth' | 'rightToBoth' | 'swap';
 export interface Send {

@@ -1283,7 +1283,7 @@ fn every_replica_places_a_mono_channel_in_the_surround_field() {
     );
     // fr, lr and the legs L R C LFE Ls Rs every replica writes.
     // A new mono channel is the L/R pair; no divergence puts it in C.
-    write(&nodes, 0, &[("/channels/m/pan/divergence", json!(0))]);
+    write(&nodes, 0, &[("/channels/m/pan/spread", json!(0))]);
     let steps: [(f64, f64, [f32; 6]); 4] = [
         (-1.0, 0.0, [0.0, 0.0, 0.5, 0.0, 0.0, 0.0]),
         (-1.0, -1.0, [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]),
@@ -1295,7 +1295,7 @@ fn every_replica_places_a_mono_channel_in_the_surround_field() {
             &nodes,
             1,
             &[
-                ("/channels/m/pan/fr", json!(fr)),
+                ("/channels/m/pan/frontRear", json!(fr)),
                 ("/channels/m/pan/lr", json!(lr)),
             ],
         );

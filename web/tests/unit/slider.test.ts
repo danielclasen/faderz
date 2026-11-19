@@ -24,7 +24,7 @@ const CASES: Case[] = [
   { what: 'comp release at 5 ms', path: '/channels/ch1/comp/release', start: 5, props: { min: 5, max: 5000, step: 1, log: true } },
   { what: 'gate attack at 0.1 ms', path: '/channels/ch1/gate/attack', start: 0.1, props: { min: 0.1, max: 200, log: true } },
   { what: 'trim with FINE', path: '/channels/ch1/trim', start: 0, props: { min: -20, max: 20 }, fine: 'latch' },
-  { what: 'divergence with FINE', path: '/channels/ch1/pan/divergence', start: 0.5, props: { min: 0, max: 1, step: 0.01 }, fine: 'latch' },
+  { what: 'divergence with FINE', path: '/channels/ch1/pan/spread', start: 0.5, props: { min: 0, max: 1, step: 0.01 }, fine: 'latch' },
 ];
 
 function param(c: Case) {

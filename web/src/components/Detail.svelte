@@ -189,9 +189,9 @@
       {#if ch && element.width <= 2}
         <div class="pan-row"><span class="lbl">Pan</span><Pan path={p('pan', 'lr')} label={`${element.name} pan`} /></div>
         {#if element.width === 1 && feedsSurround}
-          <div class="pan-row"><span class="lbl">F/R</span><Pan path={p('pan', 'fr')} label={`${element.name} front rear`} left="F" right="R" /></div>
-          <Param path={p('pan', 'divergence')} label="Diverg" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
-          <Param path={p('pan', 'lfe')} label="LFE" min={-90} max={10} fader format={(v) => formatDb(v)} />
+          <div class="pan-row"><span class="lbl">F/R</span><Pan path={p('pan', 'frontRear')} label={`${element.name} front rear`} left="F" right="R" /></div>
+          <Param path={p('pan', 'spread')} label="Spread" min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} />
+          <Param path={p('pan', 'lfeSend')} label="LFE" min={-90} max={10} fader format={(v) => formatDb(v)} />
         {:else if element.width === 1}
           <p class="note">Front/rear, divergence and LFE act on a surround bus: route this channel to one.</p>
         {:else}

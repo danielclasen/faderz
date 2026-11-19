@@ -16,6 +16,7 @@ import type {
   StereoImage,
   Shape,
   State,
+  PanState,
 } from '../../src/lib/contract/types.ts';
 import { LAYOUT_LABELS } from '../../src/lib/contract/types.ts';
 import { dbToGain, effectiveGainDb } from '../../src/lib/audio/db.ts';
@@ -128,6 +129,11 @@ function surroundGains(dst: Layout, lr: number, fr: number, surround: SurroundPa
   const lfe = surround.lfe ?? -90;
   if (lfe > -90) gains.LFE = dbToGain(lfe);
   return gains;
+}
+
+/** The surround position of a channel's pan: front/rear, spread and LFE send (not the deprecated fr, divergence and lfe). */
+function placeOf(pan: PanState): { fr: number; surround: SurroundPan } {
+  return { fr: pan.frontRear ?? -1, surround: { divergence: pan.spread ?? 1, lfe: pan.lfeSend ?? -90 } };
 }
 
 /** Power gain matrix [dst][src] from one layout into another. */
@@ -475,7 +481,7 @@ export class ReplicaMeters {
     for (const b of this.shape.buses) {
       const contributions = this.shape.channels
         .filter((c) => state.channels[c.id]!.routes[b.id])
-        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr, surround: state.channels[c.id]!.pan, image: state.channels[c.id]!.image }));
+        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, ...placeOf(state.channels[c.id]!.pan), image: state.channels[c.id]!.image }));
       const st = state.buses[b.id]!;
       buses.push(busMeter(b.id, b.layout, mixInto(b.layout, contributions), st.fader, st.mute, st.limiter));
     }
@@ -497,12 +503,12 @@ export class ReplicaMeters {
       if (talk !== null && state.channels[talk]) {
         // The interrupt replaces the mix: the talkback channel before its fader.
         const pan = state.channels[talk]!.pan;
-        mixMinus.push(busMeter(mm.id, mm.layout, mixInto(mm.layout, [{ id: talk, gain: 1, pan: pan.lr, fr: pan.fr, surround: pan, image: state.channels[talk]!.image }]), st.fader, st.mute));
+        mixMinus.push(busMeter(mm.id, mm.layout, mixInto(mm.layout, [{ id: talk, gain: 1, pan: pan.lr, ...placeOf(pan), image: state.channels[talk]!.image }]), st.fader, st.mute));
         continue;
       }
       const contributions = this.shape.channels
         .filter((c) => state.channels[c.id]!.routes[mm.bus] && !st.exclude.includes(c.id))
-        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, fr: state.channels[c.id]!.pan.fr, surround: state.channels[c.id]!.pan, image: state.channels[c.id]!.image }));
+        .map((c) => ({ id: c.id, gain: post(c.id), pan: state.channels[c.id]!.pan.lr, ...placeOf(state.channels[c.id]!.pan), image: state.channels[c.id]!.image }));
       mixMinus.push(busMeter(mm.id, mm.layout, mixInto(mm.layout, contributions), st.fader, st.mute));
     }
     // Line-up tone replaces the mix of its targets: a sine at level dBFS
@@ -538,7 +544,7 @@ export class ReplicaMeters {
           if (pfl) return 1;
           return st.mute || vcaMuted(id) ? 0 : dbToGain(effectiveGainDb(st.fader, vcaOffsets(id)));
         };
-        const mix = mixInto(out.layout, heard.map((l) => ({ id: l.id, gain: gain(l.id), ...(pfl ? { pan: 0, fr: -1, surround: { divergence: 1 }, image: state.channels[l.id]!.image } : { pan: state.channels[l.id]!.pan.lr, fr: state.channels[l.id]!.pan.fr, surround: state.channels[l.id]!.pan, image: state.channels[l.id]!.image }) })));
+        const mix = mixInto(out.layout, heard.map((l) => ({ id: l.id, gain: gain(l.id), ...(pfl ? { pan: 0, fr: -1, surround: { divergence: 1 }, image: state.channels[l.id]!.image } : { pan: state.channels[l.id]!.pan.lr, ...placeOf(state.channels[l.id]!.pan), image: state.channels[l.id]!.image }) })));
         const peak = mix.peak.map((v) => r1(Math.max(SILENCE, v + jitter())));
         return { peak: out.layout === 'stereo' ? applyImage(state.monitor.image, peak) : peak };
       }
