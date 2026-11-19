@@ -119,7 +119,7 @@
       onclick={() => (open = !open)}
       use:tip={lampTip}
       data-testid="engine"
-    ><i></i><span class="fixed">{engineLamp(seen.warnings.length, seen.inputs.map((f) => stripName(f.channel)))}</span></button>
+    ><i></i><span class="slot"><span class="fixed lamp">{engineLamp(seen.warnings.length, seen.inputs.map((f) => stripName(f.channel)))}</span></span></button>
     {#if open}
       <div
         bind:this={panel}
@@ -214,6 +214,21 @@
   }
   .engine:focus-visible {
     outline: 2px solid var(--focus);
+  }
+  /* The lamp's text changes with every fault that comes and goes. A
+     flex item is never a relayout boundary, so the text is a block child
+     of the lamp's one width with size and layout containment: a change
+     lays out that box, not the page. */
+  .engine .slot {
+    display: block;
+    font-family: var(--font-num);
+  }
+  .engine .lamp {
+    display: block;
+    width: 20ch;
+    height: 14px;
+    line-height: 14px;
+    contain: size layout style;
   }
   .engine i {
     width: 7px;

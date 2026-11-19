@@ -11,7 +11,7 @@ import { fit } from './format';
 
 export const WARN_WINDOW_MS = 10_000;
 
-/** Width of the lamp text: "WARN IN VT 2 +2 more" fills it. */
+/** Width of the lamp text: "WARN IN VT 2 +2 more" fills it; StatusBar's .lamp box is as wide. */
 const LAMP_W = 20;
 
 /**
