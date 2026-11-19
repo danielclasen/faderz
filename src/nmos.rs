@@ -422,24 +422,66 @@ impl Node {
             })
             .await;
         }
-        if method != axum::http::Method::GET && response.status().is_success() {
-            for (index, cancel) in named {
-                if cancel
-                    && self.scheduled(index).is_some()
-                    && let Err(Fail(e)) = self.conns.unschedule(index).await
-                {
-                    // The scheduled activation stays in the state and would
-                    // fire: the cancel is not done, whatever samplez-nmos
-                    // answered.
-                    tracing::warn!(port = index, "nmos: the cancel was not ordered: {e}");
-                    return refused(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        &format!("the cancel was not taken by the set: {e}; send it again"),
-                    );
+        if method == axum::http::Method::GET
+            || !response.status().is_success()
+            || !named.iter().any(|(_, cancel)| *cancel)
+        {
+            return response;
+        }
+        if single.is_some() {
+            for (index, _) in named.into_iter().filter(|(_, cancel)| *cancel) {
+                if let Err(e) = self.cancel(index).await {
+                    return refused(StatusCode::SERVICE_UNAVAILABLE, &e);
                 }
             }
+            return response;
         }
-        response
+        // `/bulk` answers 200 with a code per item: a cancel samplez-nmos
+        // refused cancels nothing, and one the set did not take fails on
+        // its own item.
+        let (mut parts, body) = response.into_parts();
+        let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
+            return refused(StatusCode::INTERNAL_SERVER_ERROR, "an unreadable response");
+        };
+        let Ok(mut items) = serde_json::from_slice::<Vec<serde_json::Value>>(&bytes) else {
+            return Response::from_parts(parts, axum::body::Body::from(bytes));
+        };
+        let senders = path.ends_with("/senders");
+        for item in &mut items {
+            let served = (item.get("code").and_then(serde_json::Value::as_u64))
+                .is_some_and(|code| (200..300).contains(&code));
+            let Some(index) = (item.get("id").and_then(|id| id.as_str()))
+                .and_then(|id| self.ids.get(&(senders, id.to_owned())).copied())
+            else {
+                continue;
+            };
+            if served
+                && named.contains(&(index, true))
+                && let Err(e) = self.cancel(index).await
+            {
+                item["code"] = StatusCode::SERVICE_UNAVAILABLE.as_u16().into();
+                item["error"] = e.into();
+            }
+        }
+        parts.headers.remove(header::CONTENT_LENGTH);
+        Response::from_parts(
+            parts,
+            axum::body::Body::from(serde_json::to_vec(&items).unwrap_or_default()),
+        )
+    }
+
+    /// Cancels the scheduled activation the state holds for the port at
+    /// `index`, if any: samplez-nmos has cancelled only its own. The error
+    /// is the answer to give, as the activation stays in the state and
+    /// would fire.
+    async fn cancel(&self, index: usize) -> Result<(), String> {
+        if self.scheduled(index).is_none() {
+            return Ok(());
+        }
+        self.conns.unschedule(index).await.map_err(|Fail(e)| {
+            tracing::warn!(port = index, "nmos: the cancel was not ordered: {e}");
+            format!("the cancel was not taken by the set: {e}; send it again")
+        })
     }
 
     /// `/active` of a port the state last changed shows the activation
@@ -499,9 +541,10 @@ impl Node {
     /// Orders [`Command::Fire`] for each scheduled activation whose time
     /// has come, while this replica leads; another leader fires those
     /// still pending. One that did not fire is tried again after
-    /// [`FIRE_RETRY`] and logged once.
+    /// [`FIRE_RETRY`], in the next round, and logged once.
     async fn fire(&self) {
-        let mut failed: BTreeMap<String, tokio::time::Instant> = BTreeMap::new();
+        // Per schedule that did not fire: when, and the round it failed in.
+        let mut failed: BTreeMap<String, (tokio::time::Instant, u32)> = BTreeMap::new();
         loop {
             let Some(replica) = self.replica.upgrade() else {
                 return;
@@ -521,15 +564,17 @@ impl Node {
             failed.retain(|id, _| due.iter().any(|s| s.id == *id));
             for s in due {
                 let now = tokio::time::Instant::now();
-                if failed.get(&s.id).is_some_and(|at| now < *at + FIRE_RETRY) {
-                    continue;
-                }
-                match self.conns.fire(&s).await {
+                let round = match failed.get(&s.id) {
+                    Some((at, _)) if now < *at + FIRE_RETRY => continue,
+                    Some((_, round)) => round + 1,
+                    None => 0,
+                };
+                match self.conns.fire(&s, round).await {
                     Ok(()) => {
                         failed.remove(&s.id);
                     }
                     Err(Fail(e)) => {
-                        if failed.insert(s.id.clone(), now).is_none() {
+                        if failed.insert(s.id.clone(), (now, round)).is_none() {
                             tracing::warn!(
                                 schedule = s.id,
                                 "nmos: the scheduled activation did not fire: {e}"
@@ -952,11 +997,12 @@ impl Conns {
         .await
     }
 
-    /// Orders the firing of scheduled activation `s`, under ids every
-    /// replica derives alike, so a second leader firing it is a duplicate.
-    async fn fire(&self, s: &Scheduled) -> Result<(), Fail> {
+    /// Orders the firing of scheduled activation `s` in retry `round`,
+    /// under ids every replica derives alike ([`fire_id`]), so a second
+    /// leader firing it is a duplicate.
+    async fn fire(&self, s: &Scheduled, round: u32) -> Result<(), Fail> {
         self.submit(|attempt| Command::Fire {
-            id: format!("fire-{attempt}-{}", s.id),
+            id: fire_id(&s.id, round, attempt),
             schedule: s.id.clone(),
         })
         .await
@@ -1004,6 +1050,14 @@ impl Connections for Conns {
             }
         })
     }
+}
+
+/// The id of attempt `attempt` of retry `round` to fire `schedule`. Each
+/// round has ids of its own: under the last round's, the command dedup
+/// would answer a retry with that round's refusal for as long as it
+/// keeps it, rather than order the Fire again.
+fn fire_id(schedule: &str, round: u32, attempt: usize) -> String {
+    format!("fire-{round}-{attempt}-{schedule}")
 }
 
 /// What an apply samplez-nmos hands over for a scheduled time means.
@@ -1367,6 +1421,20 @@ fn symbols(layout: &str, width: usize) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Fire retried after a refused round orders under ids no earlier
+    /// round used, so the command dedup does not answer it with the old
+    /// refusal; every replica derives the same id for the same round and
+    /// attempt, so a second leader's Fire is a duplicate.
+    #[test]
+    fn each_fire_round_orders_under_ids_of_its_own() {
+        let ids: BTreeSet<String> = (0..3)
+            .flat_map(|round| (0..RESENDS).map(move |attempt| fire_id("s1", round, attempt)))
+            .collect();
+        assert_eq!(ids.len(), 3 * RESENDS);
+        assert_eq!(fire_id("s1", 2, 1), fire_id("s1", 2, 1));
+        assert_ne!(fire_id("s1", 0, 0), fire_id("s2", 0, 0));
+    }
 
     /// A staging request's scheduled activation is kept with the mode
     /// and requested time it was asked with; an immediate one, a cancel
