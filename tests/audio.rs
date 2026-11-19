@@ -544,14 +544,26 @@ async fn a_solo_reaches_the_monitor_meter() {
         ],
     )
     .await;
-    let v = meter_values(&server, 5).await;
-    assert!(near(v[MON_PEAK], -1204), "the source, pgm, in {v:?}");
+    // The meter windows are 100 ms: a change shows once the window it
+    // falls in is over, so each reading waits for its value.
+    let reads = |what: &'static str, want: i16| {
+        let server = &server;
+        async move {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let v = meter_values(server, 1).await;
+                if near(v[MON_PEAK], want) {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "{what} ({want}) in {v:?}");
+            }
+        }
+    };
+    reads("the source, pgm", -1204).await;
     patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
-    let v = meter_values(&server, 5).await;
-    assert!(near(v[MON_PEAK], -903), "ch1 PFL in {v:?}");
+    reads("ch1 PFL", -903).await;
     patch(&server, &[("/channels/ch1/solo", json!("off"))]).await;
-    let v = meter_values(&server, 5).await;
-    assert!(near(v[MON_PEAK], -1204), "the source again in {v:?}");
+    reads("the source again", -1204).await;
     server.stop().await;
 }
 
