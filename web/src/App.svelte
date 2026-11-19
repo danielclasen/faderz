@@ -22,6 +22,7 @@
   import TouchInfo from './components/TouchInfo.svelte';
   import SignIn from './components/SignIn.svelte';
   import Account from './components/Account.svelte';
+  import AboutDialog from './components/AboutDialog.svelte';
 
   const mixer = getMixer();
   /** A phone in landscape: notices move from the status bar into the header. */
@@ -158,6 +159,7 @@
   <StatusBar />
   <TouchInfo />
   <SignIn />
+  <AboutDialog />
 </div>
 
 <style>

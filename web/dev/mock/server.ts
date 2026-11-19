@@ -9,7 +9,7 @@ import { isIP } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Change, CommandResult, TallyState } from '../../src/lib/contract/types.ts';
-import { BUILD, Cluster, CommandError, type Replica } from './cluster.ts';
+import { BUILD, CHANGELOG, Cluster, CommandError, type Replica } from './cluster.ts';
 
 const API = '/api/v1';
 
@@ -255,6 +255,10 @@ export class MockServer {
       {
         method: 'GET', pattern: /^\/replicas$/, template: '/replicas',
         handler: () => ({ status: 200, body: { replica: leader(), build: BUILD, replicas: c.replicaStatus() } }),
+      },
+      {
+        method: 'GET', pattern: /^\/about$/, template: '/about',
+        handler: () => ({ status: 200, body: { build: BUILD, changelog: CHANGELOG } }),
       },
       {
         method: 'POST', pattern: /^\/scenes$/, template: '/scenes',

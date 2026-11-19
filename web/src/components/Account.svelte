@@ -3,13 +3,14 @@
   // initials that opens a menu. The menu names the role, and the user
   // only where that is no email address; its entries are a list of
   // settings, then Sign out; under them, what the serving replica was
-  // built from.
+  // built from, an entry that opens About / What's new.
   import { tick } from 'svelte';
   import { getAuth } from '../lib/auth.svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { follow, type Placement } from '../lib/anchor';
   import { initials, isEmail } from '../lib/account';
   import { setTheme, theme } from '../lib/theme.svelte';
+  import { openAbout } from '../lib/about.svelte';
 
   const mixer = getMixer();
   // Absent where the header is mounted without the sign-in state.
@@ -144,10 +145,17 @@
         <button class="item" role="menuitem" tabindex="-1" data-entry={entry.id} onclick={() => choose(entry)}>{entry.label}</button>
       {/each}
       {#if mixer.status.build}
-        <div class="build num" data-testid="account-build">
+        <button
+          class="item build num"
+          role="menuitem"
+          tabindex="-1"
+          data-testid="account-build"
+          aria-label={`About / What's new: faderz ${mixer.status.build.faderz}, samplez ${mixer.status.build.samplez}`}
+          onclick={() => choose({ id: 'about', label: "About / What's new", run: openAbout })}
+        >
           <span>faderz {mixer.status.build.faderz}</span>
           <span>samplez {mixer.status.build.samplez}</span>
-        </div>
+        </button>
       {/if}
     </div>
   {/if}
@@ -245,9 +253,9 @@
   .build {
     display: flex;
     flex-direction: column;
-    padding: 6px 8px 2px;
     margin-top: 4px;
     border-top: 1px solid var(--line);
+    border-radius: 0 0 3px 3px;
     color: var(--text-faint);
     font-size: 10px;
     line-height: 14px;

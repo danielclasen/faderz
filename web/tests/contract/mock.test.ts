@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 // Drives the dev mock over real HTTP and WebSocket connections and checks
 // every message and response against the committed contract with an
 // independent validator: JSON messages against the message schemas,
@@ -1446,5 +1447,10 @@ describe('REST', () => {
     const replicas = (await rest('GET', '/replicas')).body!;
     expect(replicas['replicas']).toHaveLength(3);
     expect(replicas['build']).toEqual(BUILD);
+  });
+
+  it('serves the build and the changelog of this checkout, as a binary built from it does', async () => {
+    const about = await rest('GET', '/about');
+    expect(about).toEqual({ status: 200, body: { build: BUILD, changelog: readFileSync(new URL('../../../CHANGELOG.md', import.meta.url), 'utf8') } });
   });
 });

@@ -346,6 +346,12 @@ export interface Build {
   faderz: string;
   samplez: string;
 }
+/** GET /about: what the serving replica was built from, and the faderz changelog of that release. */
+export interface About {
+  build: Build;
+  /** The faderz CHANGELOG.md, Markdown as release-please writes it. */
+  changelog: string;
+}
 export interface StateDocument {
   revision: Revision;
   replica: ReplicaRef;

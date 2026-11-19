@@ -1,7 +1,7 @@
 // REST-backed operator actions. Each carries a fresh command id; RestClient
 // retries a failed request with the same id on the next endpoint.
 
-import type { Change, CommandResult, Scene } from '../contract/types';
+import type { About, Change, CommandResult, Scene } from '../contract/types';
 import { RestClient } from '../net/rest';
 import { restBase } from '../sync/endpoints';
 import { uuid } from '../net/ids';
@@ -76,4 +76,9 @@ export function resetLoudness(mixer: MixerStore, ids: string[]) {
 /** Writes `changes` in one revision, or none of them (PATCH /state), as a preset does. */
 export function patchState(mixer: MixerStore, what: string, changes: Change[]) {
   return run(mixer, what, () => client().request<CommandResult>('PATCH', '/state', { commandId: uuid(), changes }));
+}
+
+/** What the serving replica was built from and its changelog; a read, so a locked desk asks it too. */
+export function fetchAbout(): Promise<About> {
+  return client().request<About>('GET', '/about');
 }

@@ -66,3 +66,24 @@ test('keeps the commit banner readable on its own row when quorum is lost on a p
     for (const r of REPLICAS) await request.post(`/__mock/replicas/${r}/restore`);
   }
 });
+
+test('a tap on About / What\'s new in the connection details opens the changelog within a phone screen, and a tap on its close key closes it', async ({ page }) => {
+  await live(page);
+  await page.getByRole('button', { name: /^Connection LIVE, details$/ }).tap();
+  const opener = page.getByTestId('build-about');
+  // A finger-sized key.
+  expect((await opener.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await opener.tap();
+  const dialog = page.getByRole('dialog', { name: "About / What's new" });
+  await expect(dialog.getByTestId('about-changelog')).toBeVisible();
+  const v = page.viewportSize()!;
+  const r = (await dialog.boundingBox())!;
+  expect(r.x >= 0 && r.y >= 0 && r.x + r.width <= v.width && r.y + r.height <= v.height, JSON.stringify(r)).toBe(true);
+  // Its body scrolls, not the page.
+  expect(await dialog.locator('.body').evaluate((b) => b.scrollHeight > b.clientHeight)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(v.width);
+  const close = dialog.getByTestId('about-close');
+  expect((await close.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+  await close.tap();
+  await expect(dialog).toBeHidden();
+});

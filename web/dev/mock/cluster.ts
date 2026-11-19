@@ -73,6 +73,9 @@ export const BUILD: Build = (() => {
   return { faderz, samplez };
 })();
 
+/** The faderz changelog of this checkout, as a binary built from it embeds it. */
+export const CHANGELOG: string = readFileSync(new URL('../../../CHANGELOG.md', import.meta.url), 'utf8');
+
 /** Commands arriving within one block share a log entry. */
 export const BLOCK_MS = 5;
 const LOG_LIMIT = 1000;

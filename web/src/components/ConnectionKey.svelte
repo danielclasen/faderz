@@ -6,6 +6,7 @@
   import { quorumOf } from '../lib/quorum';
   import { tip } from '../lib/tip';
   import { handleTag } from '../lib/net/handle';
+  import { about, openAbout } from '../lib/about.svelte';
 
   /** In the status bar the details open upward; on a short screen the key sits in the header and they open downward. */
   let { where = 'bar' }: { where?: 'bar' | 'header' } = $props();
@@ -68,7 +69,8 @@
     return follow(key, panel, where === 'bar' ? 'above' : 'below', 'start', (p) => (place = p));
   });
   function onkeydown(e: KeyboardEvent): void {
-    if (open && e.key === 'Escape') {
+    // Escape in the About dialog closes the dialog alone, back to its key here.
+    if (open && e.key === 'Escape' && !about.open) {
       open = false;
       key?.focus();
     }
@@ -164,6 +166,9 @@
       <dt>faderz</dt><dd class="num" data-testid="build-faderz" title={`The faderz version ${status.primaryReplica ?? '-'} runs`}>{status.build?.faderz ?? '-'}</dd>
       <dt>samplez</dt><dd class="num" data-testid="build-samplez" title={`The samplez release ${status.primaryReplica ?? '-'} was built against`}>{status.build?.samplez ?? '-'}</dd>
     </dl>
+    {#if status.build}
+      <button class="whatsnew" data-testid="build-about" onclick={openAbout}>About / What's new</button>
+    {/if}
     <table class="replicas" aria-label="Replicas" data-testid="replicas">
       <thead><tr><th scope="col">Replica</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">This screen</th></tr></thead>
       <tbody>
@@ -364,6 +369,22 @@
     margin: 0;
     color: var(--text);
     text-align: right;
+  }
+  .whatsnew {
+    appearance: none;
+    align-self: flex-end;
+    padding: 3px 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    background: var(--panel-2);
+    color: var(--text);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  @media (pointer: coarse) {
+    .whatsnew {
+      padding: 12px 14px;
+    }
   }
   .replicas {
     border-collapse: collapse;
