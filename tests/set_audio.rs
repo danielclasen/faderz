@@ -517,6 +517,10 @@ fn steady(nodes: &[Option<Node>], n: usize) {
     assert!(steady, "replica {n} did not commit: {}", states(nodes));
 }
 
+/// Held by each test that runs a set: two sets of three engines at once
+/// miss their deadlines on a CI host, so they run one after the other.
+static ONE_SET: Mutex<()> = Mutex::new(());
+
 /// The ch1 peak, in centi-dB, of the meter frame the replica `node`
 /// sends a client after the first `skip`.
 fn ch1_peak(node: &Node, skip: usize) -> i16 {
@@ -566,6 +570,7 @@ fn ch1_peak(node: &Node, skip: usize) -> i16 {
     ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
 )]
 fn every_replicas_meters_follow_the_faders() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
     /// A level of digital silence, -120 dB.
     const FLOOR: i16 = -12_000;
     let (set, listeners) = Set::new("taps");
@@ -629,6 +634,7 @@ fn every_replicas_meters_follow_the_faders() {
     ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
 )]
 fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_max_level(tracing::Level::WARN)
