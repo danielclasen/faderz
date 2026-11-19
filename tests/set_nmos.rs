@@ -74,12 +74,20 @@ struct Node {
 }
 
 impl Set {
-    fn new(name: &str, registry: SocketAddr) -> (Set, Vec<std::net::TcpListener>) {
+    /// A set whose ch1 reads a 440 Hz sine, or the constant `ch1_dc`.
+    fn new(
+        name: &str,
+        registry: SocketAddr,
+        ch1_dc: Option<f32>,
+    ) -> (Set, Vec<std::net::TcpListener>) {
         let at = domain(&format!("set-nmos-volumes-{name}"));
         let domain = domain(&format!("set-nmos-{name}"));
         let (ch1, ch2, ch2b, other) = (mxl_id(), mxl_id(), mxl_id(), mxl_id());
         let sources = vec![
-            Source::sine(&domain.0, &ch1, 0.5, 440),
+            match ch1_dc {
+                Some(level) => Source::start(&domain.0, &ch1, vec![level]),
+                None => Source::sine(&domain.0, &ch1, 0.5, 440),
+            },
             Source::sine(&domain.0, &ch2, 0.25, 1000),
             Source::sine(&domain.0, &ch2b, 0.3, 220),
             Source::sine(&domain.0, &other, 0.1, 200),
@@ -586,7 +594,7 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         .with_max_level(tracing::Level::WARN)
         .try_init();
     let (registry, addr) = registry::start();
-    let (set, listeners) = Set::new("node", addr);
+    let (set, listeners) = Set::new("node", addr, None);
     let mut nodes: Vec<Option<Node>> = listeners
         .into_iter()
         .enumerate()
@@ -1149,43 +1157,44 @@ fn states(nodes: &[Option<Node>]) -> String {
     out
 }
 
-/// What the member flows carry as any reader of them sees it, the
-/// merge included, which knows nothing of an engine's block statuses:
-/// every block a reader gets from a member flow, read every 20 ms 80 ms
-/// behind libmxl's clock, by replica.
+/// ch1's level in the down-replica test: a constant, so a block's mean
+/// tells it from ch2's 1000 Hz sine, whose 48 samples are one period.
+const CH1_DC: f32 = 0.5;
+
+/// What a member flow carries, read as a merge reads it, knowing nothing
+/// of block statuses.
 #[derive(Default, Debug)]
 struct Carried {
     /// Blocks read.
     blocks: usize,
     /// The loudest sample in them.
     loudest: f32,
-    /// The first block that carried a sample other than 0.
-    heard: Option<u64>,
-    /// Blocks read that the replica's engine reports committed.
+    /// The first block whose mean says ch1's level is in it.
+    ch1: Option<u64>,
+    /// Blocks read that the engine reports committed.
     committed: usize,
-    /// Blocks read that its engine reports withheld, never written: a
-    /// reader gets what the flow held there before, nothing for a flow
-    /// created since.
+    /// Blocks the engine reports withheld, read or not: computed while
+    /// out of step.
     withheld: usize,
 }
 
-/// Reads every member flow from now on, each while its flow exists, as
-/// [`Carried`] counts; stops when `stop` is set.
+/// Reads every member flow, 80 ms behind libmxl's clock every 20 ms, from
+/// now on, and replica `fresh`'s from its flow's first block, until
+/// `stop` is set.
 fn carried(
     set: &Set,
     engines: Vec<Arc<faderz::audio::Audio>>,
+    fresh: usize,
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) -> std::thread::JoinHandle<Vec<Carried>> {
     let (domain, flows) = (set.domain.0.clone(), set.members.clone());
-    let engines: Vec<Arc<std::sync::Mutex<Arc<faderz::audio::Audio>>>> = engines
-        .into_iter()
-        .map(|e| Arc::new(std::sync::Mutex::new(e)))
-        .collect();
     std::thread::spawn(move || {
         let mut out: Vec<Carried> = flows.iter().map(|_| Carried::default()).collect();
         let mut readers: Vec<Option<(Generation, SlotState)>> =
             flows.iter().map(|_| None).collect();
         let mut next = vec![now_block() + 1; flows.len()];
+        // The flow keeps 1 s of history, and was created since the kill.
+        next[fresh] = now_block().saturating_sub(900);
         let mut buf = vec![0.0f32; 2 * B as usize];
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
             let last = now_block();
@@ -1212,29 +1221,31 @@ fn carried(
                     continue;
                 };
                 let input = g.input(0).unwrap();
-                let engine = engines[n].lock().unwrap().clone();
+                let c = &mut out[n];
                 for k in next[n]..=last {
+                    let status = engines[n].engine().block_status(0, k).map(|s| s.kind);
+                    if status == Some(Kind::Withheld) {
+                        c.withheld += 1;
+                    }
                     match input.read(state, k, &GroupWait::Skipped, &mut buf) {
                         Outcome::Copy => {}
-                        // A flow deleted, as a killed replica's is, is read
-                        // anew once it is created again.
                         Outcome::Invalid => {
                             readers[n] = None;
                             break;
                         }
                         _ => continue,
                     }
-                    let c = &mut out[n];
                     c.blocks += 1;
-                    let loudest = buf.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-                    if loudest > 0.0 && c.heard.is_none() {
-                        c.heard = Some(k);
-                    }
-                    c.loudest = c.loudest.max(loudest);
-                    match engine.engine().block_status(0, k).map(|s| s.kind) {
-                        Some(Kind::Committed) => c.committed += 1,
-                        Some(Kind::Withheld) => c.withheld += 1,
-                        _ => {}
+                    c.committed += usize::from(status == Some(Kind::Committed));
+                    c.loudest = buf.iter().fold(c.loudest, |m, v| m.max(v.abs()));
+                    // Planar legs: ch1 panned to the centre adds about
+                    // 0.35 to each leg's mean, ch2 nothing.
+                    let dc = buf
+                        .chunks_exact(B as usize)
+                        .map(|leg| leg.iter().sum::<f32>() / B as f32)
+                        .fold(0.0f32, |m, v| m.max(v.abs()));
+                    if dc > 0.05 && c.ch1.is_none() {
+                        c.ch1 = Some(k);
                     }
                 }
                 next[n] = last + 1;
@@ -1245,16 +1256,9 @@ fn carried(
     })
 }
 
-/// A replica down while a channel is detached starts with the channel
-/// attached, as its volume left it, until it has caught up with the log;
-/// meanwhile it is withdrawn, and its member flow carries nothing it
-/// computed from that: the merge of the member flows, which reads them
-/// as they are, never carries the detached channel. ch1 is the one
-/// channel open to the programme bus, so the detached mix is digital
-/// silence, and any sample other than 0 in any member flow is ch1's.
-/// The reader takes whatever a member flow holds, written or not: the
-/// killed replica's flow is deleted with it and created again empty, so a
-/// block it computed with ch1 and withheld cannot be read as ch1 either.
+/// A replica down while ch1 was detached comes back on its volume with
+/// ch1 attached; until it has caught up, no member flow, and so no merge
+/// of them, carries ch1.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -1263,7 +1267,7 @@ fn carried(
 fn a_replica_down_while_a_channel_is_detached_writes_none_of_it_on_its_return() {
     let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
     let (_registry, addr) = registry::start();
-    let (set, listeners) = Set::new("down", addr);
+    let (set, listeners) = Set::new("down", addr, Some(CH1_DC));
     let mut nodes: Vec<Option<Node>> = listeners
         .into_iter()
         .enumerate()
@@ -1287,6 +1291,20 @@ fn a_replica_down_while_a_channel_is_detached_writes_none_of_it_on_its_return() 
     std::thread::sleep(Duration::from_millis(500));
     let heard = alike(&set, &nodes, now_block() + 1, 100);
     assert!(heard > 1e-6, "ch1 is not heard before the detach");
+    // Every member flow carries ch1's marker while it is attached.
+    let engines = (0..REPLICAS)
+        .map(|n| node(&nodes, n).server.audio.clone().expect("an engine"))
+        .collect();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader = carried(&set, engines, 0, stop.clone());
+    std::thread::sleep(Duration::from_millis(300));
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for (n, c) in reader.join().unwrap().iter().enumerate() {
+        assert!(
+            c.ch1.is_some(),
+            "replica {n} carries no ch1 while attached: {c:?}"
+        );
+    }
 
     // A follower killed; ch1 detached through the leader while it is down.
     let down = (0..REPLICAS).find(|&n| n != leader).unwrap();
@@ -1303,35 +1321,29 @@ fn a_replica_down_while_a_channel_is_detached_writes_none_of_it_on_its_return() 
     // Past the fade the detach starts.
     std::thread::sleep(Duration::from_millis(500));
 
-    // The merge reads every member flow from now on; the killed replica
-    // comes back on its volume, which has ch1 attached.
+    // The killed replica comes back on its volume, which has ch1
+    // attached; its member flow is read from its first block.
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     nodes[down] = Some(set.start(down, None));
     let engines = (0..REPLICAS)
         .map(|n| node(&nodes, n).server.audio.clone().expect("an engine"))
         .collect();
-    let reader = carried(&set, engines, stop.clone());
-    // Until it has caught up its engine reads ch1, as its volume left it.
-    let mut stale = false;
+    let reader = carried(&set, engines, down, stop.clone());
     let caught = until(60, || {
-        let state = node(&nodes, down).input(0).0;
-        stale |= state == InputState::Attached;
-        state == InputState::Detached
+        node(&nodes, down).input(0).0 == InputState::Detached
             && node(&nodes, down).state() == Some(ReplicaState::Committing)
     });
-    // Two seconds more of it committing; what the member flows carried
-    // is checked first, as it tells most of a replica that wrote while
-    // out of step.
     std::thread::sleep(Duration::from_secs(2));
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let carried = reader.join().unwrap();
+    // What the flows carried first: it says most of a replica that wrote
+    // while out of step.
     for (n, c) in carried.iter().enumerate() {
         assert_eq!(
-            c.loudest,
-            0.0,
-            "replica {n}'s member flow (restarted: {}) carried the detached ch1 from block {:?}: {c:?}",
-            n == down,
-            c.heard
+            c.ch1,
+            None,
+            "replica {n} (restarted: {}) carried ch1: {c:?}",
+            n == down
         );
     }
     assert!(
@@ -1339,17 +1351,16 @@ fn a_replica_down_while_a_channel_is_detached_writes_none_of_it_on_its_return() 
         "the restarted replica did not catch up: {}",
         states(&nodes)
     );
+    // The reader watched it out of step, and then writing.
+    let c = &carried[down];
     assert!(
-        stale,
-        "the restarted replica started with ch1 detached: nothing stale to keep out"
+        c.withheld > 0,
+        "no block of the restarted replica was read out of step: {c:?}"
     );
-    for (n, c) in carried.iter().enumerate() {
-        assert!(
-            c.committed > 100,
-            "replica {n} (restarted: {}) committed little: {c:?}",
-            n == down
-        );
-    }
+    assert!(
+        c.committed > 100,
+        "the restarted replica committed little: {c:?}"
+    );
     for node in nodes.into_iter().flatten() {
         node.kill();
     }
