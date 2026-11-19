@@ -329,6 +329,7 @@ mod tests {
             &mut state,
             &[
                 ("/ducks/comm/channels/ch1/target", json!(true)),
+                ("/ducks/comm/destinations/pgm", json!(false)),
                 ("/ducks/comm/destinations/mm1", json!(true)),
                 ("/ducks/rem/channels/ch1/target", json!(true)),
                 ("/ducks/rem/destinations/pgm", json!(true)),
