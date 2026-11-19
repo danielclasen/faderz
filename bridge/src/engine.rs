@@ -141,7 +141,12 @@ pub fn continuous(path: &str) -> bool {
         ["channels", _, "trim" | "delay"] => true,
         ["channels", _, "legTrim", _] => true,
         ["channels", _, "hpf", "freq"] => true,
-        ["channels", _, "pan", "lr" | "fr" | "divergence" | "lfe" | "frontRear" | "spread" | "lfeSend"] => true,
+        [
+            "channels",
+            _,
+            "pan",
+            "lr" | "fr" | "divergence" | "lfe" | "frontRear" | "spread" | "lfeSend",
+        ] => true,
         ["channels", _, "sends", _, "level" | "pan"] => true,
         [
             "channels" | "buses" | "auxes",
