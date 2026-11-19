@@ -85,6 +85,8 @@ impl<'a> Readings<'a> {
 pub struct Layout {
     /// Kind, legs and source of each element.
     elements: Vec<(Kind, usize, Source)>,
+    /// The id of each element, as `elements`.
+    ids: Vec<String>,
     /// Duck groups, one engine group each in shape order.
     ducks: usize,
     /// FNV-1a 32-bit of the layout text.
@@ -106,9 +108,11 @@ impl Layout {
         };
         let mut text = String::new();
         let mut elements = Vec::new();
+        let mut ids = Vec::new();
         let mut add = |kind, section: &str, id: &str, legs: usize, source| {
             text.push_str(&format!("{section}/{id}/{legs};"));
             elements.push((kind, legs, source));
+            ids.push(id.to_owned());
         };
         for (slot, c) in shape.channels.iter().enumerate() {
             let direct = output(&c.id);
@@ -137,9 +141,28 @@ impl Layout {
         }
         Layout {
             elements,
+            ids,
             ducks: shape.ducks.len(),
             fingerprint: fnv1a(&text),
         }
+    }
+
+    /// The index in a frame's values of the first value of element `id`
+    /// (a channel, bus, aux, mix-minus or monitor output), its peak of
+    /// the first leg: the elements come in shape order, a channel with
+    /// 2n + 1 values for n legs, a monitor output n and any other 3n + 8.
+    pub fn offset(&self, id: &str) -> Option<usize> {
+        let at = self.ids.iter().position(|i| i == id)?;
+        Some(
+            self.elements[..at]
+                .iter()
+                .map(|&(kind, n, _)| match kind {
+                    Kind::Channel => 2 * n + 1,
+                    Kind::Monitor => n,
+                    Kind::Bus => 3 * n + 8,
+                })
+                .sum(),
+        )
     }
 
     /// The frame numbered `sequence` of `replica` from the engine's
@@ -295,6 +318,26 @@ mod tests {
         let text = "c/ch1/1;c/ch2/1;c/st1/2;b/pgm/2;b/cf/2;a/aux1/1;m/mm1/2;o/mon/2;d/comm/1;";
         assert_eq!(layout.fingerprint, fnv1a(text));
         assert_eq!(fnv1a("a"), 0xe40c_292c);
+    }
+
+    /// An element's offset is the values of every element before it, so
+    /// it moves when an element is added ahead of it.
+    #[test]
+    fn an_offset_counts_the_values_of_the_elements_before() {
+        let layout = Layout::of(&Shape::parse(&small()).unwrap());
+        // ch1 3, ch2 3, st1 5, pgm 14, cf 14, aux1 11, mm1 14.
+        assert_eq!(layout.offset("ch1"), Some(0));
+        assert_eq!(layout.offset("ch2"), Some(3));
+        assert_eq!(layout.offset("pgm"), Some(11));
+        assert_eq!(layout.offset("mon"), Some(11 + 14 + 14 + 11 + 14));
+        assert_eq!(layout.offset("nope"), None);
+        let mut with_a_bus = small();
+        with_a_bus["buses"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "id": "b2", "name": "B2", "kind": "cleanFeed", "width": 2, "layout": "stereo" }));
+        let more = Layout::of(&Shape::parse(&with_a_bus).unwrap());
+        assert_eq!(more.offset("mon"), Some(64 + 14));
     }
 
     fn input(peak: Vec<f32>, momentary: Option<f64>) -> InputMeters {

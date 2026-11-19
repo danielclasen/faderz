@@ -524,17 +524,20 @@ fn steady(nodes: &[Option<Node>], n: usize) {
     assert!(steady, "replica {n} did not commit: {}", states(nodes));
 }
 
-/// The meter frame's values: ch1 3, ch2 3, pgm 14, N-1 14, then the
-/// monitor 2; ch1's peak is the first, the monitor's left leg the 35th.
+/// Where in the meter frame's values ch1's peak and the monitor's left
+/// leg are, as the shape lays the frame out.
 const CH1: usize = 0;
-const MON: usize = 34;
+fn mon() -> usize {
+    let shape = faderz::shape::Shape::parse(&shape()).unwrap();
+    faderz::meters::Layout::of(&shape).offset("mon").unwrap()
+}
 
 /// Held by each test that runs a set: two sets of three engines at once
 /// miss their deadlines on a CI host, so they run one after the other.
 static ONE_SET: Mutex<()> = Mutex::new(());
 
 /// Value `index` of the meter frame the replica `node` sends a client
-/// after the first `skip`: [`CH1`] or [`MON`], a peak in centi-dB.
+/// after the first `skip`: [`CH1`] or [`mon()`], a peak in centi-dB.
 fn peak(node: &Node, skip: usize, index: usize) -> i16 {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -645,7 +648,8 @@ fn every_replicas_meters_follow_the_faders() {
             "on its silent source again",
         ),
     ];
-    let steps = (steps.into_iter().map(|s| (CH1, s))).chain(monitor.into_iter().map(|s| (MON, s)));
+    let steps =
+        (steps.into_iter().map(|s| (CH1, s))).chain(monitor.into_iter().map(|s| (mon(), s)));
     for (index, ((path, value), want, what)) in steps {
         write(&nodes, 0, &[(path, value)]);
         for n in 0..REPLICAS {
@@ -656,7 +660,7 @@ fn every_replicas_meters_follow_the_faders() {
                 last = peak(node(&nodes, n), 3, index);
                 (last - want).abs() <= 10
             });
-            let meter = if index == MON { "monitor" } else { "ch1" };
+            let meter = if index == mon() { "monitor" } else { "ch1" };
             assert!(
                 read,
                 "replica {n}'s {meter} meter {what}: {last}, not {want}: {}",
