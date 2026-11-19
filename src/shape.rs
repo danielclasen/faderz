@@ -127,7 +127,7 @@ impl Shape {
     /// mix-minus outputs, VCAs, duck groups and monitor outputs
     /// (recall-safe groups and output sources name them alone) and among outputs; each width
     /// matches its layout; a mix-minus names a bus; an output names an
-    /// element of its width; there is a bus, aux or mix-minus output for
+    /// element at least as wide, which it folds down to its own width; there is a bus, aux or mix-minus output for
     /// the monitor to listen to.
     pub fn parse(value: &Value) -> Result<Shape, String> {
         check(&contract().shape, value)?;
@@ -163,9 +163,9 @@ impl Shape {
             }
             match widths.iter().find(|(id, _)| *id == o.source) {
                 None => return Err(format!("output {} names no element {}", o.id, o.source)),
-                Some((_, w)) if *w != o.width => {
+                Some((_, w)) if o.width > *w => {
                     return Err(format!(
-                        "output {} has width {}, its source {} {w}",
+                        "output {} has width {}, wider than its source {} at {w}",
                         o.id, o.width, o.source
                     ));
                 }
@@ -204,8 +204,9 @@ impl Shape {
     }
 
     /// Id, width and layout of each bus, aux, mix-minus and monitor
-    /// output no output carries, in meter frame order: the engine's meters,
-    /// computed on matrix columns of their own.
+    /// output no output carries at its full width, in meter frame order: the
+    /// engine's meters, computed on matrix columns of their own. An output
+    /// narrower than its source folds it down and meters only itself.
     pub fn meter_columns(&self) -> Vec<(&str, usize, &str)> {
         let b = self.buses.iter().map(|e| (&e.id, e.width, &e.layout));
         let a = self.auxes.iter().map(|e| (&e.id, e.width, &e.layout));
@@ -217,9 +218,15 @@ impl Shape {
         b.chain(a)
             .chain(m)
             .chain(o)
-            .filter(|(id, ..)| !self.outputs.iter().any(|o| &o.source == *id))
+            .filter(|(id, w, _)| self.full_output(id, *w).is_none())
             .map(|(id, w, l)| (id.as_str(), w, l.as_str()))
             .collect()
+    }
+
+    /// The first output carrying element `id`, `width` legs wide, at its
+    /// full width: the output whose meters are the element's.
+    pub fn full_output(&self, id: &str, width: usize) -> Option<usize> {
+        (self.outputs.iter()).position(|o| o.source == id && o.width == width)
     }
 
     /// Whether `id` names an element that may carry recall-safe groups.
@@ -406,6 +413,23 @@ pub(crate) mod tests {
             "monitorOutputs": [{ "id": "mon", "name": "Monitor", "width": 2, "layout": "stereo" }],
             "outputs": [{ "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" }],
         })
+    }
+
+    /// [`small`] with a 5.1 channel on a 5.1 programme bus, which a 6-leg
+    /// output and a stereo one carry.
+    pub fn surround() -> Value {
+        let mut v = small();
+        v["channels"].as_array_mut().unwrap().push(
+            json!({ "id": "sur", "name": "Surround", "width": 6, "layout": "5.1", "altInput": false }),
+        );
+        v["buses"][0] =
+            json!({ "id": "pgm", "name": "PGM", "kind": "program", "width": 6, "layout": "5.1" });
+        v["mixMinus"] = json!([]);
+        v["outputs"] = json!([
+            { "id": "out-51", "name": "PGM 5.1", "source": "pgm", "width": 6, "layout": "5.1" },
+            { "id": "out-lr", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ]);
+        v
     }
 
     #[test]

@@ -124,10 +124,15 @@ struct Reader {
 
 impl Reader {
     fn new(domain: &Path, flow: &str) -> Reader {
+        Reader::wide(domain, flow, 2)
+    }
+
+    /// A reader of a flow of `channels` legs.
+    fn wide(domain: &Path, flow: &str, channels: u32) -> Reader {
         let mut generation = Generation::new(&api(), domain, 1).unwrap();
         let cfg = InputConfig {
             flow_id: flow,
-            channels: 2,
+            channels,
             flow_channels: None,
             offset: 0,
         };
@@ -141,7 +146,7 @@ impl Reader {
         Reader {
             generation,
             state: SlotState::default(),
-            buf: vec![0.0; 2 * B as usize],
+            buf: vec![0.0; channels as usize * B as usize],
         }
     }
 
@@ -721,6 +726,78 @@ async fn a_talkback_interrupt_replaces_the_mix_minus_until_released() {
         .await;
     patch(&server, &[("/mixMinus/mm1/interrupt/active", json!(false))]).await;
     mm.expect(ST1[0], ST1[1], "the mix back on release").await;
+    server.stop().await;
+}
+
+/// A 5.1 channel on a 5.1 bus, written by a 6-leg output and by a stereo
+/// one: the stereo flow is the bus folded down by BS.775 Lo/Ro, centre
+/// and surrounds at -3 dB and the LFE dropped, after the bus fader, and
+/// follows the bus fader as it moves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_output_narrower_than_its_bus_writes_the_fold_down() {
+    let domain = domain("fold");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-fold");
+    let (src, out51, out_lr) = (new_id(), new_id(), new_id());
+    // L R C LFE Ls Rs, each a distinct power of two.
+    let legs = [0.5f32, 0.25, 0.125, 0.0625, 0.03125, 0.015625];
+    let _src = Source::start(&domain.0, &src, legs.to_vec());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "sur", "name": "Surround", "width": 6, "layout": "5.1", "altInput": false },
+        ],
+        "buses": [
+            { "id": "pgm", "name": "PGM", "kind": "program", "width": 6, "layout": "5.1" },
+        ],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-51", "name": "PGM 5.1", "source": "pgm", "width": 6, "layout": "5.1" },
+            { "id": "out-lr", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let inputs = json!({ "sur": { "flow": src } });
+    let outputs = json!({ "out-51": { "flow": out51 }, "out-lr": { "flow": out_lr } });
+    let server = start_with(&data.0, &domain.0, shape, inputs, outputs).await;
+    appears(&domain.0, &out51).await;
+    appears(&domain.0, &out_lr).await;
+    let mut wide = Reader::wide(&domain.0, &out51, 6);
+    let mut lr = Reader::new(&domain.0, &out_lr);
+    patch(
+        &server,
+        &[
+            ("/channels/sur/fader", json!(0)),
+            ("/channels/sur/routes/pgm", json!(true)),
+        ],
+    )
+    .await;
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    let (lo, ro) = (
+        legs[0] + h * legs[2] + h * legs[4],
+        legs[1] + h * legs[2] + h * legs[5],
+    );
+    lr.expect(lo, ro, "Lo/Ro of the 5.1 bus").await;
+    let n = B as usize;
+    let near = |v: &f32, want: f32| (v - want).abs() <= 1e-6;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(b) = wide.recent()
+            && b.chunks(n)
+                .zip(legs)
+                .all(|(leg, want)| leg.iter().all(|v| near(v, want)))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the 5.1 flow carries every leg as it is"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // The fold follows the bus fader: -6 dB.
+    patch(&server, &[("/buses/pgm/fader", json!(-6))]).await;
+    let g = 10f32.powf(-6.0 / 20.0);
+    lr.expect(lo * g, ro * g, "Lo/Ro after the bus fader").await;
     server.stop().await;
 }
 

@@ -95,9 +95,9 @@ pub struct Layout {
 
 impl Layout {
     pub fn of(shape: &Shape) -> Layout {
-        let output = |id: &str| shape.outputs.iter().position(|o| o.source == id);
+        let output = |id: &str, width: usize| shape.full_output(id, width);
         let meters = shape.meter_columns();
-        let source = |id: &str| match output(id) {
+        let source = |id: &str, width: usize| match output(id, width) {
             Some(o) => Source::Output(o),
             None => Source::Meter(
                 meters
@@ -115,7 +115,7 @@ impl Layout {
             ids.push(id.to_owned());
         };
         for (slot, c) in shape.channels.iter().enumerate() {
-            let direct = output(&c.id);
+            let direct = output(&c.id, c.width);
             add(
                 Kind::Channel,
                 "c",
@@ -125,16 +125,16 @@ impl Layout {
             );
         }
         for b in &shape.buses {
-            add(Kind::Bus, "b", &b.id, b.width, source(&b.id));
+            add(Kind::Bus, "b", &b.id, b.width, source(&b.id, b.width));
         }
         for a in &shape.auxes {
-            add(Kind::Bus, "a", &a.id, a.width, source(&a.id));
+            add(Kind::Bus, "a", &a.id, a.width, source(&a.id, a.width));
         }
         for m in &shape.mix_minus {
-            add(Kind::Bus, "m", &m.id, m.width, source(&m.id));
+            add(Kind::Bus, "m", &m.id, m.width, source(&m.id, m.width));
         }
         for m in &shape.monitor_outputs {
-            add(Kind::Monitor, "o", &m.id, m.width, source(&m.id));
+            add(Kind::Monitor, "o", &m.id, m.width, source(&m.id, m.width));
         }
         for d in &shape.ducks {
             text.push_str(&format!("d/{}/1;", d.id));
@@ -309,6 +309,7 @@ fn fnv1a(text: &str) -> u32 {
 mod tests {
     use super::*;
     use crate::shape::tests::small;
+    use serde_json::Value;
 
     /// The client derives the same fingerprint from the shape
     /// (web/src/lib/contract/meterFrame.ts) and refuses a frame of another.
@@ -338,6 +339,25 @@ mod tests {
             .push(serde_json::json!({ "id": "b2", "name": "B2", "kind": "cleanFeed", "width": 2, "layout": "stereo" }));
         let more = Layout::of(&Shape::parse(&with_a_bus).unwrap());
         assert_eq!(more.offset("mon"), Some(64 + 14));
+    }
+
+    /// An element is metered by the output that carries it at its full
+    /// width; one a narrower output alone carries has an engine meter.
+    #[test]
+    fn a_fold_down_output_is_not_its_sources_meter() {
+        let mut v = crate::shape::tests::surround();
+        let source = |v: &Value| {
+            let layout = Layout::of(&Shape::parse(v).unwrap());
+            layout
+                .elements
+                .iter()
+                .find(|e| e.1 == 6 && e.0 == Kind::Bus)
+                .unwrap()
+                .2
+        };
+        assert!(matches!(source(&v), Source::Output(0)));
+        v["outputs"].as_array_mut().unwrap().remove(0);
+        assert!(matches!(source(&v), Source::Meter(0)));
     }
 
     fn input(peak: Vec<f32>, momentary: Option<f64>) -> InputMeters {

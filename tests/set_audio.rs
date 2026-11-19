@@ -71,6 +71,7 @@ struct Set {
     _sources: Vec<Source>,
     inputs: Value,
     outputs: Value,
+    shape: Value,
     ports: Vec<u16>,
     tls: Vec<Value>,
     markers: Arc<Memory>,
@@ -88,31 +89,57 @@ struct Node {
 
 impl Set {
     fn new(name: &str) -> (Set, Vec<std::net::TcpListener>) {
+        Set::with(name, shape(), &["out-pgm", "out-mm"], |domain| {
+            let (ch1, ch2, ch2b) = (new_id(), new_id(), new_id());
+            let sources = vec![
+                Source::sine(domain, &ch1, 0.5, 440),
+                Source::sine(domain, &ch2, 0.25, 1000),
+                Source::sine(domain, &ch2b, 0.3, 220),
+            ];
+            let inputs = json!({ "ch1": { "flow": ch1 }, "ch2": { "flow": ch2, "altFlow": ch2b } });
+            (sources, inputs)
+        })
+    }
+
+    /// A set of `shape`, each of `outputs` written by every replica to a
+    /// flow of its own, reading the `inputs` `sources` writes into the
+    /// domain it is given.
+    fn with(
+        name: &str,
+        shape: Value,
+        outputs: &[&str],
+        sources: impl FnOnce(&Path) -> (Vec<Source>, Value),
+    ) -> (Set, Vec<std::net::TcpListener>) {
         // The volumes on tmpfs: a test host's disk, shared with builds,
         // can take longer to sync an append than the apply lead allows.
         let at = domain(&format!("set-volumes-{name}"));
         let domain = domain(&format!("set-{name}"));
-        let (ch1, ch2, ch2b) = (new_id(), new_id(), new_id());
-        let sources = vec![
-            Source::sine(&domain.0, &ch1, 0.5, 440),
-            Source::sine(&domain.0, &ch2, 0.25, 1000),
-            Source::sine(&domain.0, &ch2b, 0.3, 220),
-        ];
+        let (sources, inputs) = sources(&domain.0);
         let listeners: Vec<std::net::TcpListener> = (0..REPLICAS)
             .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
             .collect();
         let ports = (listeners.iter())
             .map(|l| l.local_addr().unwrap().port())
             .collect();
-        let members: Vec<String> = (0..REPLICAS).map(|_| new_id()).collect();
-        let mm_members: Vec<String> = (0..REPLICAS).map(|_| new_id()).collect();
+        let flows = |_: &&str| -> Vec<String> { (0..REPLICAS).map(|_| new_id()).collect() };
+        let outputs: serde_json::Map<String, Value> = (outputs.iter())
+            .map(|id| ((*id).to_owned(), json!({ "flows": flows(id) })))
+            .collect();
+        let flows_of = |output: &Value| -> Vec<String> {
+            (output["flows"].as_array().unwrap().iter())
+                .map(|f| f.as_str().unwrap().to_owned())
+                .collect()
+        };
+        let members = flows_of(outputs.values().next().unwrap());
+        let mm_members = outputs.get("out-mm").map(flows_of).unwrap_or_default();
         let set = Set {
             tls: certificates(&at.0, REPLICAS),
             at,
             domain,
             _sources: sources,
-            inputs: json!({ "ch1": { "flow": ch1 }, "ch2": { "flow": ch2, "altFlow": ch2b } }),
-            outputs: json!({ "out-pgm": { "flows": members }, "out-mm": { "flows": mm_members } }),
+            inputs,
+            outputs: Value::Object(outputs),
+            shape,
             members,
             mm_members,
             ports,
@@ -153,7 +180,7 @@ impl Set {
                 // A loaded test host applies late more often than a node.
                 "maxApplyLeadMs": 120,
             },
-            "shape": shape(),
+            "shape": self.shape,
             "mxl": {
                 "libraryPath": libmxl(),
                 "domains": [{ "name": "d", "path": self.domain.0 }],
@@ -312,10 +339,15 @@ impl Outputs {
 
 /// A reader of the stereo flow `flow`, once it exists.
 fn attach(domain: &Path, flow: &str) -> Option<Generation> {
+    attach_wide(domain, flow, 2)
+}
+
+/// A reader of the flow `flow` of `channels` legs, once it exists.
+fn attach_wide(domain: &Path, flow: &str, channels: u32) -> Option<Generation> {
     let mut generation = Generation::new(&api(), domain, 1).ok()?;
     let cfg = InputConfig {
         flow_id: flow,
-        channels: 2,
+        channels,
         flow_channels: None,
         offset: 0,
     };
@@ -949,6 +981,102 @@ fn states(nodes: &[Option<Node>]) -> String {
         );
     }
     out
+}
+
+/// The legs of the latest block of `flow` 80 ms behind libmxl's clock,
+/// planar, once it reads.
+fn legs_of(domain: &Path, flow: &str, channels: u32) -> Option<Vec<Vec<f32>>> {
+    let generation = attach_wide(domain, flow, channels)?;
+    let n = B as usize;
+    let mut buf = vec![0.0f32; channels as usize * n];
+    let input = generation.input(0).unwrap();
+    let k = Outputs::now();
+    let o = input.read(&mut SlotState::default(), k, &GroupWait::Skipped, &mut buf);
+    (o == Outcome::Copy).then(|| buf.chunks(n).map(|leg| leg.to_vec()).collect())
+}
+
+/// Every replica of a set with a 5.1 channel on a 5.1 bus writes the 6-leg
+/// output as it mixes it and the stereo output as BS.775 Lo/Ro of the
+/// bus, the same on all three, and each follows a bus fader written to
+/// the set.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_writes_the_fold_down_of_a_surround_bus() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "sur", "name": "Surround", "width": 6, "layout": "5.1", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 6, "layout": "5.1" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-51", "name": "PGM 5.1", "source": "pgm", "width": 6, "layout": "5.1" },
+            { "id": "out-lr", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    // L R C LFE Ls Rs, each a distinct power of two.
+    let legs = [0.5f32, 0.25, 0.125, 0.0625, 0.03125, 0.015625];
+    let (set, listeners) = Set::with("fold", shape, &["out-51", "out-lr"], |domain| {
+        let src = new_id();
+        (
+            vec![Source::start(domain, &src, legs.to_vec())],
+            json!({ "sur": { "flow": src } }),
+        )
+    });
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let flows = |output: &str| -> Vec<String> {
+        (set.outputs[output]["flows"].as_array().unwrap().iter())
+            .map(|f| f.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (wide, lr) = (flows("out-51"), flows("out-lr"));
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    let (lo, ro) = (
+        legs[0] + h * legs[2] + h * legs[4],
+        legs[1] + h * legs[2] + h * legs[5],
+    );
+    let near = |leg: &[f32], want: f32| leg.iter().all(|v| (v - want).abs() <= 1e-6);
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/sur/fader", json!(0)),
+            ("/channels/sur/routes/pgm", json!(true)),
+        ],
+    );
+    for (bus, g) in [(0.0, 1.0f32), (-6.0, 10f32.powf(-6.0 / 20.0))] {
+        write(&nodes, 1, &[("/buses/pgm/fader", json!(bus))]);
+        for n in 0..REPLICAS {
+            let mut last = None;
+            let read = until(20, || {
+                let (Some(w), Some(s)) = (
+                    legs_of(&set.domain.0, &wide[n], 6),
+                    legs_of(&set.domain.0, &lr[n], 2),
+                ) else {
+                    return false;
+                };
+                last = Some((w.iter().map(|l| l[0]).collect::<Vec<_>>(), s[0][0], s[1][0]));
+                w.iter().zip(legs).all(|(leg, want)| near(leg, want * g))
+                    && near(&s[0], lo * g)
+                    && near(&s[1], ro * g)
+            });
+            assert!(
+                read,
+                "replica {n} at bus fader {bus}: wanted {legs:?} * {g}, Lo {lo}, Ro {ro}; read {last:?}: {}",
+                states(&nodes)
+            );
+        }
+    }
 }
 
 /// An interrupt of the mix-minus output is one replicated command: every

@@ -241,11 +241,22 @@ pub(crate) fn columns(shape: &Shape) -> Vec<(&str, usize)> {
 
 /// Writes the gains `g` of an element `ew` legs wide ([`Mix::element`])
 /// into the columns from `first` on of an output `width` legs wide, its
-/// rows into rows `rows` of `m`; legs the element lacks are 0.
+/// rows into rows `rows` of `m`. An output as wide as the element takes
+/// its legs; a narrower one folds them down as [`pan`] does a channel,
+/// the sum of each leg's gain times its fold coefficient; legs the
+/// element lacks are 0.
 fn put(m: &mut [Vec<f32>], rows: &[usize], first: usize, width: usize, ew: usize, g: &[f64]) {
     for (i, &row) in rows.iter().enumerate() {
         for leg in 0..width {
-            let v = if leg < ew { g[i * ew + leg] } else { 0.0 };
+            let v = if width < ew {
+                (0..ew)
+                    .map(|k| g[i * ew + k] * pan(ew, width, k, leg, 0.0))
+                    .sum()
+            } else if leg < ew {
+                g[i * ew + leg]
+            } else {
+                0.0
+            };
             m[row][first + leg] = v as f32;
         }
     }
@@ -1666,6 +1677,77 @@ mod tests {
         assert_eq!(pan(2, 1, 0, 0, 0.0), 0.5);
         assert_eq!(pan(6, 1, 2, 0, 0.0), h);
         assert_eq!(pan(6, 1, 3, 0, 0.0), 0.0);
+    }
+
+    /// A 5.1 channel on a 5.1 bus carried by a 6-leg output and by a
+    /// stereo output: the stereo one is the bus folded by BS.775 Lo/Ro,
+    /// after the bus fader, and the bus keeps no meter column of its own.
+    fn surround() -> (Shape, Value) {
+        let v = crate::shape::tests::surround();
+        let shape = Shape::parse(&v).unwrap();
+        let mut s = shape.initial_state();
+        s["channels"]["sur"]["fader"] = json!(0);
+        s["channels"]["sur"]["routes"]["pgm"] = json!(true);
+        s["buses"]["pgm"]["fader"] = json!(-6);
+        (shape, s)
+    }
+
+    #[test]
+    fn an_output_narrower_than_its_source_folds_it_down() {
+        let (shape, s) = surround();
+        let m = matrix(&shape, &s);
+        let (bus, h) = (gain(-6.0), std::f64::consts::FRAC_1_SQRT_2);
+        // Rows: ch1, ch2, st1 L, st1 R, then sur L R C LFE Ls Rs.
+        // Columns: out-51 0..6, out-lr 6..8, then cf, aux1, mon.
+        assert_eq!(m[0].len(), 6 + 2 + 2 + 1 + 2);
+        let want_lr = [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [h, h],
+            [0.0, 0.0],
+            [h, 0.0],
+            [0.0, h],
+        ];
+        for (leg, lr) in want_lr.iter().enumerate() {
+            let row = &m[4 + leg];
+            for (j, g) in row[..6].iter().enumerate() {
+                assert!(
+                    close(*g, if j == leg { bus } else { 0.0 }),
+                    "5.1 [{leg}][{j}]"
+                );
+            }
+            assert!(close(row[6], bus * lr[0]), "Lo of leg {leg}: {}", row[6]);
+            assert!(close(row[7], bus * lr[1]), "Ro of leg {leg}: {}", row[7]);
+        }
+    }
+
+    /// Only a full-width output is the element's meter; a bus a narrower
+    /// output alone carries meters on columns of its own.
+    #[test]
+    fn a_fold_down_output_leaves_its_source_a_meter_unless_a_full_one_exists() {
+        let (shape, _) = surround();
+        assert!(shape.meter_columns().iter().all(|m| m.0 != "pgm"));
+        let mut v = serde_json::to_value(&shape).unwrap();
+        v["outputs"].as_array_mut().unwrap().remove(0);
+        let shape = Shape::parse(&v).unwrap();
+        let pgm = shape.meter_columns().into_iter().find(|m| m.0 == "pgm");
+        assert_eq!(pgm, Some(("pgm", 6, "5.1")));
+        let m = matrix(&shape, &surround().1);
+        // out-lr, then the meters in shape order: pgm (6 legs) first.
+        assert_eq!(m[0].len(), 2 + 6 + 2 + 1 + 2);
+        assert!(close(m[4][2], gain(-6.0)) && close(m[4][0], gain(-6.0)));
+    }
+
+    /// An output wider than its source is refused; the engine would have
+    /// to invent legs.
+    #[test]
+    fn an_output_wider_than_its_source_is_refused() {
+        let mut v = crate::shape::tests::small();
+        v["outputs"] = json!([
+            { "id": "o", "name": "x", "source": "aux1", "width": 2, "layout": "stereo" },
+        ]);
+        let e = Shape::parse(&v).unwrap_err();
+        assert!(e.contains("wider than its source"), "{e}");
     }
 
     #[test]
