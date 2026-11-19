@@ -933,7 +933,10 @@ async fn a_burst_ducks_the_programme_but_not_the_me(block: u32) {
         // The edges are read from one window of 2 s, which a debug engine
         // on a loaded host computes whole only with time in hand: inputs
         // read 100 ms late, and a backlog of 100 ms computed rather than
-        // skipped, where the default of two blocks is 2 ms at block 48.
+        // skipped. maxCatchupBlocks is set far off its default of two
+        // blocks (2 ms at block 48) on purpose: this test is about the
+        // duck, not about a late wake. A skip past the default is
+        // samplez's engine's to test, and its tests cover it.
         json!({
             "blockSize": block,
             "readerMarginSamples": 100 * PER_MS,
