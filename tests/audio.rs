@@ -595,7 +595,7 @@ async fn a_loudness_reset_restarts_the_measurement() {
         }
     }
     patch(&server, &[("/channels/ch1/fader", json!(0))]).await;
-    let v = until_values(&server, "loud, measured", |v| {
+    until_values(&server, "loud, measured", |v| {
         v[INTEGRATED] != i16::MIN && v[MAX_MOMENTARY] != i16::MIN
     })
     .await;
