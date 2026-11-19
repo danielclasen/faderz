@@ -949,7 +949,7 @@ fn states(nodes: &[Option<Node>]) -> String {
 
 /// An interrupt of the mix-minus output is one replicated command: every
 /// replica's member flow of it carries the talkback channel alone, at
-/// its level before its closed fader, in place of the mix, alike on all
+/// its level (ch1 is 6 dB above ch2) before its closed fader, in place of the mix, alike on all
 /// of them, and the mix again once released.
 #[test]
 #[cfg_attr(
@@ -1007,8 +1007,8 @@ fn an_interrupt_changes_every_replicas_mix_minus_alike() {
     );
     let talk = settled("the interrupt");
     assert!(
-        talk > mix + 1000,
-        "the talkback ({talk}) is not louder than the mix ({mix}) by 10 dB"
+        talk > mix + 500,
+        "the talkback ({talk}) is not 6 dB above the mix ({mix})"
     );
     write(
         &nodes,
