@@ -524,10 +524,10 @@ fn steady(nodes: &[Option<Node>], n: usize) {
     assert!(steady, "replica {n} did not commit: {}", states(nodes));
 }
 
-/// The meter frame's values: ch1 3, ch2 3, pgm 14, then the monitor
-/// 2; ch1's peak is the first, the monitor's left leg the 21st.
+/// The meter frame's values: ch1 3, ch2 3, pgm 14, N-1 14, then the
+/// monitor 2; ch1's peak is the first, the monitor's left leg the 35th.
 const CH1: usize = 0;
-const MON: usize = 20;
+const MON: usize = 34;
 
 /// Held by each test that runs a set: two sets of three engines at once
 /// miss their deadlines on a CI host, so they run one after the other.
