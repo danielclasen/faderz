@@ -116,6 +116,13 @@ pub enum Command {
         id: String,
         schedule: String,
     },
+    /// `POST /loudness/reset`: counts a reset of each output's loudness
+    /// measurement in the state, which every replica's engine follows at
+    /// the delta's `atIndex`.
+    ResetLoudness {
+        id: String,
+        ids: Vec<String>,
+    },
 }
 
 impl Command {
@@ -134,7 +141,8 @@ impl Command {
             | Command::Connect { id, .. }
             | Command::Schedule { id, .. }
             | Command::Unschedule { id, .. }
-            | Command::Fire { id, .. } => id,
+            | Command::Fire { id, .. }
+            | Command::ResetLoudness { id, .. } => id,
         }
     }
 }
@@ -1464,6 +1472,29 @@ impl Mixer {
         changed(self.write(written))
     }
 
+    /// Counts one more reset in each of `ids`' measurements
+    /// (`/loudness/<id>/resets`), the same on every replica; the engines
+    /// restart the measurement at the delta's `atIndex`. An id that is no
+    /// output refuses the whole command.
+    fn reset_loudness(&mut self, session: &SessionKey, id: &str, ids: &[String]) -> Effect<Edits> {
+        let shape = self.shape();
+        if let Some(bad) = ids.iter().find(|i| !shape.is_output_bus(i)) {
+            let message = format!("unknown bus {bad}");
+            return self.refuse(session, id, Answer::NotFound { message });
+        }
+        let ids: std::collections::BTreeSet<&String> = ids.iter().collect();
+        let written = (ids.into_iter())
+            .map(|bus| {
+                let n = self.state["loudness"][bus.as_str()]["resets"].as_u64();
+                (
+                    format!("/loudness/{}/resets", escape(bus)),
+                    json!(n.unwrap_or(0) + 1),
+                )
+            })
+            .collect();
+        changed(self.write(written))
+    }
+
     /// `/consoles` written from the consoles held.
     fn publish_consoles(&mut self) -> Effect<Edits> {
         let list = self.console_list();
@@ -1753,6 +1784,7 @@ impl Product for Mixer {
             } => self.schedule(&session, id, port, active, *at),
             Command::Unschedule { port, .. } => self.unschedule(port),
             Command::Fire { id, schedule } => self.fire(&session, id, schedule, ctx),
+            Command::ResetLoudness { id, ids } => self.reset_loudness(&session, id, ids),
         }
     }
 
@@ -2414,6 +2446,44 @@ mod tests {
         m.check_write("/recallSafe/vca1", &json!(["fader"]))
             .unwrap();
         m.check_write("/monitor/source", &json!("aux1")).unwrap();
+    }
+
+    /// A reset counts up in the state of each bus it names, once however
+    /// often it is named, so every replica's engine restarts the
+    /// measurement at the delta's index; an id that is no bus refuses the
+    /// whole command and counts nothing.
+    #[test]
+    fn a_loudness_reset_is_counted_in_the_state() {
+        let mut m = mixer();
+        let reset = |m: &mut Mixer, id: &str, ids: &[&str]| {
+            let ids = ids.iter().map(|i| (*i).to_owned()).collect();
+            rest(m, Command::ResetLoudness { id: id.into(), ids })
+        };
+        assert_eq!(at(&m, "/loudness/pgm/resets"), &json!(0));
+        let v = values(&reset(&mut m, "r1", &["pgm", "pgm", "cf"]));
+        assert_eq!(
+            v,
+            vec![
+                ("/loudness/cf/resets".to_owned(), json!(1)),
+                ("/loudness/pgm/resets".to_owned(), json!(1)),
+            ]
+        );
+        let v = values(&reset(&mut m, "r2", &["pgm"]));
+        assert_eq!(v, vec![("/loudness/pgm/resets".to_owned(), json!(2))]);
+        assert!(matches!(
+            reset(&mut m, "r3", &["pgm", "ch1"]),
+            Effect::Unchanged
+        ));
+        assert!(matches!(
+            m.answer(&rest_key(), "r3"),
+            Some(Answer::NotFound { .. })
+        ));
+        assert_eq!(at(&m, "/loudness/pgm/resets"), &json!(2));
+        // A write of the count by a client is no control.
+        assert!(matches!(
+            m.check_write("/loudness/pgm/resets", &json!(0)),
+            Err(Answer::Invalid { .. })
+        ));
     }
 
     #[test]

@@ -87,6 +87,8 @@ pub struct Layout {
     elements: Vec<(Kind, usize, Source)>,
     /// The id of each element, as `elements`.
     ids: Vec<String>,
+    /// The shape's outputs: the engine's meters are numbered after them.
+    outputs: usize,
     /// Duck groups, one engine group each in shape order.
     ducks: usize,
     /// FNV-1a 32-bit of the layout text.
@@ -142,8 +144,21 @@ impl Layout {
         Layout {
             elements,
             ids,
+            outputs: shape.outputs.len(),
             ducks: shape.ducks.len(),
             fingerprint: fnv1a(&text),
+        }
+    }
+
+    /// The number the engine gives the measurement of bus, aux or
+    /// mix-minus `id`: its first full-width output's, or after the
+    /// outputs its engine meter's ([`samplez::Engine::reset_loudness`]).
+    pub fn loudness_meter(&self, id: &str) -> Option<usize> {
+        let at = self.ids.iter().position(|i| i == id)?;
+        match self.elements[at] {
+            (Kind::Bus, _, Source::Output(o)) => Some(o),
+            (Kind::Bus, _, Source::Meter(m)) => Some(self.outputs + m),
+            _ => None,
         }
     }
 
@@ -323,6 +338,18 @@ mod tests {
 
     /// An element's offset is the values of every element before it, so
     /// it moves when an element is added ahead of it.
+    #[test]
+    fn a_loudness_meter_is_its_output_or_its_engine_meter_after_them() {
+        let layout = Layout::of(&Shape::parse(&small()).unwrap());
+        // Outputs: out-pgm. Meters: cf, aux1, mm1, mon.
+        assert_eq!(layout.loudness_meter("pgm"), Some(0));
+        assert_eq!(layout.loudness_meter("cf"), Some(1));
+        assert_eq!(layout.loudness_meter("aux1"), Some(2));
+        assert_eq!(layout.loudness_meter("mm1"), Some(3));
+        assert_eq!(layout.loudness_meter("ch1"), None);
+        assert_eq!(layout.loudness_meter("nope"), None);
+    }
+
     #[test]
     fn an_offset_counts_the_values_of_the_elements_before() {
         let layout = Layout::of(&Shape::parse(&small()).unwrap());

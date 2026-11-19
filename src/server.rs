@@ -299,7 +299,8 @@ impl Server {
                             }
                             std::future::pending::<()>().await
                         };
-                        tokio::join!(follow, meter, count);
+                        let resets = audio.follow_resets(&tasks_state);
+                        tokio::join!(follow, meter, count, resets);
                     }
                     None => std::future::pending::<()>().await,
                 }

@@ -245,6 +245,8 @@ export type LoudnessScale = 'ebu9' | 'ebu18';
 /** Integration of an output's loudness measurement: start and pause (EBU Tech 3341). */
 export interface LoudnessMeasurement {
   running: boolean;
+  /** Resets so far; the server writes it. */
+  resets?: number;
 }
 export interface Metering {
   zones: { alignment: number; permittedMax: number; truePeakMax: number };

@@ -214,6 +214,29 @@ pub async fn tally(server: &Server, source: &str, state: &str) {
     );
 }
 
+/// POST `body` to `path` of `addr`: status and body.
+pub async fn post(addr: std::net::SocketAddr, path: &str, body: &Value) -> (u16, String) {
+    let body = body.to_string();
+    let mut tcp = TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "POST /api/v1{path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         X-Samplez-Request: 1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    tcp.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    tcp.read_to_string(&mut answer).await.unwrap();
+    let status = answer[9..12].parse().unwrap();
+    (
+        status,
+        answer
+            .split_once("\r\n\r\n")
+            .map_or("", |(_, b)| b)
+            .to_owned(),
+    )
+}
+
 /// GET `path` from `addr`: status and body.
 pub async fn get(addr: std::net::SocketAddr, path: &str) -> (u16, String) {
     let mut tcp = TcpStream::connect(addr).await.unwrap();

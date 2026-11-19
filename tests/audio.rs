@@ -555,6 +555,69 @@ async fn a_solo_reaches_the_monitor_meter() {
     server.stop().await;
 }
 
+/// POST /loudness/reset restarts the loudness measurement of an output:
+/// the highest momentary loudness since the last reset falls to the
+/// level the output has now, from the louder one it had.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loudness_reset_restarts_the_measurement() {
+    const MOMENTARY: usize = PGM_PEAK + 6;
+    const INTEGRATED: usize = PGM_PEAK + 8;
+    const MAX_MOMENTARY: usize = PGM_PEAK + 10;
+    let domain = domain("loud-reset");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-loud-reset");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // Frames until `done` holds of the meter values, or a minute passes.
+    async fn until_values(server: &Server, what: &str, done: impl Fn(&[i16]) -> bool) -> Vec<i16> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let v = meter_values(server, 1).await;
+            if done(&v) {
+                return v;
+            }
+            assert!(Instant::now() < deadline, "{what}: {v:?}");
+        }
+    }
+    patch(&server, &[("/channels/st1/fader", json!(0))]).await;
+    let v = until_values(&server, "loud, measured", |v| {
+        v[INTEGRATED] != i16::MIN && v[MAX_MOMENTARY] != i16::MIN
+    })
+    .await;
+    let loud = v[MAX_MOMENTARY];
+    // 20 dB down: the maximum holds, the momentary level follows.
+    patch(&server, &[("/channels/st1/fader", json!(-20))]).await;
+    let v = until_values(&server, "20 dB down", |v| {
+        v[MOMENTARY] != i16::MIN && v[MOMENTARY] <= loud - 1800
+    })
+    .await;
+    assert!(v[MAX_MOMENTARY] >= loud, "the maximum holds: {v:?}");
+    let (status, body) = post(server.api, "/loudness/reset", &json!({ "ids": ["pgm"] })).await;
+    assert_eq!(status, 204, "{body}");
+    let v = until_values(&server, "the maximum restarts", |v| {
+        v[MAX_MOMENTARY] != i16::MIN && v[MAX_MOMENTARY] <= loud - 1500
+    })
+    .await;
+    assert!(v[MAX_MOMENTARY] <= loud - 1500, "{v:?}");
+    let (status, _) = post(server.api, "/loudness/reset", &json!({ "ids": ["ch1"] })).await;
+    assert_eq!(status, 404, "a channel has no loudness measurement");
+    server.stop().await;
+}
+
 /// Channel and VCA PFL and AFL reach the monitor output flow in place
 /// of its source, PFL over AFL, and every solo off gives the source back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

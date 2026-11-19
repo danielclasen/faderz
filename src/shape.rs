@@ -370,7 +370,7 @@ impl Shape {
                 self.buses.iter().map(|e| &e.id)
                     .chain(self.auxes.iter().map(|e| &e.id))
                     .chain(self.mix_minus.iter().map(|e| &e.id))
-                    .map(|id| (id.clone(), json!({ "running": true })))
+                    .map(|id| (id.clone(), json!({ "running": true, "resets": 0 })))
                     .collect(),
             ),
             "recallSafe": {},
@@ -456,7 +456,10 @@ pub(crate) mod tests {
             ["aux1", "cf", "mm1", "pgm"],
             "every bus, aux and mix-minus output"
         );
-        assert_eq!(state["loudness"]["pgm"], json!({ "running": true }));
+        assert_eq!(
+            state["loudness"]["pgm"],
+            json!({ "running": true, "resets": 0 })
+        );
     }
 
     /// A duck group starts idle on the programme buses alone: the clean

@@ -3092,6 +3092,11 @@
       "properties": {
         "running": {
           "type": "boolean"
+        },
+        "resets": {
+          "description": "How many times POST /loudness/reset has restarted the measurement. Written by the server only; a client sees a reset when the count rises, at the delta's atIndex.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

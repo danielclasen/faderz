@@ -704,6 +704,77 @@ fn every_replicas_meters_follow_the_faders() {
     }
 }
 
+/// A reset of an output's loudness posted to one replica restarts the
+/// measurement on every replica: the highest momentary loudness since
+/// the last reset falls on each to the level the output has then, and
+/// the replicas agree on the integrated loudness.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_loudness_reset_restarts_every_replicas_measurement() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (set, listeners) = Set::new("loud");
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let shape = faderz::shape::Shape::parse(&shape()).unwrap();
+    // pgm: peak, true peak and RMS of two legs, then momentary,
+    // short-term, integrated, range, and the highest momentary.
+    let at = faderz::meters::Layout::of(&shape).offset("pgm").unwrap();
+    let (momentary, integrated, max_momentary) = (at + 6, at + 8, at + 10);
+    let null = i16::MIN;
+    let read = |n: usize, index: usize| peak(node(&nodes, n), 1, index);
+    write(&nodes, 0, &[("/channels/ch1/fader", json!(0))]);
+    let mut loud = i16::MAX;
+    for n in 0..REPLICAS {
+        let measured = until(60, || {
+            let max = read(n, max_momentary);
+            if max != null {
+                loud = loud.min(max);
+            }
+            max != null && read(n, integrated) != null
+        });
+        assert!(measured, "replica {n} measures: {}", states(&nodes));
+    }
+    // 20 dB down: every maximum holds, the momentary levels follow.
+    write(&nodes, 0, &[("/channels/ch1/fader", json!(-20))]);
+    for n in 0..REPLICAS {
+        let lower = until(30, || {
+            let now = read(n, momentary);
+            now != null && now <= loud - 1800
+        });
+        assert!(lower, "replica {n} is 20 dB down: {}", states(&nodes));
+        assert!(read(n, max_momentary) >= loud - 100, "the maximum holds");
+    }
+    // Posted to a replica that need not lead.
+    let api = node(&nodes, 1).server.api;
+    let (status, body) =
+        node(&nodes, 1)
+            .runtime
+            .block_on(post(api, "/loudness/reset", &json!({ "ids": ["pgm"] })));
+    assert_eq!(status, 204, "{body}");
+    for n in 0..REPLICAS {
+        let reset = until(30, || {
+            let max = read(n, max_momentary);
+            max != null && max <= loud - 1500
+        });
+        assert!(reset, "replica {n} restarted: {}", states(&nodes));
+    }
+    // A steady tone measured from one sample: the replicas agree.
+    for n in 0..REPLICAS {
+        assert!(until(60, || read(n, integrated) != null));
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let each: Vec<i16> = (0..REPLICAS).map(|n| read(n, integrated)).collect();
+    let spread = each.iter().max().unwrap() - each.iter().min().unwrap();
+    assert!(spread <= 5, "integrated loudness {each:?} centi-LU");
+}
+
 /// Every replica of a set with engines lists all three in its `replicas`
 /// message, as clients show the set, healthy and able to commit; one
 /// killed, the other two each list it down within a few report windows,

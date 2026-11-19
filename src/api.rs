@@ -459,9 +459,13 @@ struct ResetBody {
     ids: Vec<String>,
 }
 
-/// There are no loudness meters until the engine runs: the ids are
-/// checked and nothing else happens.
-async fn reset_loudness(State(app): State<Arc<App>>, bytes: Bytes) -> Response {
+/// Counts a reset of each output's measurement in the replicated state;
+/// every replica's engine restarts it at the delta's `atIndex`.
+async fn reset_loudness(
+    State(app): State<Arc<App>>,
+    identity: Option<Extension<Identity>>,
+    bytes: Bytes,
+) -> Response {
     let run = async {
         let b: ResetBody = body(&bytes)?;
         valid(|c| &c.id_set, "ids", &json!(b.ids))?;
@@ -474,6 +478,19 @@ async fn reset_loudness(State(app): State<Arc<App>>, bytes: Bytes) -> Response {
         if let Some(id) = unknown {
             return Err(error(StatusCode::NOT_FOUND, format!("unknown bus {id}")));
         }
+        let owner = owner(identity.map(|Extension(i)| i));
+        let id = uuid()
+            .map_err(|e| error(StatusCode::SERVICE_UNAVAILABLE, format!("not applied: {e}")))?;
+        run(
+            &app,
+            &owner,
+            &id,
+            Command::ResetLoudness {
+                id: id.clone(),
+                ids: b.ids,
+            },
+        )
+        .await?;
         Ok(StatusCode::NO_CONTENT.into_response())
     };
     run.await.unwrap_or_else(|e| e)
