@@ -195,6 +195,7 @@ impl Audio {
         set: &Set,
     ) -> Result<SetEngine, String> {
         let timing = timing(&config, set);
+        let block = u64::from(config.block_size);
         for (input, flow) in config
             .inputs
             .iter_mut()
@@ -220,6 +221,8 @@ impl Audio {
         let bridge = EngineAudio::new(engine.clone(), statuses_rx, hashes_rx, &timing);
         let mut audio = Audio::new(engine, shape, state, ops);
         audio.replicated = true;
+        // Only a loudness reset is placed at an index from here.
+        audio.block = block;
         Ok(SetEngine {
             audio,
             bridge,
