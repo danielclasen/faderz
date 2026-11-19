@@ -284,16 +284,21 @@ async fn the_leader_lists_every_replica_and_one_stopped_as_down() {
         if let Some((n, now)) = leading {
             let leads = (now.as_array().unwrap().iter())
                 .any(|r| r["id"] == format!("faderz-{n}") && r["role"] == "leader");
-            let down = (now.as_array().unwrap().iter())
-                .any(|r| r["id"] == name.as_str() && r["healthy"] == false);
+            // The stopped one down, the others healthy and holding the
+            // quorum: what the asserts below check, so a listing amid a
+            // move of leadership never reaches them.
+            let settled = (now.as_array().unwrap().iter()).all(|r| {
+                let up = r["id"] != name.as_str();
+                r["healthy"] == up && r["commitable"] == up
+            });
             listed = now;
-            if leads && down {
+            if leads && settled {
                 break;
             }
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "{name} not listed down by a leader within 15 s: {listed}"
+            "{name} not listed down, the others up, by a leader within 15 s: {listed}"
         );
         seq += 1;
         let id = faderz::app::uuid().unwrap();
