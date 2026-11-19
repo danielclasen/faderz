@@ -144,7 +144,7 @@
         <button class="item" role="menuitem" tabindex="-1" data-entry={entry.id} onclick={() => choose(entry)}>{entry.label}</button>
       {/each}
       {#if mixer.status.build}
-        <div class="build num" role="presentation" data-testid="account-build">
+        <div class="build num" data-testid="account-build">
           <span>faderz {mixer.status.build.faderz}</span>
           <span>samplez {mixer.status.build.samplez}</span>
         </div>

@@ -59,9 +59,17 @@ import { ReplicaMeters, SourceModel } from './signals.ts';
  */
 export const BUILD: Build = (() => {
   const read = (file: string) => readFileSync(new URL(`../../../${file}`, import.meta.url), 'utf8');
-  const faderz = /^version = "([^"]+)"$/m.exec(read('Cargo.toml'))?.[1];
-  const samplez = /^name = "samplez"\nversion = "[^"]+"\nsource = "[^"?#]+\?tag=v([^"#&]+)/m.exec(read('Cargo.lock'))?.[1];
-  if (!faderz || !samplez) throw new Error('no faderz version in Cargo.toml or samplez tag in Cargo.lock');
+  const faderz = /^version = "([^"]+)"\r?$/m.exec(read('Cargo.toml'))?.[1];
+  // As build.rs reads it: the tag without its v, a commit as version+sha7, else the version.
+  const entry = read('Cargo.lock')
+    .split('[[package]]')
+    .find((p) => /^name = "samplez"\r?$/m.test(p));
+  const field = (key: string) => entry && new RegExp(`^${key} = "([^"]*)"\\r?$`, 'm').exec(entry)?.[1];
+  const version = field('version');
+  const [url, commit] = field('source')?.split('#') ?? [];
+  const tag = url?.split('?')[1]?.split('&').find((p) => p.startsWith('tag='))?.slice(4);
+  const samplez = commit === undefined ? version : tag ? tag.replace(/^v/, '') : `${version}+${commit.slice(0, 7)}`;
+  if (!faderz || !samplez) throw new Error('no faderz version in Cargo.toml or samplez entry in Cargo.lock');
   return { faderz, samplez };
 })();
 

@@ -12,8 +12,8 @@ fn main() {
 }
 
 /// The samplez release Cargo.lock pins: the tag of its git source without
-/// the `v`, or for a commit no tag names, the package version with the
-/// commit's first 7 hex digits as build metadata.
+/// the `v`, for a commit no tag names the package version with the
+/// commit's first 7 hex digits as build metadata, else the version.
 fn samplez(lock: &str) -> String {
     let entry = (lock.split("[[package]]"))
         .find(|p| p.lines().any(|l| l.trim() == r#"name = "samplez""#))
@@ -27,10 +27,10 @@ fn samplez(lock: &str) -> String {
         })
     };
     let version = field("version").expect("the samplez entry has a version");
-    let Some(source) = field("source") else {
+    // A path dependency has no source, a registry one names its release.
+    let Some((url, commit)) = field("source").and_then(|s| s.split_once('#')) else {
         return version.to_string();
     };
-    let (url, commit) = source.split_once('#').unwrap_or((source, ""));
     let tag = (url.split_once('?').map(|(_, q)| q).unwrap_or(""))
         .split('&')
         .find_map(|p| p.strip_prefix("tag="));
