@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.1](https://github.com/danielclasen/faderz/compare/v0.4.0...v0.4.1) (2026-11-19)
+
+
+### Features
+
+* **mix:** fold an output down to a width narrower than its source ([#87](https://github.com/danielclasen/faderz/issues/87)) ([e990e72](https://github.com/danielclasen/faderz/commit/e990e722e1d8d59c7c27f3577ced73cb562c93c8))
+* **mix:** interrupt a mix-minus with talkback and dim the monitor ([#83](https://github.com/danielclasen/faderz/issues/83)) ([7d4d07b](https://github.com/danielclasen/faderz/commit/7d4d07b7014b2f87dcbae317231010a7059ca3e9))
+* **mix:** play channel and VCA PFL/AFL on the monitor output ([#80](https://github.com/danielclasen/faderz/issues/80)) ([46919ed](https://github.com/danielclasen/faderz/commit/46919ed7395449e0857aeea95b43e0a5cfe67337))
+* **mxl:** label a member flow with its replica ordinal ([#98](https://github.com/danielclasen/faderz/issues/98)) ([397ae08](https://github.com/danielclasen/faderz/commit/397ae0836f8be72ea95855b30db94ab19612711c))
+
+
+### Bug Fixes
+
+* **deps:** build against samplez 0.12.0 ([#97](https://github.com/danielclasen/faderz/issues/97)) ([e6d8a19](https://github.com/danielclasen/faderz/commit/e6d8a19ffa93203802162906786bbdf8284132f5))
+* **nmos:** show a fired scheduled activation as it was asked for ([#96](https://github.com/danielclasen/faderz/issues/96)) ([fb54ee0](https://github.com/danielclasen/faderz/commit/fb54ee00ec6ef10d9a3a29565472191624e36d85))
+* **web:** console header, status bar and box fits ([#84](https://github.com/danielclasen/faderz/issues/84)) ([c69819d](https://github.com/danielclasen/faderz/commit/c69819d6763f53457c36b5e7e7afa9d7fc18a2e4))
+* **web:** fit a three-digit user count in the key, not the header ([#95](https://github.com/danielclasen/faderz/issues/95)) ([ce05d8d](https://github.com/danielclasen/faderz/commit/ce05d8d7441995d3ef19429b9e2d6adc70f28433))
+* **web:** lay out a touch from another client in boxes of its own ([#89](https://github.com/danielclasen/faderz/issues/89)) ([992bed8](https://github.com/danielclasen/faderz/commit/992bed8e9b829b469e6b384593aeef7b5667e247))
+
 ## [0.4.0](https://github.com/danielclasen/faderz/compare/v0.3.2...v0.4.0) (2026-11-19)
 
 
