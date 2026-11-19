@@ -261,12 +261,9 @@ impl Server {
                     Some((audio, live, revision)) => {
                         let meter = audio.meter(&tasks_app.hub, &name);
                         let count = tasks_app.count(&audio);
-                        // A set's engine follows the replicated log; only
-                        // its meter taps follow the state here.
+                        // A set's engine follows the replicated log.
                         let follow = async {
-                            if replicated {
-                                audio.follow_taps(&tasks_state, revision).await;
-                            } else {
+                            if !replicated {
                                 audio.follow(&tasks_state, live, revision).await;
                             }
                             std::future::pending::<()>().await
