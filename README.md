@@ -273,6 +273,7 @@ variable; the flag wins over the variable, the variable over the file.
 | `engine.maxCatchupBlocks` | `2` | overdue blocks processed in order after a late wake |
 | `engine.pruneAfterBlocks` | `50` | blocks of a frozen producer head before an input is pruned |
 | `engine.rampSamples` | `480` | the length of every gain ramp |
+| `engine.delayBudgetSamples` | `4194304` | the most delay-line history the inputs may hold together, in samples; also what a replica of a set reads from another when it resyncs |
 | `rt.enabled` | `true` | `false` skips capabilities, memory locking and `SCHED_FIFO` |
 | `rt.priority` | `70` | `SCHED_FIFO` priority |
 | `rt.rtCpu` | `auto` | `auto`, `none`, `first`, `last` or an index into the allowed CPUs |

@@ -8,6 +8,8 @@ use std::time::Duration;
 use samplez::rt::ProcessStatus;
 use samplez_replica::bootstrap::{Kube, Markers};
 use samplez_replica::contact::SystemClocks;
+use samplez_replica::net::Pool;
+use samplez_replica::peer::max_response;
 use samplez_replica::rollout::{self, Fixed};
 use samplez_replica::state_machine::Product as _;
 use samplez_replica::{Estimate, Replica};
@@ -128,7 +130,8 @@ impl Server {
                     mixer,
                     estimate,
                     set,
-                    tls.clone(),
+                    // Reads a donor's core with its delay lines' history.
+                    Pool::new(tls.clone(), max_response(config.delay_budget())),
                     markers,
                     write_timeout,
                 )

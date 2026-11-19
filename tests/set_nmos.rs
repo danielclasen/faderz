@@ -202,7 +202,7 @@ impl Node {
     }
 
     fn leads(&self) -> bool {
-        let r = self.ops("/healthz").1["replica"].clone();
+        let r = self.ops("/readyz").1["replica"].clone();
         r["leader"] == r["id"]
     }
 

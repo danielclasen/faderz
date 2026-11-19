@@ -853,9 +853,9 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     agree(&nodes, &outputs, from, 500);
 
     // A follower is killed; the other two go on through input switches.
-    let leader = node(&nodes, 0).ops("/healthz").1["replica"]["leader"].clone();
+    let leader = node(&nodes, 0).ops("/readyz").1["replica"]["leader"].clone();
     let killed = (0..REPLICAS)
-        .find(|&n| node(&nodes, n).ops("/healthz").1["replica"]["id"] != leader)
+        .find(|&n| node(&nodes, n).ops("/readyz").1["replica"]["id"] != leader)
         .unwrap();
     let alive: Vec<usize> = (0..REPLICAS).filter(|&n| n != killed).collect();
     nodes[killed].take().unwrap().kill();
@@ -882,9 +882,9 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     agree(&nodes, &outputs, from, 300);
 
     // The leader is killed; the other two elect another and go on.
-    let leader = node(&nodes, 0).ops("/healthz").1["replica"]["leader"].clone();
+    let leader = node(&nodes, 0).ops("/readyz").1["replica"]["leader"].clone();
     let killed = (0..REPLICAS)
-        .find(|&n| node(&nodes, n).ops("/healthz").1["replica"]["id"] == leader)
+        .find(|&n| node(&nodes, n).ops("/readyz").1["replica"]["id"] == leader)
         .expect("a leader");
     nodes[killed].take().unwrap().kill();
     let from = Outputs::now() + 1;

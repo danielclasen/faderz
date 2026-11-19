@@ -49,8 +49,9 @@ pub struct Config {
     pub mxl: Option<Mxl>,
     /// samplez's engine timing: `sampleRate`, `blockSize`,
     /// `readerMarginSamples`, `maxCatchupBlocks`, `pruneAfterBlocks`,
-    /// `rampSamples`. samplez checks the values and supplies defaults,
-    /// but for `readerMarginSamples`, [`READER_MARGIN`] here.
+    /// `rampSamples`, `delayBudgetSamples`. samplez checks the values and
+    /// supplies defaults, but for `readerMarginSamples`, [`READER_MARGIN`]
+    /// here, and `delayBudgetSamples`, [`Config::delay_budget`].
     #[serde(default)]
     pub engine: Map<String, Value>,
     /// samplez's RT thread settings (`enabled`, `priority`, `rtCpu`).
@@ -271,14 +272,21 @@ pub struct Output {
 pub const READER_MARGIN: u32 = 1536;
 
 /// The `engine` keys faderz passes to samplez; the others it sets itself.
-const ENGINE_KEYS: [&str; 6] = [
+const ENGINE_KEYS: [&str; 7] = [
     "sampleRate",
     "blockSize",
     "readerMarginSamples",
     "maxCatchupBlocks",
     "pruneAfterBlocks",
     "rampSamples",
+    "delayBudgetSamples",
 ];
+
+/// `delayBudgetSamples` when the configuration sets none: samplez's
+/// default, 2^22. faderz sets it on the engine itself, so the engine and
+/// the replica's peer connections, which read a donor's delay lines
+/// within it, always take one value.
+pub const DELAY_BUDGET: u64 = 1 << 22;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -855,6 +863,15 @@ impl Config {
 }
 
 impl Config {
+    /// The engine's `delayBudgetSamples`: the configured one, else
+    /// [`DELAY_BUDGET`]. One that is not a number is refused where the
+    /// engine's configuration is checked.
+    pub fn delay_budget(&self) -> u64 {
+        (self.engine.get("delayBudgetSamples"))
+            .and_then(Value::as_u64)
+            .unwrap_or(DELAY_BUDGET)
+    }
+
     /// Every flow an output names, member and merged flows included: what
     /// no input may read.
     pub fn own_flows(&self) -> std::collections::BTreeSet<String> {
@@ -1172,6 +1189,9 @@ impl Config {
         engine
             .entry("readerMarginSamples")
             .or_insert(json!(READER_MARGIN));
+        engine
+            .entry("delayBudgetSamples")
+            .or_insert(json!(DELAY_BUDGET));
         let mut v = Value::Object(engine);
         v["libmxl"] = json!(mxl.library_path);
         v["domains"] = mxl
@@ -1736,6 +1756,16 @@ mod tests {
         set["engine"] = json!({ "readerMarginSamples": 960 });
         let (c, ..) = Config::parse(&set.to_string(), || unreachable!()).unwrap();
         assert_eq!(c.audio.unwrap().reader_margin_samples, 960);
+
+        // The engine and the replica's peer connections take one delay
+        // budget: the configured one, else DELAY_BUDGET.
+        let (c, ..) = Config::parse(&ok, || unreachable!()).unwrap();
+        assert_eq!(c.delay_budget(), DELAY_BUDGET);
+        assert_eq!(c.audio.unwrap().delay_budget_samples, DELAY_BUDGET);
+        set["engine"] = json!({ "delayBudgetSamples": 480_000 });
+        let (c, ..) = Config::parse(&set.to_string(), || unreachable!()).unwrap();
+        assert_eq!(c.delay_budget(), 480_000);
+        assert_eq!(c.audio.unwrap().delay_budget_samples, 480_000);
     }
 
     /// Declared consoles take defaults; a console the contract refuses or

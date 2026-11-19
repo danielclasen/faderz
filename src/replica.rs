@@ -26,7 +26,6 @@ use samplez_replica::net::{Network, Pool};
 use samplez_replica::peer::{PeerClient, PeerReply, PeerRequest};
 use samplez_replica::state_machine::Factory;
 use samplez_replica::{Estimate, Replica, Settings, TypeConfig, raft_config};
-use samplez_service::PeerTls;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Set;
@@ -183,9 +182,9 @@ fn warn_dropped(replica: &Replica<Mixer>) {
 /// empty one starts or joins the set `markers` names, and the leader
 /// reconciles the voters with `set.voters`. Returns at once; the replica
 /// is ready once it has joined and applied the log
-/// ([`samplez_service::ReplicaInfo::ready`]). The peer listener serves
-/// the replica ([`samplez_replica::peer::serve`]) with `tls`. A write
-/// waits up to `write_timeout` to be ordered and applied.
+/// ([`samplez_service::ReplicaInfo::ready`]). It reaches the other
+/// replicas through `pool`. A write waits up to `write_timeout` to be
+/// ordered and applied.
 ///
 /// # Errors
 ///
@@ -196,7 +195,7 @@ pub async fn start_set(
     mixer: Factory<Mixer>,
     estimate: Estimate,
     set: &Set,
-    tls: Arc<PeerTls>,
+    pool: Arc<Pool>,
     markers: Arc<dyn Markers>,
     write_timeout: Duration,
 ) -> Result<Replica<Mixer>, String> {
@@ -215,7 +214,6 @@ pub async fn start_set(
         peers: set.peers.clone(),
         voters: Some(set.voters),
     };
-    let pool = Pool::new(tls);
     let replica = Replica::with_store(
         settings,
         raft_config("faderz"),

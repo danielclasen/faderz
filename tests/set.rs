@@ -95,7 +95,7 @@ async fn ops(server: &Server, route: &str) -> (u16, Value) {
 }
 
 async fn replica_info(server: &Server) -> Value {
-    ops(server, "/healthz").await.1
+    ops(server, "/readyz").await.1
 }
 
 /// Waits until every replica of `servers` is a voter a leader counts and
