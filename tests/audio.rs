@@ -573,7 +573,8 @@ async fn a_loudness_reset_restarts_the_measurement() {
         pgm: new_id(),
         mm: new_id(),
     };
-    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    // A tone: a constant is no loudness, the K-weighting removes it.
+    let _ch1 = Source::sine(&domain.0, &flows.ch1, 0.5, 440);
     let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
     let server = start(&data.0, &domain.0, &flows).await;
     appears(&domain.0, &flows.pgm).await;
@@ -593,14 +594,14 @@ async fn a_loudness_reset_restarts_the_measurement() {
             assert!(Instant::now() < deadline, "{what}: {v:?}");
         }
     }
-    patch(&server, &[("/channels/st1/fader", json!(0))]).await;
+    patch(&server, &[("/channels/ch1/fader", json!(0))]).await;
     let v = until_values(&server, "loud, measured", |v| {
         v[INTEGRATED] != i16::MIN && v[MAX_MOMENTARY] != i16::MIN
     })
     .await;
     let loud = v[MAX_MOMENTARY];
     // 20 dB down: the maximum holds, the momentary level follows.
-    patch(&server, &[("/channels/st1/fader", json!(-20))]).await;
+    patch(&server, &[("/channels/ch1/fader", json!(-20))]).await;
     let v = until_values(&server, "20 dB down", |v| {
         v[MOMENTARY] != i16::MIN && v[MOMENTARY] <= loud - 1800
     })
