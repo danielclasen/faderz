@@ -25,16 +25,15 @@ use crate::config::Set;
 use crate::state::{Answer, Command, Mixer};
 
 thread_local! {
-    /// Whether this thread is inside [`with_state`], holding the log
-    /// store's lock.
+    /// Whether this thread is inside [`with_state`].
     static IN_STATE: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Runs `f` on the replicated state of `replica`, under its log store's
-/// lock. samplez takes its contact lock and then the store's, and until
-/// the replica is ready its own view of itself takes the store's again,
-/// so `f` must not call into the replica: [`App::info`] and
-/// [`App::contact_metrics`] would deadlock. Debug builds assert that.
+/// Runs `f` on the replicated state of `replica`. An entry arriving
+/// meanwhile is applied only once `f` returns, so `f` takes what it needs
+/// and does not call into the replica: [`App::info`] and
+/// [`App::contact_metrics`] wait on the replica's own locks and would
+/// hold applying off for as long. Debug builds assert that.
 pub fn with_state<T>(replica: &Replica<Mixer>, f: impl FnOnce(&StateMachine<Mixer>) -> T) -> T {
     struct Leave(bool);
     impl Drop for Leave {
@@ -51,7 +50,7 @@ pub fn with_state<T>(replica: &Replica<Mixer>, f: impl FnOnce(&StateMachine<Mixe
 fn outside_state() {
     debug_assert!(
         !IN_STATE.get(),
-        "a call into the replica inside App::with_state: the contact lock under the store lock"
+        "a call into the replica inside App::with_state, which holds off applying entries"
     );
 }
 
@@ -277,13 +276,13 @@ impl App {
         with_state(&self.replica, f)
     }
 
-    /// The replica's own view of itself; takes samplez's contact lock.
+    /// The replica's own view of itself; takes the replica's locks.
     fn info(&self) -> ReplicaInfo {
         outside_state();
         self.replica.replica()
     }
 
-    /// The audio replica's contact metrics; takes samplez's contact lock.
+    /// The audio replica's contact metrics; takes the replica's locks.
     fn contact_metrics(&self) -> Option<samplez_replica::contact::Metrics> {
         outside_state();
         self.replica.contact_metrics()
@@ -1137,13 +1136,13 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// samplez takes its contact lock and then the log store's, so a call
-    /// that takes the contact lock inside [`App::with_state`] deadlocks
-    /// against it; debug builds catch one before it can.
+    /// A call into the replica inside [`App::with_state`] holds off
+    /// applying entries for as long as the replica's locks take; debug
+    /// builds catch one.
     #[cfg(debug_assertions)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[should_panic(expected = "the contact lock under the store lock")]
-    async fn a_contact_call_under_the_store_lock_is_caught() {
+    #[should_panic(expected = "holds off applying entries")]
+    async fn a_replica_call_inside_with_state_is_caught() {
         let (app, _dir) = app().await;
         app.with_state(|_| app.replica_ref());
     }
@@ -1151,7 +1150,7 @@ pub(crate) mod tests {
     /// `GET /state` reads the replica's ref beside the state: it takes
     /// it before the store lock, as every route does.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn the_state_route_takes_no_contact_lock_under_the_store_lock() {
+    async fn the_state_route_calls_no_replica_inside_with_state() {
         let (app, _dir) = app().await;
         let response = tower::ServiceExt::oneshot(
             crate::api::router(app.clone()),

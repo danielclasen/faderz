@@ -1795,6 +1795,11 @@ impl Mixer {
     }
 }
 
+/// The snapshot message's `shape`, `state` and `owners`.
+fn snapshot_text(shape: &Shape, state: &Value, owners: &Value) -> String {
+    json!({ "shape": shape, "state": state, "owners": owners }).to_string()
+}
+
 impl Product for Mixer {
     type Change = Edits;
 
@@ -1974,7 +1979,14 @@ impl Product for Mixer {
 
     /// `shape`, `state` and `owners`, which the snapshot message carries.
     fn text(&self) -> String {
-        json!({ "shape": self.shape(), "state": &*self.state, "owners": self.owners() }).to_string()
+        snapshot_text(self.shape(), &self.state, &self.owners())
+    }
+
+    /// [`Product::text`] built after the store lock: under it only the
+    /// shared shape and state are taken and the owners listed.
+    fn text_later(&self) -> Option<Box<dyn FnOnce() -> String + Send>> {
+        let (shape, state, owners) = (self.shared_shape(), self.shared_state(), self.owners());
+        Some(Box::new(move || snapshot_text(&shape, &state, &owners)))
     }
 
     fn save(&self) -> Vec<u8> {
@@ -2244,6 +2256,22 @@ mod tests {
 
     fn mixer() -> Mixer {
         Mixer::new(Shape::parse(&small()).unwrap())
+    }
+
+    /// A client snapshot built after the store lock is the one built
+    /// under it, and holds the state it was taken at.
+    #[test]
+    fn a_snapshot_text_built_later_is_the_text_of_the_state_taken() {
+        let mut m = mixer();
+        set(&mut m, "a", 1, "/channels/ch1/fader", json!(-6));
+        touch(&mut m, "a", 2, "/channels/ch1/fader");
+        let before = m.text();
+        assert!(before.contains(r#""/channels/ch1/fader""#), "{before}");
+        let later = m.text_later().expect("the mixer builds its text later");
+        set(&mut m, "a", 3, "/channels/ch1/fader", json!(-12));
+        touch(&mut m, "b", 1, "/channels/ch2/fader");
+        assert_eq!(later(), before);
+        assert_ne!(m.text(), before);
     }
 
     /// A reader takes the state out of the store lock as a pointer: what

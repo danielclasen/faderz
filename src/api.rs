@@ -152,7 +152,7 @@ async fn result(app: &App, ack: &Ack, command_id: bool) -> Value {
 }
 
 async fn get_state(State(app): State<Arc<App>>) -> Response {
-    // Taken before the state: it reaches samplez's contact lock.
+    // Taken before the state: it waits on the replica's locks.
     let replica = app.replica_ref();
     // Pointers and the owners only under the store lock: the state is
     // serialised after it, as the lock holds off applying entries.
