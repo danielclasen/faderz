@@ -318,6 +318,9 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
     let (status, body) = request(server.nmos, "PATCH", &path, Some(&staged)).await;
     assert_eq!(status, 202, "{body}");
     until("the schedule is state", async || scheduled(&server) == 1).await;
+    // Until it fires, the port shows the activation it has.
+    let shown = active(&server, &ch1).await;
+    assert_eq!(shown["activation"]["mode"], "activate_immediate", "{shown}");
     let cancel = json!({ "activation": { "mode": null } });
     let (status, body) = request(server.nmos, "PATCH", &path, Some(&cancel)).await;
     assert_eq!(status, 200, "{body}");

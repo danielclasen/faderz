@@ -436,9 +436,10 @@ impl Node {
             }
             return response;
         }
-        // `/bulk` answers 200 with a code per item: a cancel samplez-nmos
-        // refused cancels nothing, and one the set did not take fails on
-        // its own item.
+        // `/bulk` answers 200 with a code per item, in the order of the
+        // request's items: a cancel samplez-nmos refused cancels nothing,
+        // a later item for the same port is what the port is left with,
+        // and a cancel the set did not take fails on its own item.
         let (mut parts, body) = response.into_parts();
         let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
             return refused(StatusCode::INTERNAL_SERVER_ERROR, "an unreadable response");
@@ -447,20 +448,17 @@ impl Node {
             return Response::from_parts(parts, axum::body::Body::from(bytes));
         };
         let senders = path.ends_with("/senders");
-        for item in &mut items {
-            let served = (item.get("code").and_then(serde_json::Value::as_u64))
-                .is_some_and(|code| (200..300).contains(&code));
-            let Some(index) = (item.get("id").and_then(|id| id.as_str()))
-                .and_then(|id| self.ids.get(&(senders, id.to_owned())).copied())
-            else {
-                continue;
-            };
-            if served
-                && named.contains(&(index, true))
-                && let Err(e) = self.cancel(index).await
-            {
-                item["code"] = StatusCode::SERVICE_UNAVAILABLE.as_u16().into();
-                item["error"] = e.into();
+        let asked: Vec<Option<(&str, usize, bool)>> = (value.as_array().into_iter().flatten())
+            .map(|item| {
+                let id = item.get("id")?.as_str()?;
+                let index = *self.ids.get(&(senders, id.to_owned()))?;
+                Some((id, index, item.get("params").is_some_and(cancels)))
+            })
+            .collect();
+        for (n, index) in bulk_cancels(&asked, &items) {
+            if let Err(e) = self.cancel(index).await {
+                items[n]["code"] = StatusCode::SERVICE_UNAVAILABLE.as_u16().into();
+                items[n]["error"] = e.into();
             }
         }
         parts.headers.remove(header::CONTENT_LENGTH);
@@ -541,10 +539,9 @@ impl Node {
     /// Orders [`Command::Fire`] for each scheduled activation whose time
     /// has come, while this replica leads; another leader fires those
     /// still pending. One that did not fire is tried again after
-    /// [`FIRE_RETRY`], in the next round, and logged once.
+    /// [`FIRE_RETRY`] and logged once.
     async fn fire(&self) {
-        // Per schedule that did not fire: when, and the round it failed in.
-        let mut failed: BTreeMap<String, (tokio::time::Instant, u32)> = BTreeMap::new();
+        let mut failed: BTreeMap<String, tokio::time::Instant> = BTreeMap::new();
         loop {
             let Some(replica) = self.replica.upgrade() else {
                 return;
@@ -564,17 +561,15 @@ impl Node {
             failed.retain(|id, _| due.iter().any(|s| s.id == *id));
             for s in due {
                 let now = tokio::time::Instant::now();
-                let round = match failed.get(&s.id) {
-                    Some((at, _)) if now < *at + FIRE_RETRY => continue,
-                    Some((_, round)) => round + 1,
-                    None => 0,
-                };
-                match self.conns.fire(&s, round).await {
+                if failed.get(&s.id).is_some_and(|at| now < *at + FIRE_RETRY) {
+                    continue;
+                }
+                match self.conns.fire(&s).await {
                     Ok(()) => {
                         failed.remove(&s.id);
                     }
                     Err(Fail(e)) => {
-                        if failed.insert(s.id.clone(), (now, round)).is_none() {
+                        if failed.insert(s.id.clone(), now).is_none() {
                             tracing::warn!(
                                 schedule = s.id,
                                 "nmos: the scheduled activation did not fire: {e}"
@@ -997,12 +992,15 @@ impl Conns {
         .await
     }
 
-    /// Orders the firing of scheduled activation `s` in retry `round`,
-    /// under ids every replica derives alike ([`fire_id`]), so a second
-    /// leader firing it is a duplicate.
-    async fn fire(&self, s: &Scheduled, round: u32) -> Result<(), Fail> {
+    /// Orders the firing of scheduled activation `s`. Each try orders
+    /// under ids of its own: under an earlier try's, the command dedup
+    /// would answer with that try's refusal for as long as it keeps it,
+    /// on whichever replica leads. A second leader's Fire of one already
+    /// fired changes nothing.
+    async fn fire(&self, s: &Scheduled) -> Result<(), Fail> {
+        let id = crate::app::uuid().map_err(|e| Fail(e.to_string()))?;
         self.submit(|attempt| Command::Fire {
-            id: fire_id(&s.id, round, attempt),
+            id: format!("fire-{id}-{attempt}"),
             schedule: s.id.clone(),
         })
         .await
@@ -1039,25 +1037,45 @@ impl Connections for Conns {
     ) -> BoxFuture<'_, Result<(), Fail>> {
         Box::pin(async move {
             let index = self.index(port);
-            // This replica writes the port's `/active` itself again.
-            self.foreign[index].store(false, Relaxed);
             if !self.saw(index, generation) {
                 return Ok(());
             }
             match at {
                 Some(at) => self.schedule(index, &active, at, generation).await,
-                None => self.order(index, &active, generation).await,
+                None => {
+                    // This replica writes the port's `/active` itself again;
+                    // a schedule does so only once it fires.
+                    self.foreign[index].store(false, Relaxed);
+                    self.order(index, &active, generation).await
+                }
             }
         })
     }
 }
 
-/// The id of attempt `attempt` of retry `round` to fire `schedule`. Each
-/// round has ids of its own: under the last round's, the command dedup
-/// would answer a retry with that round's refusal for as long as it
-/// keeps it, rather than order the Fire again.
-fn fire_id(schedule: &str, round: u32, attempt: usize) -> String {
-    format!("fire-{round}-{attempt}-{schedule}")
+/// The cancels of a `/bulk` request to take into the state, as (item,
+/// port): of `asked`, each request item's id, port and whether it
+/// cancels, and `answered`, the response's items in the same order, a
+/// cancel answered 2xx whose port no later item names.
+fn bulk_cancels(
+    asked: &[Option<(&str, usize, bool)>],
+    answered: &[serde_json::Value],
+) -> Vec<(usize, usize)> {
+    let mut taken = Vec::new();
+    for (n, (item, asked_n)) in answered.iter().zip(asked).enumerate() {
+        let Some((id, index, true)) = *asked_n else {
+            continue;
+        };
+        let served = (item.get("code").and_then(serde_json::Value::as_u64))
+            .is_some_and(|code| (200..300).contains(&code));
+        let later = asked[n + 1..]
+            .iter()
+            .any(|a| a.is_some_and(|(_, i, _)| i == index));
+        if served && !later && item.get("id").and_then(|v| v.as_str()) == Some(id) {
+            taken.push((n, index));
+        }
+    }
+    taken
 }
 
 /// What an apply samplez-nmos hands over for a scheduled time means.
@@ -1422,18 +1440,30 @@ fn symbols(layout: &str, width: usize) -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    /// A Fire retried after a refused round orders under ids no earlier
-    /// round used, so the command dedup does not answer it with the old
-    /// refusal; every replica derives the same id for the same round and
-    /// attempt, so a second leader's Fire is a duplicate.
+    /// A `/bulk` cancel is taken into the state only where samplez-nmos
+    /// answered it 2xx and no later item of the request names its port,
+    /// whose schedule the cancel would otherwise remove.
     #[test]
-    fn each_fire_round_orders_under_ids_of_its_own() {
-        let ids: BTreeSet<String> = (0..3)
-            .flat_map(|round| (0..RESENDS).map(move |attempt| fire_id("s1", round, attempt)))
-            .collect();
-        assert_eq!(ids.len(), 3 * RESENDS);
-        assert_eq!(fire_id("s1", 2, 1), fire_id("s1", 2, 1));
-        assert_ne!(fire_id("s1", 0, 0), fire_id("s2", 0, 0));
+    fn a_bulk_cancel_is_taken_per_item() {
+        let asked = [
+            Some(("a", 0, true)),
+            Some(("b", 1, true)),
+            Some(("c", 2, true)),
+            Some(("c", 2, false)),
+            None,
+            Some(("d", 3, false)),
+        ];
+        let answered = [
+            serde_json::json!({ "id": "a", "code": 400 }),
+            serde_json::json!({ "id": "b", "code": 200 }),
+            serde_json::json!({ "id": "c", "code": 200 }),
+            serde_json::json!({ "id": "c", "code": 202 }),
+            serde_json::json!({ "id": "x", "code": 404 }),
+            serde_json::json!({ "id": "d", "code": 202 }),
+        ];
+        assert_eq!(bulk_cancels(&asked, &answered), vec![(1, 1)]);
+        // A response out of step with the request cancels nothing.
+        assert_eq!(bulk_cancels(&asked[1..2], &answered[..1]), vec![]);
     }
 
     /// A staging request's scheduled activation is kept with the mode
