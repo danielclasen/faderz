@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { REPLICAS, debug, live, switchTheme, uiFontLoaded } from './support';
+import { REPLICAS, debug, live, serverState, switchTheme, uiFontLoaded } from './support';
 
 test('renders the mixer on a phone over a plain-HTTP LAN origin', async ({ page, baseURL }) => {
   const errors: string[] = [];
@@ -22,7 +22,8 @@ test('renders the mixer on a phone over a plain-HTTP LAN origin', async ({ page,
   expect(errors).toEqual([]);
 });
 
-test('a phone header holds the view menu, the users key and the account pill, one finger tall, and no theme key', async ({ page }) => {
+test('a phone header holds the view menu, the users key and the account pill, one finger tall, and no theme key', async ({ page, request }) => {
+  const surfaces = (await serverState(request)).state.consoles.length;
   await page.goto('/');
   await expect(page.getByTestId('link')).toContainText('LIVE');
   const header = page.locator('header.top');
@@ -40,7 +41,9 @@ test('a phone header holds the view menu, the users key and the account pill, on
   await expect(users).toHaveText(/^USR\s+\d+$/);
   await users.click();
   const panel = page.getByRole('region', { name: 'Users' });
-  await expect(panel.getByTestId('console').first()).toBeVisible();
+  // Every configured surface is listed, and this screen with them.
+  await expect(panel.getByTestId('console')).toHaveCount(surfaces);
+  await expect(panel.getByTestId('you')).toBeVisible();
   const p = (await panel.boundingBox())!;
   expect(p.x).toBeGreaterThanOrEqual(0);
   expect(p.x + p.width).toBeLessThanOrEqual(W);

@@ -4,7 +4,7 @@
 // locked. Runs on the desktop project, which sizes its own pages.
 
 import { expect, test, type Browser, type Page } from '@playwright/test';
-import { live, resetMock, switchTheme } from './support';
+import { live, resetMock, serverState, switchTheme } from './support';
 
 test.beforeEach(async ({ request }) => resetMock(request));
 
@@ -188,9 +188,11 @@ test('the header has no theme key at any width; the account menu and the Setup v
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
-test('the header shows status left of a separator and controls right of it, each item one height, at every width', async ({ page }) => {
+test('the header shows status left of a separator and controls right of it, each item one height, at every width', async ({ page, request }) => {
+  // The mock configures control surfaces; a server may have none, and then the header shows none.
+  const surfaces = (await serverState(request)).state.consoles.length;
   await live(page);
-  await expect(page.getByTestId('consoles').locator('[data-console]').first()).toBeAttached();
+  await expect(page.getByTestId('consoles').locator('[data-console]')).toHaveCount(surfaces);
   const found: string[] = [];
   for (const [width, height] of [...SIZES, [1301, 900], [1440, 900], [1600, 1000]] as const) {
     await page.setViewportSize({ width, height });
@@ -230,8 +232,8 @@ test('the header shows status left of a separator and controls right of it, each
     // Controls are one height, and so is every status item shown.
     const heights = new Set([...layout.status, ...layout.controls].map((c) => c.h));
     if (heights.size !== 1) found.push(`${at}: heights ${JSON.stringify([...layout.status, ...layout.controls])}`);
-    // The surfaces show from 1301 px, the separator with them, between status and controls.
-    if ((layout.consoles !== null) !== width > 1300) found.push(`${at}: surfaces ${layout.consoles !== null}`);
+    // The surfaces show from 1301 px where there are any, the separator with them, between status and controls.
+    if ((layout.consoles !== null) !== (width > 1300 && surfaces > 0)) found.push(`${at}: surfaces ${layout.consoles !== null}`);
     if ((layout.sep !== null) !== (layout.consoles !== null)) found.push(`${at}: separator ${layout.sep !== null}`);
     // The surfaces stand against the divider: the reserved slots, empty mostly, sit left of them.
     if (layout.sep && layout.consoles && layout.sep.left - layout.consoles.right > 12) found.push(`${at}: ${Math.round(layout.sep.left - layout.consoles.right)} px between the surfaces and the divider`);
@@ -242,7 +244,7 @@ test('the header shows status left of a separator and controls right of it, each
   expect(found).toEqual([]);
 });
 
-test('the users panel lists every control surface with its strips, where the header has no room for them', async ({ page }) => {
+test('the users panel lists every control surface with its strips, where the header has no room for them', { tag: '@mock' }, async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await live(page);
   await expect(page.getByTestId('consoles')).toBeHidden();
@@ -259,7 +261,7 @@ test('the users panel lists every control surface with its strips, where the hea
   await expect(page.getByTestId('users-down')).toBeVisible();
 });
 
-test('the surfaces read as a quiet field on the header in either theme, never the near-black well', async ({ page }) => {
+test('the surfaces read as a quiet field on the header in either theme, never the near-black well', { tag: '@mock' }, async ({ page }) => {
   await live(page);
   const surfaces = page.getByTestId('consoles');
   await expect(surfaces).toBeVisible();
