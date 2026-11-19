@@ -130,7 +130,8 @@ test('the quorum sits in the link key, says what it counts, and follows a replic
   await expect(quorum).toHaveText('QUORUM 3/3');
 });
 
-test('names the signed-in user by initials in a pill at the header end, with Sign out in its menu and no email anywhere', async ({ page }) => {
+test('names the signed-in user by initials in a pill at the header end, with Sign out in its menu and no email anywhere', async ({ page, request }) => {
+  const { build } = (await (await request.get('/api/v1/replicas')).json()) as { build: { faderz: string; samplez: string } };
   const logouts = await signedIn(page);
   await live(page);
   const pill = page.getByTestId('account');
@@ -150,10 +151,13 @@ test('names the signed-in user by initials in a pill at the header end, with Sig
   await page.keyboard.press('ArrowUp');
   const menu = page.getByRole('menu', { name: 'Account' });
   await expect(menu).toBeVisible();
-  // Settings first, Sign out last.
-  await expect(menu.getByRole('menuitem')).toHaveText(['Switch to light theme', 'Sign out']);
-  const out = menu.getByRole('menuitem', { name: 'Sign out' });
-  await expect(out).toBeFocused();
+  // Settings first, then Sign out, then the version lines that open
+  // About / What's new; ArrowUp from the pill lands on the last.
+  await expect(menu.getByRole('menuitem')).toHaveText(['Switch to light theme', 'Sign out', `faderz ${build.faderz} samplez ${build.samplez}`]);
+  await expect(page.getByTestId('account-build')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(menu.getByRole('menuitem', { name: 'Sign out' })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await expect(menu.getByRole('menuitem', { name: 'Switch to light theme' })).toBeFocused();
   await expect(page.getByTestId('account-role')).toHaveText('operator');
