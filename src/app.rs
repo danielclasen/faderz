@@ -266,10 +266,10 @@ fn hears(
 }
 
 /// Each voter as the replicas list shows it, and whether a majority of
-/// them is heard now. Replica `me` is up while `ready`; another is
-/// listed up while heard now (`hears`) or within [`DOWN_AFTER`], but the
-/// majority, which `me`'s own commitable and so a client's failover
-/// follow, counts only those heard now.
+/// the voters is up now: replica `me` while `ready`, another while heard
+/// now (`hears`). The list shows another one up while heard now or
+/// within [`DOWN_AFTER`]; the majority leaves that grace out, as `me`'s
+/// own commitable follows it and a client fails over on that.
 fn listing(
     voters: &[NodeId],
     me: NodeId,
