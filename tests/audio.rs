@@ -843,6 +843,100 @@ async fn a_talkback_interrupt_replaces_the_mix_minus_until_released() {
     server.stop().await;
 }
 
+/// A mono channel's pan places it in the field of a 5.1 bus: at the
+/// front it is the centre leg alone, divergence spreads it to L and R,
+/// fr takes it to the surrounds, and the LFE send is a gain of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mono_channels_pan_places_it_in_a_surround_field() {
+    let domain = domain("surround-pan");
+    let data = dir(Path::new(env!("CARGO_TARGET_TMPDIR")), "data-surround-pan");
+    let (src, out51) = (new_id(), new_id());
+    let _src = Source::start(&domain.0, &src, vec![0.5]);
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "m", "name": "Mic", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [
+            { "id": "pgm", "name": "PGM", "kind": "program", "width": 6, "layout": "5.1" },
+        ],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-51", "name": "PGM 5.1", "source": "pgm", "width": 6, "layout": "5.1" },
+        ],
+    });
+    let inputs = json!({ "m": { "flow": src } });
+    let outputs = json!({ "out-51": { "flow": out51 } });
+    let server = start_with(&data.0, &domain.0, shape, inputs, outputs).await;
+    appears(&domain.0, &out51).await;
+    let mut wide = Reader::wide(&domain.0, &out51, 6);
+    patch(
+        &server,
+        &[
+            ("/channels/m/fader", json!(0)),
+            ("/channels/m/routes/pgm", json!(true)),
+        ],
+    )
+    .await;
+    let (a, h) = (0.5f32, std::f32::consts::FRAC_1_SQRT_2);
+    let n = B as usize;
+    let near = |v: &f32, want: f32| (v - want).abs() <= 1e-6;
+    // L R C LFE Ls Rs for each position of the field.
+    let lfe = a * 10f32.powf(-6.0 / 20.0);
+    let steps: [(&str, Value, [f32; 6]); 4] = [
+        (
+            "front centre",
+            json!({ "fr": -1 }),
+            [0.0, 0.0, a, 0.0, 0.0, 0.0],
+        ),
+        (
+            "full divergence",
+            json!({ "divergence": 1 }),
+            [a * h, a * h, 0.0, 0.0, 0.0, 0.0],
+        ),
+        (
+            "rear",
+            json!({ "divergence": 0, "fr": 1 }),
+            [0.0, 0.0, 0.0, 0.0, a * h, a * h],
+        ),
+        (
+            "lfe send",
+            json!({ "fr": -1, "lfe": -6 }),
+            [0.0, 0.0, a, lfe, 0.0, 0.0],
+        ),
+    ];
+    for (what, pan, want) in steps {
+        let writes: Vec<(String, Value)> = pan
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (format!("/channels/m/pan/{k}"), v.clone()))
+            .collect();
+        let writes: Vec<(&str, Value)> = writes
+            .iter()
+            .map(|(p, v)| (p.as_str(), v.clone()))
+            .collect();
+        patch(&server, &writes).await;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(b) = wide.recent()
+                && b.chunks(n)
+                    .zip(want)
+                    .all(|(leg, w)| leg.iter().all(|v| near(v, w)))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{what}: the 5.1 flow carries {want:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    server.stop().await;
+}
+
 /// A 5.1 channel on a 5.1 bus, written by a 6-leg output and by a stereo
 /// one: the stereo flow is the bus folded down by BS.775 Lo/Ro, centre
 /// and surrounds at -3 dB and the LFE dropped, after the bus fader, and
