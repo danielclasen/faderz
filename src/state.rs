@@ -789,11 +789,18 @@ impl Mixer {
             self.ports.scheduled.retain(|p| p.id != s.id);
             return Effect::Changed(Edits::default());
         }
+        // The mode and requested time of the request that scheduled it,
+        // when the schedule carries them: a relative activation stays
+        // relative on `/active`. Without them it was asked for at `at`.
         let at = tai_text(s.at);
+        let (mode, requested) = match &s.active.activation {
+            Some(a) => (a.mode.clone(), a.requested.clone()),
+            None => ("activate_scheduled_absolute".into(), Some(at.clone())),
+        };
         let active = Connection {
             activation: Some(Activation {
-                mode: "activate_scheduled_absolute".into(),
-                requested: Some(at.clone()),
+                mode,
+                requested,
                 time: at,
             }),
             ..s.active
@@ -4485,6 +4492,61 @@ mod tests {
             schedule: schedule.into(),
         };
         apply_as(m, &c, generation)
+    }
+
+    /// A fired activation shows on `/active` as it was asked for: the
+    /// mode and requested time of the request that scheduled it, the
+    /// activation time when it fired; one scheduled without them as an
+    /// absolute activation at that time.
+    #[test]
+    fn a_fired_activation_keeps_the_mode_and_requested_time_it_was_asked_with() {
+        let activation = |m: &Mixer| {
+            m.receiver("ch1")
+                .and_then(|(c, _)| c.cloned())
+                .and_then(|c| c.activation)
+                .unwrap()
+        };
+        let mut m = wired();
+        let relative = Connection {
+            activation: Some(Activation {
+                mode: "activate_scheduled_relative".into(),
+                requested: Some("0:200000000".into()),
+                time: String::new(),
+            }),
+            ..conn(true, Some(F1))
+        };
+        schedule(&mut m, "s1", receiver("ch1"), relative, 7_000_000_123);
+        assert!(matches!(
+            fire(&mut m, "f1", "s1", Some(true)),
+            Effect::Changed(_)
+        ));
+        assert_eq!(
+            activation(&m),
+            Activation {
+                mode: "activate_scheduled_relative".into(),
+                requested: Some("0:200000000".into()),
+                time: "7:123".into(),
+            }
+        );
+        schedule(
+            &mut m,
+            "s2",
+            receiver("ch1"),
+            conn(true, Some(F2)),
+            8_000_000_000,
+        );
+        assert!(matches!(
+            fire(&mut m, "f2", "s2", Some(true)),
+            Effect::Changed(_)
+        ));
+        assert_eq!(
+            activation(&m),
+            Activation {
+                mode: "activate_scheduled_absolute".into(),
+                requested: Some("8:0".into()),
+                time: "8:0".into(),
+            }
+        );
     }
 
     /// A scheduled activation is state from when it is staged, so any

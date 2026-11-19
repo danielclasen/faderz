@@ -216,6 +216,7 @@ impl Node {
             foreign: (0..model.senders.len() + model.receivers.len())
                 .map(|_| AtomicBool::new(false))
                 .collect(),
+            asked: Mutex::new(vec![None; model.senders.len() + model.receivers.len()]),
             instance: crate::app::uuid().map_err(|e| format!("nmos: {e}"))?,
         });
         let shown = replica
@@ -343,6 +344,31 @@ impl Node {
                     .collect()
             }
         };
+        // What a scheduled activation is asked for with, kept for the
+        // schedule samplez-nmos hands over while serving the request.
+        if method == axum::http::Method::PATCH {
+            let params: Vec<(usize, &serde_json::Value)> = match single {
+                Some(index) => vec![(index, &value)],
+                None => {
+                    let senders = path.ends_with("/senders");
+                    (value.as_array().into_iter().flatten())
+                        .filter_map(|item| {
+                            let id = item.get("id")?.as_str()?;
+                            Some((
+                                *self.ids.get(&(senders, id.to_owned()))?,
+                                item.get("params")?,
+                            ))
+                        })
+                        .collect()
+                }
+            };
+            let mut asked = self.conns.asked.lock().expect("asked lock poisoned");
+            for (index, params) in params {
+                if let Some(a) = scheduled_request(params) {
+                    asked[index] = Some(a);
+                }
+            }
+        }
         let status = self.nmos.status();
         let adopted = |index: usize| {
             if status.ports[index].pending.is_some() {
@@ -366,9 +392,13 @@ impl Node {
         {
             return with_json(response, |v| {
                 let at = tai_text(s.at);
+                let (mode, requested) = match &s.active.activation {
+                    Some(a) => (a.mode.clone(), a.requested.clone()),
+                    None => ("activate_scheduled_absolute".to_owned(), Some(at.clone())),
+                };
                 v["activation"] = serde_json::json!({
-                    "mode": "activate_scheduled_absolute",
-                    "requested_time": at,
+                    "mode": mode,
+                    "requested_time": requested,
                     "activation_time": at,
                 });
                 v["master_enable"] = s.active.master_enable.into();
@@ -704,6 +734,10 @@ struct Conns {
     /// rather than by an activation this replica served: its
     /// `activation` is then the state's.
     foreign: Vec<AtomicBool>,
+    /// Per port, the mode and requested time of the last scheduled
+    /// activation staged here, until it is taken into the state with its
+    /// schedule ([`Conns::schedule`]).
+    asked: Mutex<Vec<Option<Activation>>>,
 }
 
 impl Conns {
@@ -869,10 +903,19 @@ impl Conns {
                 .await
             }
             Scheduling::Take => {
+                // The request staged here with it, so a fired one shows
+                // the mode and requested time it was asked with.
+                let asked =
+                    (self.asked.lock().expect("asked lock poisoned")[index].take()).map(|a| {
+                        Activation {
+                            time: tai_text(at),
+                            ..a
+                        }
+                    });
                 self.submit(|attempt| Command::Schedule {
                     id: id(attempt),
                     port: port.clone(),
-                    active: connection(active, None),
+                    active: connection(active, asked.clone()),
                     at,
                 })
                 .await
@@ -1069,6 +1112,24 @@ fn port_of(path: &str) -> Option<(&str, &str)> {
 
 /// Whether a staging request's `activation` asks for a cancel: `mode`
 /// given and null.
+/// The mode and requested time a staging request's `params` schedule an
+/// activation with; none for an immediate one, a cancel or none at all.
+fn scheduled_request(params: &serde_json::Value) -> Option<Activation> {
+    let activation = params.get("activation")?;
+    let mode = activation.get("mode")?.as_str()?;
+    if mode != "activate_scheduled_relative" && mode != "activate_scheduled_absolute" {
+        return None;
+    }
+    Some(Activation {
+        mode: mode.to_owned(),
+        requested: activation
+            .get("requested_time")?
+            .as_str()
+            .map(str::to_owned),
+        time: String::new(),
+    })
+}
+
 fn cancels(params: &serde_json::Value) -> bool {
     params
         .get("activation")
@@ -1290,6 +1351,42 @@ fn symbols(layout: &str, width: usize) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A staging request's scheduled activation is kept with the mode
+    /// and requested time it was asked with; an immediate one, a cancel
+    /// and a request without an activation keep nothing.
+    #[test]
+    fn a_scheduled_request_keeps_its_mode_and_requested_time() {
+        let asked = |mode: serde_json::Value, requested: serde_json::Value| {
+            scheduled_request(&serde_json::json!({
+                "activation": { "mode": mode, "requested_time": requested }
+            }))
+        };
+        assert_eq!(
+            asked("activate_scheduled_relative".into(), "0:200000000".into()),
+            Some(Activation {
+                mode: "activate_scheduled_relative".into(),
+                requested: Some("0:200000000".into()),
+                time: String::new(),
+            })
+        );
+        assert_eq!(
+            asked("activate_scheduled_absolute".into(), "1700000000:0".into()).map(|a| a.mode),
+            Some("activate_scheduled_absolute".into())
+        );
+        assert_eq!(
+            asked("activate_immediate".into(), serde_json::Value::Null),
+            None
+        );
+        assert_eq!(
+            asked(serde_json::Value::Null, serde_json::Value::Null),
+            None
+        );
+        assert_eq!(
+            scheduled_request(&serde_json::json!({ "master_enable": true })),
+            None
+        );
+    }
 
     #[test]
     fn a_flow_definition_reads_as_channels_rate_and_format() {
