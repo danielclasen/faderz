@@ -126,9 +126,9 @@ struct Sent {
     /// not sent, as all are at start: the engine's strip passes its input
     /// unchanged until set.
     strips: Vec<Vec<Option<StripParam>>>,
-    /// The limiters, duck groups and masks the engine holds, as targets;
-    /// `None` after a resend asked for, when every limiter, setting and
-    /// mask goes again.
+    /// The limiters, input delays, duck groups and masks the engine
+    /// holds, as targets; `None` after a resend asked for, when every
+    /// limiter, delay, setting and mask goes again.
     ducks: Option<Targets>,
     /// The loudness run flags and reset epochs the engine was sent, as
     /// targets ([`mix::loudness`]).
@@ -490,6 +490,7 @@ impl Audio {
         }
         let next = Targets {
             limiters: targets.limiters,
+            delays: targets.delays,
             ducks: targets.ducks,
             masks: targets.masks,
             ..Targets::default()
@@ -504,6 +505,10 @@ impl Audio {
             let took = match &entry {
                 &Entry::Limiter { output, params } => {
                     let set = |at| self.engine.set_limiter(output, params, at);
+                    self.send(&mut at, set).await
+                }
+                &Entry::Delay { slot, samples } => {
+                    let set = |at| self.engine.set_delay(slot, samples, at);
                     self.send(&mut at, set).await
                 }
                 Entry::Duck { group, setting } => {
@@ -526,7 +531,7 @@ impl Audio {
                 refused = true;
             }
         }
-        // After a refusal every limiter, setting and mask goes again on
+        // After a refusal every limiter, delay, setting and mask goes again on
         // the next write.
         sent.ducks = (!refused).then_some(held);
         for (slot, flow) in targets.flows.into_iter().enumerate() {
@@ -794,9 +799,15 @@ fn engine_status(status: &samplez::Status) -> Value {
     json!({ "inputs": inputs, "outputs": outputs })
 }
 
-/// Notes in `held` the limiter, duck setting or mask `entry` sent.
+/// Notes in `held` the limiter, delay, duck setting or mask `entry` sent.
 fn hold_entry(held: &mut Targets, entry: Entry) {
     match entry {
+        Entry::Delay { slot, samples } => {
+            if held.delays.len() <= slot {
+                held.delays.resize(slot + 1, 0);
+            }
+            held.delays[slot] = samples;
+        }
         Entry::Limiter { output, params } => {
             if held.limiters.len() <= output {
                 held.limiters.resize(output + 1, None);

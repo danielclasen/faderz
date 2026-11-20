@@ -45,6 +45,10 @@ pub struct ChannelShape {
     pub alt_input: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// The longest delay the channel's input delay line takes, in
+    /// samples, from `mxl.inputs.<id>.maxDelayMs`; none without a line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_delay: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

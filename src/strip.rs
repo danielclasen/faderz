@@ -1,8 +1,8 @@
 //! A channel's processing in the live state as the parameters of its
 //! input's strip in the engine (`samplez_dsp::strip`): trim, leg trim,
 //! polarity, high-pass, the four EQ bands, gate, compressor and their
-//! order. The model's ranges are the strip's. Delay is kept and not
-//! applied. Also each output's limiter, from the bus or aux it carries.
+//! order. The model's ranges are the strip's. Also each channel's input
+//! delay, and each output's limiter, from the bus or aux it carries.
 
 use samplez_dsp::{BandType, CompParams, EqBand, GateParams, LimiterParams, StripParam};
 use serde_json::Value;
@@ -81,6 +81,13 @@ pub fn params(c: &Value, width: usize) -> Vec<StripParam> {
         enabled: on(&c["dynamicsBeforeEq"]),
     });
     p
+}
+
+/// The input delay of channel state `c` (model `ChannelState`), in
+/// samples. A write is refused past the channel's delay line
+/// ([`crate::shape::ChannelShape::max_delay`]), so the engine takes it.
+pub fn delay(c: &Value) -> u32 {
+    c["delay"].as_u64().unwrap_or(0) as u32
 }
 
 /// Per output of `shape`, the limiter of the bus or aux it carries in

@@ -1445,6 +1445,138 @@ fn every_replica_applies_a_bus_limiter_alike() {
     }
 }
 
+/// A channel's delay is replicated state: every replica plays a pulse on
+/// the input exactly that many samples late, and at 0 not late at all,
+/// the three writing the same bits.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_delays_a_channel_alike() {
+    use std::sync::atomic::AtomicU64;
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let rate: u64 = 48000;
+    let shape = json!({
+        "sampleRate": rate,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch", "name": "Pres", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let pulse = Arc::new([AtomicU64::new(u64::MAX), AtomicU64::new(u64::MAX)]);
+    let at = pulse.clone();
+    let (set, listeners) = Set::with("delay", shape, &["out-pgm"], |domain| {
+        // The pulses are read back from the outputs' history.
+        std::fs::write(
+            domain.join("options.json"),
+            r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
+        )
+        .unwrap();
+        let src = new_id();
+        let source = Source::signal(domain, &src, 1, move |_, idx| {
+            let on = (at[0].load(Ordering::Relaxed)..at[1].load(Ordering::Relaxed)).contains(&idx);
+            if on { 0.5 } else { 0.0 }
+        });
+        (
+            vec![source],
+            json!({ "ch": { "flow": src, "maxDelayMs": 20 } }),
+        )
+    });
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let flows: Vec<String> = (set.outputs["out-pgm"]["flows"].as_array().unwrap().iter())
+        .map(|f| f.as_str().unwrap().to_owned())
+        .collect();
+    write(
+        &nodes,
+        0,
+        &[
+            ("/buses/pgm/fader", json!(0)),
+            ("/channels/ch/fader", json!(0)),
+            ("/channels/ch/routes/pgm", json!(true)),
+        ],
+    );
+    // The left leg of samples [from, to) of every replica's output, once
+    // all are written.
+    let spans = |from: u64, to: u64| -> Option<Vec<Vec<f32>>> {
+        (flows.iter())
+            .map(|f| {
+                let generation = attach(&set.domain.0, f)?;
+                let input = generation.input(0).unwrap();
+                let mut buf = vec![0.0f32; 2 * B as usize];
+                let mut left = Vec::new();
+                for k in from / B..=to / B {
+                    let o = input.read(&mut SlotState::default(), k, &GroupWait::Skipped, &mut buf);
+                    if o != Outcome::Copy {
+                        return None;
+                    }
+                    left.extend_from_slice(&buf[..B as usize]);
+                }
+                let skip = (from % B) as usize;
+                Some(left[skip..skip + (to - from) as usize].to_vec())
+            })
+            .collect()
+    };
+    let line = rate / 50;
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    // 0, a delay off the block grid, the full line, and 0 again.
+    for (n, delay) in [0, rate / 100 + 7, line, 0].into_iter().enumerate() {
+        write(
+            &nodes,
+            n % REPLICAS,
+            &[("/channels/ch/delay", json!(delay))],
+        );
+        // A pulse of 100 ms from 0.5 s on, off the block grid: the delay
+        // has applied on every replica and its crossfade ended long before.
+        let start = (Outputs::now() + 80) * B + rate / 2 + 7;
+        let end = start + rate / 10;
+        pulse[1].store(end, Ordering::Relaxed);
+        pulse[0].store(start, Ordering::Relaxed);
+        let (from, to) = (start - rate / 10, end + line + late + rate / 10);
+        let mut read = None;
+        let written = until(20, || {
+            read = spans(from, to);
+            read.is_some()
+        });
+        pulse[0].store(u64::MAX, Ordering::Relaxed);
+        assert!(
+            written,
+            "delay {delay}: [{from}, {to}) never written: {}",
+            states(&nodes)
+        );
+        let read = read.unwrap();
+        let bits = |b: &[f32]| b.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert!(
+            read.iter().all(|r| bits(r) == bits(&read[0])),
+            "delay {delay}: the replicas write other bits"
+        );
+        let heard: Vec<u64> = (read[0].iter().enumerate())
+            .filter(|(_, v)| v.abs() > 0.1)
+            .map(|(i, _)| from + i as u64)
+            .collect();
+        let (first, last) = (heard.first().copied(), heard.last().copied());
+        assert_eq!(
+            (first, last, heard.len() as u64),
+            (
+                Some(start + late + delay),
+                Some(end - 1 + late + delay),
+                end - start
+            ),
+            "delay {delay}: the pulse [{start}, {end}) is heard from {first:?} to {last:?}"
+        );
+    }
+}
+
 /// A stereo channel's image and balance are replicated state: every
 /// replica writes the legs it feeds both, or swapped, and the opposite
 /// leg lowered by its pan.

@@ -1397,6 +1397,113 @@ async fn a_bus_limiter_holds_the_true_peak_at_its_ceiling() {
     server.stop().await;
 }
 
+/// A channel's delay plays its input exactly that many samples late, and
+/// a delay of 0 not late at all: both edges of a pulse on the input land
+/// on the programme output at the limiter's look-ahead plus the delay,
+/// to the sample, at a delay off the block grid and at the full line.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_channel_delay_plays_its_input_exactly_that_late() {
+    let domain = domain("delay");
+    // The pulses are read back from the output's history.
+    std::fs::write(
+        domain.0.join("options.json"),
+        r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
+    )
+    .unwrap();
+    let data = data("delay");
+    let (src, out) = (new_id(), new_id());
+    let rate: u64 = 48000;
+    let block = 48u64;
+    let pulse = Arc::new([AtomicU64::new(u64::MAX), AtomicU64::new(u64::MAX)]);
+    let at = pulse.clone();
+    let _src = Source::signal(&domain.0, &src, 1, move |_, idx| {
+        let on = (at[0].load(Relaxed)..at[1].load(Relaxed)).contains(&idx);
+        if on { 0.5 } else { 0.0 }
+    });
+    let shape = json!({
+        "sampleRate": rate,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch", "name": "Pres", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    // A line of 20 ms.
+    let line = rate / 50;
+    let server = start_engine(
+        &data.0,
+        &domain.0,
+        shape,
+        json!({ "ch": { "flow": src, "maxDelayMs": 20 } }),
+        json!({ "out-pgm": { "flow": out } }),
+        // As for the duck test: a debug engine on a loaded host computes
+        // each window whole only with time in hand.
+        json!({
+            "blockSize": block,
+            "readerMarginSamples": rate / 10,
+            "maxCatchupBlocks": rate / 10 / block,
+        }),
+    )
+    .await;
+    appears(&domain.0, &out).await;
+    patch(
+        &server,
+        &[
+            ("/buses/pgm/fader", json!(0)),
+            ("/channels/ch/fader", json!(0)),
+            ("/channels/ch/routes/pgm", json!(true)),
+        ],
+    )
+    .await;
+    let api = api();
+    let engine = server.audio.as_ref().unwrap().engine();
+    let skipped = || engine.counters().overrun_skipped_samples.load(Relaxed);
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    let now = || time::timestamp_to_index(&api, time::now(&api));
+    // 0, a delay off the block grid, the full line, and 0 again.
+    for delay in [0, rate / 100 + 7, line, 0] {
+        patch(&server, &[("/channels/ch/delay", json!(delay))]).await;
+        let skipped_before = skipped();
+        // A pulse of 100 ms from 0.5 s on, off the block grid: the delay
+        // has applied and its crossfade ended long before.
+        let start = now() + rate / 2 + 7;
+        let end = start + rate / 10;
+        pulse[1].store(end, Relaxed);
+        pulse[0].store(start, Relaxed);
+        let (from, to) = (start - rate / 10, end + line + late + rate / 10);
+        // Written by then, with the 100 ms the clock leads the output by.
+        while now() <= to + rate / 2 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        pulse[0].store(u64::MAX, Relaxed);
+        assert_eq!(
+            skipped(),
+            skipped_before,
+            "delay {delay}: samples skipped, the engine was starved for over 100 ms"
+        );
+        let heard: Vec<u64> = (span(&domain.0, &out, from, to).iter())
+            .enumerate()
+            .filter(|(_, s)| s.0.abs() > 0.1)
+            .map(|(i, _)| from + i as u64)
+            .collect();
+        let (first, last) = (heard.first().copied(), heard.last().copied());
+        assert_eq!(
+            (first, last, heard.len() as u64),
+            (
+                Some(start + late + delay),
+                Some(end - 1 + late + delay),
+                end - start
+            ),
+            "delay {delay}: the pulse [{start}, {end}) is heard from {first:?} to {last:?}"
+        );
+    }
+    server.stop().await;
+}
+
 /// A diff larger than the changes the engine holds at once waits for
 /// room and lands whole.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

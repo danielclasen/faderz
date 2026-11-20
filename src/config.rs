@@ -223,6 +223,13 @@ pub struct Input {
     /// `source` label in the shape gains the selection, as in `ch 7-8`.
     #[serde(default)]
     pub channels: Option<Vec<u32>>,
+    /// The channel's delay line: the longest delay it takes, in ms at
+    /// the shape's sample rate, at most 5 s at 48 kHz
+    /// (`samplez_dsp::MAX_DELAY_SAMPLES`). Absent or 0, the channel has
+    /// none and takes no delay but 0. Every line is allocated at start
+    /// and counts against `engine.delayBudgetSamples`.
+    #[serde(default)]
+    pub max_delay_ms: Option<f64>,
 }
 
 /// The highest flow channel `mxl.inputs.<channel>.channels` may name:
@@ -846,6 +853,7 @@ impl Config {
         }
         let revision = env(REVISION_ENV).filter(|r| !r.is_empty());
         config.set = config.replica.set(&name, env_marker, revision)?;
+        config.delay_lines(&mut shape)?;
         config.audio = config.audio(&shape)?;
         if let (Some(engine), Some(mxl)) = (&config.audio, &config.mxl) {
             config.wiring = (shape.channels.iter().zip(&engine.inputs))
@@ -1010,6 +1018,56 @@ impl Config {
             .into_bytes()
     }
 
+    /// Sets each channel's `maxDelay` in `shape` from
+    /// `mxl.inputs.<id>.maxDelayMs`, in samples at the shape's rate, and
+    /// refuses lines that together hold more history than
+    /// `engine.delayBudgetSamples`: a line times the channel's width,
+    /// summed over channels, as samplez counts it.
+    fn delay_lines(&self, shape: &mut Shape) -> Result<(), String> {
+        if let Some(c) = shape.channels.iter().find(|c| c.max_delay.is_some()) {
+            return Err(format!(
+                "shape: channel {} maxDelay: set by mxl.inputs.{}.maxDelayMs",
+                c.id, c.id
+            ));
+        }
+        let Some(mxl) = &self.mxl else {
+            return Ok(());
+        };
+        let rate = f64::from(shape.sample_rate);
+        let mut lines = Vec::new();
+        for c in &mut shape.channels {
+            let Some(ms) = mxl.inputs.get(&c.id).and_then(|i| i.max_delay_ms) else {
+                continue;
+            };
+            let samples = (ms * rate / 1000.0).round();
+            if !(0.0..=f64::from(samplez_dsp::MAX_DELAY_SAMPLES)).contains(&samples) {
+                return Err(format!(
+                    "mxl.inputs.{}.maxDelayMs {ms}: not in 0 to {} samples at {} Hz",
+                    c.id,
+                    samplez_dsp::MAX_DELAY_SAMPLES,
+                    shape.sample_rate
+                ));
+            }
+            if samples > 0.0 {
+                c.max_delay = Some(samples as u32);
+                lines.push((c.id.clone(), samples as u64 * c.width as u64));
+            }
+        }
+        let held: u64 = lines.iter().map(|(_, s)| s).sum();
+        let budget = self.delay_budget();
+        if held > budget {
+            let list: Vec<String> = (lines.iter())
+                .map(|(id, s)| format!("{id} ({s})"))
+                .collect();
+            return Err(format!(
+                "mxl.inputs: the delay lines of {} hold {held} samples times legs, above \
+                 engine.delayBudgetSamples {budget}; shorten maxDelayMs or raise the budget",
+                list.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
     /// Appends each channel's flow channel selection to its `source`
     /// label, or makes it the label.
     fn label_sources(&self, shape: &mut Shape) -> Result<(), String> {
@@ -1108,6 +1166,7 @@ impl Config {
                 "flowId": input.flow,
                 "channels": c.width,
                 "loudnessChannels": loudness_channels(&c.layout),
+                "maxDelaySamples": c.max_delay.unwrap_or(0),
             });
             if let Some(legs) = &input.channels {
                 if legs.len() != c.width {
@@ -1783,6 +1842,76 @@ mod tests {
         let (c, ..) = Config::parse(&set.to_string(), || unreachable!()).unwrap();
         assert_eq!(c.delay_budget(), 480_000);
         assert_eq!(c.audio.unwrap().delay_budget_samples, 480_000);
+    }
+
+    /// A channel's delay line is opt-in, given in ms and taken in samples
+    /// at the shape's rate, by the shape (`maxDelay`) and the engine
+    /// (`maxDelaySamples`) alike. Lines that together hold more than the
+    /// budget refuse the start, naming each channel's share; one past
+    /// what the engine takes, or one written into the shape, too.
+    #[test]
+    fn delay_lines_are_opt_in_and_within_the_budget() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let config = |ch1: Value, st1: Value, engine: Value| {
+            json!({
+                "replica": { "name": "r1" },
+                "shape": small(),
+                "engine": engine,
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                    "inputs": {
+                        "ch1": { "flow": id(1), "altFlow": id(5), "maxDelayMs": ch1 },
+                        "ch2": { "flow": id(2) },
+                        "st1": { "flow": id(3), "maxDelayMs": st1 },
+                    },
+                    "outputs": { "out-pgm": { "flow": id(4) } },
+                },
+            })
+            .to_string()
+        };
+        let (c, shape, _) = Config::parse(
+            &config(json!(20), json!(5000), json!({})),
+            || unreachable!(),
+        )
+        .unwrap();
+        let lines: Vec<Option<u32>> = shape.channels.iter().map(|c| c.max_delay).collect();
+        assert_eq!(lines, [Some(960), None, Some(240_000)]);
+        let engine: Vec<u32> = (c.audio.unwrap().inputs.iter())
+            .map(|i| i.max_delay_samples)
+            .collect();
+        assert_eq!(engine, [960, 0, 240_000]);
+        // 0 is no line.
+        let (_, shape, _) =
+            Config::parse(&config(json!(0), json!(0), json!({})), || unreachable!()).unwrap();
+        assert!(shape.channels.iter().all(|c| c.max_delay.is_none()));
+
+        // The stereo line counts twice.
+        let held = 960 + 2 * 240_000;
+        let fits = json!({ "delayBudgetSamples": held });
+        Config::parse(&config(json!(20), json!(5000), fits), || unreachable!()).unwrap();
+        let short = json!({ "delayBudgetSamples": held - 1 });
+        let e =
+            Config::parse(&config(json!(20), json!(5000), short), || unreachable!()).unwrap_err();
+        assert!(e.contains("ch1 (960), st1 (480000)"), "{e}");
+        assert!(
+            e.contains(&format!("delayBudgetSamples {}", held - 1)),
+            "{e}"
+        );
+
+        let e = Config::parse(
+            &config(json!(20), json!(5000.1), json!({})),
+            || unreachable!(),
+        )
+        .unwrap_err();
+        assert!(e.contains("mxl.inputs.st1.maxDelayMs 5000.1"), "{e}");
+        let e =
+            Config::parse(&config(json!(-1), json!(0), json!({})), || unreachable!()).unwrap_err();
+        assert!(e.contains("mxl.inputs.ch1.maxDelayMs -1"), "{e}");
+
+        let mut set: Value = serde_json::from_str(&config(json!(0), json!(0), json!({}))).unwrap();
+        set["shape"]["channels"][0]["maxDelay"] = json!(960);
+        let e = Config::parse(&set.to_string(), || unreachable!()).unwrap_err();
+        assert!(e.contains("set by mxl.inputs.ch1.maxDelayMs"), "{e}");
     }
 
     /// Declared consoles take defaults; a console the contract refuses or

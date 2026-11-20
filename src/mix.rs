@@ -458,8 +458,8 @@ pub(crate) fn flow<'w>(state: &Value, id: &str, w: &'w Wiring) -> &'w str {
 }
 
 /// Everything the engine of `shape` plays from `state`: the gain matrix
-/// ([`matrix`]), each channel's strip ([`strip::params`]), each output's
-/// limiter ([`strip::limiters`]), the duck groups ([`duck::targets`])
+/// ([`matrix`]), each channel's strip ([`strip::params`]) and input
+/// delay ([`strip::delay`]), each output's limiter ([`strip::limiters`]), the duck groups ([`duck::targets`])
 /// and masks ([`duck::masks`]) and the flow its selected input reads
 /// ([`selected`]), one slot per channel. Every output is enabled.
 pub fn targets(shape: &Shape, wiring: &[Wiring], state: &Value) -> Targets {
@@ -550,8 +550,9 @@ struct Moved {
     elements: BTreeSet<String>,
     /// The columns of the monitor outputs.
     monitor: bool,
-    /// The strips and flows of these slots.
+    /// The strips, delays and flows of these slots.
     strips: BTreeSet<usize>,
+    delays: BTreeSet<usize>,
     flows: BTreeSet<usize>,
     /// The duck masks: a group's targets or destinations, or the
     /// monitor's source.
@@ -586,6 +587,9 @@ impl Derived {
                     .collect(),
                 strips: (shape.channels.iter())
                     .map(|c| strip::params(&state["channels"][&c.id], c.width))
+                    .collect(),
+                delays: (shape.channels.iter())
+                    .map(|c| strip::delay(&state["channels"][&c.id]))
                     .collect(),
                 limiters: strip::limiters(shape, state),
                 ducks: duck::targets(shape, state),
@@ -657,6 +661,9 @@ impl Derived {
             let c = &shape.channels[slot];
             self.targets.strips[slot] = strip::params(&state["channels"][&c.id], c.width);
         }
+        for slot in moved.delays {
+            self.targets.delays[slot] = strip::delay(&state["channels"][&shape.channels[slot].id]);
+        }
         for slot in moved.flows {
             self.targets.flows[slot] =
                 Some(flow(state, &shape.channels[slot].id, &wiring[slot]).to_owned());
@@ -717,6 +724,9 @@ impl Moved {
                         Some("input") => {
                             moved.flows.insert(s);
                         }
+                        Some("delay") => {
+                            moved.delays.insert(s);
+                        }
                         // Whether anything solos, and in which mode, moves
                         // every row of the monitor ([`Mix::monitor`]) and
                         // its duck masks.
@@ -728,6 +738,7 @@ impl Moved {
                         None => {
                             moved.rows.insert(s);
                             moved.strips.insert(s);
+                            moved.delays.insert(s);
                             moved.flows.insert(s);
                             moved.monitor = true;
                             moved.masks = true;
@@ -735,6 +746,7 @@ impl Moved {
                         _ => {
                             moved.rows.insert(s);
                             moved.strips.insert(s);
+                            moved.delays.insert(s);
                             moved.flows.insert(s);
                         }
                     }

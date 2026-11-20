@@ -55,14 +55,23 @@ mutes, bus and aux polarity, mix-minus exclusions and talkback
 interrupts, the monitor's source, channel and VCA PFL and AFL listening
 (PFL over AFL; PFL centred before the pan, AFL at the pan before the AFV
 stage), fold-down, image, level, dim, talkback dim, cut, mono and speaker mutes
-and solos, duck groups, and the bus and aux true-peak limiter on every
-output carrying that bus or aux. An output carrying a bus or aux is
+and solos, duck groups, the channel delay, and the bus and aux true-peak
+limiter on every output carrying that bus or aux. An output carrying a bus or aux is
 late by the limiter's look-ahead, 53 samples (about 1.1 ms at 48 kHz), whether
 the limiter is on or off, so that turning it on needs no restart; an
 output carrying a mix-minus, a direct out or the monitor is not. The rest of the state is kept, shown and replicated but not
-applied to the audio in this version: channel delay, bus and aux EQ,
+applied to the audio in this version: bus and aux EQ,
 dynamics and delay, the line-up tone, the AFV rise, hold and fall
 times, and the scene crossfade time.
+
+A channel delays its input by its `delay`, in samples, exactly, for lip
+sync: opt-in per channel through `mxl.inputs.<channel>.maxDelayMs`, the
+longest delay its line takes, at most 5 s at 48 kHz. A channel without a
+line takes no delay but 0, and at 0 a channel is not late at all. A write
+past the line is refused. The shape gives each channel's line as
+`maxDelay` in samples. The lines are allocated at start and together hold
+at most `engine.delayBudgetSamples` samples, a line counting once per leg;
+a longer line is a configuration change and a restart.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is
@@ -337,7 +346,7 @@ variable; the flag wins over the variable, the variable over the file.
 | `consoles` | `[]` | consoles known before any registers: `id`, `name`, `protocol` (`mcu`), `transport` (`bridge`), `strips` (8) |
 | `mxl.libraryPath` | `/opt/mxl/lib/libmxl.so` | libmxl, loaded at start |
 | `mxl.domains` | | `[{name, path, id}]`: the mounted MXL domains; `id`, the domain's MXL id, for NMOS when the domain has no `domain_def.json` |
-| `mxl.inputs.<channel>` | | `flow`; `altFlow` for a channel with `altInput`; `domain` with more than one domain; `channels`, the 1-based flow channel each leg reads |
+| `mxl.inputs.<channel>` | | `flow`; `altFlow` for a channel with `altInput`; `domain` with more than one domain; `channels`, the 1-based flow channel each leg reads; `maxDelayMs`, the channel's delay line, none by default |
 | `mxl.outputs.<output>` | | `flow` in a set of one; `flows`, one member flow per replica by ordinal, in a set of more; `domain` with more than one domain; `mergedFlow`, the flow merging the member flows, which the NMOS sender names, in a set of more with `nmos.enabled` |
 | `engine.sampleRate` | `48000` | |
 | `engine.blockSize` | `48` | samples per block |

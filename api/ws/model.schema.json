@@ -348,7 +348,7 @@
       "maximum": 24
     },
     "DelaySamples": {
-      "description": "Integer delay in samples at the shape sample rate, up to 5 s, for lip-sync against video processing chains.",
+      "description": "Integer delay in samples at the shape sample rate, up to 5 s, for lip-sync against video processing chains. A channel's delay is applied to its input and takes at most its maxDelay.",
       "type": "integer",
       "minimum": 0,
       "maximum": 240000
@@ -436,6 +436,10 @@
           "minLength": 1,
           "maxLength": 64,
           "description": "Label of the input source, shown under the channel name; absent when the source has no label."
+        },
+        "maxDelay": {
+          "description": "The longest delay the channel's input delay line takes, in samples; absent when the channel has none, which then takes no delay but 0. Configured per input; a longer line is a configuration change and a restart.",
+          "$ref": "#/$defs/DelaySamples"
         }
       }
     },

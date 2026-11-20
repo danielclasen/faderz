@@ -24,7 +24,7 @@ use crate::shape::Shape;
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
 /// change to any of them takes another version, so replicas deriving
 /// differently never run side by side.
-pub const DERIVATION_VERSION: u32 = 5;
+pub const DERIVATION_VERSION: u32 = 6;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
@@ -1060,6 +1060,25 @@ impl Mixer {
                 .any(|c| &c.id == channel && c.alt_input)
         {
             return Err(format!("channel {channel} has no B input"));
+        } else if let [group, channel, leaf] = tokens(path).as_slice()
+            && (group.as_str(), leaf.as_str()) == ("channels", "delay")
+        {
+            // The engine refuses a delay past the input's line.
+            let line = (shape.channels.iter())
+                .find(|c| &c.id == channel)
+                .and_then(|c| c.max_delay);
+            let samples = value.as_u64().unwrap_or(0);
+            match line {
+                None if samples > 0 => {
+                    return Err(format!("channel {channel} has no delay line"));
+                }
+                Some(max) if samples > u64::from(max) => {
+                    return Err(format!(
+                        "channel {channel} delays at most {max} samples, its delay line"
+                    ));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -4037,6 +4056,8 @@ mod tests {
             channel("ch4", 1, "mono"),
         ];
         shape["channels"].as_array_mut().unwrap().extend(more);
+        shape["channels"][3]["maxDelay"] = json!(960);
+        shape["channels"][5]["maxDelay"] = json!(48_000);
         shape["vcas"]
             .as_array_mut()
             .unwrap()
@@ -4091,7 +4112,7 @@ mod tests {
             let some = |next: &mut dyn FnMut(u64) -> u64| -> Value {
                 json!(channels.iter().filter(|_| next(3) == 0).collect::<Vec<_>>())
             };
-            match next(39) {
+            match next(40) {
                 0 => (format!("/channels/{ch}/fader"), db),
                 1 => (format!("/channels/{ch}/mute"), flag),
                 2 => (
@@ -4218,6 +4239,9 @@ mod tests {
                     },
                     json!(["normal", "leftToBoth", "rightToBoth", "swap"][next(4) as usize]),
                 ),
+                // Within ch3's and c51's lines; any but 0 is refused on
+                // the others.
+                38 => (format!("/channels/{ch}/delay"), json!(next(3) * 480)),
                 _ => ("/metering/loudness/preset".into(), json!("atsc")),
             }
         };
@@ -4310,6 +4334,7 @@ mod tests {
                     "{at}"
                 );
                 assert_eq!(kept.flows, whole.flows, "{at}");
+                assert_eq!(kept.delays, whole.delays, "{at}");
                 assert_eq!(
                     format!("{:?}", kept.ducks),
                     format!("{:?}", whole.ducks),
@@ -4519,6 +4544,65 @@ mod tests {
     #[test]
     fn the_config_hash_of_a_fixed_configuration_never_moves() {
         assert_eq!(wired().config_hash(), 1_102_375_237_759_052_186);
+    }
+
+    /// `wired` with a delay line of `line` samples on ch1 and none on
+    /// the others.
+    fn delayed(line: u32) -> Mixer {
+        let m = wired();
+        let mut shape = m.shape().clone();
+        shape.channels[0].max_delay = Some(line);
+        Mixer::configured(shape, Vec::new(), m.wiring.clone())
+    }
+
+    /// A channel's delay is its input slot's delay target, 0 by default,
+    /// and reaches the engine as one `Delay` entry. A write is refused
+    /// past the channel's line and, on a channel without one, for
+    /// anything but 0: the engine would refuse the entry. A loaded state
+    /// whose delay the configured line no longer takes drops it to 0.
+    #[test]
+    fn a_channels_delay_is_its_input_slots_within_its_line() {
+        let mut m = delayed(960);
+        let before = m.targets().unwrap();
+        assert_eq!(before.delays, [0, 0, 0]);
+        patch(&mut m, "p1", &[("/channels/ch1/delay", json!(960))]);
+        let after = m.targets().unwrap();
+        assert_eq!(after.delays, [960, 0, 0]);
+        let entries: Vec<String> = (before.diff(&after).iter())
+            .filter(|e| matches!(e, samplez::engine::Entry::Delay { .. }))
+            .map(|e| format!("{e:?}"))
+            .collect();
+        assert_eq!(entries, ["Delay { slot: 0, samples: 960 }"]);
+        assert_ne!(
+            m.config_hash(),
+            wired().config_hash(),
+            "the line is configuration"
+        );
+
+        let refused = |m: &Mixer, path: &str, value: Value| match m.check_write(path, &value) {
+            Err(Answer::Invalid { message }) => message,
+            other => panic!("{path} {value}: {other:?}"),
+        };
+        let e = refused(&m, "/channels/ch1/delay", json!(961));
+        assert!(e.contains("ch1 delays at most 960 samples"), "{e}");
+        let e = refused(&m, "/channels/ch2/delay", json!(1));
+        assert!(e.contains("ch2 has no delay line"), "{e}");
+        m.check_write("/channels/ch2/delay", &json!(0)).unwrap();
+        patch(&mut m, "p2", &[("/channels/ch1/delay", json!(961))]);
+        assert_eq!(
+            m.state()["channels"]["ch1"]["delay"],
+            960,
+            "nothing applied"
+        );
+
+        let mut shorter = delayed(480);
+        shorter.load(&m.save()).unwrap();
+        assert_eq!(shorter.state()["channels"]["ch1"]["delay"], 0);
+        assert_eq!(shorter.dropped, ["/channels/ch1/delay"]);
+        assert_eq!(shorter.targets().unwrap().delays, [0, 0, 0]);
+        let mut same = delayed(960);
+        same.load(&m.save()).unwrap();
+        assert_eq!(same.targets().unwrap().delays, [960, 0, 0]);
     }
 
     /// A snapshot carries its format: a binary that reads the earlier
