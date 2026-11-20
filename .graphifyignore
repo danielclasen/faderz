@@ -1,0 +1,24 @@
+# VCS and local worktrees
+.git/
+.claude/worktrees/
+
+# Graphify output and caches
+graphify-out/
+.graphify/
+.graphify-cache/
+
+# Build artifacts and dependencies
+target/
+bridge/target/
+.cargo-registry/
+.cargo-git/
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/playwright-report-binary/
+
+# Generated and fixture files
+docs/screenshots/
+*.lock
+web/package-lock.json
