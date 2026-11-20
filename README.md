@@ -79,7 +79,7 @@ sets that channel's delay to 0 and names the channel in its answer's
 Once a channel has a line, a snapshot carries it as the shape's
 `maxDelay`, and a recall that set a delay to 0 carries its answer;
 faderz 0.4.9 and earlier read neither. Rolling back to such a release
-needs the data volume cleared, or every `maxDelayMs` removed first.
+needs the data volume cleared.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is
