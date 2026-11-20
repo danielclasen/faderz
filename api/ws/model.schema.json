@@ -3025,7 +3025,7 @@
       }
     },
     "Loudness": {
-      "description": "ITU-R BS.1770-5 / EBU R128 loudness in LUFS, LRA in LU (EBU Tech 3342). null until enough audio has been measured. maxMomentary and maxShortTerm are the highest momentary and short-term loudness since the last reset (EBU Tech 3341). integrated, lra and the maxima take in audio only while the measurement runs (LoudnessMeasurement). integrated and lra keep measuring across gaps; integratedValid is false while the measurement holds a slice that was a gap or that this replica lost, until it is reset. lraStable is false during the first 60 s of running measurement after a reset, while LRA is not yet meaningful.",
+      "description": "ITU-R BS.1770-5 / EBU R128 loudness in LUFS, LRA in LU (EBU Tech 3342). null until enough audio has been measured. maxMomentary and maxShortTerm are the highest momentary and short-term loudness since the last reset (EBU Tech 3341). integrated, lra and the maxima take in audio only while the measurement runs (LoudnessMeasurement). integrated and lra keep measuring across gaps, which never blank them; integratedValid is true while an integrated loudness is measured. lraStable is false during the first 60 s of running measurement after a reset, while LRA is not yet meaningful.",
       "type": "object",
       "required": [
         "momentary",

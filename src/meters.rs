@@ -288,15 +288,15 @@ const LRA_SETTLED: u64 = 60 * 48_000;
 /// Samples in one meter window.
 const WINDOW: u64 = 4_800;
 
-/// Bit 0 `integratedValid`: an integrated loudness with no slice since
-/// the measurement started a gap or lost. Bit 1 `lraStable`: that, and
-/// 60 s measured since.
+/// Bit 0 `integratedValid`: an integrated loudness is measured; a gap
+/// or a lost slice does not clear it, as samplez measures across them.
+/// Bit 1 `lraStable`: that, and 60 s measured since.
 fn flags(m: &OutputMeters) -> i16 {
     let measured = match (m.window, m.since) {
         (Some(w), Some(since)) => ((w + 1) * WINDOW).saturating_sub(since),
         _ => 0,
     };
-    let valid = m.integrated.is_some() && m.gaps == 0 && m.lost == 0;
+    let valid = m.integrated.is_some();
     i16::from(valid) | i16::from(valid && measured >= LRA_SETTLED) << 1
 }
 
@@ -637,12 +637,26 @@ mod tests {
         };
         let got = Layout::of(&shape).frame("rep", 258, &r);
         assert_eq!(got, want);
+        // The same programme with gaps and a slice lost: samplez measures
+        // across them, and the frame carries the integrated loudness and
+        // its valid flag as before.
+        let gapped = OutputMeters {
+            gaps: 12,
+            lost: 3,
+            ..pgm.clone()
+        };
+        let r = Readings {
+            outputs: vec![&direct, &gapped],
+            ..r
+        };
+        assert_eq!(Layout::of(&shape).frame("rep", 258, &r), want);
     }
 
-    /// Loudness: integratedValid while a measurement has no gap and lost
-    /// no slice, lraStable from 60 s of measurement on.
+    /// Loudness: integratedValid while an integrated loudness is measured,
+    /// across gaps and lost slices, which never blank it; lraStable from
+    /// 60 s of measurement on.
     #[test]
-    fn the_loudness_flags_follow_gaps_and_measured_time() {
+    fn the_loudness_flags_follow_the_measurement_not_its_gaps() {
         let m = |gaps, lost, window| OutputMeters {
             gaps,
             lost,
@@ -655,8 +669,8 @@ mod tests {
         assert_eq!(flags(&m(0, 0, 10)), 1);
         assert_eq!(flags(&m(0, 0, 599)), 1);
         assert_eq!(flags(&m(0, 0, 600)), 3);
-        assert_eq!(flags(&m(1, 0, 600)), 0, "a gap");
-        assert_eq!(flags(&m(0, 1, 600)), 0, "a slice lost");
+        assert_eq!(flags(&m(1, 0, 600)), 3, "a gap");
+        assert_eq!(flags(&m(0, 1, 10)), 1, "a slice lost");
         assert_eq!(flags(&OutputMeters::default()), 0, "nothing measured");
     }
 }
