@@ -320,6 +320,7 @@ variable; the flag wins over the variable, the variable over the file.
 | `rt.enabled` | `true` | `false` skips capabilities, memory locking and `SCHED_FIFO` |
 | `rt.priority` | `70` | `SCHED_FIFO` priority |
 | `rt.rtCpu` | `auto` | `auto`, `none`, `first`, `last` or an index into the allowed CPUs |
+| `rt.isolateRtCpu` | `true` | With the RT thread pinned, keeps every other thread off its CPU |
 | `nmos.enabled` | `false` | register with an NMOS registry and take IS-05 connections; needs the `mxl` section |
 | `nmos.seed` | replica name | what every NMOS id derives from; the StatefulSet's name in a set of more |
 | `nmos.advertiseHost` | | host controllers reach `listeners.nmos` at; required with `nmos.enabled` |

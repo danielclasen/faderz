@@ -412,6 +412,13 @@ export class MockServer {
       this.slowLinkMs = ms;
       return send(200, { ok: true });
     }
+    if (method === 'POST' && path === '/__mock/build') {
+      const faderz = url.searchParams.get('faderz');
+      const session = url.searchParams.get('session');
+      if (!faderz || !session) return send(400, { error: 'faderz and session are required' });
+      c.setBuildVersion(session, faderz);
+      return send(200, { ok: true });
+    }
     if (method === 'POST' && path === '/__mock/stall-close') {
       // As a link that dies mid-close: the server sends its close frame,
       // then reads nothing more, so a browser socket sits closing until it

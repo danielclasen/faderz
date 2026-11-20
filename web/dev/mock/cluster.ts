@@ -628,7 +628,7 @@ export class Cluster {
       conn.mode = msg.mode;
       this.broadcastPresence();
       this.renew(conn.owner, r);
-      this.emit(conn, { type: 'replicas', replica: this.ref(r), build: BUILD, replicas: this.replicaStatus() });
+      this.emit(conn, { type: 'replicas', replica: this.ref(r), build: this.buildOf(conn), replicas: this.replicaStatus() });
       return this.sync(conn, this.ownEpoch(msg.epoch, msg.lastRevision));
     }
     if (!conn.owner) {
@@ -1449,10 +1449,29 @@ export class Cluster {
     for (const r of this.replicas) r.meters.resetLoudness(ids);
   }
 
+  /** The faderz version replicas report to a session, by /__mock/build. */
+  private builds = new Map<string, string>();
+
+  /** The build replicas report to the session of `conn`. */
+  private buildOf(conn: Conn): Build {
+    const faderz = this.builds.get(conn.session);
+    return faderz ? { ...BUILD, faderz } : BUILD;
+  }
+
+  /**
+   * Every replica now reports `faderz` as its version to `session`, as
+   * after a roll; to that session only, so a test leaves the others it
+   * shares the mock with alone.
+   */
+  setBuildVersion(session: string, faderz: string): void {
+    this.builds.set(session, faderz);
+    this.broadcastReplicas();
+  }
+
   private broadcastReplicas(): void {
     const replicas = this.replicaStatus();
     for (const r of this.replicas) {
-      for (const c of r.conns) if (c.synced) this.emit(c, { type: 'replicas', replica: this.ref(r), build: BUILD, replicas });
+      for (const c of r.conns) if (c.synced) this.emit(c, { type: 'replicas', replica: this.ref(r), build: this.buildOf(c), replicas });
     }
   }
 

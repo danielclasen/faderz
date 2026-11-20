@@ -440,3 +440,21 @@ test('the EQ curve in the processing panel is as wide as the panel gives it', as
     await page.keyboard.press('Escape');
   }
 });
+
+test('a replica serving a new faderz version shows a reload note, which a dismiss keeps away until the next one', { tag: '@mock' }, async ({ page, request }) => {
+  await live(page);
+  const note = page.getByTestId('new-version');
+  await expect(note).toHaveCount(0);
+  const session = await debug(page, 'session');
+  const roll = async (faderz: string) => expect((await request.post(`/__mock/build?session=${session}&faderz=${faderz}`)).ok()).toBe(true);
+  await roll('99.0.0');
+  await expect(note).toContainText('A new faderz version is running (99.0.0)');
+  await expect(note.getByRole('button', { name: 'RELOAD' })).toBeVisible();
+  await note.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(note).toHaveCount(0);
+  await roll('99.0.1');
+  await expect(note).toContainText('(99.0.1)');
+  await note.getByRole('button', { name: 'RELOAD' }).click();
+  await page.waitForLoadState('load');
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
+});

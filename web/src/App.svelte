@@ -14,6 +14,7 @@
   import Consoles from './components/Consoles.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import AheadBanner from './components/AheadBanner.svelte';
+  import NewVersionNotice from './components/NewVersionNotice.svelte';
   import { tip } from './lib/tip';
   import NoticeLine from './components/NoticeLine.svelte';
   import LockKey from './components/LockKey.svelte';
@@ -131,6 +132,7 @@
 
   <main>
     <AheadBanner />
+    <NewVersionNotice />
     <svelte:boundary onerror={(e) => console.error(e)}>
     {#if !mixer.shape || !mixer.state}
       <div class="waiting" role="status">Connecting to the mixer...</div>

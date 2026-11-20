@@ -13,7 +13,13 @@ const https = tlsCert && tlsKey ? { cert: readFileSync(tlsCert), key: readFileSy
 // serving passes /api/v1 to it, WebSocket included, in place of the mock.
 const backend = process.env['FADERZ_BACKEND'];
 
+// The faderz version this bundle is built with, from the crate's manifest:
+// the console compares it with the build a replica reports.
+const faderzVersion = /^version = "([^"]+)"\r?$/m.exec(readFileSync(new URL('../Cargo.toml', import.meta.url), 'utf8'))?.[1];
+if (!faderzVersion) throw new Error('no version in ../Cargo.toml');
+
 export default defineConfig(async ({ command, mode }) => ({
+  define: { __FADERZ_VERSION__: JSON.stringify(faderzVersion) },
   plugins: [
     svelte(),
     // The licence notice of every npm package in the bundle.
