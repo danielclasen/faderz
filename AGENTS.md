@@ -59,23 +59,30 @@ else, apart from adapting to its API.
 
 ## Rolling upgrades
 
-Every replica of a set must share the configuration hash: a hash that
-changes mid-roll leaves the set with mixed hashes and stalls it, so such
-a change rolls only with every replica stopped.
+Replicas run side by side only at equal versions: samplez's compute and
+protocol versions (`samplez::COMPUTE_VERSION`,
+`samplez_replica::PROTOCOL`) and faderz's derivation version
+(`Product::DERIVATION_VERSION`, `DERIVATION_VERSION` in `src/state.rs`).
+`rollout::key::<Mixer>` hashes them with the configuration.
 
-- `DERIVATION_VERSION` (`src/state.rs`) is one of the hash's inputs, so
-  raising it changes the hash and needs a roll with every replica
-  stopped. Raise it whenever the same log would derive a different state
-  or different engine entries: a change in how a command applies, in
-  target derivation, in what save and load produce, or in the state's
-  saved encoding. Nothing else raises it, and any change to `apply`,
-  target derivation, `save` or `load` is reviewed for it.
-- The hash takes no build or crate version.
-- Today samplez's compatibility key hashes the samplez crate version, so
-  every faderz release that takes a new samplez is a hand-over roll that
-  needs the set parked, not a plain pod-by-pod roll.
+- A release that raises none of them rolls pod by pod with no gap in
+  the output. A raised one makes the rollout a hand-over at the first
+  new pod: hitless, from one committer to the next.
+- A samplez bump can raise compute or protocol on its own; its
+  changelog says so.
+- Raise the derivation version for any change in how a command
+  applies, in target derivation, in save or load, or in the state's
+  saved encoding, and for nothing else. Any change to `apply`, target
+  derivation, `save` or `load` is reviewed for it.
+- The configuration hash (`Mixer::config_hash`) takes no build or crate
+  version. Its inputs, the literal `4` included, stay frozen, so a
+  release keeps it; `the_config_hash_of_a_fixed_configuration_never_moves`
+  pins it.
 - `libm` stays pinned at `=0.2.16`, `Cargo.lock` is committed and every
   build is `--locked`: another `libm` can compute other bits.
+
+The release that takes samplez 0.17.0 changes the key's formula itself,
+so its own roll is a hand-over.
 
 ## Build and test
 

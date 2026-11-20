@@ -86,8 +86,15 @@ surround bus is balanced by `pan.lr` onto its L and R legs alone.
 
 A loudness reset restarts the measurement at the first 100 ms window
 starting at or after the `atIndex` of the delta that counted it, the same
-sample on every replica. A replica that applies the delta after the
-engine's earliest index restarts it there instead and logs it.
+sample on every replica: the reset count in `/loudness/<id>/resets` is
+the engine's reset epoch for that meter, which reaches every replica's
+engine through the replicated targets. In a set of one, a delta applied
+after the engine's earliest index restarts it there instead; in a set,
+an entry the log stamps again restarts it at its new index on every
+replica. `/loudness/<id>/running` false pauses the measurement the same
+way, from the delta's `atIndex`: the integrated loudness, the loudness
+range and the maxima take in nothing until it runs again, while the
+momentary and short-term loudness go on.
 
 The `counters` message names each bus, aux and mix-minus measurement's
 gaps, the 10 ms slices an input taken down by the log fed it, and its
@@ -382,8 +389,7 @@ listener:
 - In `oidc` mode the replicas behind one host name share
   `auth.oidc.sessionKey`.
 - The configuration that changes how a command applies, the shape, the
-  declared consoles, each channel's input flows and domain, and the
-  version of how the release derives engine targets from the state, is
+  declared consoles and each channel's input flows and domain, is
   equal on every replica: the leader orders no command while a replica
   reports another, and a replica of another one exits rather than
   install the set's snapshot. Changing it needs every replica stopped.
@@ -450,10 +456,14 @@ differ is withdrawn and resynced from another replica's engine core.
   by the longest time a replica reports for building an input
   generation; the commands ordered after it take effect no earlier. One
   that would switch inputs of more than one MXL domain is refused.
-- The compatibility key a rollout hands the set over by hashes the
-  samplez engine version, the mixer configuration, the `engine` settings
-  and each channel's flow channel selection; the member flows are left
-  out. Each replica reads its StatefulSet's target revision every 5 s,
+- The compatibility key a rollout hands the set over by hashes samplez's
+  compute and protocol versions, faderz's derivation version, the mixer
+  configuration, the `engine` settings and each channel's flow channel
+  selection; the member flows are left out. A release that raises none
+  of the three versions rolls pod by pod with no gap in the output; one
+  that raises any rolls as a hand-over at the first new pod, hitless.
+  The release taking samplez 0.17.0 changes the key's formula, so its
+  own roll is a hand-over. Each replica reads its StatefulSet's target revision every 5 s,
   which needs `get` on `statefulsets`, and its own revision from
   `FADERZ_POD_REVISION`, the pod's `controller-revision-hash` label
   through the downward API. The StatefulSet is the pod name without its
