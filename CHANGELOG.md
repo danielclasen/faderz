@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.7](https://github.com/danielclasen/faderz/compare/v0.4.6...v0.4.7) (2026-11-20)
+
+
+### Features
+
+* show loudness gaps and a restarted measurement beside I and LRA ([#133](https://github.com/danielclasen/faderz/issues/133)) ([b7c6be0](https://github.com/danielclasen/faderz/commit/b7c6be02175aece6282fdfab86377d1dcc9a0dc9))
+
+
+### Bug Fixes
+
+* **web:** send nothing on a socket that has begun to close ([#134](https://github.com/danielclasen/faderz/issues/134)) ([29a51b2](https://github.com/danielclasen/faderz/commit/29a51b2e6db378ef7c952011bdf44c35b00a6000))
+
 ## [0.4.6](https://github.com/danielclasen/faderz/compare/v0.4.5...v0.4.6) (2026-11-20)
 
 
