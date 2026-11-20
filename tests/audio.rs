@@ -1664,10 +1664,20 @@ async fn a_stopped_input_counts_gaps_and_the_integrated_loudness_holds() {
         .as_millis() as i64;
     let (status, body) = post(server.api, "/loudness/reset", &json!({ "ids": ["pgm"] })).await;
     assert_eq!(status, 204, "{body}");
+    // Every read from the reset on, the ones before the engine placed it
+    // included, shows pgm not restarted: a reset counted and not yet
+    // placed is not a missed one.
     let deadline = Instant::now() + Duration::from_secs(20);
-    while ms(&pgm["since"]) < asked {
-        assert!(Instant::now() < deadline, "the reset starts pgm: {pgm}");
+    loop {
         pgm = loudness_of(&server, "pgm").await;
+        assert_eq!(
+            pgm["restarted"], false,
+            "read while the reset is placed: {pgm}"
+        );
+        if ms(&pgm["since"]) >= asked {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the reset starts pgm: {pgm}");
     }
     // Past the pending time, it started where the reset starts it.
     tokio::time::sleep(Duration::from_secs(3)).await;

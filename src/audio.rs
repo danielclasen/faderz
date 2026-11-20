@@ -473,9 +473,14 @@ impl Audio {
                     }
                 }
             }
-            self.counted(&seen);
+            // Counted once placed: a counters read before it would see a
+            // reset counted and not applied, and one the engine refuses
+            // leaves the measurement as it was.
             for (id, at) in due {
-                self.reset_loudness(&layout, &id, at).await;
+                if self.reset_loudness(&layout, &id, at).await {
+                    let n = seen[&id];
+                    self.counted(&BTreeMap::from([(id, n)]));
+                }
             }
         }
     }
@@ -491,23 +496,24 @@ impl Audio {
     /// Restarts the measurement of bus `id` at `at` rounded up to a block,
     /// or at the engine's earliest index when that is later, and notes
     /// where it starts then; a reset the engine refuses notes nothing.
-    async fn reset_loudness(&self, layout: &Layout, id: &str, at: u64) {
+    /// Whether it was placed.
+    async fn reset_loudness(&self, layout: &Layout, id: &str, at: u64) -> bool {
         debug_assert!(self.block > 0, "a block size to place the reset in");
         let Some(meter) = layout.loudness_meter(id) else {
             tracing::warn!(id, "a loudness reset of an element no meter measures");
-            return;
+            return false;
         };
         loop {
             match place(at, self.block, |at| self.engine.reset_loudness(meter, at)) {
                 Ok(placed) => {
                     let mut resets = self.resets.lock().expect("resets lock poisoned");
                     resets.entry(id.to_owned()).or_default().at = Some(placed);
-                    return;
+                    return true;
                 }
                 Err(ResetError::Full) => tokio::time::sleep(FULL_RETRY).await,
                 Err(e) => {
                     tracing::warn!(id, "loudness reset refused: {e}");
-                    return;
+                    return false;
                 }
             }
         }

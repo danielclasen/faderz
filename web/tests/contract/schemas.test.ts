@@ -566,7 +566,7 @@ describe('engine counters', () => {
     expect(new Set(names.map((n) => schema.properties[n]!.title)).size, 'titles are distinct').toBe(names.length);
   });
 
-  it('refuse a counters message with a counter they do not name, or without the inputs or the loudness', () => {
+  it('refuse a counters message with a counter they do not name, or without the inputs; take one without the loudness, as an older replica sends during a rolling upgrade', () => {
     const contract = new Contract();
     const replica = { id: 'r1', role: 'leader' };
     const inputs = [{ channel: 'ch1', state: 'attached', up: true, lateBlocks: 0, tooLateBlocks: 0 }];
@@ -574,7 +574,7 @@ describe('engine counters', () => {
     expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs, loudness })).not.toThrow();
     expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { afv_late_total: 1 }, inputs, loudness })).toThrow();
     expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, loudness })).toThrow();
-    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs })).toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs })).not.toThrow();
     expect(() => contract.assertServerMessage({ type: 'counters', replica, values: {}, inputs: [{ ...inputs[0], state: 'gone' }], loudness })).toThrow();
   });
 

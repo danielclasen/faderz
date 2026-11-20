@@ -51,3 +51,22 @@ describe('loudnessNote', () => {
     expect(n.tip).toMatch(/4 gaps of 10 ms .* restarted at 14:32/);
   });
 });
+
+describe('a counters message without the loudness report', () => {
+  it('leaves the notes empty, as an older replica sends it during a rolling upgrade', async () => {
+    const { INITIAL_STATUS, MixerStore } = await import('../../src/lib/state/mixer.svelte');
+    const { exampleShape, initialState } = await import('../../dev/mock/shape');
+    const s = new MixerStore();
+    s.attach({ post: () => {} });
+    const shape = exampleShape();
+    const status = { ...INITIAL_STATUS, link: 'Live' as const };
+    s.apply({ type: 'patch', input: 0, snapshot: { shape, state: initialState(shape), owners: {} }, changes: [], owners: [], status });
+    const replica = { id: 'r1', role: 'leader' as const };
+    const counters = (extra: object) => ({ type: 'patch' as const, input: 1, changes: [], owners: [], counters: { replica, values: {}, inputs: [], ...extra } });
+    s.apply(counters({ loudness: [health({ gaps: 2 })] }) as never);
+    expect(loudnessNote(s.loudnessHealth.pgm, now).gaps).toBe('2 gaps');
+    s.apply(counters({}) as never);
+    expect(s.loudnessHealth).toEqual({});
+    expect(loudnessNote(s.loudnessHealth.pgm, now)).toEqual({ gaps: null, since: null, tip: '' });
+  });
+});

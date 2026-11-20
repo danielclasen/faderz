@@ -304,8 +304,7 @@
         "type",
         "replica",
         "values",
-        "inputs",
-        "loudness"
+        "inputs"
       ],
       "additionalProperties": false,
       "properties": {
@@ -326,7 +325,7 @@
           }
         },
         "loudness": {
-          "description": "One per bus, aux and mix-minus output, in shape order: its loudness measurement's gaps, lost slices and start. Kept out of the meter frames, which carry the readings.",
+          "description": "One per bus, aux and mix-minus output, in shape order: its loudness measurement's gaps, lost slices and start. Absent from a replica of a release before it, during a rolling upgrade. Kept out of the meter frames, which carry the readings.",
           "type": "array",
           "items": {
             "$ref": "model.schema.json#/$defs/LoudnessHealth"
