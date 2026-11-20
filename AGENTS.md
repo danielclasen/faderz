@@ -66,8 +66,9 @@ protocol versions (`samplez::COMPUTE_VERSION`,
 `rollout::key::<Mixer>` hashes them with the configuration.
 
 - A release that raises none of them rolls pod by pod with no gap in
-  the output. A raised one makes the rollout a hand-over at the first
-  new pod: hitless, from one committer to the next.
+  the output, old and new replicas running as peers. A raised one
+  changes the key, and the rollout hands over at the first new pod:
+  hitless, from one committer to the next.
 - A samplez bump can raise compute or protocol on its own; its
   changelog says so.
 - Raise the derivation version for any change in how a command
@@ -82,7 +83,10 @@ protocol versions (`samplez::COMPUTE_VERSION`,
   build is `--locked`: another `libm` can compute other bits.
 
 The release that takes samplez 0.17.0 changes the key's formula itself,
-so its own roll is a hand-over.
+so its own roll is a hand-over. It also moves the loudness reset and
+pause into the derived targets, which would raise the derivation
+version; it stays at 4 there only because that release is the first
+under explicit versions, whose roll is a hand-over anyway.
 
 ## Build and test
 
