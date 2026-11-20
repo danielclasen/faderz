@@ -53,8 +53,8 @@ export class MockServer {
   private readonly routes: Route[];
   /** Every REST request and WebSocket upgrade is answered this late, as over a slow link. */
   private slowLinkMs = 0;
-  /** Every client socket open now, for /__mock/stall-close. */
-  private sockets = new Set<WebSocket>();
+  /** Every client socket open now and its session, for /__mock/stall-close. */
+  private sockets = new Map<WebSocket, string>();
 
   /** `bindHost` is the host name the server is bound to, when it is one. */
   constructor(
@@ -119,7 +119,7 @@ export class MockServer {
           ws.terminate();
         }
       });
-      this.sockets.add(ws);
+      this.sockets.set(ws, session);
       ws.on('close', () => {
         this.sockets.delete(ws);
         this.cluster.disconnect(conn);
@@ -417,14 +417,19 @@ export class MockServer {
       // then reads nothing more, so a browser socket sits closing until it
       // gives up on the closing handshake, its close event late.
       const raw = (ws: WebSocket) => (ws as unknown as { _socket: Duplex })._socket;
-      for (const ws of this.sockets) {
+      // Of one session only, so a test leaves the others it shares the
+      // mock with alone.
+      const session = url.searchParams.get('session');
+      if (!session) return send(400, { error: 'session is required' });
+      const stalled = [...this.sockets].filter(([, s]) => s === session).map(([ws]) => ws);
+      for (const ws of stalled) {
         raw(ws).write(Buffer.from([0x88, 0x00]));
         raw(ws).pause();
         // Then the link is gone: the connection ends, and with it the
         // mock's record of it.
         setTimeout(() => raw(ws).destroy(), STALL_CLOSE_MS);
       }
-      return send(200, { ok: true, sockets: this.sockets.size });
+      return send(200, { ok: true, sockets: stalled.length });
     }
     if (method === 'POST' && path === '/__mock/drop-clients') {
       for (const conn of c.connections()) conn.close();

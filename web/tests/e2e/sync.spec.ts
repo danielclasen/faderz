@@ -533,7 +533,9 @@ test('every socket left closing, the page goes on live with no WebSocket error o
   });
   page.on('pageerror', (e) => logged.push(e.message));
   await live(page);
-  expect((await request.post('/__mock/stall-close')).ok()).toBe(true);
+  const session = await debug(page, 'session');
+  const stalled = await request.post(`/__mock/stall-close?session=${session}`);
+  expect(((await stalled.json()) as { sockets: number }).sockets).toBeGreaterThan(0);
   // Past several beats while the sockets sit closing.
   await page.waitForTimeout(2000);
   await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 10_000 });
