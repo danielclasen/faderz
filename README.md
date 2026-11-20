@@ -494,13 +494,13 @@ differ is withdrawn and resynced from another replica's engine core.
   from the state it applied once its clock is verified; it commits its
   outputs once its pages match the others'. A replica restarted on its
   volume catches up the same way.
-- An input the engine prunes is written to the log as down, and one
-  readable again as up, so every replica silences and raises it at the
-  same index. Only the leader orders these entries: a report made
-  while following, or lost to an election, is appended again once the
-  replica leads while the log does not hold it, after the write timeout
-  and then at doubling intervals up to four times it; a later report on
-  the same input replaces it.
+- An input goes down in the log once more than half of the set's audio
+  voters read it unreadable for `engine.pruneAfterBlocks` blocks, and up
+  once more than half read it again; the leader appends the entry, so
+  every replica silences and raises it at the same index. An input late
+  on one node alone, the leader's included, goes down nowhere: that
+  replica reads silence, diverges and withholds while the others
+  serve. Without such a majority the input stays as the log has it.
 - A command that switches an input is ordered alone and stamped later
   by the longest time a replica reports for building an input
   generation; the commands ordered after it take effect no earlier. One

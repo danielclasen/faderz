@@ -863,7 +863,10 @@ impl Config {
                         .clone()
                         .expect("every configured input names a flow"),
                     b: mxl.inputs[&c.id].alt_flow.clone(),
-                    domain: input.domain.clone(),
+                    domain: input
+                        .domain
+                        .clone()
+                        .expect("every configured input names a domain"),
                 })
                 .collect();
         }

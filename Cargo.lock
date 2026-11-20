@@ -2453,8 +2453,8 @@ dependencies = [
 
 [[package]]
 name = "samplez"
-version = "0.17.0"
-source = "git+https://github.com/danielclasen/samplez?tag=v0.17.0#5811d444de01a0529ab103c167f391e1b2521a4c"
+version = "0.18.0"
+source = "git+https://github.com/danielclasen/samplez?tag=v0.18.0#302122537331cf6dfc949766c943f82b71e6904c"
 dependencies = [
  "libc",
  "mxl-sys",
@@ -2468,8 +2468,8 @@ dependencies = [
 
 [[package]]
 name = "samplez-dsp"
-version = "0.17.0"
-source = "git+https://github.com/danielclasen/samplez?tag=v0.17.0#5811d444de01a0529ab103c167f391e1b2521a4c"
+version = "0.18.0"
+source = "git+https://github.com/danielclasen/samplez?tag=v0.18.0#302122537331cf6dfc949766c943f82b71e6904c"
 dependencies = [
  "libm",
  "serde",
@@ -2477,8 +2477,8 @@ dependencies = [
 
 [[package]]
 name = "samplez-mxl"
-version = "0.17.0"
-source = "git+https://github.com/danielclasen/samplez?tag=v0.17.0#5811d444de01a0529ab103c167f391e1b2521a4c"
+version = "0.18.0"
+source = "git+https://github.com/danielclasen/samplez?tag=v0.18.0#302122537331cf6dfc949766c943f82b71e6904c"
 dependencies = [
  "mxl",
  "mxl-sys",
@@ -2487,8 +2487,8 @@ dependencies = [
 
 [[package]]
 name = "samplez-nmos"
-version = "0.17.0"
-source = "git+https://github.com/danielclasen/samplez?tag=v0.17.0#5811d444de01a0529ab103c167f391e1b2521a4c"
+version = "0.18.0"
+source = "git+https://github.com/danielclasen/samplez?tag=v0.18.0#302122537331cf6dfc949766c943f82b71e6904c"
 dependencies = [
  "axum",
  "hickory-resolver",
@@ -2504,8 +2504,8 @@ dependencies = [
 
 [[package]]
 name = "samplez-replica"
-version = "0.17.0"
-source = "git+https://github.com/danielclasen/samplez?tag=v0.17.0#5811d444de01a0529ab103c167f391e1b2521a4c"
+version = "0.18.0"
+source = "git+https://github.com/danielclasen/samplez?tag=v0.18.0#302122537331cf6dfc949766c943f82b71e6904c"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2530,8 +2530,8 @@ dependencies = [
 
 [[package]]
 name = "samplez-service"
-version = "0.17.0"
-source = "git+https://github.com/danielclasen/samplez?tag=v0.17.0#5811d444de01a0529ab103c167f391e1b2521a4c"
+version = "0.18.0"
+source = "git+https://github.com/danielclasen/samplez?tag=v0.18.0#302122537331cf6dfc949766c943f82b71e6904c"
 dependencies = [
  "axum",
  "base64 0.22.1",

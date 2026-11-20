@@ -10,7 +10,7 @@ use samplez_replica::bootstrap::{Kube, Markers};
 use samplez_replica::contact::SystemClocks;
 use samplez_replica::net::Pool;
 use samplez_replica::peer::max_response;
-use samplez_replica::rollout::{self, Fixed};
+use samplez_replica::rollout::{self, Fixed, Versions};
 use samplez_replica::state_machine::Product as _;
 use samplez_replica::{Estimate, Replica};
 use samplez_service::{Ops, PeerTls, ReplicatedState, Service, ServiceConfig};
@@ -90,10 +90,10 @@ impl Server {
             config.own_flows(),
         );
         let product = mixer().config_hash();
-        let (state, peer, kube, write_timeout) = match &config.set {
+        let (state, peer, kube) = match &config.set {
             None => {
                 let state = replica::start(dir, mixer, estimate).await?;
-                (Arc::new(state), None, None, replica::WRITE_TIMEOUT)
+                (Arc::new(state), None, None)
             }
             Some(set) => {
                 let tls = PeerTls::new(&set.peer.tls, ops_state.metrics())
@@ -136,7 +136,7 @@ impl Server {
                     write_timeout,
                 )
                 .await?;
-                (Arc::new(state), Some((tls, tcp)), kube, write_timeout)
+                (Arc::new(state), Some((tls, tcp)), kube)
             }
         };
         let peer_addr = match &peer {
@@ -181,7 +181,8 @@ impl Server {
                         )?;
                         let bridge = Arc::new(started.bridge);
                         let key = rollout::key::<Mixer>(&config.compatibility(product));
-                        let fixed = Fixed::new(key, set.revision.clone());
+                        let fixed =
+                            Fixed::new(key, Some(Versions::of::<Mixer>()), set.revision.clone());
                         let follow = (kube.zip(set.statefulset.clone()))
                             .map(|(kube, statefulset)| (kube, statefulset, fixed.clone()));
                         contact = Some(Contact {
@@ -190,12 +191,7 @@ impl Server {
                             rollout: fixed,
                             follow,
                         });
-                        audio::report_inputs(
-                            started.reports,
-                            Arc::downgrade(&state),
-                            started.audio.engine_weak(),
-                            write_timeout,
-                        );
+                        audio::report_inputs(started.reports, Arc::downgrade(&state));
                         started.audio
                     }
                 };
@@ -478,7 +474,11 @@ mod tests {
         Contact {
             timing: samplez_replica::contact::Timing::defaults(replica::BLOCK),
             audio: None,
-            rollout: Fixed::new(rollout::key::<Mixer>(b"faderz"), None),
+            rollout: Fixed::new(
+                rollout::key::<Mixer>(b"faderz"),
+                Some(Versions::of::<Mixer>()),
+                None,
+            ),
             follow: None,
         }
     }

@@ -18,7 +18,6 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use openraft::ServerState;
 use samplez::rt::ProcessStatus;
 use samplez::{
     Counters, DuckSetting, DuckTargets, Engine, Entry, EntryError, Fade, GainError, InputState,
@@ -29,7 +28,6 @@ use samplez_replica::Replica;
 use samplez_replica::bridge::EngineAudio;
 use samplez_replica::contact::Timing;
 use samplez_replica::entry::Body;
-use samplez_replica::state_machine::StateMachine;
 use samplez_service::ws::{Frame, Hub};
 use samplez_service::{Counter, Gauge, Metrics, Ops, Position, ReplicatedState};
 use serde_json::{Map, Value, json};
@@ -63,7 +61,8 @@ pub struct SetEngine {
 }
 
 /// A set replica's contact timers: samplez-replica's defaults, with the
-/// engine's block, margin, hold and contact window and the set's
+/// engine's block, margin, hold, contact window and `pruneAfterBlocks`,
+/// which input liveness holds a decided change for, and the set's
 /// `maxApplyLeadMs`.
 pub fn timing(engine: &samplez::Config, set: &Set) -> Timing {
     Timing {
@@ -71,6 +70,7 @@ pub fn timing(engine: &samplez::Config, set: &Set) -> Timing {
         hold: Duration::from_millis(u64::from(engine.hold_ms)),
         contact_window: Duration::from_millis(u64::from(engine.contact_window_ms)),
         max_apply_lead: set.max_apply_lead,
+        prune_after_blocks: engine.prune_after_blocks,
         ..Timing::defaults(u64::from(engine.block_size))
     }
 }
@@ -779,6 +779,7 @@ fn input_state(state: InputState) -> &'static str {
         InputState::Attached => "attached",
         InputState::Pruned => "pruned",
         InputState::Detached => "detached",
+        InputState::Tone => "tone",
     }
 }
 
@@ -1080,54 +1081,30 @@ impl Drops {
     }
 }
 
-/// Appends an `InputDown` for each input the replicated engine pruned and
-/// an `InputUp` for each one readable again, which the leader stamps; so
-/// every replica of the set silences and raises the input at the same
-/// index. Only a leader's append is ordered: a report made while
-/// following, or one lost to an election, is appended again while this
-/// replica leads and the applied log does not hold it, first after
-/// `write_timeout`, within which an append is ordered or given up, then
-/// at twice the interval up to [`RETRY_CAP`] times it ([`Unapplied`]). A
-/// report made while following that `engine` no longer agrees with is
-/// dropped. Runs on a thread of its own until the engine stops or the
-/// replica is gone.
-pub fn report_inputs(
-    reports: Receiver<Report>,
-    replica: Weak<Replica<Mixer>>,
-    engine: Weak<Engine>,
-    write_timeout: Duration,
-) {
-    let forward = move || {
-        let mut unapplied = Unapplied::new(write_timeout);
-        let mut next: Option<std::time::Instant> = None;
-        loop {
-            let received = match next {
-                Some(at) => {
-                    reports.recv_timeout(at.saturating_duration_since(std::time::Instant::now()))
-                }
-                None => reports.recv().map_err(|_| RecvTimeoutError::Disconnected),
+/// Appends the input liveness a majority of the set's audio voters
+/// decided ([`Replica::input_liveness`]) while this replica leads, as an
+/// `InputDown` or `InputUp` the leader stamps, so every replica of the
+/// set silences and raises the input at the same index; an input late on
+/// one node alone goes down nowhere. Drains the engine's own `reports`,
+/// which decide nothing in a set. Runs on a thread of its own until the
+/// engine stops or the replica is gone.
+pub fn report_inputs(reports: Receiver<Report>, replica: Weak<Replica<Mixer>>) {
+    let forward = move || loop {
+        match reports.recv_timeout(LIVENESS_POLL) {
+            Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+        let Some(replica) = replica.upgrade() else {
+            return;
+        };
+        for report in replica.input_liveness() {
+            let body = match report {
+                Report::InputPruned { slot } => input_entry(slot as u32, false),
+                Report::InputReadable { slot } => input_entry(slot as u32, true),
             };
-            let now = std::time::Instant::now();
-            match received {
-                Ok(report) => unapplied.report(report, now),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+            if let Err(e) = replica.append(body) {
+                tracing::warn!("input liveness not appended: {e}");
             }
-            let Some(replica) = replica.upgrade() else {
-                return;
-            };
-            let leads = replica.raft().metrics().borrow().state == ServerState::Leader;
-            next = unapplied.retry(
-                now,
-                leads,
-                |slot| engine.upgrade().and_then(|e| engine_up(&e, slot)),
-                |slot| crate::app::with_state(&replica, |sm| applied_up(sm, slot)),
-                |body| {
-                    if let Err(e) = replica.append(body) {
-                        tracing::warn!("input report not appended: {e}");
-                    }
-                },
-            );
         }
     };
     if let Err(e) = std::thread::Builder::new()
@@ -1138,114 +1115,8 @@ pub fn report_inputs(
     }
 }
 
-/// How many times `write_timeout` an input report is retried at most.
-pub const RETRY_CAP: u32 = 4;
-
-/// The input health this replica's engine reported that the set may not
-/// hold yet, per slot; a later report on a slot replaces an earlier one.
-struct Unapplied {
-    slots: BTreeMap<u32, Retry>,
-    first: Duration,
-}
-
-struct Retry {
-    up: bool,
-    /// Reported while leading and not appended yet: appended whatever the
-    /// applied log holds, as every report was before it was retried.
-    fresh: bool,
-    due: std::time::Instant,
-    backoff: Duration,
-}
-
-impl Unapplied {
-    fn new(first: Duration) -> Unapplied {
-        Unapplied {
-            slots: BTreeMap::new(),
-            first,
-        }
-    }
-
-    fn report(&mut self, report: Report, now: std::time::Instant) {
-        let (slot, up) = match report {
-            Report::InputPruned { slot } => (slot as u32, false),
-            Report::InputReadable { slot } => (slot as u32, true),
-        };
-        let retry = Retry {
-            up,
-            fresh: true,
-            due: now,
-            backoff: self.first,
-        };
-        self.slots.insert(slot, retry);
-    }
-
-    /// Appends each report due, while `leads`, unless it was appended
-    /// before and the applied log holds it (`applied` says whether it
-    /// holds a slot up), which drops it. A report made while following
-    /// that the local engine no longer agrees with (`engine_up` says
-    /// whether it reads a slot, none while it cannot tell) is dropped as
-    /// well: the engine took the input up or down again without a report,
-    /// which it does where the log already holds that state, and
-    /// appending the report would put a stale state into the log. Returns when the next one is
-    /// due.
-    fn retry(
-        &mut self,
-        now: std::time::Instant,
-        leads: bool,
-        engine_up: impl Fn(u32) -> Option<bool>,
-        applied: impl Fn(u32) -> bool,
-        mut append: impl FnMut(Body),
-    ) -> Option<std::time::Instant> {
-        let (first, cap) = (self.first, self.first * RETRY_CAP);
-        self.slots.retain(|&slot, r| {
-            if r.due > now {
-                return true;
-            }
-            if !leads {
-                // A follower's append is not ordered: the applied log
-                // decides once it leads.
-                r.fresh = false;
-                r.due = now + first;
-                return true;
-            }
-            if !r.fresh && engine_up(slot).is_some_and(|up| up != r.up) {
-                return false;
-            }
-            if !r.fresh && applied(slot) == r.up {
-                return false;
-            }
-            append(input_entry(slot, r.up));
-            r.fresh = false;
-            r.due = now + r.backoff;
-            r.backoff = (r.backoff * 2).min(cap);
-            true
-        });
-        self.slots.values().map(|r| r.due).min()
-    }
-}
-
-/// Whether `engine` reads input `slot`: attached up, pruned down; none
-/// for a detached one, which reads nothing by command, not by health.
-fn engine_up(engine: &Engine, slot: u32) -> Option<bool> {
-    match engine.status().inputs.get(slot as usize)?.state {
-        InputState::Attached => Some(true),
-        InputState::Pruned => Some(false),
-        InputState::Detached => None,
-    }
-}
-
-/// Whether the applied log holds `slot` up: as its latest `InputDown` or
-/// `InputUp` says, up where none is held
-/// ([`StateMachine::product_state`]).
-fn applied_up(sm: &StateMachine<Mixer>, slot: u32) -> bool {
-    (sm.pending.values().rev())
-        .find_map(|body| match body {
-            Body::InputDown { slot: s, .. } if *s == slot => Some(false),
-            Body::InputUp { slot: s, .. } if *s == slot => Some(true),
-            _ => None,
-        })
-        .unwrap_or(true)
-}
+/// How often the leader asks for the input liveness the set decided.
+const LIVENESS_POLL: Duration = Duration::from_millis(10);
 
 /// The log entry of slot `slot` up or down, at an index the leader
 /// stamps.
@@ -1350,6 +1221,7 @@ mod tests {
             name: "in".into(),
             state: InputState::Attached,
             up: true,
+            readable: Some(true),
             flow_id: String::new(),
             error: None,
             margin_short: short,
@@ -1423,166 +1295,6 @@ mod tests {
             t.contact_window,
             Duration::from_millis(u64::from(engine.contact_window_ms))
         );
-    }
-
-    fn down(slot: u32) -> Body {
-        Body::InputDown { slot, at_index: 0 }
-    }
-
-    fn up(slot: u32) -> Body {
-        Body::InputUp { slot, at_index: 0 }
-    }
-
-    /// A leader appends a pruned input's `InputDown` at once. An election
-    /// takes the entry with it; the replica follows for a while, appends
-    /// nothing then, leads again and appends it again, first after the
-    /// write timeout, then at twice the interval, until the applied log
-    /// holds the input down.
-    #[test]
-    fn an_input_report_lost_in_an_election_is_appended_again() {
-        let first = Duration::from_secs(2);
-        let t0 = std::time::Instant::now();
-        let at = |ms: u64| t0 + Duration::from_millis(ms);
-        let mut u = Unapplied::new(first);
-        let held_up = std::cell::Cell::new(true);
-        // The engine reads the input pruned throughout.
-        let pruned = |_: u32| Some(false);
-        let mut appended = Vec::new();
-        u.report(Report::InputPruned { slot: 3 }, t0);
-        let next = u.retry(t0, true, pruned, |_| held_up.get(), |b| appended.push(b));
-        assert_eq!(appended, [down(3)]);
-        assert_eq!(next, Some(at(2_000)));
-        // Not due yet.
-        u.retry(
-            at(1_000),
-            true,
-            pruned,
-            |_| held_up.get(),
-            |b| appended.push(b),
-        );
-        assert_eq!(appended.len(), 1);
-        // The election: following, it appends nothing.
-        let next = u.retry(
-            at(2_000),
-            false,
-            pruned,
-            |_| held_up.get(),
-            |b| appended.push(b),
-        );
-        assert_eq!((appended.len(), next), (1, Some(at(4_000))));
-        // Leading again, the set still holds the input up.
-        let next = u.retry(
-            at(4_000),
-            true,
-            pruned,
-            |_| held_up.get(),
-            |b| appended.push(b),
-        );
-        assert_eq!(appended, [down(3), down(3)]);
-        assert_eq!(next, Some(at(8_000)));
-        let next = u.retry(
-            at(8_000),
-            true,
-            pruned,
-            |_| held_up.get(),
-            |b| appended.push(b),
-        );
-        assert_eq!((appended.len(), next), (3, Some(at(16_000))));
-        // Bounded: never more than RETRY_CAP write timeouts apart.
-        let next = u.retry(
-            at(16_000),
-            true,
-            pruned,
-            |_| held_up.get(),
-            |b| appended.push(b),
-        );
-        assert_eq!((appended.len(), next), (4, Some(at(24_000))));
-        // Applied: dropped.
-        held_up.set(false);
-        let next = u.retry(
-            at(24_000),
-            true,
-            pruned,
-            |_| held_up.get(),
-            |b| appended.push(b),
-        );
-        assert_eq!((appended.len(), next), (4, None));
-    }
-
-    /// Reports on a slot not yet held replace each other: the latest is
-    /// appended. A follower's report is appended once it leads only while
-    /// the applied log does not hold it already.
-    #[test]
-    fn the_latest_input_report_wins() {
-        let first = Duration::from_secs(2);
-        let t0 = std::time::Instant::now();
-        let mut u = Unapplied::new(first);
-        let mut appended = Vec::new();
-        u.report(Report::InputPruned { slot: 1 }, t0);
-        u.report(Report::InputReadable { slot: 1 }, t0);
-        u.retry(t0, true, |_| Some(true), |_| true, |b| appended.push(b));
-        assert_eq!(appended, [up(1)]);
-
-        let mut u = Unapplied::new(first);
-        let mut appended = Vec::new();
-        u.report(Report::InputPruned { slot: 0 }, t0);
-        u.report(Report::InputPruned { slot: 2 }, t0);
-        u.retry(t0, false, |_| Some(false), |_| true, |b| appended.push(b));
-        assert!(appended.is_empty());
-        // Leading: slot 0 the set already holds down, slot 2 it does not.
-        let next = u.retry(
-            t0 + first,
-            true,
-            |_| Some(false),
-            |slot| slot != 0,
-            |b| appended.push(b),
-        );
-        assert_eq!(appended, [down(2)]);
-        assert_eq!(next, Some(t0 + first * 2));
-    }
-
-    /// A follower reports an input pruned; its engine reads the input
-    /// again without a report, as it does where the log holds it up. Once
-    /// the replica leads, the stale report is dropped instead of putting
-    /// the input down in the log; a report made while leading is
-    /// appended whatever the engine reads.
-    #[test]
-    fn a_follower_report_the_engine_took_back_is_not_appended() {
-        let first = Duration::from_secs(2);
-        let t0 = std::time::Instant::now();
-        let mut u = Unapplied::new(first);
-        let mut appended = Vec::new();
-        let engine = std::cell::Cell::new(Some(false));
-        u.report(Report::InputPruned { slot: 4 }, t0);
-        u.retry(t0, false, |_| engine.get(), |_| true, |b| appended.push(b));
-        assert!(appended.is_empty());
-        engine.set(Some(true));
-        let next = u.retry(
-            t0 + first,
-            true,
-            |_| engine.get(),
-            |_| true,
-            |b| appended.push(b),
-        );
-        assert!(
-            appended.is_empty(),
-            "a stale report was appended: {appended:?}"
-        );
-        assert_eq!(next, None);
-
-        // Unknown to the engine (detached): the applied log decides.
-        let mut u = Unapplied::new(first);
-        u.report(Report::InputPruned { slot: 4 }, t0);
-        u.retry(t0, false, |_| None, |_| true, |b| appended.push(b));
-        u.retry(t0 + first, true, |_| None, |_| true, |b| appended.push(b));
-        assert_eq!(appended, [down(4)]);
-
-        // Reported while leading: appended at once.
-        let mut u = Unapplied::new(first);
-        let mut appended = Vec::new();
-        u.report(Report::InputPruned { slot: 4 }, t0);
-        u.retry(t0, true, |_| Some(true), |_| true, |b| appended.push(b));
-        assert_eq!(appended, [down(4)]);
     }
 
     /// counters.schema.json names exactly the counters the `counters`

@@ -156,7 +156,12 @@ impl Node {
                         label: c.name.clone(),
                         channels: ChannelCount::AtLeast(least.unwrap_or(c.width as u32)),
                         group: c.id.clone(),
-                        domain: domain_of(&input.domain),
+                        domain: domain_of(
+                            input
+                                .domain
+                                .as_deref()
+                                .expect("a flow input names a domain"),
+                        ),
                         flow: Some(flow(&format!("channel {}", c.id), selected)?),
                     })
                 })
@@ -842,7 +847,8 @@ impl Resolver {
         self.engine
             .check_input_flow(slot, flow)
             .map_err(|e| Reject(e.0))?;
-        let domain = &self.engine.inputs[slot].domain;
+        let domain = (self.engine.inputs[slot].domain.as_deref())
+            .ok_or_else(|| Reject(format!("input {slot} reads no flow")))?;
         let instance = self.instance(domain).map_err(Reject)?;
         let fail = |e: samplez_mxl::Error| Reject(format!("flow {flow}: {e}"));
         if instance.is_flow_active(flow).map_err(fail)?.is_none() {
