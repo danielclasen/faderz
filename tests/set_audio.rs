@@ -81,6 +81,20 @@ struct Set {
     members: Vec<String>,
     /// Each replica's member flow of the mix-minus output.
     mm_members: Vec<String>,
+    /// Per replica, by ordinal, its own copy of the input flows, in a
+    /// domain only it reads as `in`; empty when every replica reads the
+    /// inputs from `domain`.
+    locals: Vec<Local>,
+}
+
+/// One replica's copy of the input flows: the same samples at the same
+/// indices as every other replica's, in a domain of its own, so that one
+/// replica can lose an input alone.
+struct Local {
+    dir: Dir,
+    /// By input, in the order the set was given them; `None` once
+    /// stopped, which deletes the flow.
+    sources: Vec<Option<Source>>,
 }
 
 /// A replica on its own runtime.
@@ -148,7 +162,32 @@ impl Set {
             mm_members,
             ports,
             markers: Arc::default(),
+            locals: Vec::new(),
         };
+        (set, listeners)
+    }
+
+    /// A set of [`shape`] whose replicas each read the sines `signals`
+    /// (flow id, amplitude, frequency) from a domain of their own: ch1
+    /// reads the first, ch2 the second as input a and the third as input
+    /// b.
+    fn local(name: &str, signals: &[(String, f32, u64)]) -> (Set, Vec<std::net::TcpListener>) {
+        let inputs = json!({
+            "ch1": { "flow": signals[0].0, "domain": "in" },
+            "ch2": { "flow": signals[1].0, "altFlow": signals[2].0, "domain": "in" },
+        });
+        let (mut set, listeners) = Set::with(name, shape(), &["out-pgm", "out-mm"], |_| {
+            (Vec::new(), inputs)
+        });
+        set.locals = (0..REPLICAS)
+            .map(|n| {
+                let dir = domain(&format!("set-{name}-in-{n}"));
+                let sources = (signals.iter())
+                    .map(|(id, amp, freq)| Some(Source::sine(&dir.0, id, *amp, *freq)))
+                    .collect();
+                Local { dir, sources }
+            })
+            .collect();
         (set, listeners)
     }
 
@@ -169,6 +208,14 @@ impl Set {
             .map(|p| format!("localhost:{p}"))
             .collect();
         let api = json!({ "bind": "127.0.0.1", "port": 0 });
+        let mut domains = vec![json!({ "name": "d", "path": self.domain.0 })];
+        let mut outputs = self.outputs.clone();
+        if let Some(local) = self.locals.get(n) {
+            domains.push(json!({ "name": "in", "path": local.dir.0 }));
+            for output in outputs.as_object_mut().unwrap().values_mut() {
+                output["domain"] = json!("d");
+            }
+        }
         let config = json!({
             "listeners": { "api": api, "ops": api, "nmos": api },
             "auth": { "mode": "none" },
@@ -187,9 +234,9 @@ impl Set {
             "shape": self.shape,
             "mxl": {
                 "libraryPath": libmxl(),
-                "domains": [{ "name": "d", "path": self.domain.0 }],
+                "domains": domains,
                 "inputs": self.inputs,
-                "outputs": self.outputs,
+                "outputs": outputs,
             },
             "rt": { "rtCpu": "none" },
         });
@@ -1036,6 +1083,128 @@ fn every_replica_lists_the_set_and_a_killed_one_as_down() {
                 })
         });
         assert!(down, "replica {n} lists {last}: {}", states(&nodes));
+    }
+}
+
+/// The replica that leads the set, as the first running one names it.
+fn leader(nodes: &[Option<Node>]) -> usize {
+    let first = nodes.iter().flatten().next().expect("a running replica");
+    let leader = first.ops("/readyz").1["replica"]["leader"].clone();
+    (0..REPLICAS)
+        .find(|&n| {
+            (nodes[n].as_ref()).is_some_and(|node| node.ops("/readyz").1["replica"]["id"] == leader)
+        })
+        .expect("a leader")
+}
+
+/// Whether replica `node`'s engine holds input `slot` up, as the log has
+/// it.
+fn input_up(node: &Node, slot: usize) -> bool {
+    let audio = node.server.audio.as_ref().unwrap();
+    audio.engine().status().inputs[slot].up
+}
+
+/// An input goes down only once a majority of the set's replicas cannot
+/// read it. The leader alone losing ch1 takes it down nowhere: the other
+/// two keep playing it alike, and the leader, reading silence, falls out
+/// of step and withholds. The two followers losing ch2 take it down on
+/// every replica, the leader that still reads it included. Fails with the
+/// leader appending its own engine's prune and readable reports in place
+/// of the set's decision: ch1 goes down everywhere at once, and ch2,
+/// which the leader's engine still reads, never does.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn an_input_goes_down_only_once_a_majority_loses_it() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let signals = [
+        (new_id(), 0.5, 440),
+        (new_id(), 0.25, 1000),
+        (new_id(), 0.3, 220),
+    ];
+    let (mut set, listeners) = Set::local("liveness", &signals);
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
+    let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
+    // ch1 alone on the programme, heard on every replica.
+    let opened = Outputs::now() + 1;
+    write(&nodes, 0, &[("/channels/ch1/fader", json!(0))]);
+    for n in 0..REPLICAS {
+        let heard = until(30, || {
+            (outputs.compare(n, n, opened).levels.last()).is_some_and(|&l| l > -3_000)
+        });
+        assert!(heard, "replica {n} does not play ch1: {}", states(&nodes));
+    }
+
+    let led = leader(&nodes);
+    let others: Vec<usize> = (0..REPLICAS).filter(|&n| n != led).collect();
+    set.locals[led].sources[0] = None;
+    let from = Outputs::now() + 1;
+    let withheld = until(30, || !committing(node(&nodes, led)));
+    assert!(
+        withheld,
+        "the leader reading silence commits on: {}",
+        states(&nodes)
+    );
+    // Two seconds of the followers' programme after the leader lost ch1:
+    // alike, and ch1 in every window.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let c = loop {
+        let c = outputs.compare(others[0], others[1], from);
+        if c.compared >= 2_000 || Instant::now() >= deadline {
+            break c;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(
+        c.compared >= 2_000 && c.differing.is_empty(),
+        "the followers {others:?} did not write alike: {c:?}: {}",
+        states(&nodes)
+    );
+    assert!(
+        !c.levels.is_empty() && c.levels.iter().all(|&l| l > -3_000),
+        "the followers {others:?} lost ch1 with the leader: {c:?}"
+    );
+    for n in 0..REPLICAS {
+        assert!(
+            input_up(node(&nodes, n), 0),
+            "replica {n} holds ch1 down, which only the leader {led} lost: {}",
+            states(&nodes)
+        );
+    }
+
+    // The leader reads ch1 again and comes back.
+    let (id, amp, freq) = &signals[0];
+    set.locals[led].sources[0] = Some(Source::sine(&set.locals[led].dir.0, id, *amp, *freq));
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+
+    // Both followers lose ch2's input a.
+    let led = leader(&nodes);
+    let lost: Vec<usize> = (0..REPLICAS).filter(|&n| n != led).collect();
+    for &n in &lost {
+        set.locals[n].sources[1] = None;
+    }
+    for n in 0..REPLICAS {
+        let down = until(30, || !input_up(node(&nodes, n), 1));
+        assert!(
+            down,
+            "replica {n} holds ch2 up, which replicas {lost:?} lost: {}",
+            states(&nodes)
+        );
+    }
+    outputs.stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
+    for node in nodes.into_iter().flatten() {
+        node.kill();
     }
 }
 
