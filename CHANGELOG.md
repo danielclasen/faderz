@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.8](https://github.com/danielclasen/faderz/compare/v0.4.7...v0.4.8) (2026-11-20)
+
+
+### Features
+
+* **web:** ask to reload when a replica runs a new faderz version ([#138](https://github.com/danielclasen/faderz/issues/138)) ([aa23d7a](https://github.com/danielclasen/faderz/commit/aa23d7a9d8d0739cc60a4bcf1e6a961ca962e8d3))
+
 ## [0.4.7](https://github.com/danielclasen/faderz/compare/v0.4.6...v0.4.7) (2026-11-20)
 
 
