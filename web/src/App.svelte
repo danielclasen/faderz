@@ -123,6 +123,7 @@
       </div>
       <span class="sep" aria-hidden="true"></span>
       <div class="group controls" role="group" aria-label="Controls">
+        <NewVersionNotice />
         <Users />
         <LockKey />
         <Account />
@@ -130,7 +131,6 @@
     </div>
   </header>
 
-  <NewVersionNotice />
   <main>
     <AheadBanner />
     <svelte:boundary onerror={(e) => console.error(e)}>
@@ -172,9 +172,7 @@
 <style>
   .app {
     display: grid;
-    /* Header, the new-version bar (empty but for a roll), the view, the
-       status bar. */
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     height: 100%;
   }
   /* Height of the header, set beside each header layout: panels that

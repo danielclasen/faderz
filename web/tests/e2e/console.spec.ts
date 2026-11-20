@@ -441,30 +441,60 @@ test('the EQ curve in the processing panel is as wide as the panel gives it', as
   }
 });
 
-test('a replica serving a newer faderz version shows a reload bar that covers nothing, which LATER keeps away until the next one', { tag: '@mock' }, async ({ page, request }) => {
-  for (const width of [1440, 412]) {
+test('a replica serving a newer faderz version lights an UPDATE key, moving and covering nothing; its panel opens on a press, LATER clears the dot until the next one', { tag: '@mock' }, async ({ page, request }) => {
+  for (const width of [1440, 700]) {
     await page.setViewportSize({ width, height: 900 });
     await live(page);
-    const note = page.getByTestId('new-version');
-    await expect(note).toHaveCount(0);
+    const key = page.getByTestId('update-key');
+    const dot = page.getByTestId('update-dot');
+    const panel = page.getByTestId('new-version');
+    await expect(key).toBeHidden();
+    const fader = page.locator('[data-path$="/fader"]').first();
+    const mute = page.locator('[data-path$="/mute"]').first();
+    const at = async () => [(await fader.boundingBox())!, (await mute.boundingBox())!, (await key.boundingBox())!].map((b) => [b.x, b.y]);
+    const before = await at();
     const session = await debug(page, 'session');
     const roll = async (faderz: string) => expect((await request.post(`/__mock/build?session=${session}&faderz=${faderz}`)).ok()).toBe(true);
     await roll(`99.0.${width}`);
-    await expect(note).toContainText(`A new faderz version is running (99.0.${width})`);
-    // A bar of its own: it ends where the view begins.
-    const bar = (await note.boundingBox())!;
-    const view = (await page.locator('main').boundingBox())!;
-    expect(bar.y + bar.height, `${width} px`).toBeLessThanOrEqual(view.y + 0.5);
-    await note.getByRole('button', { name: 'LATER' }).click();
-    await expect(note).toHaveCount(0);
+    await expect(key).toBeVisible();
+    await expect(dot).toBeVisible();
+    // Nothing moved and nothing opened on its own.
+    expect(await at(), `${width} px`).toEqual(before);
+    await expect(panel).toBeHidden();
+    await key.click();
+    await expect(panel).toContainText(`A new faderz version is running (99.0.${width})`);
+    await panel.getByRole('button', { name: 'LATER' }).click();
+    await expect(panel).toBeHidden();
+    await expect(dot).toBeHidden();
+    await expect(key).toBeVisible();
     await roll(`99.1.${width}`);
-    await expect(note).toContainText(`(99.1.${width})`);
+    await expect(dot).toBeVisible();
     // An older one is no news.
     await roll('0.0.1');
-    await expect(note).toHaveCount(0);
+    await expect(key).toBeHidden();
     await roll(`99.2.${width}`);
-    await Promise.all([page.waitForEvent('load'), note.getByRole('button', { name: 'RELOAD' }).click()]);
+    await key.click();
+    await Promise.all([page.waitForEvent('load'), panel.getByRole('button', { name: 'RELOAD' }).click()]);
     expect(await page.evaluate(() => (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).type)).toBe('reload');
     await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
   }
+});
+
+test('below 430 px the account pill stands in for the UPDATE key: a dot, and the update in its menu, moving nothing', { tag: '@mock' }, async ({ page, request }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  await live(page);
+  const dot = page.getByTestId('account-update-dot');
+  const pill = page.getByTestId('account');
+  await expect(page.getByTestId('update-key')).toBeHidden();
+  await expect(dot).toBeHidden();
+  const before = (await pill.boundingBox())!;
+  const session = await debug(page, 'session');
+  expect((await request.post(`/__mock/build?session=${session}&faderz=99.0.0`)).ok()).toBe(true);
+  await expect(dot).toBeVisible();
+  expect((await pill.boundingBox())!).toEqual(before);
+  await pill.click();
+  await page.getByRole('menuitem', { name: 'Update later' }).click();
+  await expect(dot).toBeHidden();
+  await pill.click();
+  await expect(page.getByRole('menuitem', { name: 'Reload to update to 99.0.0' })).toBeVisible();
 });

@@ -7,6 +7,8 @@
   // them, what the serving replica was built from, an entry that opens
   // About / What's new.
   import { tick } from 'svelte';
+  import { MediaQuery } from 'svelte/reactivity';
+  import { update } from '../lib/update.svelte';
   import { getAuth } from '../lib/auth.svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { follow, type Placement } from '../lib/anchor';
@@ -22,7 +24,6 @@
   const user = $derived(session?.role && session.mode !== 'none' ? (session.user ?? 'token') : null);
   /** The user's name where it may be shown: never an email address. */
   const name = $derived(user !== null && !isEmail(user) ? user : null);
-  const label = $derived(`Account${name ? ` ${name}` : ''}${session?.role ? `, ${session.role}` : ''}`);
 
   interface Entry {
     id: string;
@@ -31,6 +32,10 @@
     busyLabel?: string;
     run: () => void | Promise<void>;
   }
+  /** Below 430 px the header has no UPDATE key: this pill and menu stand in for it. */
+  const narrow = new MediaQuery('(max-width: 429px)');
+  const newer = $derived(narrow.current ? update.version(mixer.status.build) : null);
+  const label = $derived(`Account${name ? ` ${name}` : ''}${session?.role ? `, ${session.role}` : ''}${newer !== null && update.fresh(mixer.status.build) ? ', a new faderz version is running' : ''}`);
   const entries = $derived<Entry[]>([
     {
       id: 'theme',
@@ -38,6 +43,12 @@
       run: () => setTheme(theme.value === 'dark' ? 'light' : 'dark'),
     },
     ...(session?.role != null && (session.mode === 'token' || session.mode === 'oidc') ? [{ id: 'sign-out', label: 'Sign out', busyLabel: 'Signing out...', run: leave }] : []),
+    ...(newer !== null
+      ? [
+          { id: 'update', label: `Reload to update to ${newer}`, busyLabel: 'Reloading...', run: () => location.reload() },
+          { id: 'update-later', label: 'Update later', run: () => (update.later = newer) },
+        ]
+      : []),
   ]);
 
   async function leave(): Promise<void> {
@@ -137,6 +148,7 @@
     data-testid="account"
     onclick={() => (open ? hide(false) : void show(null))}
     onkeydown={pillKey}
+    ><i class="update-dot" class:on={newer !== null && update.fresh(mixer.status.build)} aria-hidden="true" data-testid="account-update-dot"></i
     >{#if user !== null}<span class="fixed">{initials(user)}</span>{:else}{@render person()}{/if}</button
   >
   {#if open}
@@ -191,7 +203,24 @@
 {/snippet}
 
 <style>
+  /* A newer version, on the narrowest screens: a dot over the pill's
+     corner, which takes no room. */
+  .update-dot {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warn);
+    box-shadow: 0 0 0 1px var(--panel-2);
+    visibility: hidden;
+  }
+  .update-dot.on {
+    visibility: visible;
+  }
   .pill {
+    position: relative;
     flex: none;
     display: grid;
     place-items: center;
