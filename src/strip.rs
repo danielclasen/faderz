@@ -2,10 +2,12 @@
 //! input's strip in the engine (`samplez_dsp::strip`): trim, leg trim,
 //! polarity, high-pass, the four EQ bands, gate, compressor and their
 //! order. The model's ranges are the strip's. Delay is kept and not
-//! applied.
+//! applied. Also each output's limiter, from the bus or aux it carries.
 
-use samplez_dsp::{BandType, CompParams, EqBand, GateParams, StripParam};
+use samplez_dsp::{BandType, CompParams, EqBand, GateParams, LimiterParams, StripParam};
 use serde_json::Value;
+
+use crate::shape::Shape;
 
 /// faderz has no compressor knee control: a hard knee.
 const KNEE_DB: f32 = 0.0;
@@ -81,10 +83,31 @@ pub fn params(c: &Value, width: usize) -> Vec<StripParam> {
     p
 }
 
+/// Per output of `shape`, the limiter of the bus or aux it carries in
+/// `state`; none for an output carrying anything else, which has no
+/// limiter in the engine ([`Shape::has_limiter`]). The model has no release
+/// control: the engine's default release.
+pub fn limiters(shape: &Shape, state: &Value) -> Vec<Option<LimiterParams>> {
+    (shape.outputs.iter())
+        .map(|o| {
+            shape.has_limiter(&o.source).then(|| {
+                let l = match &state["buses"][&o.source] {
+                    Value::Null => &state["auxes"][&o.source]["limiter"],
+                    bus => &bus["limiter"],
+                };
+                LimiterParams {
+                    enabled: on(&l["enabled"]),
+                    ceiling_db: num(&l["ceiling"]),
+                    ..LimiterParams::OFF
+                }
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shape::Shape;
     use crate::shape::tests::small;
     use serde_json::json;
 
@@ -194,6 +217,47 @@ mod tests {
         assert_eq!(p[13], StripParam::DynamicsBeforeEq { enabled: true });
         for q in p {
             q.check(2).unwrap_or_else(|e| panic!("{q:?}: {e}"));
+        }
+    }
+
+    /// An output carrying a bus or an aux takes that element's limiter,
+    /// whichever output reads it; an output carrying a mix-minus or a
+    /// monitor output has none.
+    #[test]
+    fn each_output_takes_its_elements_limiter() {
+        let mut v = small();
+        v["outputs"] = json!([
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-pgm-m", "name": "PGM mono", "source": "pgm", "width": 1, "layout": "mono" },
+            { "id": "out-aux", "name": "IFB", "source": "aux1", "width": 1, "layout": "mono" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+            { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" },
+            { "id": "out-cf", "name": "Clean", "source": "cf", "width": 2, "layout": "stereo" },
+        ]);
+        let shape = Shape::parse(&v).unwrap();
+        let mut state = shape.initial_state();
+        state["buses"]["pgm"]["limiter"] = json!({ "enabled": true, "ceiling": -10 });
+        state["auxes"]["aux1"]["limiter"] = json!({ "enabled": true, "ceiling": -2.5 });
+        let limiter = |enabled, ceiling_db| {
+            Some(LimiterParams {
+                enabled,
+                ceiling_db,
+                release_ms: 50.0,
+            })
+        };
+        assert_eq!(
+            limiters(&shape, &state),
+            vec![
+                limiter(true, -10.0),
+                limiter(true, -10.0),
+                limiter(true, -2.5),
+                None,
+                None,
+                limiter(false, -1.0),
+            ]
+        );
+        for p in limiters(&shape, &state).into_iter().flatten() {
+            p.check().unwrap_or_else(|e| panic!("{p:?}: {e}"));
         }
     }
 }

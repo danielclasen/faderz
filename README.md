@@ -55,11 +55,13 @@ mutes, bus and aux polarity, mix-minus exclusions and talkback
 interrupts, the monitor's source, channel and VCA PFL and AFL listening
 (PFL over AFL; PFL centred before the pan, AFL at the pan before the AFV
 stage), fold-down, image, level, dim, talkback dim, cut, mono and speaker mutes
-and solos, and duck groups. The rest of the state is kept, shown and
-replicated but not applied to the audio in this version: channel delay,
-bus and aux processing (EQ, dynamics,
-limiter, delay), the line-up tone, the AFV rise, hold and fall times,
-and the scene crossfade time.
+and solos, duck groups, and the bus and aux true-peak limiter on every
+output carrying that bus or aux. An output carrying a bus or aux is
+late by the limiter's look-ahead, about 1.1 ms, whether the limiter is
+on or off. The rest of the state is kept, shown and replicated but not
+applied to the audio in this version: channel delay, bus and aux EQ,
+dynamics and delay, the line-up tone, the AFV rise, hold and fall
+times, and the scene crossfade time.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is

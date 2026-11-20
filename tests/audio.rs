@@ -1328,6 +1328,75 @@ async fn an_output_narrower_than_its_bus_writes_the_fold_down() {
     server.stop().await;
 }
 
+/// A bus's limiter holds the true peak of its output at the ceiling: a
+/// tone whose true peak lies 3 dB above its samples, driven over the
+/// ceiling, comes out at or below it with the limiter on, sample peaks
+/// alone would not be, and as it goes in with the limiter off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bus_limiter_holds_the_true_peak_at_its_ceiling() {
+    let domain = domain("limiter");
+    let data = data("limiter");
+    let (src, out) = (new_id(), new_id());
+    let amp = 0.9f32;
+    let _src = Source::off_crest(&domain.0, &src, 2, amp);
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "st", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let inputs = json!({ "st": { "flow": src } });
+    let server = start_with(
+        &data.0,
+        &domain.0,
+        shape,
+        inputs,
+        json!({ "out-pgm": { "flow": out } }),
+    )
+    .await;
+    appears(&domain.0, &out).await;
+    let mut pgm = Reader::new(&domain.0, &out);
+    let ceiling_db = -6.0f32;
+    let ceiling = 10f32.powf(ceiling_db / 20.0);
+    patch(
+        &server,
+        &[
+            ("/channels/st/fader", json!(0)),
+            ("/channels/st/routes/pgm", json!(true)),
+            ("/buses/pgm/limiter/ceiling", json!(ceiling_db)),
+        ],
+    )
+    .await;
+    // The output is the tone scaled, so its true peak is its sample peak
+    // times sqrt(2).
+    for enabled in [false, true, false] {
+        patch(&server, &[("/buses/pgm/limiter/enabled", json!(enabled))]).await;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut last = None;
+        loop {
+            if let Some((l, r)) = pgm.peaks() {
+                let tp = [l, r].map(|p| p * std::f32::consts::SQRT_2);
+                last = Some(tp);
+                if tp.into_iter().all(|p| limited(enabled, p, amp, ceiling)) {
+                    break;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "limiter enabled {enabled}: tone {amp}, ceiling {ceiling}, true peaks read {last:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    server.stop().await;
+}
+
 /// A diff larger than the changes the engine holds at once waits for
 /// room and lands whole.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1939,8 +2008,11 @@ async fn a_burst_ducks_the_programme_but_not_the_me(block: u32) {
         skipped_before,
         "block {block}: samples skipped, the engine was starved for over 100 ms"
     );
-    let p = span(&domain.0, &ids[2], from, to);
-    let m = span(&domain.0, &ids[3], from, to);
+    // Both outputs carry a bus, so both have its limiter and are late by
+    // its look-ahead.
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    let p = span(&domain.0, &ids[2], from + late, to + late);
+    let m = span(&domain.0, &ids[3], from + late, to + late);
     // The commentary on the left leg (both legs ducked alike, so L + R)
     // over exactly the burst's samples, and silence elsewhere.
     let comm = |s: &(f32, f32)| s.0 + s.1;

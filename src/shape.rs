@@ -251,6 +251,12 @@ impl Shape {
             || self.mix_minus.iter().any(|e| e.id == id)
     }
 
+    /// Whether `id` names a bus or an aux, the elements whose state holds a
+    /// limiter: an output carrying one has the engine's limiter.
+    pub fn has_limiter(&self, id: &str) -> bool {
+        self.buses.iter().any(|e| e.id == id) || self.auxes.iter().any(|e| e.id == id)
+    }
+
     /// The live state of an empty start: input channels closed, buses at
     /// 0 dB, nothing muted, every channel routed to every bus, sends off,
     /// processing off, the monitor on the first bus, EBU R 68 and R 128

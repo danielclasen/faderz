@@ -1141,6 +1141,7 @@ impl Config {
                 "role": "Audio",
                 "channels": o.width,
                 "loudnessChannels": loudness_channels(&o.layout),
+                "limiter": shape.has_limiter(&o.source),
             }));
         }
         // Inputs may share a flow; an output's flow is written by this

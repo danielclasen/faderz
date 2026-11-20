@@ -125,6 +125,17 @@ impl Source {
         })
     }
 
+    /// A sine at a quarter of the sample rate on each of `channels` legs,
+    /// sampled 45 degrees off its crests: every sample is `amp / sqrt(2)`
+    /// in magnitude and the true peak, between two samples, is `amp`.
+    pub fn off_crest(domain: &Path, id: &str, channels: usize, amp: f32) -> Source {
+        let s = amp * std::f32::consts::FRAC_1_SQRT_2;
+        let signs = [1.0, 1.0, -1.0, -1.0];
+        Source::signal(domain, id, channels, move |_, idx| {
+            s * signs[idx as usize % 4]
+        })
+    }
+
     /// A producer writing `signal(channel, index)` into every sample.
     pub fn signal(
         domain: &Path,
@@ -184,6 +195,19 @@ impl Drop for Source {
         if let Some(t) = self.thread.take() {
             t.join().unwrap();
         }
+    }
+}
+
+/// Whether `tp`, the true peak of a tone of true peak `amp` through a
+/// limiter at `ceiling` (both linear), is the tone's with the limiter off,
+/// or with it on at the ceiling: no more than the 0.05 dB its interpolated
+/// peak may pass it by above, no more than 0.5 dB below.
+pub fn limited(enabled: bool, tp: f32, amp: f32, ceiling: f32) -> bool {
+    let db = |db: f32| 10f32.powf(db / 20.0);
+    if enabled {
+        tp <= ceiling * db(0.05) && tp >= ceiling * db(-0.5)
+    } else {
+        (tp - amp).abs() <= 1e-4
     }
 }
 

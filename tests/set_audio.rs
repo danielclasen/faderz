@@ -1360,6 +1360,91 @@ fn every_replica_writes_the_fold_down_of_a_surround_bus() {
     }
 }
 
+/// A bus's limiter is replicated state: with it written on, every replica
+/// holds the true peak of a tone driven over the ceiling at the ceiling,
+/// and with it off passes the tone, the three writing the same bits.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_applies_a_bus_limiter_alike() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "st", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let amp = 0.9f32;
+    let (set, listeners) = Set::with("limiter", shape, &["out-pgm"], |domain| {
+        let src = new_id();
+        (
+            vec![Source::off_crest(domain, &src, 2, amp)],
+            json!({ "st": { "flow": src } }),
+        )
+    });
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let flows: Vec<String> = (set.outputs["out-pgm"]["flows"].as_array().unwrap().iter())
+        .map(|f| f.as_str().unwrap().to_owned())
+        .collect();
+    let ceiling_db = -6.0f32;
+    let ceiling = 10f32.powf(ceiling_db / 20.0);
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/st/fader", json!(0)),
+            ("/channels/st/routes/pgm", json!(true)),
+            ("/buses/pgm/limiter/ceiling", json!(ceiling_db)),
+        ],
+    );
+    // Block `k` of every replica's output, both legs planar, once all read.
+    let blocks = |k: u64| -> Option<Vec<Vec<f32>>> {
+        (flows.iter())
+            .map(|f| {
+                let generation = attach(&set.domain.0, f)?;
+                let mut buf = vec![0.0f32; 2 * B as usize];
+                let input = generation.input(0).unwrap();
+                let o = input.read(&mut SlotState::default(), k, &GroupWait::Skipped, &mut buf);
+                (o == Outcome::Copy).then_some(buf)
+            })
+            .collect()
+    };
+    let bits = |b: &[f32]| b.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    for enabled in [false, true, false] {
+        write(&nodes, 1, &[("/buses/pgm/limiter/enabled", json!(enabled))]);
+        let mut last = None;
+        // The output is the tone scaled, so its true peak is its sample
+        // peak times sqrt(2); a block holds every phase of it.
+        let read = until(20, || {
+            let Some(b) = blocks(Outputs::now()) else {
+                return false;
+            };
+            let tp = b[0].iter().fold(0.0f32, |p, v| p.max(v.abs())) * std::f32::consts::SQRT_2;
+            let alike = b.iter().all(|r| bits(r) == bits(&b[0]));
+            last = Some((tp, alike));
+            alike && limited(enabled, tp, amp, ceiling)
+        });
+        assert!(
+            read,
+            "limiter enabled {enabled}: tone {amp}, ceiling {ceiling}, read (true peak, alike) {last:?}: {}",
+            states(&nodes)
+        );
+    }
+}
+
 /// A stereo channel's image and balance are replicated state: every
 /// replica writes the legs it feeds both, or swapped, and the opposite
 /// leg lowered by its pan.

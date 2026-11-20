@@ -458,10 +458,10 @@ pub(crate) fn flow<'w>(state: &Value, id: &str, w: &'w Wiring) -> &'w str {
 }
 
 /// Everything the engine of `shape` plays from `state`: the gain matrix
-/// ([`matrix`]), each channel's strip ([`strip::params`]), the duck
-/// groups ([`duck::targets`]) and masks ([`duck::masks`]) and the flow
-/// its selected input reads ([`selected`]), one slot per channel. Every
-/// output is enabled.
+/// ([`matrix`]), each channel's strip ([`strip::params`]), each output's
+/// limiter ([`strip::limiters`]), the duck groups ([`duck::targets`])
+/// and masks ([`duck::masks`]) and the flow its selected input reads
+/// ([`selected`]), one slot per channel. Every output is enabled.
 pub fn targets(shape: &Shape, wiring: &[Wiring], state: &Value) -> Targets {
     Derived::new(shape, wiring, state).targets
 }
@@ -587,6 +587,7 @@ impl Derived {
                 strips: (shape.channels.iter())
                     .map(|c| strip::params(&state["channels"][&c.id], c.width))
                     .collect(),
+                limiters: strip::limiters(shape, state),
                 ducks: duck::targets(shape, state),
                 masks: duck::masks(shape, state),
                 ..Targets::default()
@@ -659,6 +660,11 @@ impl Derived {
         for slot in moved.flows {
             self.targets.flows[slot] =
                 Some(flow(state, &shape.channels[slot].id, &wiring[slot]).to_owned());
+        }
+        // A bus or aux write may move a limiter: one per output, each
+        // read in full.
+        if !moved.elements.is_empty() {
+            self.targets.limiters = strip::limiters(shape, state);
         }
         // A handful of groups, each read in full: a key gain follows its
         // channel's fader, mute and VCAs, which any write can move.

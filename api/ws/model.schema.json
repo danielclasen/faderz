@@ -811,7 +811,7 @@
       }
     },
     "Limiter": {
-      "description": "True-peak limiter at the output of a bus, aux or mix-minus feed, after the fader: holds the true peak (4x oversampling) at or below ceiling dBTP, as EBU Tech 3343 recommends for programme outputs. Without look-ahead it may overshoot by the transients it cannot anticipate; the output true-peak meter shows what leaves.",
+      "description": "True-peak limiter of a bus or aux, applied after the fader on every output flow carrying it: holds the true peak (4x oversampling) at or below ceiling dBTP, as EBU Tech 3343 recommends for programme outputs. It looks ahead about 1 ms, which delays those outputs by about 1.1 ms whether it is on or off; the output true-peak meter shows what leaves.",
       "type": "object",
       "required": [
         "enabled",
