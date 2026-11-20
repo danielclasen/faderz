@@ -449,6 +449,9 @@ test('a replica serving a newer faderz version lights an UPDATE key, moving and 
     const dot = page.getByTestId('update-dot');
     const panel = page.getByTestId('new-version');
     await expect(key).toBeHidden();
+    const announce = page.getByTestId('update-announce');
+    await expect(announce).toHaveCount(1);
+    await expect(announce).toHaveText('');
     const fader = page.locator('[data-path$="/fader"]').first();
     const mute = page.locator('[data-path$="/mute"]').first();
     const at = async () => [(await fader.boundingBox())!, (await mute.boundingBox())!, (await key.boundingBox())!].map((b) => [b.x, b.y]);
@@ -503,10 +506,14 @@ test('below 430 px the account pill stands in for the UPDATE key: a dot, and the
   const pill = page.getByTestId('account');
   await expect(page.getByTestId('update-key')).toBeHidden();
   await expect(dot).toBeHidden();
+  const announce = page.getByTestId('update-announce');
+  await expect(announce).toHaveCount(1);
+  await expect(announce).toHaveText('');
   const before = (await pill.boundingBox())!;
   const session = await debug(page, 'session');
   expect((await request.post(`/__mock/build?session=${session}&faderz=99.0.0`)).ok()).toBe(true);
   await expect(dot).toBeVisible();
+  await expect(announce).toHaveText('A new faderz version is running (99.0.0)');
   expect((await pill.boundingBox())!).toEqual(before);
   await pill.click();
   await page.getByRole('menuitem', { name: 'Update later' }).click();

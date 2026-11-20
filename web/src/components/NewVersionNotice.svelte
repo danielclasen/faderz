@@ -52,8 +52,11 @@
 
 <!-- The place is kept while no newer version is known, a gap in the
      header's controls, so the key appearing moves nothing. -->
+<!-- Outside the key's wrapper, always rendered and empty until a version is
+     news: its text changing is what a screen reader announces, at every
+     width. -->
+<span class="sr-only" aria-live="polite" data-testid="update-announce">{announced}</span>
 <div class="update" class:shown={version !== null}>
-  <span class="sr-only" aria-live="polite" data-testid="update-announce">{announced}</span>
   <button
     bind:this={key}
     class="key update-key"
