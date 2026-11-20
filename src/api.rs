@@ -23,9 +23,10 @@ use serde_json::{Value, json};
 
 use crate::app::{App, now_rfc3339, uuid};
 use crate::contract::{Contract, check, contract};
+use crate::replica::{RATE, tai_samples};
 use crate::shape::Shape;
 use crate::state::{
-    Answer, Command, Console, ConsolePut, Write, default_protocol, default_strips,
+    Answer, Command, Console, ConsolePut, Crossfade, Write, default_protocol, default_strips,
     default_transport,
 };
 
@@ -367,6 +368,18 @@ async fn delete_scene(
     run.await.unwrap_or_else(|e| e)
 }
 
+/// How far past this replica's estimate of the processed index, in
+/// samples, a recall's crossfade starts: the longest lead the log stamps
+/// a command with, the highest `maxApplyLeadMs` plus samplez's
+/// `EXTRA_LEAD`. A recall taking effect by then plays its whole fade; one
+/// taking effect later, such as one that switches inputs and waits for
+/// an engine generation, joins its fade where it has got to.
+fn crossfade_lead() -> u64 {
+    let ms = *crate::config::MAX_APPLY_LEAD_MS.end()
+        + samplez_replica::schedule::EXTRA_LEAD.as_millis() as u64;
+    ms * RATE / 1000
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecallBody {
@@ -391,10 +404,15 @@ async fn recall_scene(
             ));
         }
         let owner = owner(identity.map(|Extension(i)| i));
+        let fade = (b.crossfade_ms > 0).then(|| Crossfade {
+            start: tai_samples() + crossfade_lead(),
+            len: (u64::from(b.crossfade_ms) * RATE / 1000) as u32,
+        });
         let command = Command::Recall {
             id: b.command_id.clone(),
             scene,
             at: now_rfc3339(),
+            fade,
         };
         let ack = run(&app, &owner, &b.command_id, command).await?;
         let mut body = result(&app, &ack, true).await;

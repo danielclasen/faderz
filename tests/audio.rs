@@ -200,6 +200,43 @@ impl Reader {
         left
     }
 
+    /// The block 100 ms behind libmxl's clock, written by now.
+    fn behind(&self) -> u64 {
+        let api = self.generation.api();
+        time::timestamp_to_index(api, time::now(api)) / B - 100
+    }
+
+    /// The left leg of every block from block `from` on, in order, until
+    /// a whole block reads `left` within the rounding of an f32 gain,
+    /// within 10 s. A block not written is left out.
+    async fn trace(&mut self, from: u64, left: f32) -> Vec<f32> {
+        let n = B as usize;
+        let mut state = SlotState::default();
+        let mut trace = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut k = from;
+        loop {
+            let last = self.behind();
+            let input = self.generation.input(0).unwrap();
+            while k <= last {
+                if input.read(&mut state, k, &GroupWait::Skipped, &mut self.buf) == Outcome::Copy {
+                    let block = &self.buf[..n];
+                    trace.extend_from_slice(block);
+                    if block.iter().all(|v| (v - left).abs() <= 1e-6) {
+                        return trace;
+                    }
+                }
+                k += 1;
+            }
+            let end = trace.last();
+            assert!(
+                Instant::now() < deadline,
+                "{left} not reached, last read {end:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// Waits until the left leg's peak is within `tol` of `want`.
     async fn expect_peak(&mut self, want: f32, tol: f32, what: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -1098,6 +1135,83 @@ async fn a_scene_recall_brings_the_stored_mix_back() {
     recall(&server, &path).await;
     pgm.expect(CH1 + ST1[0] * low, ST1[1] * low, "st1's fader kept")
         .await;
+    server.stop().await;
+}
+
+/// A recall with a crossfade takes the programme through the levels
+/// between the two mixes, rising throughout, and reaches the recalled
+/// mix within the crossfade time; one without a crossfade is a cut,
+/// within the engine's ramp length.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scene_recall_crossfades_over_its_time() {
+    let domain = domain("xfade");
+    let data = data("xfade");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let rate = shape()["sampleRate"].as_u64().unwrap();
+    // samplez's default rampSamples: a gain change without a fade ramps
+    // over it.
+    let ramp = 480;
+    let (high, low) = (CH1, CH1 * 10f32.powf(-20.0 / 20.0));
+    patch(&server, &[("/channels/ch1/pan/lr", json!(-1))]).await;
+    patch(&server, &[("/channels/ch1/fader", json!(0))]).await;
+    pgm.expect(high, 0.0, "the mix stored").await;
+    let id = faderz::app::uuid().unwrap();
+    let stored = posted(
+        &server,
+        "/scenes",
+        &json!({ "commandId": id, "name": "Show" }),
+    )
+    .await;
+    let scene: Value = serde_json::from_str(&stored).unwrap();
+    let path = format!("/scenes/{}/recall", scene["scene"]["id"].as_str().unwrap());
+    let between = |trace: &[f32]| {
+        (trace.iter())
+            .filter(|&&v| v > low + 1e-6 && v < high - 1e-6)
+            .count() as u64
+    };
+    for ms in [400u64, 0] {
+        patch(&server, &[("/channels/ch1/fader", json!(-20))]).await;
+        pgm.expect(low, 0.0, "the fader down").await;
+        let from = pgm.behind();
+        let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": ms });
+        posted(&server, &path, &body).await;
+        let trace = pgm.trace(from, high).await;
+        let rising = trace.windows(2).all(|w| w[1] >= w[0] - 1e-6);
+        assert!(rising, "crossfade {ms} ms: the level falls on its way up");
+        let mid = between(&trace);
+        let len = ms * rate / 1000;
+        if ms == 0 {
+            assert!(mid <= ramp, "a cut: {mid} samples between the mixes");
+            continue;
+        }
+        assert!(
+            (len / 2..=len).contains(&mid),
+            "crossfade {ms} ms, {len} samples: {mid} samples between the mixes"
+        );
+        let half = (low + high) / 2.0;
+        assert!(
+            trace
+                .iter()
+                .any(|&v| (v - half).abs() < (high - low) / 20.0),
+            "crossfade {ms} ms: no level half way"
+        );
+    }
     server.stop().await;
 }
 

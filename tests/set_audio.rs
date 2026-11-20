@@ -2426,6 +2426,151 @@ fn a_scene_recall_brings_every_replicas_mix_back() {
     );
 }
 
+/// A recall with a crossfade takes every replica's programme through the
+/// levels between the two mixes, rising throughout, bit for bit alike on
+/// every replica, and reaches the recalled mix within the crossfade time;
+/// one without a crossfade is a cut, within the engine's ramp length.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_scene_recall_crossfades_alike_on_every_replica() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch1", "name": "Pres 1", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let rate = shape["sampleRate"].as_u64().unwrap();
+    // samplez's default rampSamples: a gain change without a fade ramps
+    // over it.
+    let ramp = 480;
+    let a = 0.5f32;
+    let (set, listeners) = Set::with("xfade", shape, &["out-pgm"], |domain| {
+        let ch1 = new_id();
+        (
+            vec![Source::start(domain, &ch1, vec![a])],
+            json!({ "ch1": { "flow": ch1 } }),
+        )
+    });
+    let nodes = run(&set, listeners);
+    let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
+    let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
+    let low = 10f32.powf(-20.0 / 20.0);
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/channels/ch1/fader", json!(0)),
+        ],
+    );
+    every_replica_writes(
+        &set,
+        &nodes,
+        &set.members,
+        &[a, 0.0],
+        1e-6,
+        "the mix stored",
+    );
+    let id = faderz::app::uuid().unwrap();
+    let stored = post_any(
+        &nodes,
+        2,
+        "/scenes",
+        &json!({ "commandId": id, "name": "Show" }),
+    );
+    let scene: Value = serde_json::from_str(&stored).unwrap();
+    let path = format!("/scenes/{}/recall", scene["scene"]["id"].as_str().unwrap());
+    // A block's energy: the left leg alone carries ch1, constant.
+    let energy = |g: f32| f64::from(B as f32 * (a * g) * (a * g));
+    let (high, quiet) = (energy(1.0), energy(low));
+    for ms in [400u64, 0] {
+        write(&nodes, 0, &[("/channels/ch1/fader", json!(-20))]);
+        every_replica_writes(
+            &set,
+            &nodes,
+            &set.members,
+            &[a * low, 0.0],
+            1e-6,
+            "fader down",
+        );
+        let from = Outputs::now();
+        let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": ms });
+        post_any(&nodes, 1, &path, &body);
+        every_replica_writes(
+            &set,
+            &nodes,
+            &set.members,
+            &[a, 0.0],
+            1e-6,
+            "the mix recalled",
+        );
+        // Every replica's blocks up to the recalled mix, read.
+        let to = Outputs::now();
+        let read = until(10, || {
+            let blocks = outputs.blocks.lock().unwrap();
+            blocks.iter().all(|b| b.range(to..).next().is_some())
+        });
+        assert!(
+            read,
+            "crossfade {ms} ms: the outputs not read: {}",
+            states(&nodes)
+        );
+        for (x, y) in [(0, 1), (0, 2), (1, 2)] {
+            let c = outputs.compare(x, y, from);
+            assert!(
+                c.differing.is_empty(),
+                "crossfade {ms} ms, replicas {x} and {y}: {c:?}"
+            );
+        }
+        let blocks = outputs.blocks.lock().unwrap();
+        let ramped: Vec<u64> = (blocks[0].range(from..to))
+            .filter(|(_, (_, e))| *e > quiet * (1.0 + 1e-4) && *e < high * (1.0 - 1e-4))
+            .map(|(k, _)| *k)
+            .collect();
+        let energies: Vec<f64> = blocks[0].range(from..to).map(|(_, (_, e))| *e).collect();
+        let rising = energies.windows(2).all(|w| w[1] >= w[0] * (1.0 - 1e-4));
+        assert!(
+            rising,
+            "crossfade {ms} ms: the level falls on its way up: {energies:?}"
+        );
+        // The fade compared on every replica: a block one withheld is
+        // not written, so it cannot be compared.
+        let alike = (ramped.iter())
+            .filter(|k| blocks.iter().all(|b| b.contains_key(k)))
+            .count();
+        assert!(
+            ms == 0 || alike * 2 >= ramped.len(),
+            "crossfade {ms} ms: {alike} of {} blocks committed by every replica",
+            ramped.len()
+        );
+        let len = ms * rate / 1000;
+        let spanned = ramped.len() as u64 * B;
+        if ms == 0 {
+            assert!(
+                spanned <= ramp + B,
+                "a cut: {spanned} samples between the mixes"
+            );
+            continue;
+        }
+        assert!(
+            (len / 2..=len + B).contains(&spanned),
+            "crossfade {ms} ms, {len} samples: {spanned} samples between the mixes"
+        );
+    }
+    outputs.stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
+}
+
 /// POSTs `body` to `path` through the running replica `first` names, or
 /// the next one, while the set answers otherwise than with success, as
 /// [`write`] does: the body answered.

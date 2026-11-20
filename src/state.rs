@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use samplez::Targets;
+use samplez::{Fade, Targets};
 use samplez_replica::entry::{Origin, SessionKey};
 use samplez_replica::state_machine::{Apply, Changed, Effect, Factory, Product};
 use samplez_service::OwnerHandle;
@@ -24,7 +24,7 @@ use crate::shape::Shape;
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
 /// change to any of them takes another version, so replicas deriving
 /// differently never run side by side.
-pub const DERIVATION_VERSION: u32 = 6;
+pub const DERIVATION_VERSION: u32 = 7;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
@@ -65,6 +65,9 @@ pub enum Command {
         id: String,
         scene: String,
         at: String,
+        /// None for a cut.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fade: Option<Crossfade>,
     },
     /// `POST /afv/tally` (one source) or `PUT /afv/tally` (`replace`: the
     /// sources not listed go `off`).
@@ -135,6 +138,17 @@ pub enum Command {
         /// that applies it much later does not hand it to the holder.
         at: u64,
     },
+}
+
+/// A recall's crossfade: every gain the recall changes ramps linearly
+/// over `len` samples from sample index `start`. The receiving replica
+/// chooses `start` and the log carries it, so every replica ramps from
+/// the same index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Crossfade {
+    pub start: u64,
+    pub len: u32,
 }
 
 impl Command {
@@ -464,6 +478,9 @@ pub struct Mixer {
     /// without an engine. Derived from the state alone, so neither
     /// replicated nor saved.
     derived: Option<mix::Derived>,
+    /// The fade of each gain a crossfading recall changed, shaped as the
+    /// targets' gains, or empty for none ([`Mixer::fading`]).
+    fading: Vec<Vec<Option<Fade>>>,
 }
 
 /// A snapshot from [`FORMAT`] on.
@@ -489,6 +506,10 @@ struct Saved {
     /// Absent before [`FORMAT`] 3.
     #[serde(default)]
     ports: Ports,
+    /// [`Mixer::fading`], each fade as the bits of `from`, `start` and
+    /// `len`. Absent before recalls crossfaded.
+    #[serde(default)]
+    fading: Vec<Vec<Option<(u32, u64, u32)>>>,
 }
 
 impl Mixer {
@@ -643,6 +664,22 @@ impl Mixer {
                     .is_none_or(|s| s.master_enable)
             })
             .collect();
+    }
+
+    /// Each gain's fade ([`Mixer::fading`]) with the gain target it fades
+    /// to, shaped as the targets' gains, or empty for none: what an engine
+    /// following the state's deltas sends a gain change with.
+    pub fn gain_fades(&self) -> Vec<Vec<Option<(f32, Fade)>>> {
+        let Some(d) = &self.derived else {
+            return Vec::new();
+        };
+        (self.fading.iter().zip(&d.targets().gains))
+            .map(|(fades, gains)| {
+                (fades.iter().zip(gains))
+                    .map(|(f, &g)| f.map(|f| (g, f)))
+                    .collect()
+            })
+            .collect()
     }
 
     /// What the engine reads and writes beside the state: the flows with
@@ -1427,6 +1464,81 @@ impl Mixer {
         changed(self.write(written))
     }
 
+    /// [`Product::expire`]: releases every control `session` holds and
+    /// disconnects its consoles.
+    fn end_lease(&mut self, session: &SessionKey) -> Effect<Edits> {
+        let held: Vec<String> = self
+            .owners
+            .iter()
+            .filter(|(_, h)| h.key() == *session)
+            .map(|(p, _)| p.clone())
+            .collect();
+        let mut consoles = false;
+        for r in &mut self.consoles {
+            if r.connected && r.session.as_ref() == Some(session) {
+                r.connected = false;
+                consoles = true;
+            }
+        }
+        if held.is_empty() && !consoles {
+            return Effect::Unchanged;
+        }
+        for path in &held {
+            self.owners.remove(path);
+        }
+        let mut written = self.momentary_off(&held);
+        if consoles {
+            written.push(("/consoles".into(), self.console_list()));
+        }
+        Effect::Changed(Edits {
+            values: self.write(written),
+            owners: held.into_iter().map(|p| (p, Value::Null)).collect(),
+            origin: None,
+            ..Edits::default()
+        })
+    }
+
+    /// Runs `f`, a command or a lease expiry, and keeps
+    /// [`Mixer::fading`] for each gain target it changes: with `fade`,
+    /// the gain ramps from the value it has at the fade's start, its
+    /// running fade's value there or its old target, to the new target;
+    /// without, it loses its fade, and the engine ramps it over the ramp
+    /// length from the value it holds when the change applies. A gain
+    /// left as it was keeps its fade. Every gain is the one the engine
+    /// takes, an invalid one 0 ([`samplez_dsp::valid_gain`]).
+    fn fading<T>(&mut self, fade: Option<Crossfade>, f: impl FnOnce(&mut Mixer) -> T) -> T {
+        let before = match &self.derived {
+            Some(d) if fade.is_some() || !self.fading.is_empty() => Some(d.targets().gains.clone()),
+            _ => None,
+        };
+        let out = f(self);
+        let (Some(before), Some(d)) = (before, &self.derived) else {
+            return out;
+        };
+        let after = &d.targets().gains;
+        if self.fading.is_empty() {
+            self.fading = after.iter().map(|row| vec![None; row.len()]).collect();
+        }
+        let valid = |g: f32| if samplez_dsp::valid_gain(g) { g } else { 0.0 };
+        for ((row, was), fades) in after.iter().zip(&before).zip(&mut self.fading) {
+            for ((&gain, &old), cell) in row.iter().zip(was).zip(fades) {
+                if valid(gain).to_bits() == valid(old).to_bits() {
+                    continue;
+                }
+                let old = valid(old);
+                *cell = fade.map(|c| Fade {
+                    from: cell.map_or(old, |f| f.value_at(old, c.start)),
+                    start: c.start,
+                    len: c.len,
+                });
+            }
+        }
+        if self.fading.iter().flatten().all(Option::is_none) {
+            self.fading.clear();
+        }
+        out
+    }
+
     /// Recalls `scene`: every stored leaf whose recall-safe group its
     /// element does not keep, owned controls included, and
     /// `sceneRecalled`.
@@ -1858,52 +1970,58 @@ impl Product for Mixer {
             return Effect::Unchanged;
         };
         let session = origin.key();
-        match &command {
-            Command::Control(c) => self.control(origin, c, ctx),
-            Command::Patch { id, changes } => self.patch(&session, id, changes, ctx),
+        let fade = match &command {
+            Command::Recall { fade, .. } => *fade,
+            _ => None,
+        };
+        self.fading(fade, |m| match &command {
+            Command::Control(c) => m.control(origin, c, ctx),
+            Command::Patch { id, changes } => m.patch(&session, id, changes, ctx),
             Command::StoreScene {
                 id,
                 scene,
                 name,
                 at,
-            } => self.store_scene(&session, id, scene.as_deref(), name.as_deref(), at),
-            Command::DeleteScene { id, scene } => self.delete_scene(&session, id, scene),
-            Command::Recall { id, scene, at } => self.recall(&session, id, scene, at, ctx),
+            } => m.store_scene(&session, id, scene.as_deref(), name.as_deref(), at),
+            Command::DeleteScene { id, scene } => m.delete_scene(&session, id, scene),
+            Command::Recall { id, scene, at, .. } => m.recall(&session, id, scene, at, ctx),
             Command::Tally {
                 id,
                 sources,
                 replace,
-            } => self.tally(&session, id, sources, *replace),
+            } => m.tally(&session, id, sources, *replace),
             Command::Register {
                 id,
                 console,
                 bank_offset,
-            } => self.register(origin, id, console, *bank_offset),
-            Command::PutConsole { id, console } => self.put_console(&session, id, console),
-            Command::RemoveConsole { id, console } => self.remove_console(&session, id, console),
-            Command::Connect { id, port, active } => self.connect(&session, id, port, active, ctx),
+            } => m.register(origin, id, console, *bank_offset),
+            Command::PutConsole { id, console } => m.put_console(&session, id, console),
+            Command::RemoveConsole { id, console } => m.remove_console(&session, id, console),
+            Command::Connect { id, port, active } => m.connect(&session, id, port, active, ctx),
             Command::Schedule {
                 id,
                 port,
                 active,
                 at,
-            } => self.schedule(&session, id, port, active, *at),
-            Command::Unschedule { port, .. } => self.unschedule(port),
-            Command::Fire { id, schedule } => self.fire(&session, id, schedule, ctx),
-            Command::ResetLoudness { id, ids } => self.reset_loudness(&session, id, ids),
+            } => m.schedule(&session, id, port, active, *at),
+            Command::Unschedule { port, .. } => m.unschedule(port),
+            Command::Fire { id, schedule } => m.fire(&session, id, schedule, ctx),
+            Command::ResetLoudness { id, ids } => m.reset_loudness(&session, id, ids),
             Command::ControlRequest { path, from, at, .. } => {
-                self.control_request(&session, path, from, *at)
+                m.control_request(&session, path, from, *at)
             }
-        }
+        })
     }
 
     /// [`mix::targets`] of the state, as every write keeps them, with
     /// the loudness measurements' run flags and reset epochs
-    /// ([`mix::loudness`]); none without an engine's wiring.
+    /// ([`mix::loudness`]) and the gains' fades ([`Mixer::fading`]);
+    /// none without an engine's wiring.
     fn targets(&self) -> Option<Targets> {
         let mut t = self.derived.as_ref()?.targets().clone();
         self.overlay(&mut t);
         mix::loudness(self.shape(), self.state(), &mut t);
+        t.fading.clone_from(&self.fading);
         Some(t)
     }
 
@@ -1946,35 +2064,7 @@ impl Product for Mixer {
     /// Releases every control `session` holds and disconnects its
     /// consoles.
     fn expire(&mut self, session: &SessionKey) -> Effect<Edits> {
-        let held: Vec<String> = self
-            .owners
-            .iter()
-            .filter(|(_, h)| h.key() == *session)
-            .map(|(p, _)| p.clone())
-            .collect();
-        let mut consoles = false;
-        for r in &mut self.consoles {
-            if r.connected && r.session.as_ref() == Some(session) {
-                r.connected = false;
-                consoles = true;
-            }
-        }
-        if held.is_empty() && !consoles {
-            return Effect::Unchanged;
-        }
-        for path in &held {
-            self.owners.remove(path);
-        }
-        let mut written = self.momentary_off(&held);
-        if consoles {
-            written.push(("/consoles".into(), self.console_list()));
-        }
-        Effect::Changed(Edits {
-            values: self.write(written),
-            owners: held.into_iter().map(|p| (p, Value::Null)).collect(),
-            origin: None,
-            ..Edits::default()
-        })
+        self.fading(None, |m| m.end_lease(session))
     }
 
     fn forget(&mut self, session: &SessionKey) {
@@ -2066,6 +2156,13 @@ impl Product for Mixer {
             scenes_created: self.scenes_created,
             consoles: self.consoles.clone(),
             ports: self.ports.clone(),
+            fading: (self.fading.iter())
+                .map(|row| {
+                    (row.iter())
+                        .map(|f| f.map(|f| (f.from.to_bits(), f.start, f.len)))
+                        .collect()
+                })
+                .collect(),
         };
         let snapshot = Snapshot {
             format: FORMAT,
@@ -2101,6 +2198,19 @@ impl Product for Mixer {
             .collect();
         self.scenes = saved.scenes.iter().cloned().collect();
         self.scenes_created = saved.scenes_created;
+        self.fading = (saved.fading.iter())
+            .map(|row| {
+                (row.iter())
+                    .map(|f| {
+                        f.map(|(from, start, len)| Fade {
+                            from: f32::from_bits(from),
+                            start,
+                            len,
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
         if self.shape.is_some() {
             self.reconcile(saved);
         } else {
@@ -2118,6 +2228,19 @@ impl Product for Mixer {
         }
         self.rewire();
         self.derive();
+        // Fades shaped for other gains than the configuration's are
+        // dropped with the rest the shape has no place for.
+        let shaped = |gains: &Vec<Vec<f32>>| {
+            self.fading.len() == gains.len()
+                && (self.fading.iter().zip(gains)).all(|(f, g)| f.len() == g.len())
+        };
+        if !self
+            .derived
+            .as_ref()
+            .is_some_and(|d| shaped(&d.targets().gains))
+        {
+            self.fading.clear();
+        }
         Ok(())
     }
 }
@@ -2783,6 +2906,7 @@ mod tests {
                 id: "r1".into(),
                 scene: scene.clone(),
                 at: at_.into(),
+                fade: None,
             },
         ));
         assert!(v.contains(&("/channels/ch1/fader".into(), json!(-90))));
@@ -2798,7 +2922,8 @@ mod tests {
                 Command::Recall {
                     id: "r2".into(),
                     scene: "nope".into(),
-                    at: at_.into()
+                    at: at_.into(),
+                    fade: None,
                 }
             ),
             Effect::Unchanged
@@ -2841,6 +2966,7 @@ mod tests {
                 id: "r1".into(),
                 scene: scene.clone(),
                 at: "2026-11-15T12:01:00.000Z".into(),
+                fade: None,
             },
         );
         patch(
@@ -2883,6 +3009,7 @@ mod tests {
                 id: "r".into(),
                 scene: s1.clone(),
                 at: "2026-11-15T12:00:00.000Z".into(),
+                fade: None,
             },
         );
         let v = values(&rest(
@@ -3111,6 +3238,7 @@ mod tests {
                 id: "r".into(),
                 scene,
                 at: at_,
+                fade: None,
             },
         ));
         assert!(v.contains(&("/vcas/vca1/offset".into(), json!(-3))));
@@ -3777,6 +3905,7 @@ mod tests {
                     id: id.into(),
                     scene: scene.clone(),
                     at: "2026-11-15T12:01:00.000Z".into(),
+                    fade: None,
                 },
             ))
         };
@@ -3846,6 +3975,7 @@ mod tests {
                     id: "r".into(),
                     scene: scene.clone(),
                     at: "2026-11-15T12:01:00.000Z".into(),
+                    fade: None,
                 },
             ))
         });
@@ -3980,6 +4110,7 @@ mod tests {
                 id: "r1".into(),
                 scene,
                 at: "2026-11-15T12:01:00.000Z".into(),
+                fade: None,
             },
         );
         assert_eq!(at(&m, "/channels/ch1/fader"), &json!(-10), "recalled");
@@ -4316,6 +4447,7 @@ mod tests {
                                 id: format!("r{seq}"),
                                 scene: scene.clone(),
                                 at: "2026-11-15T12:00:00.000Z".into(),
+                                fade: None,
                             },
                         ),
                         None => Effect::Unchanged,
@@ -4462,6 +4594,7 @@ mod tests {
             id: "r".into(),
             scene,
             at: "2026-11-15T12:00:00.000Z".into(),
+            fade: None,
         };
         assert_eq!(reroutes(&m, &recall), [1]);
     }
@@ -4525,6 +4658,7 @@ mod tests {
             id: "r2".into(),
             scene: scene.clone(),
             at: "2026-11-15T12:00:00.000Z".into(),
+            fade: None,
         };
         let mut other = wired();
         other.load(&m.save()).unwrap();
@@ -4544,12 +4678,123 @@ mod tests {
             id: "r1".into(),
             scene,
             at: "2026-11-15T12:00:00.000Z".into(),
+            fade: None,
         };
         assert!(matches!(
             apply_as(&mut m, &one, Some(true)),
             Effect::Changed(_)
         ));
         assert_eq!(m.targets().unwrap().flows, flows(&["a1", "a2", "a3"]));
+    }
+
+    fn recall_faded(m: &mut Mixer, id: &str, scene: &str, fade: Option<Crossfade>) -> Targets {
+        let recall = Command::Recall {
+            id: id.into(),
+            scene: scene.into(),
+            at: "2026-11-15T12:00:00.000Z".into(),
+            fade,
+        };
+        assert!(matches!(apply_as(m, &recall, None), Effect::Changed(_)));
+        m.targets().unwrap()
+    }
+
+    /// A crossfading recall fades each gain it changes, a mute's to or
+    /// from silence included, from the start index the command carries,
+    /// from the gain's value there to its new target; a gain it leaves
+    /// gets no fade, and a recall without one is a cut. Mid-fade a new
+    /// recall fades from where the running fade has got to, a fader move
+    /// drops the fades of the gains it moves and keeps the others', and a
+    /// snapshot carries the fades.
+    #[test]
+    fn a_crossfading_recall_fades_every_gain_it_changes() {
+        let mut m = wired();
+        let faders = |db: i32| {
+            [
+                ("/channels/ch1/fader", json!(db)),
+                ("/channels/ch2/fader", json!(db)),
+            ]
+        };
+        patch(&mut m, "p0", &faders(0));
+        let open = m.targets().unwrap().gains;
+        let scene = store(&mut m, "s1", None, "A");
+        patch(&mut m, "p1", &faders(-20));
+        patch(&mut m, "p2", &[("/channels/ch2/mute", json!(true))]);
+        let low = m.targets().unwrap().gains;
+        let quiet = store(&mut m, "s2", None, "B");
+        let cut = recall_faded(&mut m, "r0", &scene, None);
+        assert_eq!(cut.gains, open);
+        assert!(cut.fading.is_empty(), "a cut fades nothing");
+        recall_faded(&mut m, "r1", &quiet, None);
+        let xf = Crossfade {
+            start: 96_000,
+            len: 48_000,
+        };
+        let t = recall_faded(&mut m, "r2", &scene, Some(xf));
+        assert_eq!(t.gains, open);
+        let mut faded = BTreeSet::new();
+        for (i, row) in t.gains.iter().enumerate() {
+            for (o, &g) in row.iter().enumerate() {
+                let want = (low[i][o].to_bits() != g.to_bits()).then_some(Fade {
+                    from: low[i][o],
+                    start: xf.start,
+                    len: xf.len,
+                });
+                assert_eq!(t.fading[i][o], want, "gain {i} -> {o}");
+                if want.is_some() {
+                    faded.insert(i);
+                }
+            }
+        }
+        assert_eq!(
+            faded,
+            BTreeSet::from([0, 1]),
+            "ch1's fader, ch2's fader and mute"
+        );
+        assert!(low[1].iter().all(|&g| g == 0.0), "ch2 fades from silence");
+        // Half way, a recall back to B fades from where A's fade is.
+        let back = Crossfade {
+            start: xf.start + u64::from(xf.len) / 2,
+            len: 4_800,
+        };
+        let t = recall_faded(&mut m, "r3", &quiet, Some(back));
+        assert_eq!(t.gains, low);
+        let mut halfway = 0;
+        for (i, row) in t.gains.iter().enumerate() {
+            for (o, &g) in row.iter().enumerate() {
+                if open[i][o].to_bits() == g.to_bits() {
+                    continue;
+                }
+                let from = Fade {
+                    from: low[i][o],
+                    start: xf.start,
+                    len: xf.len,
+                }
+                .value_at(open[i][o], back.start);
+                let (lo, hi) = (low[i][o].min(open[i][o]), low[i][o].max(open[i][o]));
+                assert!(lo < from && from < hi, "gain {i} -> {o} mid-fade: {from}");
+                assert_eq!(
+                    t.fading[i][o],
+                    Some(Fade {
+                        from,
+                        start: back.start,
+                        len: back.len,
+                    })
+                );
+                halfway += 1;
+            }
+        }
+        assert!(halfway > 0);
+        // A fader move mid-fade drops ch1's fades and keeps ch2's.
+        patch(&mut m, "p3", &[("/channels/ch1/fader", json!(-10))]);
+        let t = m.targets().unwrap();
+        assert!(t.fading[0].iter().all(Option::is_none), "{:?}", t.fading[0]);
+        assert!(t.fading[1].iter().any(Option::is_some), "{:?}", t.fading[1]);
+        let mut other = wired();
+        other.load(&m.save()).unwrap();
+        assert_eq!(other.targets().unwrap().fading, t.fading);
+        // A cut over running fades drops those of the gains it changes.
+        let t = recall_faded(&mut m, "r4", &scene, None);
+        assert!(t.fading.is_empty(), "{:?}", t.fading);
     }
 
     /// The configuration hash follows the shape, the declared consoles
@@ -4657,6 +4902,7 @@ mod tests {
                     id: id.into(),
                     scene: scene.clone(),
                     at: "2026-11-15T12:01:00.000Z".into(),
+                    fade: None,
                 },
             )
         };
@@ -4947,6 +5193,7 @@ mod tests {
             id: "r1".into(),
             scene,
             at: "2026-11-19T00:00:00Z".into(),
+            fade: None,
         };
         rest(&mut back, recalled);
         close(legs(&back));

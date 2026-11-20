@@ -21,7 +21,7 @@ use std::time::Duration;
 use openraft::ServerState;
 use samplez::rt::ProcessStatus;
 use samplez::{
-    Counters, DuckSetting, DuckTargets, Engine, Entry, EntryError, GainError, InputState,
+    Counters, DuckSetting, DuckTargets, Engine, Entry, EntryError, Fade, GainError, InputState,
     InputStatus, Replication, Report, Targets,
 };
 use samplez_dsp::{StripParam, WINDOW};
@@ -343,8 +343,10 @@ impl Audio {
             loudness,
             loudness_held: true,
         };
-        let view = crate::app::with_state(replica, |sm| sm.product.engine_view());
-        self.apply(&state, &view, &mut sent, 0, true).await;
+        let (view, fades) = crate::app::with_state(replica, |sm| {
+            (sm.product.engine_view(), sm.product.gain_fades())
+        });
+        self.apply(&state, &view, &fades, &mut sent, 0, true).await;
         // A resend asked for meanwhile marks it ready once done. The lock
         // is held over the check and the store, so a hold() cannot fall
         // between them and be overwritten.
@@ -387,8 +389,11 @@ impl Audio {
                 // engine takes it.
                 None => (state, revision) = owned_state_of(replica),
             }
-            let view = crate::app::with_state(replica, |sm| sm.product.engine_view());
-            self.apply(&state, &view, &mut sent, at, false).await;
+            let (view, fades) = crate::app::with_state(replica, |sm| {
+                (sm.product.engine_view(), sm.product.gain_fades())
+            });
+            self.apply(&state, &view, &fades, &mut sent, at, false)
+                .await;
             if let Some(n) = resent {
                 let asked = self.resends_asked.lock().expect("resend lock poisoned");
                 if *asked == n {
@@ -466,11 +471,16 @@ impl Audio {
     /// block; the gains no earlier than the detaches. When the engine no
     /// longer takes that index, the rest of the diff goes at the earliest
     /// one it does; while it holds as many changes as it takes, the next
-    /// waits. With `settle`, the gains wait for the strips' ramps.
+    /// waits. With `settle`, the gains wait for the strips' ramps. A gain
+    /// goes with its fade in `fades` ([`crate::state::Mixer::gain_fades`])
+    /// when the fade is towards that gain, and the engine takes it at the
+    /// index the gain goes at; the state the deltas built may lag the
+    /// fades read, and the gain then goes without, over the ramp length.
     async fn apply(
         &self,
         state: &Value,
         view: &mix::EngineView,
+        fades: &[Vec<Option<(f32, Fade)>>],
         sent: &mut Sent,
         at: u64,
         settle: bool,
@@ -605,11 +615,15 @@ impl Audio {
         *self.taps.lock().expect("taps lock poisoned") = mix::meter_taps(&self.shape, state);
         for (input, (row, new)) in sent.matrix.iter_mut().zip(targets.gains).enumerate() {
             for (output, (g, n)) in row.iter_mut().zip(new).enumerate() {
-                if *g != n
-                    && self
-                        .send(&mut at, |at| self.engine.set_gain(input, output, n, at))
-                        .await
-                {
+                let fade = fades.get(input).and_then(|r| r.get(output)).copied();
+                let fade = (fade.flatten())
+                    .filter(|(to, _)| to.to_bits() == n.to_bits())
+                    .map(|(_, f)| f);
+                let set = |at| {
+                    let fade = fade.filter(|f| f.within(at));
+                    self.engine.set_gain_fade(input, output, n, fade, at)
+                };
+                if *g != n && self.send(&mut at, set).await {
                     *g = n;
                 }
             }
