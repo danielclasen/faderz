@@ -1005,7 +1005,24 @@ pub(crate) mod tests {
 
     /// An App over a fresh replica of two channels, its [`App::publish`]
     /// loop not running, and the data directory to remove after.
-    pub(crate) async fn app() -> (Arc<App>, PathBuf) {
+    /// A test replica's data directory, removed when dropped: on tmpfs it
+    /// would otherwise hold memory for good, a failed test's included.
+    pub(crate) struct TestDir(PathBuf);
+
+    impl std::ops::Deref for TestDir {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    pub(crate) async fn app() -> (Arc<App>, TestDir) {
         // On tmpfs: on the disk the builds write to, one fsync of the log
         // can outlast the 2 s a write waits to commit, and a test's write
         // is refused under load.
@@ -1048,7 +1065,7 @@ pub(crate) mod tests {
             AuthMode::None,
             &Metrics::default(),
         );
-        (app, dir)
+        (app, TestDir(dir))
     }
 
     pub(crate) fn owner(session: &str) -> Owner {
@@ -1079,7 +1096,7 @@ pub(crate) mod tests {
     /// lease from when it made it, and not longer.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_selection_without_a_lease_lapses_after_one_lease() {
-        let (app, dir) = app().await;
+        let (app, _dir) = app().await;
         let s = SessionKey::from(&owner("s-a"));
         app.select(s.clone(), json!({}), Some("ch1"));
         app.lapse_selections();
@@ -1091,14 +1108,13 @@ pub(crate) mod tests {
         }
         app.lapse_selections();
         assert!(!selected(&app, &s), "lapsed after one lease");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A selection made before the session's first lease lapses as soon
     /// as the lease that arrived after it ends, however recent it is.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_selection_made_before_the_lease_lapses_when_it_ends() {
-        let (app, dir) = app().await;
+        let (app, _dir) = app().await;
         let o = owner("s-a");
         let s = SessionKey::from(&o);
         app.select(s.clone(), json!({}), Some("ch1"));
@@ -1117,14 +1133,13 @@ pub(crate) mod tests {
         until_lease(&app, &s, false).await;
         app.lapse_selections();
         assert!(!selected(&app, &s), "lapsed with the lease");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A session's selection lapses as soon as a lease it held ends,
     /// however recent the selection.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_selection_lapses_when_its_lease_ends() {
-        let (app, dir) = app().await;
+        let (app, _dir) = app().await;
         let o = owner("s-a");
         let s = SessionKey::from(&o);
         app.replica.renew_sessions(std::slice::from_ref(&o));
@@ -1143,7 +1158,6 @@ pub(crate) mod tests {
         until_lease(&app, &s, false).await;
         app.lapse_selections();
         assert!(!selected(&app, &s), "lapsed with the lease");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A control request is ordered into the log after the touch that
@@ -1152,7 +1166,7 @@ pub(crate) mod tests {
     /// ownership it is about.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_control_request_reaches_the_holder_after_the_owning_delta() {
-        let (app, dir) = app().await;
+        let (app, _dir) = app().await;
         let app = app.clone();
         let publishing = app.clone();
         tokio::spawn(async move { publishing.publish().await });
@@ -1239,7 +1253,6 @@ pub(crate) mod tests {
         app.request(holder.clone(), json!({}), path.into()).await;
         app.request(owner("s-b"), json!({}), path.into()).await;
         assert_eq!(app.replica.revision(), revision);
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A call into the replica inside [`App::with_state`] holds off
@@ -1274,7 +1287,7 @@ pub(crate) mod tests {
     /// and leaves with its last connection.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn presence_lists_a_session_once_by_its_display_name() {
-        let (app, dir) = app().await;
+        let (app, _dir) = app().await;
         let o = owner("s-a");
         let s = SessionKey::from(&o);
         let listed = |app: &App| -> Vec<Value> {
@@ -1311,7 +1324,6 @@ pub(crate) mod tests {
         let _again = app.connected(s.clone());
         app.greeted(&s, &record, &anonymous);
         assert_eq!(listed(&app)[0]["user"], "anonymous");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

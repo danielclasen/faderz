@@ -550,7 +550,7 @@ mod tests {
     /// closed, so the session's selection goes with its last connection.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_cancelled_serve_counts_its_connection_closed() {
-        let (app, dir) = app().await;
+        let (app, _dir) = app().await;
         let session = "session-a-0123456789abcdef";
         let sessions = Arc::new(Sessions::new("r1").unwrap());
         let (served, mut serving) = mpsc::unbounded_channel::<JoinHandle<()>>();
@@ -610,6 +610,5 @@ mod tests {
             .expect("the second connection ends")
             .unwrap();
         assert!(!selected(&app, &key), "gone with the last connection");
-        let _ = std::fs::remove_dir_all(dir);
     }
 }
