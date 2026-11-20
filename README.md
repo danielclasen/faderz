@@ -202,12 +202,18 @@ that time; with 0 the recall is a cut, each gain ramping over the
 engine's ramp length (`engine.rampSamples`) as on any other write.
 Strip settings, inputs and duck settings change as on any other write.
 The replica that takes the recall writes the sample index the fade
-starts at into the replicated log: 184 ms after it received the
-recall, the longest lead the log stamps a command with (the highest
-`replica.maxApplyLeadMs`, 120 ms, plus 64 ms), so the whole fade plays
-and every replica of a set fades alike. A recall that takes effect
-later, such as one switching inputs, joins its fade where it has got
-to.
+starts at into the replicated log: past its receipt by the longest lead
+the log stamps a command with, the top of `replica.maxApplyLeadMs` plus
+samplez's `EXTRA_LEAD`, so the whole fade plays and every replica of a
+set fades alike.
+
+A recall whose entry applies after its fade start, such as one that
+switches inputs and waits for an engine generation, does not play the
+part of the fade already past: each gain steps by that elapsed share of
+its swing, and one applied after the fade's end steps to the scene's
+value. A recall that re-routes can therefore click by most of its swing.
+This holds until the engine ramps a gain joining a fade already started
+from its held value into the fade.
 
 During a fade, a write that moves a fading gain, such as a fader move,
 ends that gain's fade: the gain ramps from where the fade has got to,

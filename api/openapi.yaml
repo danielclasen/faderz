@@ -278,9 +278,12 @@ paths:
         recall-safe parameter groups. The state takes the scene values at
         once. Every gain the recall changes ramps linearly to its new value
         over crossfadeMs, from a sample index the receiving replica writes
-        into the log, 184 ms past its receipt; 0 is a cut, each gain
-        ramping over the engine's ramp length. A later write that moves a
-        fading gain ends its fade.
+        into the log, past its receipt by the top of maxApplyLeadMs plus
+        samplez's EXTRA_LEAD; 0 is a cut, each gain ramping over the
+        engine's ramp length. A later write that moves a fading gain ends
+        its fade. A recall applied after its fade start, such as one that
+        switches inputs, steps each gain by the share of the fade already
+        past, and to the scene's value once the fade has ended.
       parameters:
         - $ref: "#/components/parameters/RequestHeader"
       requestBody:

@@ -2571,6 +2571,168 @@ fn a_scene_recall_crossfades_alike_on_every_replica() {
     reader.join().unwrap();
 }
 
+/// A replica rebuilt from a peer's snapshot in the middle of a crossfade
+/// takes the running fades with the state and writes, bit for bit, what
+/// its peers write for the rest of the fade.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_replica_rebuilt_mid_crossfade_writes_what_its_peers_write() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch1", "name": "Pres 1", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let a = 0.5f32;
+    let (set, listeners) = Set::with("xfade-rebuild", shape, &["out-pgm"], |domain| {
+        let ch1 = new_id();
+        (
+            vec![Source::start(domain, &ch1, vec![a])],
+            json!({ "ch1": { "flow": ch1 } }),
+        )
+    });
+    let mut nodes = run(&set, listeners);
+    let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
+    let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
+    let low = 10f32.powf(-20.0 / 20.0);
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/channels/ch1/fader", json!(0)),
+        ],
+    );
+    every_replica_writes(
+        &set,
+        &nodes,
+        &set.members,
+        &[a, 0.0],
+        1e-6,
+        "the mix stored",
+    );
+    let stored = post_any(
+        &nodes,
+        2,
+        "/scenes",
+        &json!({ "commandId": faderz::app::uuid().unwrap(), "name": "Show" }),
+    );
+    let scene: Value = serde_json::from_str(&stored).unwrap();
+    let path = format!("/scenes/{}/recall", scene["scene"]["id"].as_str().unwrap());
+    write(&nodes, 0, &[("/channels/ch1/fader", json!(-20))]);
+    every_replica_writes(
+        &set,
+        &nodes,
+        &set.members,
+        &[a * low, 0.0],
+        1e-6,
+        "fader down",
+    );
+    let stored = post_any(
+        &nodes,
+        2,
+        "/scenes",
+        &json!({ "commandId": faderz::app::uuid().unwrap(), "name": "Quiet" }),
+    );
+    let quiet_scene: Value = serde_json::from_str(&stored).unwrap();
+    let back = format!(
+        "/scenes/{}/recall",
+        quiet_scene["scene"]["id"].as_str().unwrap()
+    );
+    // Long enough to outlast a restart and the catch-up after it.
+    let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": 20_000 });
+    post_any(&nodes, 1, &path, &body);
+    std::thread::sleep(Duration::from_millis(500));
+    let leader = node(&nodes, 0).ops("/readyz").1["replica"]["leader"].clone();
+    let killed = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).ops("/readyz").1["replica"]["id"] != leader)
+        .unwrap();
+    nodes[killed].take().unwrap().kill();
+    // Its volume gone, it takes the state, fades included, from a peer's
+    // snapshot rather than replaying the recall from its own log.
+    std::fs::remove_dir_all(set.at.0.join(format!("data-{killed}"))).unwrap();
+    // Every live replica snapshots the state mid-fade and purges its log
+    // up to it, so the rebuilt one installs that snapshot ([`Mixer::load`])
+    // instead of replaying the recall.
+    for n in (0..REPLICAS).filter(|&n| n != killed) {
+        let node = node(&nodes, n);
+        let raft = node.server.app.replica.raft().clone();
+        let applied = raft.metrics().borrow().last_applied.map(|l| l.index);
+        node.runtime
+            .block_on(raft.trigger().snapshot())
+            .expect("a snapshot triggered");
+        let taken = until(10, || {
+            raft.metrics().borrow().snapshot.map(|l| l.index) >= applied
+        });
+        assert!(taken, "replica {n} took no snapshot past the recall");
+        let upto = raft.metrics().borrow().snapshot.unwrap().index;
+        node.runtime
+            .block_on(raft.trigger().purge_log(upto))
+            .expect("a purge triggered");
+        let purged = until(10, || {
+            raft.metrics()
+                .borrow()
+                .purged
+                .is_some_and(|l| l.index >= upto)
+        });
+        assert!(purged, "replica {n} kept its log up to {upto}");
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    nodes[killed] = Some(set.start(killed, None));
+    outputs.restarted(killed, node(&nodes, killed).engine());
+    steady(&nodes, killed);
+    let from = Outputs::now() + 1;
+    // A recall back mid-fade fades each gain from where the running fade
+    // has got to: on the rebuilt replica too only if the fades came with
+    // the snapshot, as its engine core copied from a peer carries the
+    // running fade either way.
+    let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": 1_000 });
+    post_any(&nodes, 0, &back, &body);
+    std::thread::sleep(Duration::from_millis(1500));
+    let energy = |g: f32| f64::from(B as f32 * (a * g) * (a * g));
+    let (high, quiet) = (energy(1.0), energy(low));
+    {
+        let blocks = outputs.blocks.lock().unwrap();
+        let fading = (blocks[killed].range(from..))
+            .filter(|(_, (_, e))| *e > quiet * (1.0 + 1e-4) && *e < high * (1.0 - 1e-4))
+            .count();
+        assert!(
+            fading > 0,
+            "the fade ended before replica {killed} was back"
+        );
+    }
+    for other in (0..REPLICAS).filter(|&n| n != killed) {
+        let c = outputs.compare(killed, other, from);
+        // A replica whose pages differ withholds them, so the comparison
+        // counts only what both committed: most of the window must be.
+        let window = 1500 * 48 / B as usize;
+        assert!(
+            c.compared * 2 >= window,
+            "replicas {killed} and {other}: {} of {window} blocks committed by both",
+            c.compared
+        );
+        assert!(
+            c.differing.is_empty(),
+            "replicas {killed} and {other} mid-crossfade: {c:?}"
+        );
+    }
+    outputs.stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
+    for node in nodes.into_iter().flatten() {
+        node.kill();
+    }
+}
+
 /// POSTs `body` to `path` through the running replica `first` names, or
 /// the next one, while the set answers otherwise than with success, as
 /// [`write`] does: the body answered.

@@ -1507,6 +1507,18 @@ impl Mixer {
     /// left as it was keeps its fade. Every gain is the one the engine
     /// takes, an invalid one 0 ([`samplez_dsp::valid_gain`]).
     fn fading<T>(&mut self, fade: Option<Crossfade>, f: impl FnOnce(&mut Mixer) -> T) -> T {
+        // Fades ended by the new fade's start, a logged index every
+        // replica applies alike, go: their gains hold the scene's values.
+        if let Some(c) = fade {
+            for cell in self.fading.iter_mut().flatten() {
+                if cell.is_some_and(|f| f.start + u64::from(f.len) <= c.start) {
+                    *cell = None;
+                }
+            }
+            if self.fading.iter().flatten().all(Option::is_none) {
+                self.fading.clear();
+            }
+        }
         let before = match &self.derived {
             Some(d) if fade.is_some() || !self.fading.is_empty() => Some(d.targets().gains.clone()),
             _ => None,
@@ -4795,6 +4807,46 @@ mod tests {
         // A cut over running fades drops those of the gains it changes.
         let t = recall_faded(&mut m, "r4", &scene, None);
         assert!(t.fading.is_empty(), "{:?}", t.fading);
+    }
+
+    /// A recall starting at or after a running fade's end drops that fade
+    /// where it leaves the gain alone: the gain holds the scene's value, and
+    /// the fades a set carries stay bounded by the gains still moving.
+    #[test]
+    fn a_later_recall_drops_the_fades_that_ended() {
+        let xf = Crossfade {
+            start: 96_000,
+            len: 48_000,
+        };
+        let end = xf.start + u64::from(xf.len);
+        // Both channels fade up to A; C then takes ch1 down again from
+        // `start`, leaving ch2 at A's value.
+        let ch2_after = |start: u64| {
+            let mut m = wired();
+            let faders = |a: i32, b: i32| {
+                [
+                    ("/channels/ch1/fader", json!(a)),
+                    ("/channels/ch2/fader", json!(b)),
+                ]
+            };
+            patch(&mut m, "p0", &faders(0, 0));
+            let a = store(&mut m, "s1", None, "A");
+            patch(&mut m, "p1", &faders(-20, 0));
+            let c = store(&mut m, "s2", None, "C");
+            patch(&mut m, "p2", &faders(-20, -20));
+            let t = recall_faded(&mut m, "r0", &a, Some(xf));
+            assert!(t.fading[0].iter().any(Option::is_some), "ch1 fades");
+            assert!(t.fading[1].iter().any(Option::is_some), "ch2 fades");
+            let t = recall_faded(&mut m, "r1", &c, Some(Crossfade { start, len: 4_800 }));
+            assert!(t.fading[0].iter().any(Option::is_some), "ch1 fades anew");
+            t.fading[1].clone()
+        };
+        assert!(
+            ch2_after(end - 1).iter().any(Option::is_some),
+            "before A's end, ch2's fade runs on"
+        );
+        let ended = ch2_after(end);
+        assert!(ended.iter().all(Option::is_none), "{ended:?}");
     }
 
     /// The configuration hash follows the shape, the declared consoles

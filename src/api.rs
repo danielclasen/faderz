@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 
 use crate::app::{App, now_rfc3339, uuid};
 use crate::contract::{Contract, check, contract};
-use crate::replica::{RATE, tai_samples};
+use crate::replica::tai_samples;
 use crate::shape::Shape;
 use crate::state::{
     Answer, Command, Console, ConsolePut, Crossfade, Write, default_protocol, default_strips,
@@ -374,10 +374,10 @@ async fn delete_scene(
 /// `EXTRA_LEAD`. A recall taking effect by then plays its whole fade; one
 /// taking effect later, such as one that switches inputs and waits for
 /// an engine generation, joins its fade where it has got to.
-fn crossfade_lead() -> u64 {
+fn crossfade_lead(rate: u64) -> u64 {
     let ms = *crate::config::MAX_APPLY_LEAD_MS.end()
         + samplez_replica::schedule::EXTRA_LEAD.as_millis() as u64;
-    ms * RATE / 1000
+    ms * rate / 1000
 }
 
 #[derive(Deserialize)]
@@ -404,9 +404,10 @@ async fn recall_scene(
             ));
         }
         let owner = owner(identity.map(|Extension(i)| i));
+        let rate = u64::from(app.with_state(|sm| sm.product.shape().sample_rate));
         let fade = (b.crossfade_ms > 0).then(|| Crossfade {
-            start: tai_samples() + crossfade_lead(),
-            len: (u64::from(b.crossfade_ms) * RATE / 1000) as u32,
+            start: tai_samples() + crossfade_lead(rate),
+            len: (u64::from(b.crossfade_ms) * rate / 1000) as u32,
         });
         let command = Command::Recall {
             id: b.command_id.clone(),
