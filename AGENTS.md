@@ -7,15 +7,9 @@ file is about changing it.
 
 ## Use a git worktree
 
-Make every change in a worktree of its own, never in the main checkout:
-
-```sh
-git fetch origin
-git worktree add .claude/worktrees/<topic>-<id> -b <topic> origin/main
-```
-
-Several sessions and editors may work on one clone at once; two writers
-in one tree corrupt each other's index and branches.
+Work in a worktree of its own, e.g.
+`git worktree add .claude/worktrees/<topic> -b <topic> origin/main`, so
+parallel sessions on one clone do not share an index.
 
 ## Architecture
 
@@ -48,80 +42,59 @@ else, apart from adapting to its API.
 
 ## Invariants
 
-- The state is a function of the log. A command, a snapshot and a replay
+- The state is a function of the log: a command, a snapshot and a replay
   give the same state, and the same state derives the same engine targets
-  on every replica, bit for bit.
-- Behaviour that a set changes is tested in a set of three replicas, not
-  only in one server: equal output across replicas, failover, a replica
-  that was down catching up.
-- The contract schemas, the console's types (`web/src/lib/contract`) and
-  the mock agree. A change to one changes all three, and the contract
-  tests check it.
-- Inside a `with_state` closure, take what is needed and return. Never
-  call into the replica there: an entry is applied only once the closures
-  running when it arrived return.
+  on every replica, bit for bit. Enforced by: the state unit tests,
+  `the_config_hash_covers_the_configuration_alone`, and the release-only
+  set tests (`tests/set_audio.rs`, `tests/set_nmos.rs`).
+- Behaviour that a set changes is tested in a set of three replicas.
+  Enforced by: the set tests above, run in release in CI.
+- The contract schemas, the console's types and the mock agree. Enforced
+  by: `web/tests/contract` (`schemas.test.ts`, `mock.test.ts`) and
+  `npm run test:backend` against the real binary.
+- Inside a `with_state` closure, take what is needed and return; never
+  call into the replica there. Enforced by:
+  `a_replica_call_inside_with_state_is_caught` and
+  `the_state_route_calls_no_replica_inside_with_state`.
 
 ## Rolling upgrades
 
-A set rolls pod by pod. Whether replicas of two releases can share a set
-is decided by the versions and by the configuration hash.
+Every replica of a set must share the configuration hash: a hash that
+changes mid-roll leaves the set with mixed hashes and stalls it, so such
+a change rolls only with every replica stopped.
 
-- The versions are samplez's compute and protocol versions and faderz's
-  derivation version, `DERIVATION_VERSION` in `src/state.rs`. A release
-  that raises none of them rolls pod by pod with no gap in the output. A
-  raised version makes the rollout a hand-over at the first new pod,
-  hitless, from one committer to the next. A samplez bump can raise the
-  compute or protocol version even when faderz changes nothing else.
-- Raise the derivation version whenever the same log would derive a
-  different state or different engine entries: a change in how a command
-  applies, in target derivation, in what save and load produce, or in the
-  state's saved encoding. Do not raise it for anything else. Any change
-  to `apply`, target derivation, `save` or `load` is reviewed for it.
-- The configuration hash, which every replica of a set must share: a
-  hash that changes mid-roll leaves the set with mixed hashes and stalls
-  it. It takes no build or crate version. It takes the derivation version
-  as one of its inputs, at 4. Once samplez takes the derivation version
-  as `Product::DERIVATION_VERSION`, faderz gives it there. The literal 4
-  then stays frozen in the hash input and never moves again, like any
-  other input the hash takes, and a test pins the hash for a fixed
-  configuration.
-- `libm` is pinned exactly, and `Cargo.lock` is committed and every build
-  is `--locked`: another `libm` can compute other bits under unchanged
-  versions.
-
-A console keeps the UI it was loaded from. When the replica serving it
-reports a newer build, it asks the operator to reload.
+- `DERIVATION_VERSION` (`src/state.rs`) is one of the hash's inputs, so
+  raising it changes the hash and needs a roll with every replica
+  stopped. Raise it whenever the same log would derive a different state
+  or different engine entries: a change in how a command applies, in
+  target derivation, in what save and load produce, or in the state's
+  saved encoding. Nothing else raises it, and any change to `apply`,
+  target derivation, `save` or `load` is reviewed for it.
+- The hash takes no build or crate version.
+- `libm` stays pinned at `=0.2.16`, `Cargo.lock` is committed and every
+  build is `--locked`: another `libm` can compute other bits.
 
 ## Build and test
 
-The server needs libmxl and a C toolchain with libclang. CI builds it in
-the samplez builder image (`ghcr.io/danielclasen/samplez-builder`).
+`.github/workflows/ci.yml` holds the exact commands; run them as CI does.
+In short:
 
-```sh
-cargo fmt --all --check && (cd bridge && cargo fmt --all --check)
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
-cargo test --release --locked --test set_audio
-cargo test --release --locked --test set_nmos
-```
-
-The set tests run three engines and are release-only.
-
-The web console:
-
-```sh
-cd web && npm ci
-npm run check
-npm test                                  # unit and contract tests
-npx playwright test <spec>                # e2e against the mock
-FADERZ_E2E_BACKEND=../target/debug/faderz npx playwright test <spec>
-```
-
-The last runs the e2e against the real binary.
+- The server builds in the samplez builder image
+  (`ghcr.io/danielclasen/samplez-builder`), with the cargo registry and
+  git directories mounted and `CARGO_INCREMENTAL=0`. Build the console
+  first (`cd web && npm ci && npm run build`): the binary embeds
+  `web/dist`. Then `cargo fmt --all --check`,
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `cargo test --locked`, and in release the set tests.
+- The bridge (`bridge/`) has its own fmt, clippy and test, and needs
+  `libasound2-dev`.
+- The console: `npm run check`, `npm test`, and `npx playwright test`
+  against the mock or, with `FADERZ_E2E_BACKEND`, against the binary.
+  `npm run test:backend` and `npm run test:binary` run in CI against the
+  built binary.
 
 Before pushing a UI change, run the specs it touches against the mock and
-against the binary. CI then confirms what is already known rather than
-discovering it.
+against the binary.
 
 ## Tests
 
@@ -153,7 +126,8 @@ disabled against repeat presses, and a visible error if it fails.
 ## Text
 
 ASCII only in code, comments, commit messages and PR descriptions: no
-typographic dashes, quotes, arrows or ellipsis characters. State facts,
+typographic dashes, quotes, arrows or ellipsis characters. The vendored
+skills under `.agents/skills/` are exempt. State facts,
 and leave out what cannot be verified from the source, a run or the
 authoritative documentation.
 
