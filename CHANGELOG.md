@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.6](https://github.com/danielclasen/faderz/compare/v0.4.5...v0.4.6) (2026-11-20)
+
+
+### Bug Fixes
+
+* **app:** list a replica down only once it is unheard for 1 s ([#129](https://github.com/danielclasen/faderz/issues/129)) ([05717ed](https://github.com/danielclasen/faderz/commit/05717edb422d7d21f219cbeb0fc0a980dcc5d333))
+
 ## [0.4.5](https://github.com/danielclasen/faderz/compare/v0.4.4...v0.4.5) (2026-11-19)
 
 
