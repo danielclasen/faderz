@@ -71,6 +71,9 @@ a change rolls only with every replica stopped.
   saved encoding. Nothing else raises it, and any change to `apply`,
   target derivation, `save` or `load` is reviewed for it.
 - The hash takes no build or crate version.
+- Today samplez's compatibility key hashes the samplez crate version, so
+  every faderz release that takes a new samplez is a hand-over roll that
+  needs the set parked, not a plain pod-by-pod roll.
 - `libm` stays pinned at `=0.2.16`, `Cargo.lock` is committed and every
   build is `--locked`: another `libm` can compute other bits.
 
