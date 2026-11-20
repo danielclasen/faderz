@@ -7,6 +7,8 @@
   import { loudnessUnit } from '../lib/loudnessUnit.svelte';
   import { hold } from '../lib/hold';
   import { pointer } from '../lib/state/pointer';
+  import { loudnessNote } from '../lib/loudnessNote';
+  import { tip } from '../lib/tip';
 
   /** Readout period, ms. */
   const READOUT_MS = 100;
@@ -75,6 +77,8 @@
   /** Short-term loudness relative to the target on the Tech 3341 scale, 0..1. */
   const range = $derived(settings.scale === 'ebu18' ? { lo: -36, hi: 18 } : { lo: -18, hi: 9 });
   const rel = $derived(l?.shortTerm == null ? null : l.shortTerm - target);
+  /** Gaps and a restarted start of the measurement, from the serving replica's counters. */
+  const note = $derived(loudnessNote(mixer.loudnessHealth[id]));
   const at = (lu: number) => Math.min(1, Math.max(0, (lu - range.lo) / (range.hi - range.lo)));
 </script>
 
@@ -106,6 +110,18 @@
   <span class="k">LRA</span>
   <b class="num v" class:unstable={l !== undefined && !l.lraStable} class:held={!running} title={!running ? 'Integration paused' : l && !l.lraStable ? 'Settles after 60 s of measurement' : undefined}><span>{fmt(l?.lra)}</span></b>
   <span class="max unit">LU</span>
+  <!-- Always there, so a note coming or going moves nothing; its text
+       sits in a box of fixed size with size and layout containment. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <span
+    class="note"
+    role="note"
+    tabindex={note.tip ? 0 : -1}
+    aria-label={note.tip || undefined}
+    data-testid={`loudness-note-${id}`}
+    use:tip={note.tip}
+    ><span class="text"><span class="gaps">{note.gaps ?? ''}</span><span class="since">{note.since ?? ''}</span></span></span
+  >
   <span class="k">TP</span><b class="num v" class:hot={tp !== null && tp > settings.zones.truePeakMax} title="Maximum true peak since the last reset, measured while the integration is paused too" data-testid={`tp-${id}`}><span>{fmt(tp)}</span></b><span
     class="max unit lamp"
     class:over
@@ -248,6 +264,38 @@
   }
   .blank {
     visibility: hidden;
+  }
+  .note {
+    grid-column: 1 / -1;
+    min-width: 0;
+    border-radius: 2px;
+  }
+  .note:focus-visible {
+    outline: 2px solid var(--focus);
+  }
+  /* Gaps at the left, the start at the right; each cut short with an
+     ellipsis where both do not fit, the tooltip has them whole. */
+  .note .text {
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+    height: 12px;
+    line-height: 12px;
+    font-size: 10px;
+    white-space: nowrap;
+    contain: size layout style;
+  }
+  .note .text span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .note .gaps {
+    color: var(--warn);
+  }
+  .note .since {
+    flex: none;
+    max-width: 100%;
   }
   .unstable {
     opacity: 0.55;

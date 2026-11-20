@@ -71,6 +71,8 @@ class ShowCluster extends Cluster {
     for (const r of this.replicas) {
       r.counters = new Proxy({ ...r.counters, input_late_blocks_total: 3, deadline_miss_total: 1 }, { set: () => true });
     }
+    // Every loudness measurement started at a reset: no readout notes a restart.
+    this.resetLoudness([...this.shape.buses, ...this.shape.auxes, ...this.shape.mixMinus].map((e) => e.id));
     for (const s of [...this.state.scenes]) this.deleteScene(s.id);
     for (const name of ['Cold open', 'Welcome', 'Interview', 'Band live', 'Phone-in', 'Credits']) this.storeScene(name, null);
     this.state.sceneRecalled = { id: this.state.scenes[3]!.id, at: new Date().toISOString() };

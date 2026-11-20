@@ -892,6 +892,29 @@ test('latches a true-peak over of a channel direct out until cleared', { tag: '@
   await patch(request, '/channels/ch1/trim', 0);
 });
 
+test('notes the gaps and a restarted start of a loudness measurement beside I and LRA, with a tooltip saying what each means', { tag: '@mock' }, async ({ page, request }) => {
+  await live(page);
+  // VT 2, the mock's faulty input, feeds every bus: each counts its slices as gaps.
+  const me = page.getByTestId('loudness-note-me');
+  await expect(me.locator('.gaps')).toHaveText(/^\d+(\.\dk|k)? gaps$/, { timeout: 5000 });
+  const box = (await me.boundingBox())!;
+  // Nothing resets cf here: it has measured since the engine started, not since a reset.
+  await expect(page.getByTestId('loudness-note-cf').locator('.since')).toHaveText(/^since \d\d:\d\d$/);
+  await page.getByTestId('loudness-note-cf').hover();
+  const tip = page.locator('#faderz-tip');
+  await expect(tip).toContainText('an input down, or audio this replica could not meter');
+  await expect(tip).toContainText("can make its reading differ slightly from the other replicas'");
+  await expect(tip).toContainText("this replica's measurement restarted; earlier programme loudness isn't included");
+  // A reset starts me's measurement there: no start to note.
+  const reset = await request.post('/api/v1/loudness/reset', { data: { ids: ['me'] }, headers: { 'X-Samplez-Request': '1' } });
+  expect(reset.status()).toBe(204);
+  await expect(me.locator('.since')).toHaveText('');
+  // The note keeps its box, whatever it says.
+  expect(await me.boundingBox()).toEqual(box);
+  // The integrated loudness is still read, never blanked for the gaps.
+  await expect(page.getByTestId('loudness-i-me')).not.toHaveText(/--\.-/, { timeout: 10_000 });
+});
+
 test('latches a true-peak over on a master until RESET, however short it was', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const lamp = page.getByTestId('tp-over-pgm20');

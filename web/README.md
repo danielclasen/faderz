@@ -28,7 +28,12 @@ bank changes, and every duck group held for 4 s in every 8 s), and validates
 every message it sends and receives against the contract; each meter
 frame is decoded and its values validated before it is sent. A duck
 group with a trigger and a target keys from the speech of its triggers,
-with the detector, hold and envelope its settings give.
+with the detector, hold and envelope its settings give. Input VT 2
+(`st3`) delivers nothing: every replica's engine has it pruned, and
+every bus, aux and mix-minus it feeds counts gaps in its loudness
+measurement. A measurement restarts, unreset, when the mock starts and
+when a killed replica comes back; a loudness reset starts it on every
+replica.
 
 - `FADERZ_MOCK_AUTOMATION=0` turns off the tally cuts and console
   activity, so nothing changes state but clients and REST calls, and
@@ -134,6 +139,14 @@ Every write control is `aria-disabled` and sends nothing while the link transmit
 The LOCK DESK key in the header does the same on one screen: a 0.5 s
 hold locks it, another unlocks it. A phone shows the key only while
 the desk is locked.
+
+Under its I and LRA a loudness readout notes the measurement's gaps, the
+10 ms slices an input was down for or the serving replica could not
+meter (`N gaps`, its gaps and lost slices together), and, when that
+replica's measurement did not start at the last reset it applied,
+`since HH:MM` in local time; a hover, keyboard focus or held touch says
+what each means. The note keeps its box whatever it says. Both come
+from the `counters` message (`src/lib/loudnessNote.ts`).
 
 Each screen latches true-peak overs and holds the maximum true peak
 (the TP readout of a master) from the meter frames it receives, so a

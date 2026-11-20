@@ -8,7 +8,7 @@
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getContext } from 'svelte';
-import type { InputHealth, Owner, Owners, PresentSession, Selection, Shape, State } from '../contract/types';
+import type { InputHealth, LoudnessHealth, Owner, Owners, PresentSession, Selection, Shape, State } from '../contract/types';
 import { MeterStore } from '../meters/store';
 import type { Patch, SyncStatus, ToWorker } from '../sync/messages';
 import { handleTag } from '../net/handle';
@@ -71,6 +71,8 @@ export class MixerStore {
   counters = $state.raw<Record<string, number>>({});
   /** Each channel's input, from the same reading as the counters. */
   counterInputs = $state.raw<InputHealth[]>([]);
+  /** Each bus, aux and mix-minus loudness measurement, from the same reading, by id. */
+  loudnessHealth = $state.raw<Record<string, LoudnessHealth>>({});
   countersReplica = $state<string | null>(null);
   meterReplica = $state<string | null>(null);
   notices = $state<Notice[]>([]);
@@ -329,6 +331,7 @@ export class MixerStore {
     if (p.counters) {
       this.counters = p.counters.values;
       this.counterInputs = p.counters.inputs;
+      this.loudnessHealth = Object.fromEntries(p.counters.loudness.map((l) => [l.id, l]));
       this.countersReplica = p.counters.replica;
     }
     if (p.selections) this.selections = p.selections;
