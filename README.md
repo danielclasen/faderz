@@ -57,7 +57,7 @@ interrupts, the monitor's source, channel and VCA PFL and AFL listening
 stage), fold-down, image, level, dim, talkback dim, cut, mono and speaker mutes
 and solos, duck groups, and the bus and aux true-peak limiter on every
 output carrying that bus or aux. An output carrying a bus or aux is
-late by the limiter's look-ahead, 53 samples (about 1.1 ms), whether
+late by the limiter's look-ahead, 53 samples (about 1.1 ms at 48 kHz), whether
 the limiter is on or off, so that turning it on needs no restart; an
 output carrying a mix-minus, a direct out or the monitor is not. The rest of the state is kept, shown and replicated but not
 applied to the audio in this version: channel delay, bus and aux EQ,

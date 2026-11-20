@@ -98,7 +98,9 @@ pub fn limiters(shape: &Shape, state: &Value) -> Vec<Option<LimiterParams>> {
                 LimiterParams {
                     enabled: on(&l["enabled"]),
                     ceiling_db: num(&l["ceiling"]),
-                    ..LimiterParams::OFF
+                    // Stated, not the engine's default: a default that
+                    // moved would change what one state derives.
+                    release_ms: 50.0,
                 }
             })
         })
@@ -259,5 +261,42 @@ mod tests {
         for p in limiters(&shape, &state).into_iter().flatten() {
             p.check().unwrap_or_else(|e| panic!("{p:?}: {e}"));
         }
+    }
+
+    /// Every ceiling the state takes is one the engine takes: the
+    /// model's bounds lie within samplez's, so no stored value is
+    /// refused by the engine for good; one outside them is refused at
+    /// the write.
+    #[test]
+    fn every_ceiling_the_state_takes_the_engine_takes() {
+        let model: Value =
+            serde_json::from_str(include_str!("../api/ws/model.schema.json")).unwrap();
+        let bounds = &model["$defs"]["LimiterCeiling"];
+        let (lo, hi) = (
+            bounds["minimum"].as_f64().unwrap(),
+            bounds["maximum"].as_f64().unwrap(),
+        );
+        let engine = samplez_dsp::limiter::LIMITER_CEILING_DB;
+        for ceiling in [lo, hi] {
+            assert!(
+                engine.contains(&(ceiling as f32)),
+                "{ceiling} outside {engine:?}"
+            );
+        }
+        let shape = Shape::parse(&small()).unwrap();
+        let mixer = crate::state::Mixer::new(shape.clone());
+        for ceiling in [lo, hi] {
+            assert!(
+                mixer
+                    .check_write("/buses/pgm/limiter/ceiling", &json!(ceiling))
+                    .is_ok(),
+                "{ceiling}"
+            );
+        }
+        assert!(
+            mixer
+                .check_write("/buses/pgm/limiter/ceiling", &json!(lo - 0.5))
+                .is_err()
+        );
     }
 }
