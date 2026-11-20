@@ -209,11 +209,13 @@
     position: absolute;
     top: 0;
     right: 0;
-    width: 6px;
-    height: 6px;
+    width: 9px;
+    height: 9px;
     border-radius: 50%;
-    background: var(--warn);
-    box-shadow: 0 0 0 1px var(--panel-2);
+    background: var(--accent);
+    box-shadow:
+      0 0 0 1.5px var(--panel-2),
+      0 0 0 2.5px var(--accent);
     visibility: hidden;
   }
   .update-dot.on {

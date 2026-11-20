@@ -442,7 +442,7 @@ test('the EQ curve in the processing panel is as wide as the panel gives it', as
 });
 
 test('a replica serving a newer faderz version lights an UPDATE key, moving and covering nothing; its panel opens on a press, LATER clears the dot until the next one', { tag: '@mock' }, async ({ page, request }) => {
-  for (const width of [1440, 700]) {
+  for (const width of [1440, 1200, 1024, 960, 700]) {
     await page.setViewportSize({ width, height: 900 });
     await live(page);
     const key = page.getByTestId('update-key');
@@ -458,8 +458,24 @@ test('a replica serving a newer faderz version lights an UPDATE key, moving and 
     await roll(`99.0.${width}`);
     await expect(key).toBeVisible();
     await expect(dot).toBeVisible();
-    // Nothing moved and nothing opened on its own.
+    // Nothing moved and nothing opened on its own; the header holds all
+    // of its keys whole.
     expect(await at(), `${width} px`).toEqual(before);
+    await expect(panel).toBeHidden();
+    const header = page.locator('header.top');
+    expect(await header.evaluate((h) => h.scrollWidth <= h.clientWidth), `${width} px header overflows`).toBe(true);
+    for (const k of [key, page.getByRole('button', { name: /^Users/ }), page.getByTestId('desk-lock')]) {
+      expect(await k.evaluate((b) => b.scrollWidth <= b.clientWidth && b.scrollHeight <= b.clientHeight + 1), `${width} px key clipped`).toBe(true);
+    }
+    await expect(page.getByTestId('update-announce')).toHaveText(`A new faderz version is running (99.0.${width})`);
+    // Escape and a press outside close it.
+    await key.click();
+    await expect(panel).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+    await expect(key).toBeFocused();
+    await key.click();
+    await page.mouse.click(5, 300);
     await expect(panel).toBeHidden();
     await key.click();
     await expect(panel).toContainText(`A new faderz version is running (99.0.${width})`);
