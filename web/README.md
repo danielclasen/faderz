@@ -31,7 +31,9 @@ group with a trigger and a target keys from the speech of its triggers,
 with the detector, hold and envelope its settings give. Input VT 2
 (`st3`) delivers nothing: every replica's engine has it pruned, and
 every bus, aux and mix-minus it feeds counts gaps in its loudness
-measurement. A loudness reset is counted in the state and starts the
+measurement. Every channel has a 5 s delay line but Music (`st1`),
+whose line takes 100 ms, and FX (`st4`), which has none. A loudness
+reset is counted in the state and starts the
 measurement on every replica; a killed replica that comes back measures
 from its own start, and so restarted where the state counts a reset.
 
@@ -447,7 +449,10 @@ restores the current value. Parameters take units: `2.5k` or `2.5 kHz`,
 `-3 dB`, `40%`, `4:1`, `off`. A delay is typed
 in the selected unit (ms, frames at the shape's frame rate, or
 samples) or with a suffix: `40ms`, `2f`, `1.5s`, `1920smp`; the arrow
-keys step one unit, Shift a tenth. Matrix grids move with the arrow keys.
+keys step one unit, Shift a tenth. A channel's delay shows the range of
+its delay line in the selected unit and caps an entry at it; a channel
+without a line has its delay greyed out, marked "No delay line".
+Matrix grids move with the arrow keys.
 The slider of a parameter or a send level moves by the distance dragged,
 from where it was, and never jumps to the touch point; its arrows step a
 hundredth of its travel, Page Up and Page Down a tenth, and every press

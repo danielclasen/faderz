@@ -1471,6 +1471,24 @@ describe('REST', () => {
     await write('/channels/ch1/input', 'a');
   });
 
+  it('refuses a channel delay past its delay line and any but 0 on a channel without one, as the server does', async () => {
+    const write = (path: string, value: unknown) => rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path, value }] });
+    const shape = cluster.shape.channels;
+    expect(shape.find((c) => c.id === 'st1')!.maxDelay).toBe(4800);
+    expect(shape.find((c) => c.id === 'st4')!.maxDelay).toBeUndefined();
+    expect((await write('/channels/st1/delay', 4800)).status).toBe(200);
+    expect(cluster.state.channels['st1']!.delay).toBe(4800);
+    expect(await write('/channels/st1/delay', 4801)).toMatchObject({ status: 400, body: { message: 'channel st1 delays at most 4800 samples, its delay line' } });
+    expect(await write('/channels/st4/delay', 1)).toMatchObject({ status: 400, body: { message: 'channel st4 has no delay line' } });
+    expect((await write('/channels/st4/delay', 0)).status).toBe(200);
+    const c = await new Client().open();
+    await c.hello();
+    expect(await c.answer(c.set('/channels/st4/delay', 480))).toMatchObject({ type: 'error', code: 400, message: 'channel st4 has no delay line' });
+    expect(cluster.state.channels['st1']!.delay).toBe(4800);
+    expect(cluster.state.channels['st4']!.delay).toBe(0);
+    await write('/channels/st1/delay', 0);
+  });
+
   it('drives AFV stages from tally', async () => {
     await rest('PUT', '/afv/tally', { sources: { CAM1: 'off', CAM2: 'program' } });
     expect(cluster.state.afv['ch14']!.open).toBe(true);

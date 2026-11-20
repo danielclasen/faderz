@@ -2,15 +2,21 @@
   // Delay of a channel or bus, typed in ms, frames or samples. Enter or
   // leaving the field writes it; Escape restores the current value; arrow
   // keys step one unit (Shift: a tenth). A suffix (ms, f, smp, s) overrides
-  // the selected unit for one entry.
+  // the selected unit for one entry. A channel's entry shows the range of
+  // its delay line and is capped at it; without a line it is greyed out and
+  // writes nothing.
+  import type { ChannelShape } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
-  import { formatDelay, fromSamples, parseDelay, MAX_DELAY_SAMPLES, type DelayUnit } from '../lib/audio/delay';
+  import { delayMax, delayRange, formatDelay, fromSamples, parseDelay, type DelayUnit } from '../lib/audio/delay';
 
   interface Props {
     path: string;
     label: string;
+    /** The channel whose delay this is; absent for a bus or aux. */
+    channel?: ChannelShape;
   }
-  let { path, label }: Props = $props();
+  let { path, label, channel }: Props = $props();
+  const max = $derived(delayMax(channel));
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
   const value = $derived(mixer.value<number>(path));
@@ -27,12 +33,13 @@
   let input: HTMLInputElement | undefined = $state();
 
   function write(samples: number): void {
+    if (max === null) return;
     if (input) input.value = formatDelay(samples, unit, shape.sampleRate, shape.frameRate);
     if (samples !== value) mixer.set(path, samples);
   }
   function commit(): void {
     if (!input) return;
-    const samples = parseDelay(input.value, unit, shape.sampleRate, shape.frameRate);
+    const samples = parseDelay(input.value, unit, shape.sampleRate, shape.frameRate, max ?? 0);
     if (samples === null) input.value = shown;
     else write(samples);
   }
@@ -47,7 +54,7 @@
       e.preventDefault();
       const one = fromSamples(1, unit, shape.sampleRate, shape.frameRate);
       const step = (e.shiftKey ? 0.1 : 1) / one;
-      const next = Math.min(MAX_DELAY_SAMPLES, Math.max(0, Math.round(value + (e.key === 'ArrowUp' ? step : -step))));
+      const next = Math.min(max ?? 0, Math.max(0, Math.round(value + (e.key === 'ArrowUp' ? step : -step))));
       write(next);
     }
   }
@@ -62,11 +69,12 @@
     type="text"
     inputmode="decimal"
     value={shown}
-    disabled={mixer.locked}
+    disabled={mixer.locked || max === null}
     onchange={commit}
     onkeydown={keydown}
     onfocus={() => input?.select()}
-    aria-label={`${label} in ${UNITS.find((u) => u.id === unit)!.name}, up to ${Number((MAX_DELAY_SAMPLES / shape.sampleRate).toFixed(2))} seconds`}
+    aria-label={`${label} in ${UNITS.find((u) => u.id === unit)!.name}, up to ${Number(((max ?? 0) / shape.sampleRate).toFixed(2))} seconds`}
+    aria-describedby={channel ? `${path}-range` : undefined}
     data-path={path}
   />
   <div class="units" role="radiogroup" aria-label={`${label} unit`}>
@@ -77,10 +85,14 @@
         aria-checked={unit === u.id}
         aria-label={u.name}
         title={u.id === 'frames' ? `Frames at ${fpsText} fps` : u.name}
+        disabled={max === null}
         onclick={() => (unit = u.id)}>{u.key}</button
       >
     {/each}
   </div>
+  {#if channel}
+    <span class="range" id={`${path}-range`}>{max === null ? 'No delay line' : delayRange(max, unit, shape.sampleRate, shape.frameRate)}</span>
+  {/if}
 </div>
 
 <style>
@@ -121,5 +133,10 @@
   .units .key {
     padding: 0;
     font-size: 10px;
+  }
+  .range {
+    grid-column: 2 / -1;
+    font-size: 11px;
+    color: var(--text-dim);
   }
 </style>

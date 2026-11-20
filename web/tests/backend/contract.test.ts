@@ -8,7 +8,7 @@ import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { Contract } from '../../dev/mock/contract';
-import { exampleShape } from '../../dev/mock/shape';
+import { configShape } from '../../dev/mock/shape';
 
 const BIN = process.env['FADERZ_BIN'];
 const PORT = Number(process.env['FADERZ_BACKEND_PORT'] ?? 6461);
@@ -26,7 +26,7 @@ beforeAll(async () => {
   const config = {
     listeners: { api: listener(PORT), ops: listener(PORT + 1), nmos: listener(PORT + 2) },
     replica: { name: 'r1', dataDir: `${DIR}/data` },
-    shape: exampleShape(),
+    shape: configShape(),
   };
   writeFileSync(`${DIR}/config.json`, JSON.stringify(config));
   server = spawn(resolve(BIN), ['--config', `${DIR}/config.json`], { stdio: ['ignore', 'ignore', 'inherit'] });

@@ -6,7 +6,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
-import { exampleShape } from './dev/mock/shape';
+import { configShape } from './dev/mock/shape';
 
 const BIN = process.env['FADERZ_BIN'];
 if (!BIN) throw new Error('FADERZ_BIN names the faderz binary under test');
@@ -38,7 +38,7 @@ for (const mode of ['none', 'token', 'proxy', 'oidc'] as const) {
     auth: auth[mode],
     api: { allowedOrigins: [origin] },
     replica: { name: `r-${mode}`, dataDir: `${DIR}/${mode}/data` },
-    shape: exampleShape(),
+    shape: configShape(),
   };
   writeFileSync(`${DIR}/${mode}.json`, JSON.stringify(config, null, 2));
 }

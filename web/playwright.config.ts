@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
-import { exampleShape } from './dev/mock/shape';
+import { configShape } from './dev/mock/shape';
 
 /** Plain HTTP dev server; the HTTPS and preview servers take the next two ports. */
 const PORT = Number(process.env['FADERZ_E2E_PORT'] ?? 5181);
@@ -62,7 +62,7 @@ if (BACKEND) {
       allowedOrigins: [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, LAN_URL, `https://127.0.0.1:${PORT + 1}`],
     },
     replica: { name: 'r1', dataDir: BACKEND_DATA },
-    shape: exampleShape(),
+    shape: configShape(),
   };
   writeFileSync(`${BACKEND_DIR}/config.json`, JSON.stringify(config, null, 2));
 }

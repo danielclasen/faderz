@@ -20,12 +20,16 @@ const MONO_NAMES = [
   'Lav 3', 'Lav 4', 'Hand 1', 'Hand 2', 'Spot 1', 'Spot 2',
 ];
 
+/** A delay line of 5 s at 48 kHz, the most a channel delays. */
+const FULL_LINE = 240000;
+
+// Music has a 100 ms delay line and FX none.
 const WIDE_CHANNELS: ChannelShape[] = [
-  { id: 'st1', name: 'Music', width: 2, layout: 'stereo', altInput: false, source: 'Playout 1' },
-  { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo', altInput: false, source: 'Clip server A' },
-  { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo', altInput: false, source: 'Clip server B' },
+  { id: 'st1', name: 'Music', width: 2, layout: 'stereo', altInput: false, source: 'Playout 1', maxDelay: 4800 },
+  { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo', altInput: false, source: 'Clip server A', maxDelay: FULL_LINE },
+  { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo', altInput: false, source: 'Clip server B', maxDelay: FULL_LINE },
   { id: 'st4', name: 'FX', width: 2, layout: 'stereo', altInput: false },
-  { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1', altInput: true, source: 'Playout 2' },
+  { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1', altInput: true, source: 'Playout 2', maxDelay: FULL_LINE },
 ];
 
 /** Channel count of the example shape when none is given. */
@@ -50,6 +54,7 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
       layout: 'mono' as const,
       altInput: i < 2,
       ...(i < 8 ? { source: `Studio mic ${i + 1}` } : {}),
+      maxDelay: FULL_LINE,
     })),
     ...WIDE_CHANNELS.slice(0, channelCount - mono).map((c) => ({ ...c })),
   ];
@@ -99,6 +104,16 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
     monitorOutputs,
     outputs,
   };
+}
+
+/**
+ * The example shape without delay lines, as a server configuration takes
+ * it: the server sets each channel's maxDelay from
+ * mxl.inputs.<id>.maxDelayMs and refuses a shape that carries one.
+ */
+export function configShape(channelCount = DEFAULT_CHANNELS): Shape {
+  const shape = exampleShape(channelCount);
+  return { ...shape, channels: shape.channels.map(({ maxDelay: _, ...c }) => c) };
 }
 
 function flatEq(): Eq {

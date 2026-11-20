@@ -53,6 +53,8 @@ export interface ChannelShape extends ElementShape {
   altInput: boolean;
   /** Label of the input source, shown under the channel name. */
   source?: string;
+  /** Longest delay, in samples, the input's delay line takes; absent without one, and then only 0. */
+  maxDelay?: number;
 }
 /** Operator-assigned scribble strip colour. */
 export type ScribbleColor = 'none' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'purple';
