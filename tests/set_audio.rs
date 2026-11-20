@@ -788,6 +788,71 @@ fn a_loudness_reset_restarts_every_replicas_measurement() {
     assert!(agree, "highest momentary loudness {each:?} centi-LU");
 }
 
+/// A measurement paused through one replica (`/loudness/<id>/running`
+/// false) holds on every replica: the integrated loudness does not move
+/// while the output gets 6 dB louder, and moves on each once it runs
+/// again, the replicas agreeing on it.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_paused_loudness_measurement_holds_on_every_replica_until_it_runs_again() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (set, listeners) = Set::new("pause");
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let shape = faderz::shape::Shape::parse(&shape()).unwrap();
+    // pgm: peak, true peak and RMS of two legs, then momentary,
+    // short-term and integrated.
+    let at = faderz::meters::Layout::of(&shape).offset("pgm").unwrap();
+    let (momentary, integrated) = (at + 6, at + 8);
+    let null = i16::MIN;
+    let read = |n: usize, index: usize| peak(node(&nodes, n), 1, index);
+    write(&nodes, 0, &[("/channels/ch1/fader", json!(-6))]);
+    let mut quiet = Vec::new();
+    for n in 0..REPLICAS {
+        let measured = until(60, || {
+            read(n, integrated) != null && read(n, momentary) != null
+        });
+        assert!(measured, "replica {n} measures: {}", states(&nodes));
+        quiet.push(read(n, momentary));
+    }
+    // Paused through a replica that need not lead, then 6 dB louder.
+    write(&nodes, 1, &[("/loudness/pgm/running", json!(false))]);
+    write(&nodes, 0, &[("/channels/ch1/fader", json!(0))]);
+    let mut held = Vec::new();
+    for (n, &quiet) in quiet.iter().enumerate() {
+        let louder = until(30, || {
+            let now = read(n, momentary);
+            now != null && now >= quiet + 550
+        });
+        assert!(louder, "replica {n} is 6 dB louder: {}", states(&nodes));
+        held.push(read(n, integrated));
+    }
+    for _ in 0..25 {
+        for (n, &held) in held.iter().enumerate() {
+            assert_eq!(read(n, integrated), held, "replica {n} paused");
+        }
+    }
+    write(&nodes, 2, &[("/loudness/pgm/running", json!(true))]);
+    for (n, &held) in held.iter().enumerate() {
+        let moved = until(60, || read(n, integrated) >= held + 100);
+        assert!(moved, "replica {n} runs again: {}", states(&nodes));
+    }
+    let mut each = Vec::new();
+    let agree = until(30, || {
+        each = (0..REPLICAS).map(|n| read(n, integrated)).collect();
+        let spread = each.iter().max().unwrap() - each.iter().min().unwrap();
+        !each.contains(&null) && spread <= 5
+    });
+    assert!(agree, "integrated loudness {each:?} centi-LU");
+}
+
 /// Replica `n`'s loudness measurement of `id` as its `counters` message
 /// carries it.
 fn loudness(nodes: &[Option<Node>], n: usize, id: &str) -> Value {

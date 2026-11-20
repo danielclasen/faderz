@@ -589,6 +589,18 @@ async fn a_solo_reaches_the_monitor_meter() {
     server.stop().await;
 }
 
+/// Frames until `done` holds of the meter values, or a minute passes.
+async fn until_values(server: &Server, what: &str, done: impl Fn(&[i16]) -> bool) -> Vec<i16> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let v = meter_values(server, 1).await;
+        if done(&v) {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "{what}: {v:?}");
+    }
+}
+
 /// POST /loudness/reset restarts the loudness measurement of an output:
 /// the highest momentary loudness since the last reset falls to the
 /// level the output has now, from the louder one it had.
@@ -615,17 +627,6 @@ async fn a_loudness_reset_restarts_the_measurement() {
     while get(server.ops, "/readyz").await.0 != 200 {
         assert!(Instant::now() < deadline, "ready");
         tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    // Frames until `done` holds of the meter values, or a minute passes.
-    async fn until_values(server: &Server, what: &str, done: impl Fn(&[i16]) -> bool) -> Vec<i16> {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            let v = meter_values(server, 1).await;
-            if done(&v) {
-                return v;
-            }
-            assert!(Instant::now() < deadline, "{what}: {v:?}");
-        }
     }
     patch(&server, &[("/channels/ch1/fader", json!(0))]).await;
     // Not the integrated loudness: a meter slice the engine missed on a
@@ -654,6 +655,52 @@ async fn a_loudness_reset_restarts_the_measurement() {
     assert!(v[MAX_MOMENTARY] <= loud - 1500, "{v:?}");
     let (status, _) = post(server.api, "/loudness/reset", &json!({ "ids": ["ch1"] })).await;
     assert_eq!(status, 404, "a channel has no loudness measurement");
+    server.stop().await;
+}
+
+/// A measurement paused (`/loudness/<id>/running` false) takes in no
+/// audio: the integrated loudness holds while the output gets 6 dB
+/// louder, and moves towards the louder level once it runs again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_paused_loudness_measurement_holds_until_it_runs_again() {
+    const MOMENTARY: usize = PGM_PEAK + 6;
+    const INTEGRATED: usize = PGM_PEAK + 8;
+    let domain = domain("loud-pause");
+    let data = data("loud-pause");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::sine(&domain.0, &flows.ch1, 0.5, 440);
+    let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    patch(&server, &[("/channels/ch1/fader", json!(-6))]).await;
+    let v = until_values(&server, "measured", |v| {
+        v[INTEGRATED] != i16::MIN && v[MOMENTARY] != i16::MIN
+    })
+    .await;
+    let quiet = v[MOMENTARY];
+    // Paused, then 6 dB louder: once the momentary loudness, measured
+    // whether running or not, shows it, the integrated loudness holds
+    // over 75 frames.
+    patch(&server, &[("/loudness/pgm/running", json!(false))]).await;
+    patch(&server, &[("/channels/ch1/fader", json!(0))]).await;
+    let v = until_values(&server, "6 dB louder", |v| {
+        v[MOMENTARY] != i16::MIN && v[MOMENTARY] >= quiet + 550
+    })
+    .await;
+    let held = v[INTEGRATED];
+    for _ in 0..75 {
+        let v = meter_values(&server, 1).await;
+        assert_eq!(v[INTEGRATED], held, "paused: {v:?}");
+    }
+    patch(&server, &[("/loudness/pgm/running", json!(true))]).await;
+    until_values(&server, "running again", |v| v[INTEGRATED] >= held + 100).await;
     server.stop().await;
 }
 
