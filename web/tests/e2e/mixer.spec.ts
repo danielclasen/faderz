@@ -912,7 +912,7 @@ test('notes the gaps and a restarted start of a loudness measurement beside I an
   await me.hover();
   const tip = page.locator('#faderz-tip');
   await expect(tip).toContainText('an input was down, or this mixer instance could not measure the audio, for example while the server was overloaded');
-  await expect(tip).toContainText("can make its reading differ slightly from the other instances'");
+  await expect(tip).toContainText("can make its count and its reading differ slightly from the other instances'");
   await expect(tip).toContainText("This mixer instance's measurement restarted at");
   await expect(tip).toContainText("earlier programme loudness isn't included");
   // The note keeps its box, whatever it says.

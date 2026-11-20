@@ -91,9 +91,13 @@ engine's earliest index restarts it there instead and logs it.
 
 The `counters` message names each bus, aux and mix-minus measurement's
 gaps, the 10 ms slices an input taken down by the log fed it, and its
-lost slices, those this replica did not meter whole, such as samples an
-overrun skipped. The integrated loudness and LRA carry on over both,
-leaving them out; gaps are the same on every replica that lost none. It
+lost slices, those this replica did not meter, such as samples an
+overrun skipped, or metered while out of step with the set, as before it
+had caught up after a start. The integrated loudness and LRA carry on
+over both, leaving them out. Gaps are identical across replicas only for
+slices every replica metered: a replica that lost slices can show fewer
+or more gaps than the others, and neither gaps nor gaps plus lost need
+match across replicas then. It
 also names when the measurement started, in UTC, and `restarted`: the
 state counts a reset of it (`/loudness/<id>/resets` above 0), and the
 measurement did not start at the last reset this replica applied, or it

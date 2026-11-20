@@ -18,7 +18,7 @@ describe('loudnessNote', () => {
     expect(one.gaps).toBe('1 gap');
     expect(one.tip).toMatch(/^1 gap of 10 ms in this measurement, under 1 s: an input was down, or this mixer instance could not measure the audio, for example while the server was overloaded/);
     expect(one.tip).toContain('Integrated loudness and LRA carry on without them');
-    expect(one.tip).toContain("can make its reading differ slightly from the other instances'");
+    expect(one.tip).toContain("can make its count and its reading differ slightly from the other instances'");
     expect(one.tip).not.toContain('on this mixer instance only.');
     expect(one.tip).not.toMatch(/replica|CPU/);
     const both = loudnessNote(health({ gaps: 2, lost: 3 }), now);

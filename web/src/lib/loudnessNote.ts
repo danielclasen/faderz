@@ -53,7 +53,7 @@ export function loudnessNote(h: LoudnessHealth | undefined, now = new Date()): L
     tips.push(
       `${n} ${word} of 10 ms in this measurement, ${span(n)}: an input was down, or this mixer instance could not measure the audio, ` +
         `for example while the server was overloaded. Integrated loudness and LRA carry on without them.${lost} ` +
-        `Gaps on this instance only can make its reading differ slightly from the other instances'.`,
+        `Gaps on this instance only, as while it caught up after a start, can make its count and its reading differ slightly from the other instances'.`,
     );
   }
   let since: string | null = null;
