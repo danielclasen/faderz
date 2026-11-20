@@ -180,7 +180,7 @@ impl Server {
                             set,
                         )?;
                         let bridge = Arc::new(started.bridge);
-                        let key = rollout::key(&config.compatibility(product));
+                        let key = rollout::key::<Mixer>(&config.compatibility(product));
                         let fixed = Fixed::new(key, set.revision.clone());
                         let follow = (kube.zip(set.statefulset.clone()))
                             .map(|(kube, statefulset)| (kube, statefulset, fixed.clone()));
@@ -290,9 +290,8 @@ impl Server {
                         let meter = audio.meter(&tasks_app.hub, &name);
                         let count = tasks_app.count(&audio);
                         // A set's engine follows the replicated log; only
-                        // its meter taps follow the state here.
-                        let started = live.clone();
-                        let resets = audio.follow_resets(&tasks_state, &started, revision);
+                        // its meter taps and loudness resets follow the
+                        // state here.
                         let follow = async {
                             if replicated {
                                 audio.follow_taps(&tasks_state, revision).await;
@@ -301,7 +300,7 @@ impl Server {
                             }
                             std::future::pending::<()>().await
                         };
-                        tokio::join!(follow, meter, count, resets);
+                        tokio::join!(follow, meter, count);
                     }
                     None => std::future::pending::<()>().await,
                 }
@@ -479,7 +478,7 @@ mod tests {
         Contact {
             timing: samplez_replica::contact::Timing::defaults(replica::BLOCK),
             audio: None,
-            rollout: Fixed::new(rollout::key(b"faderz"), None),
+            rollout: Fixed::new(rollout::key::<Mixer>(b"faderz"), None),
             follow: None,
         }
     }

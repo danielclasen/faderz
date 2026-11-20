@@ -996,7 +996,7 @@ impl Config {
         Ok(())
     }
 
-    /// What a set's compatibility key hashes besides the engine version
+    /// What a set's compatibility key hashes besides the versions
     /// ([`samplez_replica::rollout::key`]): `product`, the mixer's
     /// configuration hash, the `engine` settings and each channel's flow
     /// channel selection, which change the output a replica computes from

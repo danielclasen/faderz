@@ -25,6 +25,7 @@ use samplez::Targets;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::meters::Layout;
 use crate::shape::Shape;
 use crate::state::tokens;
 use crate::{duck, strip};
@@ -465,6 +466,34 @@ pub fn targets(shape: &Shape, wiring: &[Wiring], state: &Value) -> Targets {
     Derived::new(shape, wiring, state).targets
 }
 
+/// Sets each loudness measurement's run flag and reset epoch in `t` from
+/// `/loudness/<id>/running` and `/loudness/<id>/resets` in `state`, by
+/// the engine meter that measures it ([`Layout::loudness_meter`]): the
+/// epoch is the reset count, wrapping, so a reset counted moves it
+/// forward and the engine restarts the measurement where it applies.
+/// Every meter up to the last one measuring a bus, aux or mix-minus
+/// output is listed, one measuring none running at epoch 0.
+pub fn loudness(shape: &Shape, state: &Value, t: &mut Targets) {
+    let layout = Layout::of(shape);
+    let ids = (shape.buses.iter().map(|b| &b.id))
+        .chain(shape.auxes.iter().map(|a| &a.id))
+        .chain(shape.mix_minus.iter().map(|m| &m.id));
+    let (mut running, mut resets) = (Vec::new(), Vec::new());
+    for id in ids {
+        let Some(meter) = layout.loudness_meter(id) else {
+            continue;
+        };
+        if running.len() <= meter {
+            running.resize(meter + 1, true);
+            resets.resize(meter + 1, 0);
+        }
+        let m = &state["loudness"][id];
+        running[meter] = m["running"].as_bool().unwrap_or(true);
+        resets[meter] = m["resets"].as_u64().unwrap_or(0) as u32;
+    }
+    (t.loudness_running, t.loudness_resets) = (running, resets);
+}
+
 /// What IS-05 activations set beside the state ([`crate::state::Mixer::engine_view`]):
 /// each channel's flows with the leg flows activations named, the
 /// channels whose receiver is disabled, and each output's enable.
@@ -476,10 +505,12 @@ pub struct EngineView {
 }
 
 impl EngineView {
-    /// [`targets`] of `state` read through this view.
+    /// [`targets`] of `state` read through this view, with the loudness
+    /// measurements' run flags and reset epochs ([`loudness`]).
     pub fn targets(&self, shape: &Shape, state: &Value) -> Targets {
         let mut t = targets(shape, &self.wiring, state);
         self.overlay(&mut t);
+        loudness(shape, state, &mut t);
         t
     }
 

@@ -152,7 +152,7 @@ impl Layout {
 
     /// The number the engine gives the measurement of bus, aux or
     /// mix-minus `id`: its first full-width output's, or after the
-    /// outputs its engine meter's ([`samplez::Engine::reset_loudness`]).
+    /// outputs its engine meter's ([`samplez::Entry::ResetLoudness`]).
     pub fn loudness_meter(&self, id: &str) -> Option<usize> {
         let at = self.ids.iter().position(|i| i == id)?;
         match self.elements[at] {

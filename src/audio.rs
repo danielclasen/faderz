@@ -22,7 +22,7 @@ use openraft::ServerState;
 use samplez::rt::ProcessStatus;
 use samplez::{
     Counters, DuckSetting, DuckTargets, Engine, Entry, EntryError, GainError, InputState,
-    InputStatus, Replication, Report, ResetError, Targets,
+    InputStatus, Replication, Report, Targets,
 };
 use samplez_dsp::{StripParam, WINDOW};
 use samplez_replica::Replica;
@@ -110,10 +110,10 @@ pub struct Audio {
     resent: AtomicU64,
     resend_pending: Gauge,
     inputs: Mutex<InputHealth>,
-    /// Per bus, aux or mix-minus, the resets the state counts and where
-    /// the last one this engine applied starts the measurement
-    /// ([`Audio::follow_resets`]).
-    resets: Mutex<BTreeMap<String, Resets>>,
+    /// Per loudness meter ([`Layout::loudness_meter`]), the resets the
+    /// state counts and where the last one this engine applied starts the
+    /// measurement.
+    resets: Mutex<BTreeMap<usize, Resets>>,
 }
 
 /// What the engine was sent: every coefficient, each input's flow, none
@@ -129,6 +129,12 @@ struct Sent {
     /// The duck groups and masks the engine holds, as targets; `None`
     /// after a resend asked for, when every setting and mask goes again.
     ducks: Option<Targets>,
+    /// The loudness run flags and reset epochs the engine was sent, as
+    /// targets ([`mix::loudness`]).
+    loudness: Targets,
+    /// Whether the engine holds the run flags of `loudness`: not after a
+    /// resend asked for, when every one goes again.
+    loudness_held: bool,
 }
 
 impl Sent {
@@ -140,6 +146,7 @@ impl Sent {
         self.matrix.iter_mut().flatten().for_each(|g| *g = f32::NAN);
         self.strips.iter_mut().flatten().for_each(|p| *p = None);
         self.ducks = None;
+        self.loudness_held = false;
         let status = engine.status();
         for (routed, input) in self.routed.iter_mut().zip(status.inputs) {
             *routed = (input.state != InputState::Detached).then_some(input.flow_id);
@@ -199,7 +206,6 @@ impl Audio {
         set: &Set,
     ) -> Result<SetEngine, String> {
         let timing = timing(&config, set);
-        let block = u64::from(config.block_size);
         for (input, flow) in config
             .inputs
             .iter_mut()
@@ -225,8 +231,6 @@ impl Audio {
         let bridge = EngineAudio::new(engine.clone(), statuses_rx, hashes_rx, &timing);
         let mut audio = Audio::new(engine, shape, state, ops);
         audio.replicated = true;
-        // Only a loudness reset is placed at an index from here.
-        audio.block = block;
         Ok(SetEngine {
             audio,
             bridge,
@@ -311,6 +315,11 @@ impl Audio {
         // The engine starts silent, its strips passing their input as it
         // is: the strips go first and the gains once their ramps are over,
         // so every output fades in processed. Ready from then on.
+        // Every measurement runs from the engine's start, and the resets
+        // the state counted before it are history.
+        let mut loudness = Targets::default();
+        mix::loudness(&self.shape, &state, &mut loudness);
+        loudness.loudness_running.clear();
         let mut sent = Sent {
             matrix: mix::matrix(&self.shape, &state)
                 .into_iter()
@@ -330,6 +339,8 @@ impl Audio {
                 ducks: vec![DuckTargets::default(); self.shape.ducks.len()],
                 ..Targets::default()
             }),
+            loudness,
+            loudness_held: true,
         };
         let view = crate::app::with_state(replica, |sm| sm.product.engine_view());
         self.apply(&state, &view, &mut sent, 0, true).await;
@@ -387,136 +398,63 @@ impl Audio {
         }
     }
 
-    /// Keeps the meter taps on a set's replicated state. A set's engine
-    /// follows the log through samplez-replica and [`Audio::follow`] does not
-    /// run, so nothing else updates them: without this every post-fader meter
-    /// stays at the fader, mute and VCA gains the replica started with. Wakes
-    /// on each applied revision, and every second besides, so a revision a
-    /// rebuild moved backwards cannot stall it. Never returns.
+    /// Keeps the meter taps and the loudness resets on a set's replicated
+    /// state. A set's engine follows the log through samplez-replica and
+    /// [`Audio::follow`] does not run, so nothing else updates them:
+    /// without this every post-fader meter stays at the fader, mute and
+    /// VCA gains the replica started with. Notes where each reset the
+    /// state machine derived starts its measurement: the last record that
+    /// resets a meter, a restamp's after the entry it moved. Wakes on each
+    /// applied revision, and every second besides, so a revision a rebuild
+    /// moved backwards cannot stall it. Never returns.
     pub async fn follow_taps(&self, replica: &Replica<Mixer>, mut revision: u64) {
         loop {
             tokio::select! {
                 () = replica.applied(revision + 1) => {}
                 () = tokio::time::sleep(Duration::from_secs(1)) => {}
             }
-            let (taps, at) = crate::app::with_state(replica, |sm| {
+            let (taps, at, counted, placed) = crate::app::with_state(replica, |sm| {
+                let placed: Vec<(usize, u64)> = (sm.records.values())
+                    .flat_map(|r| {
+                        (r.entries.iter()).filter_map(|e| match *e {
+                            Entry::ResetLoudness { meter } => Some((meter, r.at_index)),
+                            _ => None,
+                        })
+                    })
+                    .collect();
                 (
                     mix::meter_taps(&self.shape, sm.product.state()),
                     sm.revision,
+                    resets_of(sm.product.state()),
+                    placed,
                 )
             });
             revision = at;
             *self.taps.lock().expect("taps lock poisoned") = taps;
+            self.counted(&counted);
+            for (meter, at) in placed {
+                self.placed(meter, at);
+            }
         }
     }
 
-    /// Restarts a loudness measurement as the state counts a reset of it
-    /// (`/loudness/<id>/resets`), in a set of one or of more: each replica
-    /// restarts it at the `atIndex` of the delta that counted it, the same
-    /// sample on every replica, which the engine places at the first 100 ms
-    /// window starting at or after it. A replica that applies the delta
-    /// after the engine's earliest index restarts it at that index
-    /// instead, and says so. Never returns.
-    pub async fn follow_resets(&self, replica: &Replica<Mixer>, state: &Value, mut revision: u64) {
+    /// Notes the resets the state counts, `counted` by bus.
+    fn counted(&self, counted: &BTreeMap<String, u64>) {
         let layout = Layout::of(&self.shape);
-        let mut seen = resets_of(state);
-        self.counted(&seen);
-        loop {
-            tokio::select! {
-                () = replica.applied(revision + 1) => {}
-                () = tokio::time::sleep(Duration::from_secs(1)) => {}
-            }
-            // A revision moved backwards by a rebuild: the counts are
-            // the state's, and a reset below what was seen is not lost.
-            if crate::app::with_state(replica, |sm| sm.revision) < revision {
-                let (now, at) = state_of(replica);
-                revision = at;
-                seen = resets_of(&now);
-                self.counted(&seen);
-                continue;
-            }
-            let since = Position {
-                epoch: replica.epoch(),
-                revision,
-            };
-            // Each counted reset with the index it was counted at; none
-            // is known when the deltas are no longer held.
-            let mut due: Vec<(String, u64)> = Vec::new();
-            match replica.deltas_since(since).await {
-                Some(deltas) => {
-                    for d in deltas {
-                        revision = d.revision;
-                        let Ok(delta) = serde_json::from_str::<Value>(&d.text) else {
-                            continue;
-                        };
-                        let at = delta["atIndex"].as_u64().unwrap_or(0);
-                        for c in delta["changes"].as_array().into_iter().flatten() {
-                            let Some(id) = c["path"].as_str().and_then(reset_path) else {
-                                continue;
-                            };
-                            let n = c["value"].as_u64().unwrap_or(0);
-                            if n > seen.get(&id).copied().unwrap_or(0) {
-                                seen.insert(id.clone(), n);
-                                due.push((id, at));
-                            }
-                        }
-                    }
-                }
-                None => {
-                    let (state, at) = state_of(replica);
-                    revision = at;
-                    for (id, n) in resets_of(&state) {
-                        if n > seen.get(&id).copied().unwrap_or(0) {
-                            seen.insert(id.clone(), n);
-                            due.push((id, 0));
-                        }
-                    }
-                }
-            }
-            // Counted once placed: a counters read before it would see a
-            // reset counted and not applied, and one the engine refuses
-            // leaves the measurement as it was.
-            for (id, at) in due {
-                if self.reset_loudness(&layout, &id, at).await {
-                    let n = seen[&id];
-                    self.counted(&BTreeMap::from([(id, n)]));
-                }
-            }
-        }
-    }
-
-    /// Notes the resets the state counts, `seen`, per bus.
-    fn counted(&self, seen: &BTreeMap<String, u64>) {
         let mut resets = self.resets.lock().expect("resets lock poisoned");
-        for (id, &n) in seen {
-            resets.entry(id.clone()).or_default().counted = n;
+        for (id, &n) in counted {
+            if let Some(meter) = layout.loudness_meter(id) {
+                resets.entry(meter).or_default().counted = n;
+            }
         }
     }
 
-    /// Restarts the measurement of bus `id` at `at` rounded up to a block,
-    /// or at the engine's earliest index when that is later, and notes
-    /// where it starts then; a reset the engine refuses notes nothing.
-    /// Whether it was placed.
-    async fn reset_loudness(&self, layout: &Layout, id: &str, at: u64) -> bool {
-        debug_assert!(self.block > 0, "a block size to place the reset in");
-        let Some(meter) = layout.loudness_meter(id) else {
-            tracing::warn!(id, "a loudness reset of an element no meter measures");
-            return false;
-        };
-        loop {
-            match place(at, self.block, |at| self.engine.reset_loudness(meter, at)) {
-                Ok(placed) => {
-                    let mut resets = self.resets.lock().expect("resets lock poisoned");
-                    resets.entry(id.to_owned()).or_default().at = Some(placed);
-                    return true;
-                }
-                Err(ResetError::Full) => tokio::time::sleep(FULL_RETRY).await,
-                Err(e) => {
-                    tracing::warn!(id, "loudness reset refused: {e}");
-                    return false;
-                }
-            }
-        }
+    /// Notes a reset of `meter` the engine takes at `at`: it starts the
+    /// measurement at the first 100 ms window at or after it.
+    fn placed(&self, meter: usize, at: u64) {
+        let mut resets = self.resets.lock().expect("resets lock poisoned");
+        let start = &mut resets.entry(meter).or_default().at;
+        *start = (*start).max(Some(at.next_multiple_of(WINDOW)));
     }
 
     /// Sends the engine every strip parameter, duck setting, duck mask and
@@ -621,6 +559,35 @@ impl Audio {
                 }
             }
         }
+        // A pause, a run again and a reset counted, as the engine's own
+        // log entries; after a resend asked for, every run flag again.
+        let next = Targets {
+            loudness_running: targets.loudness_running,
+            loudness_resets: targets.loudness_resets,
+            ..Targets::default()
+        };
+        let mut entries = sent.loudness.diff(&next);
+        if !sent.loudness_held {
+            entries.retain(|e| matches!(e, Entry::ResetLoudness { .. }));
+            entries.extend(next.assert(&[], None));
+        }
+        for entry in entries {
+            match entry {
+                Entry::LoudnessRun { meter, running } => {
+                    let set = |at| self.engine.set_loudness_running(meter, running, at);
+                    self.send(&mut at, set).await;
+                }
+                Entry::ResetLoudness { meter } => {
+                    let reset = |at| self.engine.reset_loudness(meter, at);
+                    if self.send(&mut at, reset).await {
+                        self.placed(meter, at);
+                    }
+                }
+                _ => {}
+            }
+        }
+        (sent.loudness, sent.loudness_held) = (next, true);
+        self.counted(&resets_of(state));
         if settle {
             at = (at + self.ramp).next_multiple_of(self.block);
         }
@@ -755,7 +722,11 @@ impl Audio {
                 "gaps": meters.gaps,
                 "lost": meters.lost,
                 "since": meters.since.map(|i| utc_of(i, now)),
-                "restarted": restarted(meters.since, resets.get(id).copied().unwrap_or_default(), now),
+                "restarted": restarted(
+                    meters.since,
+                    resets.get(&meter).copied().unwrap_or_default(),
+                    now,
+                ),
             }))
         })
         .collect()
@@ -865,32 +836,6 @@ struct Resets {
     /// the first 100 ms window at or after the index the engine took it
     /// at; none before the first.
     at: Option<u64>,
-}
-
-/// Asks `reset` to take a reset at `at` rounded up to a block of `block`,
-/// and again at the earliest index each refusal as too near names: where
-/// it starts the measurement, the first 100 ms window at or after the
-/// index taken, or the refusal that is not too near.
-fn place(
-    at: u64,
-    block: u64,
-    mut reset: impl FnMut(u64) -> Result<(), ResetError>,
-) -> Result<u64, ResetError> {
-    let mut at = at.next_multiple_of(block);
-    loop {
-        match reset(at) {
-            Ok(()) => return Ok(at.next_multiple_of(WINDOW)),
-            Err(ResetError::TooNear { at_index, earliest }) => {
-                tracing::warn!(
-                    at_index,
-                    earliest,
-                    "the loudness reset applies late, at the engine's earliest index"
-                );
-                at = earliest.next_multiple_of(block);
-            }
-            Err(e) => return Err(e),
-        }
-    }
 }
 
 /// How long after the index a reset starts at a measurement that has not
@@ -1275,12 +1220,6 @@ fn input_entry(slot: u32, up: bool) -> Body {
     }
 }
 
-/// The bus a write path `/loudness/<id>/resets` names.
-fn reset_path(path: &str) -> Option<String> {
-    let id = path.strip_prefix("/loudness/")?.strip_suffix("/resets")?;
-    (!id.contains('/')).then(|| id.to_owned())
-}
-
 /// Each measurement's reset count in `state`.
 fn resets_of(state: &Value) -> BTreeMap<String, u64> {
     (state["loudness"].as_object().into_iter().flatten())
@@ -1335,31 +1274,6 @@ mod tests {
         assert!(!restarted(Some(at - WINDOW), applied, later - 1));
     }
 
-    /// A reset the engine takes where asked starts at the window at or
-    /// after that index; one too near is taken at the engine's earliest
-    /// index and starts at the window there, which is what is noted; a
-    /// refused one notes nothing.
-    #[test]
-    fn a_late_reset_starts_where_the_engine_took_it() {
-        let block = 48;
-        assert_eq!(place(4801, block, |_| Ok(())), Ok(2 * WINDOW));
-        let mut asked = Vec::new();
-        let late = place(4800, block, |at| {
-            asked.push(at);
-            match asked.len() {
-                1 => Err(ResetError::TooNear {
-                    at_index: at,
-                    earliest: 3 * WINDOW + 7,
-                }),
-                _ => Ok(()),
-            }
-        });
-        assert_eq!(asked, [4800, 3 * WINDOW + 48]);
-        assert_eq!(late, Ok(4 * WINDOW));
-        let refused = place(4800, block, |_| Err(ResetError::Invalid("no meter".into())));
-        assert!(matches!(refused, Err(ResetError::Invalid(_))));
-    }
-
     /// A start on libmxl's clock reads as the UTC time that far back from
     /// now, within the time the two clock reads take.
     #[test]
@@ -1383,11 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_path_names_its_bus() {
-        assert_eq!(reset_path("/loudness/pgm/resets").as_deref(), Some("pgm"));
-        assert_eq!(reset_path("/loudness/pgm/running"), None);
-        assert_eq!(reset_path("/loudness/pgm/x/resets"), None);
-        assert_eq!(reset_path("/tally/pgm/resets"), None);
+    fn the_resets_counted_name_their_bus() {
         let state = json!({ "loudness": { "a": { "running": true }, "b": { "resets": 3 } } });
         assert_eq!(
             resets_of(&state),

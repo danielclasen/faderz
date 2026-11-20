@@ -19,10 +19,11 @@ use crate::duck;
 use crate::mix::{self, Wiring};
 use crate::shape::Shape;
 
-/// The version of how [`Mixer::targets`] derives engine targets from the
-/// state, in [`Mixer::config_hash`]: a change to the derivation that
-/// gives other targets for one state takes another version, so replicas
-/// deriving differently never form one set.
+/// The version of how a command applies, how [`Mixer::targets`] derives
+/// engine targets from the state, and what save and load produce
+/// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
+/// change to any of them takes another version, so replicas deriving
+/// differently never run side by side.
 pub const DERIVATION_VERSION: u32 = 4;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
@@ -1803,6 +1804,7 @@ fn snapshot_text(shape: &Shape, state: &Value, owners: &Value) -> String {
 impl Product for Mixer {
     type Change = Edits;
 
+    const DERIVATION_VERSION: u32 = crate::state::DERIVATION_VERSION;
     const DRIVES_ENGINE: bool = true;
 
     /// A command that switches an input is refused as [`Answer::Refused`]
@@ -1852,11 +1854,13 @@ impl Product for Mixer {
         }
     }
 
-    /// [`mix::targets`] of the state, as every write keeps them; none
-    /// without an engine's wiring.
+    /// [`mix::targets`] of the state, as every write keeps them, with
+    /// the loudness measurements' run flags and reset epochs
+    /// ([`mix::loudness`]); none without an engine's wiring.
     fn targets(&self) -> Option<Targets> {
         let mut t = self.derived.as_ref()?.targets().clone();
         self.overlay(&mut t);
+        mix::loudness(self.shape(), self.state(), &mut t);
         Some(t)
     }
 

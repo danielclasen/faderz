@@ -624,14 +624,20 @@ async fn duck_groups_are_set_through_the_api() {
 
 /// The build a replica names, on the WebSocket and over REST, is the one
 /// it was built from: the crate's version, and the samplez release that
-/// Cargo.lock pins and that the samplez crate linked in says it is.
+/// Cargo.lock pins.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_replica_names_the_build_cargo_lock_pins() {
     let lock = include_str!("../Cargo.lock");
-    let source = (lock.split("[[package]]"))
+    let entry = (lock.split("[[package]]"))
         .find(|p| p.lines().any(|l| l.trim() == r#"name = "samplez""#))
-        .and_then(|p| p.lines().find_map(|l| l.trim().strip_prefix("source = ")))
-        .expect("Cargo.lock pins samplez from git");
+        .expect("Cargo.lock has the samplez package");
+    let field = |key: &str| {
+        (entry.lines())
+            .find_map(|l| l.trim().strip_prefix(key)?.strip_prefix(" = "))
+            .map(|v| v.trim_matches('"'))
+    };
+    let source = field("source").expect("Cargo.lock pins samplez from git");
+    let pinned = field("version").expect("the samplez entry has a version");
     let dir = data_dir();
     let server = start(&dir).await;
     let mut a = Client::connect(&server, SESSION_A).await;
@@ -644,11 +650,11 @@ async fn a_replica_names_the_build_cargo_lock_pins() {
     match samplez.split_once('+') {
         // A commit no tag names: the version, and the commit pinned.
         Some((version, commit)) => {
-            assert_eq!(version, samplez::ENGINE_VERSION);
+            assert_eq!(version, pinned);
             assert!(source.contains(&format!("#{commit}")), "{source}");
         }
         None => {
-            assert_eq!(samplez, samplez::ENGINE_VERSION);
+            assert_eq!(samplez, pinned);
             assert!(source.contains(&format!("?tag=v{samplez}#")), "{source}");
         }
     }
