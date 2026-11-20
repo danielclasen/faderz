@@ -1006,8 +1006,17 @@ pub(crate) mod tests {
     /// An App over a fresh replica of two channels, its [`App::publish`]
     /// loop not running, and the data directory to remove after.
     pub(crate) async fn app() -> (Arc<App>, PathBuf) {
-        let deps = std::env::current_exe().unwrap();
-        let dir = deps.parent().unwrap().join(format!(
+        // On tmpfs: on the disk the builds write to, one fsync of the log
+        // can outlast the 2 s a write waits to commit, and a test's write
+        // is refused under load.
+        let shm = std::path::Path::new("/dev/shm");
+        let base = if shm.is_dir() {
+            shm.to_path_buf()
+        } else {
+            let exe = std::env::current_exe().unwrap();
+            exe.parent().unwrap().to_path_buf()
+        };
+        let dir = base.join(format!(
             "faderz-app-{}-{}",
             std::process::id(),
             DIRS.fetch_add(1, Ordering::Relaxed)
@@ -1175,7 +1184,7 @@ pub(crate) mod tests {
         pending
             .submit(serde_json::to_vec(&touch).unwrap().into())
             .await
-            .unwrap();
+            .expect("the touch commits");
         app.request(owner("s-b"), json!({ "name": "b" }), path.into())
             .await;
         // The holder gets the touch's delta, then the request.
