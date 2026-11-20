@@ -11,6 +11,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { Change, CommandResult, TallyState } from '../../src/lib/contract/types.ts';
 import { BUILD, CHANGELOG, Cluster, CommandError, type Replica } from './cluster.ts';
 
+/** How long /__mock/stall-close leaves a socket closing before it ends. */
+const STALL_CLOSE_MS = 5_000;
 const API = '/api/v1';
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -418,6 +420,9 @@ export class MockServer {
       for (const ws of this.sockets) {
         raw(ws).write(Buffer.from([0x88, 0x00]));
         raw(ws).pause();
+        // Then the link is gone: the connection ends, and with it the
+        // mock's record of it.
+        setTimeout(() => raw(ws).destroy(), STALL_CLOSE_MS);
       }
       return send(200, { ok: true, sockets: this.sockets.size });
     }

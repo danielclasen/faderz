@@ -523,8 +523,10 @@ test('connects on its first socket over a link whose requests and upgrade take 4
 
 // On a slow link a socket can sit closing for a while before its close
 // event: the worker sent its heartbeat on it every beat, and the browser
-// logged "WebSocket is already in CLOSING or CLOSED state" each time.
-test('a socket left closing sends nothing more, logs nothing and the page reconnects', { tag: '@mock' }, async ({ page, request }) => {
+// logged "WebSocket is already in CLOSING or CLOSED state" each time. The
+// unit test proves no send on a closing socket; this one, whose console
+// may not carry the worker's messages, that the page goes on live.
+test('every socket left closing, the page goes on live with no WebSocket error on its console', { tag: '@mock' }, async ({ page, request }) => {
   const logged: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error' || m.type() === 'warning') logged.push(m.text());
