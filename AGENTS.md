@@ -63,25 +63,34 @@ else, apart from adapting to its API.
 
 ## Rolling upgrades
 
-A set rolls pod by pod. A release that changes only the UI, the API shape
-or logging must roll with no gap in the output. What decides whether
-replicas of two releases can share a set:
+A set rolls pod by pod. Whether replicas of two releases can share a set
+is decided by the versions and by the configuration hash.
 
-- `DERIVATION_VERSION` (`src/state.rs`). Raise it whenever the same log
-  would derive a different state or different engine entries: a change in
-  how a command applies, in target derivation, or in what save and load
-  produce. Do not raise it for anything else. Any change to `apply`,
-  target derivation, `save` or `load` is reviewed for it.
-- The configuration hash, which every replica of a set must share. A hash
-  that changes mid-roll leaves the set with mixed hashes and stalls it.
-  The hash takes the derivation version as one of its inputs, at 4. Once
-  samplez takes the derivation version as `Product::DERIVATION_VERSION`,
-  faderz gives it there. The literal 4 then stays frozen in the hash input
-  and never moves again, and a test pins the hash for a fixed
+- The versions are samplez's compute and protocol versions and faderz's
+  derivation version, `DERIVATION_VERSION` in `src/state.rs`. A release
+  that raises none of them rolls pod by pod with no gap in the output. A
+  raised version makes the rollout a hand-over at the first new pod,
+  hitless, from one committer to the next. A samplez bump can raise the
+  compute or protocol version even when faderz changes nothing else.
+- Raise the derivation version whenever the same log would derive a
+  different state or different engine entries: a change in how a command
+  applies, in target derivation, in what save and load produce, or in the
+  state's saved encoding. Do not raise it for anything else. Any change
+  to `apply`, target derivation, `save` or `load` is reviewed for it.
+- The configuration hash, which every replica of a set must share: a
+  hash that changes mid-roll leaves the set with mixed hashes and stalls
+  it. It takes no build or crate version. It takes the derivation version
+  as one of its inputs, at 4. Once samplez takes the derivation version
+  as `Product::DERIVATION_VERSION`, faderz gives it there. The literal 4
+  then stays frozen in the hash input and never moves again, like any
+  other input the hash takes, and a test pins the hash for a fixed
   configuration.
+- `libm` is pinned exactly, and `Cargo.lock` is committed and every build
+  is `--locked`: another `libm` can compute other bits under unchanged
+  versions.
 
 A console keeps the UI it was loaded from. When the replica serving it
-reports another build, it asks the operator to reload.
+reports a newer build, it asks the operator to reload.
 
 ## Build and test
 
