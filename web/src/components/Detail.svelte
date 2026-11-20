@@ -2,7 +2,7 @@
   import { pendingWrite } from '../lib/pending';
   import type { BusState, ChannelState, EqBandType, RecallGroup, Solo, StereoImage, Tap } from '../lib/contract/types';
   import { TAPS, TAP_KEY, TAP_LABEL } from '../lib/audio/taps';
-  import { LAYOUT_LABELS, RECALL_GROUPS, SCRIBBLE_COLORS } from '../lib/contract/types';
+  import { LAYOUT_LABELS, RECALL_GROUPS, SCRIBBLE_COLORS, TONE_FREQUENCY_HZ, TONE_INPUT_LEVEL_DB } from '../lib/contract/types';
   import { onMount } from 'svelte';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { pointer } from '../lib/state/pointer';
@@ -133,6 +133,15 @@
             >
           {/each}
         </div>
+      {/if}
+      {#if ch?.tone}
+        <!-- A tone channel's generator, in place of an input source: it reads no flow. -->
+        <div class="row" role="group" aria-label={`${element.name} line-up tone`} data-section="tone">
+          <span class="lbl">Tone</span>
+          <button {@attach pendingWrite(mixer, p('tone', 'ident'))} class="key" aria-disabled={mixer.locked} aria-pressed={ch.tone.ident} onclick={() => toggle('tone', 'ident')} title="Stops the tone on one leg at a time to identify the legs">IDENT</button>
+        </div>
+        <Param path={p('tone', 'frequency')} label="Tone" min={TONE_FREQUENCY_HZ.min} max={TONE_FREQUENCY_HZ.max} step={1} log format={(v) => `${formatFreq(v)} Hz`} />
+        <Param path={p('tone', 'level')} label="Level" min={TONE_INPUT_LEVEL_DB.min} max={TONE_INPUT_LEVEL_DB.max} unit=" dBFS" />
       {/if}
       {#if channel?.altInput}
         <div class="taps" role="radiogroup" aria-label={`${element.name} input source`}>

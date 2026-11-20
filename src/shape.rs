@@ -49,6 +49,19 @@ pub struct ChannelShape {
     /// samples, from `mxl.inputs.<id>.maxDelayMs`; none without a line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_delay: Option<u32>,
+    /// The line-up tone generator the channel's input is, from
+    /// `mxl.inputs.<id>.tone`; none for a channel reading a flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<ChannelTone>,
+}
+
+/// A tone channel's generator as configured: the frequency, Hz, and the
+/// level, dBFS sample peak, it starts at.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelTone {
+    pub frequency: u32,
+    pub level: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -261,8 +274,9 @@ impl Shape {
         self.buses.iter().any(|e| e.id == id) || self.auxes.iter().any(|e| e.id == id)
     }
 
-    /// The live state of an empty start: input channels closed, buses at
-    /// 0 dB, nothing muted, every channel routed to every bus, sends off,
+    /// The live state of an empty start: input channels closed, a tone
+    /// channel's generator as configured with no ident, buses at 0 dB,
+    /// nothing muted, every channel routed to every bus, sends off,
     /// processing off, the monitor on the first bus, EBU R 68 and R 128
     /// metering with every loudness measurement running, duck groups as
     /// [`duck::initial_state`] sets them, no scenes and no tally.
@@ -314,7 +328,7 @@ impl Shape {
                             .map(|b| (b.id.clone(), json!(true)))
                             .collect(),
                     );
-                    let state = json!({
+                    let mut state = json!({
                         "input": "a",
                         "color": "none",
                         "trim": 0,
@@ -343,6 +357,10 @@ impl Shape {
                         "sends": sends,
                         "routes": routes,
                     });
+                    if let Some(t) = c.tone {
+                        state["tone"] =
+                            json!({ "frequency": t.frequency, "level": t.level, "ident": false });
+                    }
                     (c.id.clone(), state)
                 })
                 .collect(),

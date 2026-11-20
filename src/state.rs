@@ -4228,6 +4228,26 @@ mod tests {
         assert!(pgm_left_is(gains[0][0], 0.0), "ch1 stays open");
     }
 
+    /// [`wide_with`] with ch4 a tone channel at 440 Hz, -20 dBFS, wired
+    /// to no flow.
+    fn wide_toned(fold: bool) -> Mixer {
+        let m = wide_with(fold);
+        let mut shape = m.shape().clone();
+        let slot = (shape.channels.iter().position(|c| c.id == "ch4")).unwrap();
+        shape.channels[slot].alt_input = false;
+        shape.channels[slot].tone = Some(crate::shape::ChannelTone {
+            frequency: 440,
+            level: -20.0,
+        });
+        let mut wiring = m.wiring.clone();
+        wiring[slot] = Wiring {
+            a: String::new(),
+            b: None,
+            domain: String::new(),
+        };
+        Mixer::configured(shape, Vec::new(), wiring)
+    }
+
     /// The small shape with more channels, a 5.1 one among them, a
     /// second VCA, a stereo aux and a direct out, each channel wired to
     /// flows of its own in one domain.
@@ -4307,7 +4327,7 @@ mod tests {
             let some = |next: &mut dyn FnMut(u64) -> u64| -> Value {
                 json!(channels.iter().filter(|_| next(3) == 0).collect::<Vec<_>>())
             };
-            match next(40) {
+            match next(41) {
                 0 => (format!("/channels/{ch}/fader"), db),
                 1 => (format!("/channels/{ch}/mute"), flag),
                 2 => (
@@ -4437,6 +4457,18 @@ mod tests {
                 // Within ch3's and c51's lines; any but 0 is refused on
                 // the others.
                 38 => (format!("/channels/{ch}/delay"), json!(next(3) * 480)),
+                // ch4 is a tone channel; the others have no tone to write.
+                39 => match next(3) {
+                    0 => (
+                        format!("/channels/{ch}/tone/frequency"),
+                        json!(20 + next(19_981)),
+                    ),
+                    1 => (
+                        format!("/channels/{ch}/tone/level"),
+                        json!(-(next(601) as f64) / 10.0),
+                    ),
+                    _ => (format!("/channels/{ch}/tone/ident"), flag),
+                },
                 _ => ("/metering/loudness/preset".into(), json!("atsc")),
             }
         };
@@ -4444,7 +4476,7 @@ mod tests {
         let mut changed = 0;
         for round in 0..150 {
             let fold = round % 2 == 1;
-            let mut m = wide_with(fold);
+            let mut m = wide_toned(fold);
             let mut scenes: Vec<String> = Vec::new();
             for step in 0..60 {
                 seq += 1;
@@ -4507,7 +4539,7 @@ mod tests {
                     }
                     _ => {
                         let before = m.targets().unwrap();
-                        let mut loaded = wide_with(fold);
+                        let mut loaded = wide_toned(fold);
                         loaded.load(&m.save()).unwrap();
                         assert_eq!(
                             format!("{:?}", loaded.targets()),
@@ -4531,6 +4563,7 @@ mod tests {
                 );
                 assert_eq!(kept.flows, whole.flows, "{at}");
                 assert_eq!(kept.delays, whole.delays, "{at}");
+                assert_eq!(kept.tones, whole.tones, "{at}");
                 assert_eq!(
                     format!("{:?}", kept.ducks),
                     format!("{:?}", whole.ducks),
@@ -4954,6 +4987,121 @@ mod tests {
         let mut same = delayed(960);
         same.load(&m.save()).unwrap();
         assert_eq!(same.targets().unwrap().delays, [960, 0, 0]);
+    }
+
+    /// `wired` with st1 a tone channel starting at 440 Hz, -20 dBFS, as
+    /// the configuration wires one: to no flow.
+    fn toned() -> Mixer {
+        let m = wired();
+        let mut shape = m.shape().clone();
+        shape.channels[2].tone = Some(crate::shape::ChannelTone {
+            frequency: 440,
+            level: -20.0,
+        });
+        let mut wiring = m.wiring.clone();
+        wiring[2] = Wiring {
+            a: String::new(),
+            b: None,
+            domain: String::new(),
+        };
+        Mixer::configured(shape, Vec::new(), wiring)
+    }
+
+    /// A tone channel's generator is its input slot's tone target, from
+    /// the state's `tone`, which starts as configured, and the slot reads
+    /// no flow; other slots have none. A write reaches the engine as one
+    /// `Tone` entry. The state takes exactly samplez's ranges: a value
+    /// past one is refused, never clamped, and a channel reading a flow
+    /// has no tone to write. A load keeps a saved tone, and a state
+    /// saved without one starts the generator as configured.
+    #[test]
+    fn a_tone_channels_generator_is_its_input_slots_tone() {
+        use samplez_dsp::{TONE_FREQUENCY_HZ, TONE_LEVEL_DB, ToneParams};
+        let mut m = toned();
+        check(&contract().state, m.state()).unwrap();
+        let before = m.targets().unwrap();
+        let tone = |frequency_hz, level_db, ident| ToneParams {
+            frequency_hz,
+            level_db,
+            ident,
+        };
+        assert_eq!(before.tones, [None, None, Some(tone(440, -20.0, false))]);
+        assert_eq!(
+            before.flows,
+            flows(&["a1", "a2"])
+                .into_iter()
+                .chain([None])
+                .collect::<Vec<_>>()
+        );
+        assert!(!m.engine_view().detached[2], "not an IS-05 detach");
+        assert_ne!(m.config_hash(), wired().config_hash());
+
+        patch(
+            &mut m,
+            "p1",
+            &[
+                ("/channels/st1/tone/frequency", json!(1000)),
+                ("/channels/st1/tone/level", json!(-6.5)),
+                ("/channels/st1/tone/ident", json!(true)),
+            ],
+        );
+        let after = m.targets().unwrap();
+        assert_eq!(after.tones[2], Some(tone(1000, -6.5, true)));
+        let whole = mix::targets(m.shape(), &m.wiring, m.state());
+        assert_eq!(
+            after.tones, whole.tones,
+            "kept as derived from the whole state"
+        );
+        let entries: Vec<String> = (before.diff(&after).iter())
+            .map(|e| format!("{e:?}"))
+            .collect();
+        assert_eq!(
+            entries,
+            ["Tone { slot: 2, frequency_hz: 1000, level_db: -6.5, ident: true }"]
+        );
+
+        let (hz, db) = (TONE_FREQUENCY_HZ, TONE_LEVEL_DB);
+        let path = |leaf: &str| format!("/channels/st1/tone/{leaf}");
+        for (leaf, value) in [
+            ("frequency", json!(hz.start())),
+            ("frequency", json!(hz.end())),
+            ("level", json!(db.start())),
+            ("level", json!(db.end())),
+        ] {
+            m.check_write(&path(leaf), &value).unwrap();
+        }
+        for (leaf, value) in [
+            ("frequency", json!(hz.start() - 1)),
+            ("frequency", json!(hz.end() + 1)),
+            ("frequency", json!(440.5)),
+            ("level", json!(f64::from(*db.start()) - 0.01)),
+            ("level", json!(f64::from(*db.end()) + 0.01)),
+            ("ident", json!(1)),
+        ] {
+            match m.check_write(&path(leaf), &value) {
+                Err(Answer::Invalid { .. }) => {}
+                other => panic!("{leaf} {value}: {other:?}"),
+            }
+        }
+        patch(&mut m, "p2", &[("/channels/st1/tone/level", json!(3))]);
+        assert_eq!(
+            at(&m, "/channels/st1/tone/level"),
+            &json!(-6.5),
+            "not clamped"
+        );
+        for path in ["/channels/ch1/tone/level", "/tone/frequency"] {
+            match m.check_write(path, &json!(-6)) {
+                Err(Answer::NotFound { .. }) => {}
+                other => panic!("{path}: {other:?}"),
+            }
+        }
+
+        let mut loaded = toned();
+        loaded.load(&m.save()).unwrap();
+        assert_eq!(loaded.targets().unwrap().tones, after.tones);
+        let mut fresh = toned();
+        fresh.load(&wired().save()).unwrap();
+        assert_eq!(fresh.targets().unwrap().tones, before.tones);
     }
 
     /// A scene's delay that the channel's line, shortened since the scene

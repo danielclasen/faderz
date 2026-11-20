@@ -1614,6 +1614,93 @@ fn every_replica_applies_a_bus_limiter_alike() {
     }
 }
 
+/// A tone channel's generator is replicated state: through level,
+/// frequency and ident writes sent to each replica in turn, every replica
+/// writes the same bits, and each write moves the programme's level.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_plays_a_tone_channel_alike() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "tn", "name": "Tone", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let inputs = json!({ "tn": { "tone": { "frequency": 1000, "level": -12 } } });
+    let (set, listeners) = Set::with("tone", shape, &["out-pgm"], |_| (Vec::new(), inputs));
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
+    let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
+    let from = Outputs::now() + 1;
+    write(
+        &nodes,
+        0,
+        &[
+            ("/buses/pgm/fader", json!(0)),
+            ("/channels/tn/fader", json!(0)),
+            ("/channels/tn/routes/pgm", json!(true)),
+        ],
+    );
+    let writes = [
+        ("/channels/tn/tone/level", json!(-6)),
+        ("/channels/tn/tone/frequency", json!(440)),
+        ("/channels/tn/tone/ident", json!(true)),
+        ("/channels/tn/tone/level", json!(-20.5)),
+        ("/channels/tn/tone/ident", json!(false)),
+        ("/channels/tn/tone/frequency", json!(1500)),
+    ];
+    for (i, (path, value)) in writes.into_iter().enumerate() {
+        // Long enough for every replica to play each setting a while.
+        std::thread::sleep(Duration::from_millis(400));
+        write(&nodes, i % REPLICAS, &[(path, value)]);
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    for a in 0..REPLICAS {
+        for b in a + 1..REPLICAS {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let c = loop {
+                let c = outputs.compare(a, b, from);
+                if c.compared >= 2_500 || Instant::now() >= deadline {
+                    break c;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            };
+            assert!(
+                c.compared >= 2_500 && c.differing.is_empty(),
+                "replicas {a} and {b}: {c:?}: {}",
+                states(&nodes)
+            );
+            // Silence before the fader opens, then the tone at three
+            // levels, half of it while a leg is cut.
+            assert!(c.levels.len() >= 5, "the writes moved nothing: {c:?}");
+            assert!(
+                c.levels.last().is_some_and(|&l| l > -3_000),
+                "no tone: {c:?}"
+            );
+        }
+    }
+    outputs.stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
+    for node in nodes.into_iter().flatten() {
+        node.kill();
+    }
+}
+
 /// A channel's delay is replicated state: every replica plays a pulse on
 /// the input exactly that many samples late, and at 0 not late at all,
 /// the three writing the same bits.

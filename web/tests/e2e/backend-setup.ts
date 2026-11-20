@@ -9,8 +9,12 @@ import { BACKEND_URL } from '../../playwright.config';
 const HEADERS = { 'X-Samplez-Request': '1', 'Content-Type': 'application/json' };
 /** Changes per PATCH: one command stays well within what the backend orders in one entry. */
 const CHUNK = 100;
-/** Parts of the state only the server writes, or that this setup writes otherwise. */
-const SERVER_SIDE = /^\/(tally|scenes|consoles|sceneRecalled)(\/|$)|^\/afv\/[^/]+\/open$|^\/loudness\/[^/]+\/resets$/;
+/**
+ * Parts of the state only the server writes, or that this setup writes
+ * otherwise, and a tone channel's generator, which the backend has none
+ * of without an engine (configShape).
+ */
+const SERVER_SIDE = /^\/(tally|scenes|consoles|sceneRecalled)(\/|$)|^\/afv\/[^/]+\/open$|^\/loudness\/[^/]+\/resets$|^\/channels\/[^/]+\/tone\//;
 
 /** Writable leaves: an array of strings (an id set) is one leaf, other arrays one per leg. */
 function leaves(value: unknown, base: string, out: Array<{ path: string; value: unknown }>): void {

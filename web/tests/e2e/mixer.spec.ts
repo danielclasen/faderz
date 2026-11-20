@@ -37,7 +37,7 @@ test.afterEach(async ({ request }) => resetMock(request));
 
 test('loads the mixer from a snapshot and streams meters', { tag: '@meters' }, async ({ page }) => {
   await live(page);
-  await expect(page.locator('[data-channel]')).toHaveCount(29);
+  await expect(page.locator('[data-channel]')).toHaveCount(30);
   await expect(page.locator('[data-master]')).toHaveCount(4);
   await expect(page.getByRole('button', { name: 'Pres 1 mute' })).toBeVisible();
   expect(await uiFontLoaded(page)).toBe(true);
@@ -555,6 +555,51 @@ test('shows a channel delay range in the selected unit and refuses an entry past
   await settled(page);
   expect((await serverState(request)).state.channels['st1']!.delay).toBe(4800);
   await patch(request, '/channels/st1/delay', 0);
+});
+
+// The backend runs without an engine, so no channel there is a tone
+// generator (configShape).
+test("a tone channel's strip shows TONE, and its panel sets frequency, level and ident and refuses a value past its range", { tag: '@mock' }, async ({ page, request }) => {
+  await live(page);
+  const tag = page.getByTestId('tone-lu');
+  await expect(tag).toContainText('TONE 1.00k');
+  await page.locator('[data-channel="lu"] .head').click();
+  const panel = page.getByRole('region', { name: 'Line-up processing' });
+  await expect(panel.getByRole('radiogroup', { name: 'Line-up input source' })).toHaveCount(0);
+  const frequency = panel.getByRole('textbox', { name: 'Tone value, type to set' });
+  await frequency.fill('440');
+  await frequency.press('Enter');
+  const level = panel.getByRole('textbox', { name: 'Level value, type to set' });
+  await level.fill('-20');
+  await level.press('Enter');
+  await panel.getByRole('button', { name: 'IDENT' }).click();
+  await settled(page);
+  expect((await serverState(request)).state.channels['lu']!.tone).toEqual({ frequency: 440, level: -20, ident: true });
+  await expect(tag).toContainText('TONE 440 ID');
+  // Past samplez's range: refused, never clamped.
+  await frequency.fill('25000');
+  await frequency.press('Enter');
+  await expect(page.getByTestId('notice')).toContainText('Tone takes 20 to 20000');
+  await expect(frequency).toHaveValue('  440 Hz');
+  await level.fill('3');
+  await level.press('Enter');
+  await expect(page.getByTestId('notice')).toContainText('Level takes -60 to 0 dBFS');
+  await settled(page);
+  expect((await serverState(request)).state.channels['lu']!.tone).toEqual({ frequency: 440, level: -20, ident: true });
+  await patch(request, '/channels/lu/tone/frequency', 1000);
+  await patch(request, '/channels/lu/tone/level', -18);
+  await patch(request, '/channels/lu/tone/ident', false);
+});
+
+test('a channel reading a flow shows its source and no tone controls', async ({ page }) => {
+  await live(page);
+  await expect(page.locator('[data-channel="ch1"] .head')).toContainText('Studio mic 1');
+  await expect(page.locator('[data-channel="ch1"] [data-testid="tone-ch1"]')).toHaveCount(0);
+  await page.locator('[data-channel="ch1"] .head').click();
+  const panel = page.getByRole('region', { name: 'Pres 1 processing' });
+  await expect(panel.getByRole('textbox', { name: 'Trim value, type to set' })).toBeVisible();
+  await expect(panel.getByRole('group', { name: 'Pres 1 line-up tone' })).toHaveCount(0);
+  await expect(panel.getByRole('textbox', { name: 'Tone value, type to set' })).toHaveCount(0);
 });
 
 test('greys out the delay of a channel without a delay line and leaves a bus delay as it was', async ({ page, request }) => {

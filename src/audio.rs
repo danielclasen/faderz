@@ -23,7 +23,7 @@ use samplez::{
     Counters, DuckSetting, DuckTargets, Engine, Entry, EntryError, Fade, GainError, InputState,
     InputStatus, Replication, Report, Targets,
 };
-use samplez_dsp::{StripParam, WINDOW};
+use samplez_dsp::{StripParam, ToneParams, WINDOW};
 use samplez_replica::Replica;
 use samplez_replica::bridge::EngineAudio;
 use samplez_replica::contact::Timing;
@@ -76,11 +76,12 @@ pub fn timing(engine: &samplez::Config, set: &Set) -> Timing {
 }
 
 /// The flow each channel reads at start, as the state sets it: none for a
-/// channel IS-05 detached, so the engine opens no reader for it.
+/// channel IS-05 detached or a tone channel, so the engine opens no
+/// reader for it.
 fn start_flows(shape: &Shape, view: &mix::EngineView, state: &Value) -> Vec<Option<String>> {
     (mix::selected(shape, &view.wiring, state).into_iter())
         .zip(&view.detached)
-        .map(|(flow, detached)| (!detached).then_some(flow))
+        .map(|(flow, detached)| flow.filter(|_| !detached))
         .collect()
 }
 
@@ -126,9 +127,9 @@ struct Sent {
     /// not sent, as all are at start: the engine's strip passes its input
     /// unchanged until set.
     strips: Vec<Vec<Option<StripParam>>>,
-    /// The limiters, input delays, duck groups and masks the engine
-    /// holds, as targets; `None` after a resend asked for, when every
-    /// limiter, delay, setting and mask goes again.
+    /// The limiters, input delays, tone generators, duck groups and masks
+    /// the engine holds, as targets; `None` after a resend asked for, when
+    /// every limiter, delay, tone, setting and mask goes again.
     ducks: Option<Targets>,
     /// The loudness run flags and reset epochs the engine was sent, as
     /// targets ([`mix::loudness`]).
@@ -150,7 +151,8 @@ impl Sent {
         self.loudness_held = false;
         let status = engine.status();
         for (routed, input) in self.routed.iter_mut().zip(status.inputs) {
-            *routed = (input.state != InputState::Detached).then_some(input.flow_id);
+            let reads = !matches!(input.state, InputState::Detached | InputState::Tone);
+            *routed = reads.then_some(input.flow_id);
         }
         for (enabled, output) in self.outputs.iter_mut().zip(status.outputs) {
             *enabled = output.enabled;
@@ -463,7 +465,7 @@ impl Audio {
         *start = (*start).max(Some(at.next_multiple_of(WINDOW)));
     }
 
-    /// Sends the engine every strip parameter, duck setting, duck mask and
+    /// Sends the engine every strip parameter, tone, duck setting, duck mask and
     /// coefficient of `state`'s targets read through `view`
     /// ([`mix::EngineView::targets`]) that differs from what it was sent, a
     /// route or detach for every channel whose flow differs and an enable
@@ -501,6 +503,7 @@ impl Audio {
         let next = Targets {
             limiters: targets.limiters,
             delays: targets.delays,
+            tones: targets.tones,
             ducks: targets.ducks,
             masks: targets.masks,
             ..Targets::default()
@@ -519,6 +522,20 @@ impl Audio {
                 }
                 &Entry::Delay { slot, samples } => {
                     let set = |at| self.engine.set_delay(slot, samples, at);
+                    self.send(&mut at, set).await
+                }
+                &Entry::Tone {
+                    slot,
+                    frequency_hz,
+                    level_db,
+                    ident,
+                } => {
+                    let params = ToneParams {
+                        frequency_hz,
+                        level_db,
+                        ident,
+                    };
+                    let set = |at| self.engine.set_tone(slot, params, at);
                     self.send(&mut at, set).await
                 }
                 Entry::Duck { group, setting } => {
@@ -541,8 +558,8 @@ impl Audio {
                 refused = true;
             }
         }
-        // After a refusal every limiter, delay, setting and mask goes again on
-        // the next write.
+        // After a refusal every limiter, delay, tone, setting and mask goes
+        // again on the next write.
         sent.ducks = (!refused).then_some(held);
         for (slot, flow) in targets.flows.into_iter().enumerate() {
             while flow != sent.routed[slot] {
@@ -814,9 +831,25 @@ fn engine_status(status: &samplez::Status) -> Value {
     json!({ "inputs": inputs, "outputs": outputs })
 }
 
-/// Notes in `held` the limiter, delay, duck setting or mask `entry` sent.
+/// Notes in `held` the limiter, delay, tone, duck setting or mask `entry`
+/// sent.
 fn hold_entry(held: &mut Targets, entry: Entry) {
     match entry {
+        Entry::Tone {
+            slot,
+            frequency_hz,
+            level_db,
+            ident,
+        } => {
+            if held.tones.len() <= slot {
+                held.tones.resize(slot + 1, None);
+            }
+            held.tones[slot] = Some(ToneParams {
+                frequency_hz,
+                level_db,
+                ident,
+            });
+        }
         Entry::Delay { slot, samples } => {
             if held.delays.len() <= slot {
                 held.delays.resize(slot + 1, 0);

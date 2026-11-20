@@ -32,7 +32,8 @@ with the detector, hold and envelope its settings give. Input VT 2
 (`st3`) delivers nothing: every replica's engine has it pruned, and
 every bus, aux and mix-minus it feeds counts gaps in its loudness
 measurement. Every channel has a 5 s delay line but Music (`st1`),
-whose line takes 100 ms, and FX (`st4`), which has none. A loudness
+whose line takes 100 ms, and FX (`st4`) and Line-up (`lu`), which have
+none. Line-up is a tone generator, which reads no flow. A loudness
 reset is counted in the state and starts the
 measurement on every replica; a killed replica that comes back measures
 from its own start, and so restarted where the state counts a reset.
@@ -41,9 +42,9 @@ from its own start, and so restarted where the state counts a reset.
   activity, so nothing changes state but clients and REST calls, and
   keys every duck group in use at a steady -50 dBFS, so a group ducks
   only while held or on, or with its threshold below -50 dBFS.
-- `FADERZ_MOCK_CHANNELS=<n>` sets the input channel count (default 29):
-  mono channels `ch1`... followed by up to four stereo channels and one
-  5.1 channel.
+- `FADERZ_MOCK_CHANNELS=<n>` sets the input channel count (default 30):
+  mono channels `ch1`... followed by up to four stereo channels, one
+  5.1 channel and the stereo tone channel.
 - `FADERZ_BACKEND=<url>`, such as `http://127.0.0.1:8080`, loads no
   mock: `/api/v1`, WebSocket included, goes to that faderz server.
 
@@ -291,8 +292,9 @@ checks its REST responses against `openapi.yaml` and its WebSocket
 messages against the schemas, with the validators of the contract
 tests. `FADERZ_E2E_BACKEND` runs the e2e suite against one replica of
 the binary (API, ops and NMOS on ports n + 3 to n + 5) behind the two
-dev servers, with the mock's example shape; a global setup writes the
-mock's example state over REST. Tests tagged `@mock` need the mock's
+dev servers, with the mock's example shape less its delay lines and tone
+generator, which the binary, running without an engine, has none of; a
+global setup writes the rest of the mock's example state over REST. Tests tagged `@mock` need the mock's
 controls or its replicas, `@meters` its meter frames; they are left out
 of that run, and so is the production build server.
 
@@ -455,6 +457,9 @@ delay greyed out, marked "No delay line". A typed value outside the
 range is never clamped: the field is restored and the range shown as
 an error. A scene recall that set a channel's delay to 0, its stored
 delay past the line, says so in a notice.
+A tone channel's head shows TONE and its frequency, ID while its ident
+is on, in place of a source; its processing panel sets the frequency,
+the level and IDENT in place of an input select.
 Matrix grids move with the arrow keys.
 The slider of a parameter or a send level moves by the distance dragged,
 from where it was, and never jumps to the touch point; its arrows step a

@@ -42,7 +42,7 @@ built into the binary and the control-surface bridge both speak.
   failover between them
 - Hardware control surfaces through `faderz-bridge` (Mackie Control over
   USB-MIDI or RTP-MIDI)
-- NMOS: each channel's input an IS-04 receiver and each output a sender,
+- NMOS: each channel's flow input an IS-04 receiver and each output a sender,
   connected over MXL through IS-05 per AMWA BCP-007-03
 - `/healthz`, `/readyz` and Prometheus `/metrics`; a container image and
   a release binary
@@ -61,7 +61,7 @@ late by the limiter's look-ahead, 53 samples (about 1.1 ms at 48 kHz), whether
 the limiter is on or off, so that turning it on needs no restart; an
 output carrying a mix-minus, a direct out or the monitor is not. The rest of the state is kept, shown and replicated but not
 applied to the audio in this version: bus and aux EQ,
-dynamics and delay, the line-up tone, and the AFV rise, hold and fall
+dynamics and delay, the line-up tone on outputs (`/tone`), and the AFV rise, hold and fall
 times.
 
 A channel delays its input by its `delay`, in samples, exactly, for lip
@@ -80,6 +80,23 @@ Once a channel has a line, a snapshot carries it as the shape's
 `maxDelay`, and a recall that set a delay to 0 carries its answer;
 faderz 0.4.9 and earlier read neither. Rolling back to such a release
 needs the data volume cleared.
+
+A channel whose input is configured `tone` in place of a `flow` plays
+samplez's line-up tone generator: a sine of whole hertz at a sample-peak
+level on every leg, which the channel's strip, delay, fader and routing
+take as any input's. It reads no flow, so it takes no `flow`, `altFlow`,
+`domain` or `channels`, its channel has no `altInput`, and it has no
+NMOS receiver. `tone: {}` starts it at 1 kHz and -18 dBFS; `frequency`,
+20 to 20000 Hz, and `level`, -60 to 0 dBFS, start it elsewhere. The
+shape gives such a channel `tone`, the values it starts at, and its
+state `tone`, written at `/channels/<channel>/tone/frequency`, `level`
+and `ident`: a level or ident change ramps over `engine.rampSamples`, a
+frequency change crossfades over as long, and a value outside its range
+is refused, never clamped. With `ident` the tone stops on one leg at a
+time in leg order, for 250 ms each, then sounds on every leg for
+250 ms. A scene recall leaves the tone as it is. A snapshot of a state
+with a tone channel carries the shape's `tone`, which faderz 0.4.9 and
+earlier do not read either.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is
@@ -383,7 +400,7 @@ variable; the flag wins over the variable, the variable over the file.
 | `consoles` | `[]` | consoles known before any registers: `id`, `name`, `protocol` (`mcu`), `transport` (`bridge`), `strips` (8) |
 | `mxl.libraryPath` | `/opt/mxl/lib/libmxl.so` | libmxl, loaded at start |
 | `mxl.domains` | | `[{name, path, id}]`: the mounted MXL domains; `id`, the domain's MXL id, for NMOS when the domain has no `domain_def.json` |
-| `mxl.inputs.<channel>` | | `flow`; `altFlow` for a channel with `altInput`; `domain` with more than one domain; `channels`, the 1-based flow channel each leg reads; `maxDelayMs`, the channel's delay line, none by default |
+| `mxl.inputs.<channel>` | | `flow`; `altFlow` for a channel with `altInput`; `domain` with more than one domain; `channels`, the 1-based flow channel each leg reads; `maxDelayMs`, the channel's delay line, none by default; or `tone`, a line-up tone generator in place of a flow, `{}` or the `frequency` and `level` it starts at |
 | `mxl.outputs.<output>` | | `flow` in a set of one; `flows`, one member flow per replica by ordinal, in a set of more; `domain` with more than one domain; `mergedFlow`, the flow merging the member flows, which the NMOS sender names, in a set of more with `nmos.enabled` |
 | `engine.sampleRate` | `48000` | |
 | `engine.blockSize` | `48` | samples per block |
@@ -602,8 +619,8 @@ channel input, `faderz_input_attached`,
 ## NMOS
 
 With `nmos.enabled` faderz is one NMOS Node (IS-04 v1.3, IS-05 v1.2,
-AMWA BCP-007-03 for MXL): a Receiver per channel, which is the channel's
-input reader, and a Source, Flow and Sender per output, all with
+AMWA BCP-007-03 for MXL): a Receiver per channel reading a flow, which
+is the channel's input reader, none for a tone channel, and a Source, Flow and Sender per output, all with
 transport `urn:x-nmos:transport:mxl` and 32-bit float audio at 48 kHz.
 The ids derive from `nmos.seed`, so a restart keeps them. Each domain's
 MXL id comes from its `domain_def.json`, else from `mxl.domains[].id`;

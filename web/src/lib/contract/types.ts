@@ -55,7 +55,31 @@ export interface ChannelShape extends ElementShape {
   source?: string;
   /** Longest delay, in samples, the input's delay line takes; absent without one, and then only 0. */
   maxDelay?: number;
+  /** Present when the input is a line-up tone generator, no flow: the frequency and level it starts at. */
+  tone?: ToneInputShape;
 }
+
+/** A tone channel's generator as configured. */
+export interface ToneInputShape {
+  /** Hz. */
+  frequency: number;
+  /** dBFS sample peak. */
+  level: number;
+}
+
+/** A tone channel's generator: a sine on every leg of its input. */
+export interface ToneInput {
+  /** Whole Hz, within TONE_FREQUENCY_HZ. */
+  frequency: number;
+  /** dBFS sample peak, within TONE_INPUT_LEVEL_DB. */
+  level: number;
+  /** Stops the tone on one leg at a time to identify the legs. */
+  ident: boolean;
+}
+
+/** The ranges of model ToneFrequency and ToneInputLevel: samplez's generator's. */
+export const TONE_FREQUENCY_HZ = { min: 20, max: 20000 } as const;
+export const TONE_INPUT_LEVEL_DB = { min: -60, max: 0 } as const;
 /** Operator-assigned scribble strip colour. */
 export type ScribbleColor = 'none' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'purple';
 export const SCRIBBLE_COLORS: readonly ScribbleColor[] = ['none', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple'];
@@ -170,6 +194,8 @@ export interface ChannelState {
   directOut: { tap: Tap };
   sends: Record<Id, Send>;
   routes: Record<Id, boolean>;
+  /** A tone channel's generator; absent on a channel reading a flow. */
+  tone?: ToneInput;
 }
 export interface Limiter {
   enabled: boolean;

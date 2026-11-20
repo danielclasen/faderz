@@ -1618,6 +1618,93 @@ async fn a_channel_delay_plays_its_input_exactly_that_late() {
     server.stop().await;
 }
 
+/// The left leg of `flow` over the 100 ms ending 100 ms behind libmxl's
+/// clock: its sample peak and its rising zero crossings per second.
+fn tone_of(domain: &Path, flow: &str, rate: u64) -> (f32, u64) {
+    let api = api();
+    let to = time::timestamp_to_index(&api, time::now(&api)) - rate / 10;
+    let left: Vec<f32> = (span(domain, flow, to - rate / 10, to).iter())
+        .map(|s| s.0)
+        .collect();
+    let peak = left.iter().fold(0.0f32, |p, v| p.max(v.abs()));
+    let rising = left
+        .windows(2)
+        .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+        .count();
+    (peak, rising as u64 * 10)
+}
+
+/// A tone channel plays samplez's generator as its state sets it, with
+/// no flow to read: the programme, which carries a stereo tone channel
+/// leg to leg, holds its frequency at its sample peak level, and a level
+/// and then a frequency written are heard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tone_channel_plays_its_frequency_at_its_level() {
+    let domain = domain("tone-input");
+    let data = data("tone-input");
+    let out = new_id();
+    let rate: u64 = 48000;
+    let shape = json!({
+        "sampleRate": rate,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "tn", "name": "Tone", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let server = start_with(
+        &data.0,
+        &domain.0,
+        shape,
+        json!({ "tn": { "tone": { "frequency": 1000, "level": -6 } } }),
+        json!({ "out-pgm": { "flow": out } }),
+    )
+    .await;
+    appears(&domain.0, &out).await;
+    patch(
+        &server,
+        &[
+            ("/buses/pgm/fader", json!(0)),
+            ("/channels/tn/fader", json!(0)),
+            ("/channels/tn/routes/pgm", json!(true)),
+        ],
+    )
+    .await;
+    let gain = |db: f32| 10f32.powf(db / 20.0);
+    // Within a crossing of the frequency over the 100 ms read, and at
+    // the level: the generator reaches its crest at either frequency.
+    let heard = |want_hz: u64, want_db: f32| {
+        let (peak, hz) = tone_of(&domain.0, &out, rate);
+        hz.abs_diff(want_hz) <= 10 && (peak - gain(want_db)).abs() <= 1e-4
+    };
+    for (path, value, hz, db) in [
+        (None, Value::Null, 1000, -6.0),
+        (Some("level"), json!(-20), 1000, -20.0),
+        (Some("frequency"), json!(440), 440, -20.0),
+    ] {
+        if let Some(leaf) = path {
+            let path = format!("/channels/tn/tone/{leaf}");
+            patch(&server, &[(path.as_str(), value)]).await;
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !heard(hz, db) {
+            assert!(
+                Instant::now() < deadline,
+                "{hz} Hz at {db} dBFS not heard; read {:?}",
+                tone_of(&domain.0, &out, rate)
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    let status = server.audio.as_ref().unwrap().engine().status();
+    assert_eq!(status.inputs[0].state, samplez::InputState::Tone);
+    server.stop().await;
+}
+
 /// A diff larger than the changes the engine holds at once waits for
 /// room and lands whole.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -440,6 +440,23 @@
         "maxDelay": {
           "description": "The longest delay the channel's input delay line takes, in samples; absent when the channel has none, which then takes no delay but 0. Configured per input; a longer line is a configuration change and a restart.",
           "$ref": "#/$defs/DelaySamples"
+        },
+        "tone": {
+          "description": "Present for a channel whose input is a line-up tone generator in place of a flow, configured per input: the frequency and level it starts at. Such a channel reads no flow and has no NMOS receiver; its state's tone sets the generator.",
+          "type": "object",
+          "required": [
+            "frequency",
+            "level"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "frequency": {
+              "$ref": "#/$defs/ToneFrequency"
+            },
+            "level": {
+              "$ref": "#/$defs/ToneInputLevel"
+            }
+          }
         }
       }
     },
@@ -1000,6 +1017,9 @@
         },
         "color": {
           "$ref": "#/$defs/ScribbleColor"
+        },
+        "tone": {
+          "$ref": "#/$defs/ToneInput"
         }
       }
     },
@@ -1758,7 +1778,7 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|color|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe|frontRear|spread|lfeSend)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31})$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|color|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe|frontRear|spread|lfeSend)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31}|tone/(frequency|level|ident))$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
@@ -2603,6 +2623,57 @@
             "properties": {
               "path": {
                 "type": "string",
+                "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/tone/frequency$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/ToneFrequency"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/tone/level$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/ToneInputLevel"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/tone/ident$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
                 "pattern": "^/tone/targets$"
               }
             }
@@ -3234,6 +3305,39 @@
       "description": "dBFS.",
       "type": "number",
       "minimum": -30,
+      "maximum": 0
+    },
+    "ToneInput": {
+      "description": "A tone channel's line-up tone generator: a sine of frequency at level (sample peak) on every leg of its input, which its strip, delay, fader and routing then take as any input's. ident true identifies the legs: the tone stops on one leg at a time in layout order, for 250 ms each, then sounds on all of them for 250 ms. A level or ident change ramps, a frequency change crossfades. Never clamped: a value outside its range is refused.",
+      "type": "object",
+      "required": [
+        "frequency",
+        "level",
+        "ident"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "frequency": {
+          "$ref": "#/$defs/ToneFrequency"
+        },
+        "level": {
+          "$ref": "#/$defs/ToneInputLevel"
+        },
+        "ident": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ToneFrequency": {
+      "description": "Hz, whole.",
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 20000
+    },
+    "ToneInputLevel": {
+      "description": "dBFS, sample peak.",
+      "type": "number",
+      "minimum": -60,
       "maximum": 0
     },
     "LoudnessPreset": {

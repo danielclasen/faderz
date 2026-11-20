@@ -2,9 +2,12 @@
 //! input's strip in the engine (`samplez_dsp::strip`): trim, leg trim,
 //! polarity, high-pass, the four EQ bands, gate, compressor and their
 //! order. The model's ranges are the strip's. Also each channel's input
-//! delay, and each output's limiter, from the bus or aux it carries.
+//! delay and a tone channel's generator, and each output's limiter, from
+//! the bus or aux it carries.
 
-use samplez_dsp::{BandType, CompParams, EqBand, GateParams, LimiterParams, StripParam};
+use samplez_dsp::{
+    BandType, CompParams, EqBand, GateParams, LimiterParams, StripParam, ToneParams,
+};
 use serde_json::Value;
 
 use crate::shape::Shape;
@@ -88,6 +91,18 @@ pub fn params(c: &Value, width: usize) -> Vec<StripParam> {
 /// ([`crate::shape::ChannelShape::max_delay`]), so the engine takes it.
 pub fn delay(c: &Value) -> u32 {
     c["delay"].as_u64().unwrap_or(0) as u32
+}
+
+/// The tone generator parameters of a tone channel's state `c` (model
+/// `ChannelState`), whose `tone` the contract keeps within samplez's
+/// ranges, so the engine takes them.
+pub fn tone(c: &Value) -> ToneParams {
+    let t = &c["tone"];
+    ToneParams {
+        frequency_hz: t["frequency"].as_f64().unwrap_or(0.0) as u32,
+        level_db: num(&t["level"]),
+        ident: on(&t["ident"]),
+    }
 }
 
 /// Per output of `shape`, the limiter of the bus or aux it carries in

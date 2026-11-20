@@ -146,7 +146,9 @@ impl Node {
         };
         let (receivers, senders) = crate::app::with_state(replica, |sm| {
             let m = &sm.product;
+            // A tone input reads no flow: it has no receiver.
             let receivers = (shape.channels.iter().zip(&engine.inputs))
+                .filter(|(_, input)| input.tone.is_none())
                 .map(|(c, input)| {
                     let (_, selected) = m.receiver(&c.id).expect("every channel is wired");
                     let legs = mxl.inputs[&c.id].channels.as_deref();

@@ -4,7 +4,7 @@
   import type { ChannelShape, ChannelState, Solo, Tap } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { channelPath } from '../lib/state/paths';
-  import { effectiveGainDb, formatDb } from '../lib/audio/db';
+  import { effectiveGainDb, formatDb, formatFreq } from '../lib/audio/db';
   import LayoutBadge from './LayoutBadge.svelte';
   import Fader from './Fader.svelte';
   import Meter from './Meter.svelte';
@@ -32,6 +32,11 @@
   const mixer = getMixer();
   const coarse = new MediaQuery('pointer: coarse');
   const st = $derived(mixer.state!.channels[channel.id] as ChannelState);
+  /** A tone channel's generator, in place of a flow and its source label. */
+  const tone = $derived(st.tone);
+  const toneText = $derived(
+    tone ? `line-up tone ${tone.frequency} Hz at ${formatDb(tone.level)} dBFS${tone.ident ? ', ident on' : ''}` : '',
+  );
   const afv = $derived(mixer.state!.afv[channel.id]);
   const tally = $derived(afv?.source ? mixer.state!.tally[afv.source] : undefined);
   const mute = $derived(mixer.value<boolean>(channelPath(channel.id, 'mute')));
@@ -113,12 +118,19 @@
     data-color={st.color}
     onclick={() => onselect(channel.id)}
     aria-pressed={selected}
-    use:tip={`${channel.source ? `${channel.name} (${channel.source})` : channel.name}${safe.length > 0 ? `; recall safe: ${safe.join(', ')}` : ''}${selectorsText ? `; ${selectorsText}` : ''}`}
+    use:tip={`${tone ? `${channel.name} (${toneText})` : channel.source ? `${channel.name} (${channel.source})` : channel.name}${safe.length > 0 ? `; recall safe: ${safe.join(', ')}` : ''}${selectorsText ? `; ${selectorsText}` : ''}`}
   >
     <span class="no num">{index + 1}</span>
     <span class="name">{channel.name}</span>
     <span class="line2">
-      <span class="source">{channel.source ?? ''}</span>
+      {#if tone}
+        <!-- A tone channel reads no flow: TONE and its frequency in place of a source. -->
+        <span class="source tone" data-testid={`tone-${channel.id}`}
+          ><b>TONE</b> {formatFreq(tone.frequency)}{tone.ident ? ' ID' : ''}<span class="sr-only">, {toneText}</span></span
+        >
+      {:else}
+        <span class="source">{channel.source ?? ''}</span>
+      {/if}
       <span class="badges">
         <!-- First, so appearing moves no other badge; the sessions are in
              the head's tooltip and accessible name. -->
@@ -374,6 +386,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+  }
+  .source.tone b {
+    font-weight: 600;
+    color: var(--tone-ink);
+    background: var(--tone);
+    border-radius: 2px;
+    padding: 0 2px;
   }
   .badge {
     font-size: 10px;

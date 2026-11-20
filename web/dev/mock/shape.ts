@@ -23,13 +23,16 @@ const MONO_NAMES = [
 /** A delay line of 5 s at 48 kHz, the most a channel delays. */
 const FULL_LINE = 240000;
 
-// Music has a 100 ms delay line and FX none.
+// Music has a 100 ms delay line, FX none, and Line-up is a tone
+// generator, which reads no flow.
 const WIDE_CHANNELS: ChannelShape[] = [
   { id: 'st1', name: 'Music', width: 2, layout: 'stereo', altInput: false, source: 'Playout 1', maxDelay: 4800 },
   { id: 'st2', name: 'VT 1', width: 2, layout: 'stereo', altInput: false, source: 'Clip server A', maxDelay: FULL_LINE },
   { id: 'st3', name: 'VT 2', width: 2, layout: 'stereo', altInput: false, source: 'Clip server B', maxDelay: FULL_LINE },
   { id: 'st4', name: 'FX', width: 2, layout: 'stereo', altInput: false },
   { id: 'sur1', name: 'Film 5.1', width: 6, layout: '5.1', altInput: true, source: 'Playout 2', maxDelay: FULL_LINE },
+
+  { id: 'lu', name: 'Line-up', width: 2, layout: 'stereo', altInput: false, tone: { frequency: 1000, level: -18 } },
 ];
 
 /** Channel count of the example shape when none is given. */
@@ -37,8 +40,8 @@ export const DEFAULT_CHANNELS = MONO_NAMES.length + WIDE_CHANNELS.length;
 
 /**
  * Example shape with `channelCount` input channels: mono channels ch1 to
- * chN, then the stereo and 5.1 channels st1 to st4 and sur1, as many of
- * those as fit.
+ * chN, then the stereo and 5.1 channels st1 to st4 and sur1 and the tone
+ * channel lu, as many of those as fit.
  */
 export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
   if (!Number.isInteger(channelCount) || channelCount < 1) {
@@ -107,13 +110,15 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
 }
 
 /**
- * The example shape without delay lines, as a server configuration takes
- * it: the server sets each channel's maxDelay from
- * mxl.inputs.<id>.maxDelayMs and refuses a shape that carries one.
+ * The example shape without delay lines and tone generators, as a server
+ * configuration takes it: the server sets each channel's maxDelay and
+ * tone from mxl.inputs.<id>.maxDelayMs and .tone and refuses a shape that
+ * carries one. Without an mxl section, as the e2e and backend tests run
+ * the binary, no channel has either.
  */
 export function configShape(channelCount = DEFAULT_CHANNELS): Shape {
   const shape = exampleShape(channelCount);
-  return { ...shape, channels: shape.channels.map(({ maxDelay: _, ...c }) => c) };
+  return { ...shape, channels: shape.channels.map(({ maxDelay: _, tone: __, ...c }) => c) };
 }
 
 function flatEq(): Eq {
@@ -211,6 +216,7 @@ export function initialState(shape: Shape): State {
       meterTap: 'postFader',
       // Pre-fader: a closed fader does not silence an ISO record or IFB feed.
       directOut: { tap: 'preFader' },
+      ...(c.tone ? { tone: { ...c.tone, ident: false } } : {}),
       sends: Object.fromEntries(
         shape.auxes.map((a) => [
           a.id,

@@ -76,6 +76,11 @@ paths:
         more than 8 triggers, is refused with 400, as is `hold: true`:
         the hold is momentary, and only a WebSocket session that touched
         it sets it.
+
+        A tone channel's generator is written under
+        `/channels/{channelId}/tone/`: `frequency`, `level` and `ident`.
+        A value outside its range is refused with 400, never clamped,
+        and a channel that reads a flow has no `tone` (404).
       parameters:
         - $ref: "#/components/parameters/RequestHeader"
       requestBody:
@@ -111,6 +116,14 @@ paths:
                     - { path: /ducks/comm/channels/amb/depth, value: 15 }
                     - { path: /ducks/comm/attackMs, value: 20 }
                     - { path: /ducks/comm/releaseMs, value: 1000 }
+              lineUp:
+                summary: Line up at 1 kHz, -18 dBFS, the legs identified.
+                value:
+                  commandId: 7a3e1c5b-2d9f-4b6a-8e17-3c0f5a9d2b64
+                  changes:
+                    - { path: /channels/tone/tone/frequency, value: 1000 }
+                    - { path: /channels/tone/tone/level, value: -18 }
+                    - { path: /channels/tone/tone/ident, value: true }
       responses:
         "403":
           $ref: "#/components/responses/Error"
