@@ -51,6 +51,8 @@ export class MockServer {
   private readonly routes: Route[];
   /** Every REST request and WebSocket upgrade is answered this late, as over a slow link. */
   private slowLinkMs = 0;
+  /** Every client socket open now, for /__mock/stall-close. */
+  private sockets = new Set<WebSocket>();
 
   /** `bindHost` is the host name the server is bound to, when it is one. */
   constructor(
@@ -115,7 +117,11 @@ export class MockServer {
           ws.terminate();
         }
       });
-      ws.on('close', () => this.cluster.disconnect(conn));
+      this.sockets.add(ws);
+      ws.on('close', () => {
+        this.sockets.delete(ws);
+        this.cluster.disconnect(conn);
+      });
     });
   }
 
@@ -403,6 +409,17 @@ export class MockServer {
       if (!Number.isFinite(ms) || ms < 0) return send(400, { error: 'ms must be a non-negative number' });
       this.slowLinkMs = ms;
       return send(200, { ok: true });
+    }
+    if (method === 'POST' && path === '/__mock/stall-close') {
+      // As a link that dies mid-close: the server sends its close frame,
+      // then reads nothing more, so a browser socket sits closing until it
+      // gives up on the closing handshake, its close event late.
+      const raw = (ws: WebSocket) => (ws as unknown as { _socket: Duplex })._socket;
+      for (const ws of this.sockets) {
+        raw(ws).write(Buffer.from([0x88, 0x00]));
+        raw(ws).pause();
+      }
+      return send(200, { ok: true, sockets: this.sockets.size });
     }
     if (method === 'POST' && path === '/__mock/drop-clients') {
       for (const conn of c.connections()) conn.close();

@@ -64,6 +64,7 @@ export class FakeSocket implements SocketLike {
   binaryType = 'blob';
   sent: ClientMessage[] = [];
   closed = false;
+  readyState = 0;
   onopen: ((ev: unknown) => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
   onclose: ((ev: unknown) => void) | null = null;
@@ -72,17 +73,26 @@ export class FakeSocket implements SocketLike {
   constructor(readonly url: string) {}
 
   send(data: string): void {
+    // A browser socket logs and drops a send once it is closing.
+    if (this.readyState !== 1) throw new Error(`send in readyState ${this.readyState}: ${data}`);
     this.sent.push(JSON.parse(data) as ClientMessage);
   }
 
   close(): void {
     this.closed = true;
+    this.readyState = Math.max(this.readyState, 2);
   }
 
   // ---- server side ----
 
   open(): void {
+    this.readyState = 1;
     this.onopen?.({});
+  }
+
+  /** The connection begins to close; its close event has not come yet. */
+  closing(): void {
+    this.readyState = 2;
   }
 
   deliver(msg: ServerMessage | ArrayBuffer | Uint8Array): void {
@@ -92,6 +102,7 @@ export class FakeSocket implements SocketLike {
   /** The server drops the connection. */
   drop(): void {
     this.closed = true;
+    this.readyState = 3;
     this.onclose?.({});
   }
 

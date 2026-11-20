@@ -54,6 +54,8 @@ import { backoff, RttEstimator } from './rtt';
 
 export interface SocketLike {
   binaryType: string;
+  /** WebSocket readyState: 0 connecting, 1 open, 2 closing, 3 closed. */
+  readonly readyState: number;
   send(data: string): void;
   close(code?: number, reason?: string): void;
   onopen: ((ev: unknown) => void) | null;
@@ -61,6 +63,9 @@ export interface SocketLike {
   onclose: ((ev: unknown) => void) | null;
   onerror: ((ev: unknown) => void) | null;
 }
+
+/** WebSocket.OPEN. */
+const WS_OPEN = 1;
 
 export interface EngineDeps {
   endpoints: readonly string[];
@@ -551,6 +556,13 @@ export class SyncEngine {
 
   private send(link: Link, msg: ClientMessage): void {
     if (!link.opened) return;
+    // A socket the peer or the network has begun to close sends nothing
+    // again, though its close event may come late on a slow link: it is
+    // lost now, and nothing is sent on it.
+    if (link.socket.readyState !== WS_OPEN) {
+      if (link.socket.readyState > WS_OPEN) this.closed(link, 'lost');
+      return;
+    }
     if (link === this.primary && (msg.type === 'hello' || msg.type === 'resync')) this.syncRequests++;
     link.socket.send(JSON.stringify(msg));
   }

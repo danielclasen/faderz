@@ -291,6 +291,21 @@ describe('sync engine: heartbeat and failure detection', () => {
     expect(primary.sent.at(-1)).toEqual({ type: 'pong', t: 4242 });
   });
 
+  it('sends nothing on a primary that has begun to close, and fails over at once, before its close event', () => {
+    const { clock, engine, primary, standby } = live();
+    const before = primary.sent.length;
+    primary.closing();
+    // The next beat would ping it: the socket is lost instead.
+    beats(clock, 1000, [standby, R2]);
+    expect(primary.sent.length).toBe(before);
+    expect(primary.closed).toBe(true);
+    expect(engine.link).not.toBe('Live');
+    // Its close event, late, changes nothing and sends nothing.
+    primary.onclose?.({});
+    beats(clock, 1000, [standby, R2]);
+    expect(primary.sent.length).toBe(before);
+  });
+
   it('marks a primary late by one beat suspect and fails nothing over', () => {
     const { clock, engine, primary, standby } = live();
     clock.advance(SUSPECT_MS + 10);

@@ -520,3 +520,20 @@ test('connects on its first socket over a link whose requests and upgrade take 4
   // The primary was the first socket; the standby the second, at most.
   expect(sockets.length).toBeLessThanOrEqual(2);
 });
+
+// On a slow link a socket can sit closing for a while before its close
+// event: the worker sent its heartbeat on it every beat, and the browser
+// logged "WebSocket is already in CLOSING or CLOSED state" each time.
+test('a socket left closing sends nothing more, logs nothing and the page reconnects', { tag: '@mock' }, async ({ page, request }) => {
+  const logged: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error' || m.type() === 'warning') logged.push(m.text());
+  });
+  page.on('pageerror', (e) => logged.push(e.message));
+  await live(page);
+  expect((await request.post('/__mock/stall-close')).ok()).toBe(true);
+  // Past several beats while the sockets sit closing.
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live', { timeout: 10_000 });
+  expect(logged.filter((t) => /WebSocket|CLOSING|CLOSED/.test(t))).toEqual([]);
+});
