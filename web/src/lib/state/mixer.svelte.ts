@@ -331,7 +331,8 @@ export class MixerStore {
     if (p.counters) {
       this.counters = p.counters.values;
       this.counterInputs = p.counters.inputs;
-      this.loudnessHealth = Object.fromEntries(p.counters.loudness.map((l) => [l.id, l]));
+      // A replica older than the loudness report sends none, as during a rolling upgrade.
+      this.loudnessHealth = Object.fromEntries((p.counters.loudness ?? []).map((l) => [l.id, l]));
       this.countersReplica = p.counters.replica;
     }
     if (p.selections) this.selections = p.selections;

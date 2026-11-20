@@ -383,9 +383,9 @@ export class Cluster {
         lateBlocks: 0,
         tooLateBlocks: 0,
       })),
-      // No reset yet: each measures from the engine's start.
+      // No reset yet: each measures from the engine's start, and none restarted.
       loudness: new Map(
-        [...this.shape.buses, ...this.shape.auxes, ...this.shape.mixMinus].map((e) => [e.id, { gaps: 0, lost: 0, since: Date.now(), restarted: true }]),
+        [...this.shape.buses, ...this.shape.auxes, ...this.shape.mixMinus].map((e) => [e.id, { gaps: 0, lost: 0, since: Date.now(), restarted: false }]),
       ),
     }));
     this.storeScene('Opening', null);
@@ -522,9 +522,12 @@ export class Cluster {
     for (const c of [...r.conns]) if (r.frozen !== 'none') c.close();
     if (!r.healthy) {
       r.meterSequence = 0;
-      // Its process started again: each measurement starts with it, not at the last reset.
+      // Its process started again: each measurement starts with it, not at
+      // the last reset, and restarted where the state counts one.
       const now = Date.now();
-      for (const id of r.loudness.keys()) r.loudness.set(id, { gaps: 0, lost: 0, since: now, restarted: true });
+      for (const id of r.loudness.keys()) {
+        r.loudness.set(id, { gaps: 0, lost: 0, since: now, restarted: (this.state.loudness[id]?.resets ?? 0) > 0 });
+      }
     }
     r.healthy = true;
     r.frozen = 'none';
@@ -1460,7 +1463,9 @@ export class Cluster {
       .map((path) => ({ path, value: false }));
   }
 
+  /** Counts a reset of each of `ids` in the state, as the server does, and starts each measurement on every replica. */
   resetLoudness(ids: string[]): void {
+    this.stage({ changes: [...new Set(ids)].map((id) => ({ path: `/loudness/${id}/resets`, value: (this.state.loudness[id]?.resets ?? 0) + 1 })) });
     const now = Date.now();
     for (const r of this.replicas) {
       r.meters.resetLoudness(ids);

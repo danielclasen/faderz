@@ -83,7 +83,7 @@ export interface Patch {
   status?: SyncStatus;
   /** Latest meter frame, flattened (meters/flat.ts); its buffer is transferred. */
   meters?: { replica: string; sequence: number; values: Float32Array };
-  counters?: { replica: string; values: Record<string, number>; inputs: InputHealth[]; loudness: LoudnessHealth[] };
+  counters?: { replica: string; values: Record<string, number>; inputs: InputHealth[]; loudness?: LoudnessHealth[] };
   notices?: WorkerNotice[];
   /** What every session has selected, replaced whole when it changes. */
   selections?: Selection[];

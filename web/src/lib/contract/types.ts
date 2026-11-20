@@ -593,7 +593,8 @@ export interface CountersMessage {
   replica: ReplicaRef;
   values: Record<string, number>;
   inputs: InputHealth[];
-  loudness: LoudnessHealth[];
+  /** Absent from a replica older than it, as during a rolling upgrade. */
+  loudness?: LoudnessHealth[];
 }
 export interface ErrorMessage {
   type: 'error';

@@ -8,7 +8,7 @@
   import { hold } from '../lib/hold';
   import { pointer } from '../lib/state/pointer';
   import { loudnessNote } from '../lib/loudnessNote';
-  import { tip } from '../lib/tip';
+  import { showTip, tip } from '../lib/tip';
 
   /** Readout period, ms. */
   const READOUT_MS = 100;
@@ -120,6 +120,9 @@
     aria-label={note.tip || undefined}
     data-testid={`loudness-note-${id}`}
     use:tip={note.tip}
+    onpointerup={(e) => {
+      if (note.tip) showTip(e.currentTarget, e.pointerType === 'touch');
+    }}
     ><span class="text"><span class="gaps">{note.gaps ?? ''}</span><span class="since">{note.since ?? ''}</span></span></span
   >
   <span class="k">TP</span><b class="num v" class:hot={tp !== null && tp > settings.zones.truePeakMax} title="Maximum true peak since the last reset, measured while the integration is paused too" data-testid={`tp-${id}`}><span>{fmt(tp)}</span></b><span
@@ -273,8 +276,8 @@
   .note:focus-visible {
     outline: 2px solid var(--focus);
   }
-  /* Gaps at the left, the start at the right; each cut short with an
-     ellipsis where both do not fit, the tooltip has them whole. */
+  /* Gaps at the left, the start at the right; the tooltip has both
+     whole. */
   .note .text {
     display: flex;
     justify-content: space-between;
@@ -285,17 +288,15 @@
     white-space: nowrap;
     contain: size layout style;
   }
-  .note .text span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  /* The count first: the start gives way, cut with an ellipsis. */
   .note .gaps {
+    flex: none;
     color: var(--warn);
   }
   .note .since {
-    flex: none;
-    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .unstable {
     opacity: 0.55;

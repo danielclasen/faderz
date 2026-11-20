@@ -797,9 +797,10 @@ fn loudness(nodes: &[Option<Node>], n: usize, id: &str) -> Value {
     all.into_iter().find(|l| l["id"] == id).expect("measured")
 }
 
-/// A reset starts every replica's measurement at its index, so none
-/// reports it restarted; a replica restarted after it measures from its
-/// own start and reports so, while the others do not. An input that
+/// Without a reset in the state no replica reports its measurement
+/// restarted. A reset starts every replica's at its index, so none does
+/// then; a replica restarted after it measures from its own start and
+/// reports so, while the others do not. An input that
 /// stops while it feeds the programme is taken down by the log on every
 /// replica: each counts its slices as gaps, alike on those that lost
 /// none, and keeps its integrated loudness.
@@ -825,12 +826,22 @@ fn a_restarted_replica_reports_its_measurement_restarted_and_every_one_counts_ga
             ("/channels/ch2/mute", json!(true)),
         ],
     );
+    for n in 0..REPLICAS {
+        let measures = until(30, || !loudness(&nodes, n, "pgm")["since"].is_null());
+        assert!(measures, "replica {n} measures: {}", states(&nodes));
+        let l = loudness(&nodes, n, "pgm");
+        assert_eq!(
+            l["restarted"], false,
+            "no reset in the state, replica {n}: {l}"
+        );
+    }
     let api = node(&nodes, 1).server.api;
     let (status, body) =
         node(&nodes, 1)
             .runtime
             .block_on(post(api, "/loudness/reset", &json!({ "ids": ["pgm"] })));
     assert_eq!(status, 204, "{body}");
+    std::thread::sleep(Duration::from_secs(3));
     for n in 0..REPLICAS {
         let started = until(30, || loudness(&nodes, n, "pgm")["restarted"] == false);
         assert!(

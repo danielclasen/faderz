@@ -31,9 +31,9 @@ group with a trigger and a target keys from the speech of its triggers,
 with the detector, hold and envelope its settings give. Input VT 2
 (`st3`) delivers nothing: every replica's engine has it pruned, and
 every bus, aux and mix-minus it feeds counts gaps in its loudness
-measurement. A measurement restarts, unreset, when the mock starts and
-when a killed replica comes back; a loudness reset starts it on every
-replica.
+measurement. A loudness reset is counted in the state and starts the
+measurement on every replica; a killed replica that comes back measures
+from its own start, and so restarted where the state counts a reset.
 
 - `FADERZ_MOCK_AUTOMATION=0` turns off the tally cuts and console
   activity, so nothing changes state but clients and REST calls, and
@@ -143,9 +143,11 @@ the desk is locked.
 Under its I and LRA a loudness readout notes the measurement's gaps, the
 10 ms slices an input was down for or the serving replica could not
 meter (`N gaps`, its gaps and lost slices together), and, when that
-replica's measurement did not start at the last reset it applied,
-`since HH:MM` in local time; a hover, keyboard focus or held touch says
-what each means. The note keeps its box whatever it says. Both come
+replica's measurement did not start at the last reset it applied while
+the state counts one,
+`since HH:MM` in local time, with the date when not today; a hover,
+keyboard focus, tap or held touch says what each means. The count keeps
+its place, the start gives way first where both do not fit. The note keeps its box whatever it says. Both come
 from the `counters` message (`src/lib/loudnessNote.ts`).
 
 Each screen latches true-peak overs and holds the maximum true peak

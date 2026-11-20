@@ -95,10 +95,13 @@ lost slices, those this replica did not meter whole, such as samples an
 overrun skipped. The integrated loudness and LRA carry on over both,
 leaving them out; gaps are the same on every replica that lost none. It
 also names when the measurement started, in UTC, and `restarted`: the
+state counts a reset of it (`/loudness/<id>/resets` above 0), and the
 measurement did not start at the last reset this replica applied, or it
-applied none. Every replica that applied a reset's delta holds the same
-index for it, and one started after the reset, which never applied it,
-measures from its own start. The console then shows the gaps and "since
+applied none. Every replica that applied a reset's delta starts there,
+at the index its engine took it at, and one started after the reset,
+which never applied it, measures from its own start. Until the first
+reset every replica measures from its own start, and none is flagged,
+however far apart they started. The console shows the gaps and "since
 HH:MM" in local time under the readout's I and LRA.
 
 An output may be narrower than the element it names as its `source`: it

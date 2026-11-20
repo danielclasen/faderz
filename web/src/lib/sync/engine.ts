@@ -877,7 +877,7 @@ export class SyncEngine {
         if (link === this.primary) this.primaryAhead(msg);
         return;
       case 'counters':
-        if (link === this.primary) this.counters = { replica: msg.replica.id, values: msg.values, inputs: msg.inputs, loudness: msg.loudness };
+        if (link === this.primary) this.counters = { replica: msg.replica.id, values: msg.values, inputs: msg.inputs, loudness: msg.loudness ?? [] };
         return;
       case 'selections':
         // Every connection keeps its copy; a promoted standby's is shown at once.

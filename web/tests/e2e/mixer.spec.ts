@@ -896,19 +896,25 @@ test('notes the gaps and a restarted start of a loudness measurement beside I an
   await live(page);
   // VT 2, the mock's faulty input, feeds every bus: each counts its slices as gaps.
   const me = page.getByTestId('loudness-note-me');
-  await expect(me.locator('.gaps')).toHaveText(/^\d+(\.\dk|k)? gaps$/, { timeout: 5000 });
+  await expect(me.locator('.gaps')).toHaveText(/^\d+k? gaps?$/, { timeout: 5000 });
   const box = (await me.boundingBox())!;
-  // Nothing resets cf here: it has measured since the engine started, not since a reset.
-  await expect(page.getByTestId('loudness-note-cf').locator('.since')).toHaveText(/^since \d\d:\d\d$/);
-  await page.getByTestId('loudness-note-cf').hover();
-  const tip = page.locator('#faderz-tip');
-  await expect(tip).toContainText('an input down, or audio this replica could not meter');
-  await expect(tip).toContainText("can make its reading differ slightly from the other replicas'");
-  await expect(tip).toContainText("this replica's measurement restarted; earlier programme loudness isn't included");
-  // A reset starts me's measurement there: no start to note.
+  // A reset starts me's measurement on every replica: nothing restarted.
   const reset = await request.post('/api/v1/loudness/reset', { data: { ids: ['me'] }, headers: { 'X-Samplez-Request': '1' } });
   expect(reset.status()).toBe(204);
-  await expect(me.locator('.since')).toHaveText('');
+  await expect(me.locator('.since')).toHaveText('', { timeout: 5000 });
+  // Every replica back after it, one at a time: each measures from its own
+  // start and never applied the reset the state counts.
+  for (const id of REPLICAS) {
+    expect((await request.post(`/__mock/replicas/${id}/kill`)).ok()).toBe(true);
+    expect((await request.post(`/__mock/replicas/${id}/restart`)).ok()).toBe(true);
+  }
+  await expect(me.locator('.since')).toHaveText(/^since \d\d:\d\d$/, { timeout: 15_000 });
+  await me.hover();
+  const tip = page.locator('#faderz-tip');
+  await expect(tip).toContainText('an input was down, or this mixer instance could not measure the audio, for example while the server was overloaded');
+  await expect(tip).toContainText("can make its reading differ slightly from the other instances'");
+  await expect(tip).toContainText("This mixer instance's measurement restarted at");
+  await expect(tip).toContainText("earlier programme loudness isn't included");
   // The note keeps its box, whatever it says.
   expect(await me.boundingBox()).toEqual(box);
   // The integrated loudness is still read, never blanked for the gaps.
@@ -1503,14 +1509,14 @@ test('pauses the loudness integration of an output after a hold and runs it on w
   // A tap pauses nothing.
   await run.click();
   await page.waitForTimeout(800);
-  expect((await serverState(request)).state.loudness['pgm20']).toEqual({ running: true });
+  expect((await serverState(request)).state.loudness['pgm20']?.running).toBe(true);
 
   const box = (await run.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.waitForTimeout(700);
   await page.mouse.up();
-  await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']).toEqual({ running: false });
+  await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']?.running).toBe(false);
   const paused = master.getByRole('button', { name: 'Loudness integration paused, press to run' });
   await expect(paused).toHaveAttribute('aria-pressed', 'true');
   await expect(paused).toHaveText('PAUSED');
@@ -1525,7 +1531,7 @@ test('pauses the loudness integration of an output after a hold and runs it on w
     expect(await integrated.textContent()).toBe(held);
   }
   await paused.click();
-  await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']).toEqual({ running: true });
+  await expect.poll(async () => (await serverState(request)).state.loudness['pgm20']?.running).toBe(true);
   await expect(run).toHaveAttribute('aria-pressed', 'false');
   await expect(integrated).not.toHaveAttribute('title', /.+/);
 });

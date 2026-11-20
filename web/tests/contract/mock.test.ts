@@ -351,21 +351,28 @@ describe('hello', () => {
     expect(next.values['input_silenced_blocks_total']).toBeGreaterThan(first.values['input_silenced_blocks_total']!);
   });
 
-  it('names each loudness measurement: restarted until a reset starts it, and gaps where the faulty input feeds it', async () => {
-    const c = await new Client().open();
+  it('names each loudness measurement: none restarted without a reset, one restarted on a replica back after it, and gaps where the faulty input feeds it', async () => {
+    const c = await new Client().open(onReplica('r2'));
     await c.hello();
     const first = (await c.next((m) => m.type === 'counters', 0, 1500)) as CountersMessage;
     const ids = [...cluster.shape.buses, ...cluster.shape.auxes, ...cluster.shape.mixMinus].map((e) => e.id);
-    expect(first.loudness.map((l) => l.id)).toEqual(ids);
-    // No reset yet: each measures from the engine's start.
-    for (const l of first.loudness) expect(l).toMatchObject({ restarted: true, lost: 0, since: expect.any(String) });
+    expect(first.loudness!.map((l) => l.id)).toEqual(ids);
     const fed = cluster.shape.buses.find((b) => cluster.state.channels[FAULTY_INPUT]!.routes[b.id])!.id;
-    const at = (m: CountersMessage, id: string) => m.loudness.find((l) => l.id === id)!;
+    const other = ids.find((id) => id !== fed && (cluster.state.loudness[id]?.resets ?? 0) === 0)!;
+    const at = (m: CountersMessage, id: string) => m.loudness!.find((l) => l.id === id)!;
+    expect(at(first, other)).toMatchObject({ restarted: false, lost: 0, since: expect.any(String) });
     expect((await rest('POST', '/loudness/reset', { ids: [fed] })).status).toBe(204);
-    const after = (await c.next((m) => m.type === 'counters' && !at(m as CountersMessage, fed).restarted, c.messages.length, 2500)) as CountersMessage;
-    expect(Date.parse(at(after, fed).since!)).toBeGreaterThan(Date.parse(at(first, fed).since!));
+    const after = (await c.next((m) => m.type === 'counters' && Date.parse(at(m as CountersMessage, fed).since!) > Date.parse(at(first, fed).since!), c.messages.length, 2500)) as CountersMessage;
+    expect(at(after, fed).restarted).toBe(false);
     const later = (await c.next((m) => m !== after && m.type === 'counters', c.messages.length, 2500)) as CountersMessage;
     expect(at(later, fed).gaps).toBeGreaterThan(at(after, fed).gaps);
+    // r2 back after the reset: it never applied it.
+    expect((await control('POST', '/replicas/r2/kill')).status).toBe(200);
+    expect((await control('POST', '/replicas/r2/restart')).status).toBe(200);
+    const back = await new Client().open(onReplica('r2'));
+    await back.hello();
+    const again = (await back.next((m) => m.type === 'counters', 0, 1500)) as CountersMessage;
+    expect([at(again, fed).restarted, at(again, other).restarted]).toEqual([true, false]);
   });
 
   it('is answered as a console client with kind console', async () => {
@@ -1416,17 +1423,19 @@ describe('REST', () => {
   it('pauses and starts a loudness measurement as a write, which a scene recall and a reset leave as it is', async () => {
     const write = (path: string, value: unknown) =>
       rest('PATCH', '/state', { commandId: crypto.randomUUID(), changes: [{ path, value }] });
-    expect(cluster.state.loudness['pgm20']).toEqual({ running: true });
+    expect(cluster.state.loudness['pgm20']).toMatchObject({ running: true });
+    const resets = cluster.state.loudness['pgm20']!.resets!;
     const created = await rest('POST', '/scenes', { commandId: crypto.randomUUID(), name: 'Measuring' });
     const id = (created.body!['scene'] as { id: string }).id;
     expect((await write('/loudness/pgm20/running', false)).status).toBe(200);
-    expect(cluster.state.loudness['pgm20']).toEqual({ running: false });
+    expect(cluster.state.loudness['pgm20']).toEqual({ running: false, resets });
     await rest('POST', `/scenes/${id}/recall`, { commandId: crypto.randomUUID(), crossfadeMs: 0 });
     expect((await rest('POST', '/loudness/reset', { ids: ['pgm20'] })).status).toBe(204);
-    expect(cluster.state.loudness['pgm20']).toEqual({ running: false });
+    // The reset is counted, as the server counts it.
+    expect(cluster.state.loudness['pgm20']).toEqual({ running: false, resets: resets + 1 });
     expect((await write('/loudness/nope/running', false)).status).toBe(404);
     expect((await write('/loudness/pgm20/running', true)).status).toBe(200);
-    expect(cluster.state.loudness['pgm20']).toEqual({ running: true });
+    expect(cluster.state.loudness['pgm20']).toEqual({ running: true, resets: resets + 1 });
     await rest('DELETE', `/scenes/${id}`);
   });
 
