@@ -441,20 +441,30 @@ test('the EQ curve in the processing panel is as wide as the panel gives it', as
   }
 });
 
-test('a replica serving a new faderz version shows a reload note, which a dismiss keeps away until the next one', { tag: '@mock' }, async ({ page, request }) => {
-  await live(page);
-  const note = page.getByTestId('new-version');
-  await expect(note).toHaveCount(0);
-  const session = await debug(page, 'session');
-  const roll = async (faderz: string) => expect((await request.post(`/__mock/build?session=${session}&faderz=${faderz}`)).ok()).toBe(true);
-  await roll('99.0.0');
-  await expect(note).toContainText('A new faderz version is running (99.0.0)');
-  await expect(note.getByRole('button', { name: 'RELOAD' })).toBeVisible();
-  await note.getByRole('button', { name: 'Dismiss' }).click();
-  await expect(note).toHaveCount(0);
-  await roll('99.0.1');
-  await expect(note).toContainText('(99.0.1)');
-  await note.getByRole('button', { name: 'RELOAD' }).click();
-  await page.waitForLoadState('load');
-  await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
+test('a replica serving a newer faderz version shows a reload bar that covers nothing, which LATER keeps away until the next one', { tag: '@mock' }, async ({ page, request }) => {
+  for (const width of [1440, 412]) {
+    await page.setViewportSize({ width, height: 900 });
+    await live(page);
+    const note = page.getByTestId('new-version');
+    await expect(note).toHaveCount(0);
+    const session = await debug(page, 'session');
+    const roll = async (faderz: string) => expect((await request.post(`/__mock/build?session=${session}&faderz=${faderz}`)).ok()).toBe(true);
+    await roll(`99.0.${width}`);
+    await expect(note).toContainText(`A new faderz version is running (99.0.${width})`);
+    // A bar of its own: it ends where the view begins.
+    const bar = (await note.boundingBox())!;
+    const view = (await page.locator('main').boundingBox())!;
+    expect(bar.y + bar.height, `${width} px`).toBeLessThanOrEqual(view.y + 0.5);
+    await note.getByRole('button', { name: 'LATER' }).click();
+    await expect(note).toHaveCount(0);
+    await roll(`99.1.${width}`);
+    await expect(note).toContainText(`(99.1.${width})`);
+    // An older one is no news.
+    await roll('0.0.1');
+    await expect(note).toHaveCount(0);
+    await roll(`99.2.${width}`);
+    await Promise.all([page.waitForEvent('load'), note.getByRole('button', { name: 'RELOAD' }).click()]);
+    expect(await page.evaluate(() => (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).type)).toBe('reload');
+    await expect(page.getByTestId('link')).toHaveAttribute('data-state', 'Live');
+  }
 });
