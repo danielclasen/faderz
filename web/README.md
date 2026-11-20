@@ -450,8 +450,11 @@ restores the current value. Parameters take units: `2.5k` or `2.5 kHz`,
 in the selected unit (ms, frames at the shape's frame rate, or
 samples) or with a suffix: `40ms`, `2f`, `1.5s`, `1920smp`; the arrow
 keys step one unit, Shift a tenth. A channel's delay shows the range of
-its delay line in the selected unit and caps an entry at it; a channel
-without a line has its delay greyed out, marked "No delay line".
+its delay line in the selected unit; a channel without a line has its
+delay greyed out, marked "No delay line". A typed value outside the
+range is never clamped: the field is restored and the range shown as
+an error. A scene recall that set a channel's delay to 0, its stored
+delay past the line, says so in a notice.
 Matrix grids move with the arrow keys.
 The slider of a parameter or a send level moves by the distance dragged,
 from where it was, and never jumps to the touch point; its arrows step a

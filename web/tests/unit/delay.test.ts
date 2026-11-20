@@ -20,11 +20,13 @@ describe('delay entry', () => {
     expect(parseDelay('1 frame', 'ms', SR, NTSC)).toBe(1602);
   });
 
-  it('refuses text that is no delay and clamps to 0 to 5 s', () => {
+  // The entry refuses a value outside the range; capping it would write a
+  // delay nobody typed.
+  it('refuses text that is no delay and never clamps one out of range', () => {
     expect(parseDelay('soon', 'ms', SR, PAL)).toBeNull();
     expect(parseDelay('3 parsecs', 'ms', SR, PAL)).toBeNull();
-    expect(parseDelay('-5', 'ms', SR, PAL)).toBe(0);
-    expect(parseDelay('9 s', 'ms', SR, PAL)).toBe(MAX_DELAY_SAMPLES);
+    expect(parseDelay('-5', 'ms', SR, PAL)).toBe(-240);
+    expect(parseDelay('9 s', 'ms', SR, PAL)).toBe(432000);
     expect(MAX_DELAY_SAMPLES / SR).toBe(5);
   });
 
@@ -42,13 +44,6 @@ describe('delay entry', () => {
     expect(delayMax(channel(4800))).toBe(4800);
     expect(delayMax(channel())).toBeNull();
     expect(delayMax(undefined)).toBe(MAX_DELAY_SAMPLES);
-  });
-
-  it('caps a typed delay at the line it is given', () => {
-    expect(parseDelay('1 s', 'ms', SR, PAL, 4800)).toBe(4800);
-    expect(parseDelay('3f', 'ms', SR, PAL, 4800)).toBe(4800);
-    expect(parseDelay('99.9', 'ms', SR, PAL, 4800)).toBe(4795);
-    expect(parseDelay('9 s', 'ms', SR, PAL, MAX_DELAY_SAMPLES)).toBe(MAX_DELAY_SAMPLES);
   });
 
   it('shows the range in the selected unit', () => {

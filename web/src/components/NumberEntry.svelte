@@ -1,6 +1,7 @@
 <script lang="ts">
   // Typed entry of one numeric control: Enter or leaving the field writes
-  // the value, clamped to min..max and rounded to step; Escape restores the
+  // the value, rounded to step; one outside min..max is never clamped: the
+  // field is restored and the range shown as an error. Escape restores the
   // current value. The field never resizes with its text.
   import { getMixer } from '../lib/state/mixer.svelte';
 
@@ -32,7 +33,12 @@
       input.value = shown;
       return;
     }
-    const v = Number((Math.round(Math.min(max, Math.max(min, typed)) / step) * step).toFixed(decimals));
+    if (typed < min || typed > max) {
+      input.value = shown;
+      mixer.notify('error', `${label} takes ${min} to ${max}${unit ? ` ${unit}` : ''}`, path);
+      return;
+    }
+    const v = Number((Math.round(typed / step) * step).toFixed(decimals));
     input.value = v.toFixed(decimals);
     if (v !== value) mixer.set(path, v);
   }

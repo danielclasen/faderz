@@ -1,7 +1,7 @@
 // REST-backed operator actions. Each carries a fresh command id; RestClient
 // retries a failed request with the same id on the next endpoint.
 
-import type { About, Change, CommandResult, Scene } from '../contract/types';
+import type { About, Change, CommandResult, RecallResult, Scene } from '../contract/types';
 import { RestClient } from '../net/rest';
 import { restBase } from '../sync/endpoints';
 import { uuid } from '../net/ids';
@@ -44,9 +44,14 @@ async function run<T>(mixer: MixerStore, what: string, fn: () => Promise<T>): Pr
 }
 
 export function recallScene(mixer: MixerStore, id: string, crossfadeMs: number) {
-  return run(mixer, 'Scene recall', () =>
-    client().request<CommandResult>('POST', `/scenes/${id}/recall`, { commandId: uuid(), crossfadeMs }),
-  );
+  return run(mixer, 'Scene recall', async () => {
+    const r = await client().request<RecallResult>('POST', `/scenes/${id}/recall`, { commandId: uuid(), crossfadeMs });
+    if (r.delaysNotApplied) {
+      const names = r.delaysNotApplied.map((c) => mixer.shape?.channels.find((s) => s.id === c)?.name ?? c);
+      mixer.notify('error', `Scene recall: the delay of ${names.join(', ')} is past the delay line and was set to 0`);
+    }
+    return r;
+  });
 }
 
 export function createScene(mixer: MixerStore, name: string) {

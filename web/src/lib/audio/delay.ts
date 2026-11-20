@@ -55,9 +55,10 @@ export function formatDelay(samples: number, unit: DelayUnit, sampleRate: number
 /**
  * Typed delay to samples, or null when it does not parse. A bare number is
  * in `unit`; a suffix (ms, s, f, fr, frames, smp, samples) overrides it.
- * The result is rounded to whole samples and clamped to 0..max.
+ * The result is rounded to whole samples and never clamped: the caller
+ * refuses one outside the range the element takes.
  */
-export function parseDelay(text: string, unit: DelayUnit, sampleRate: number, frameRate: FrameRate, max = MAX_DELAY_SAMPLES): number | null {
+export function parseDelay(text: string, unit: DelayUnit, sampleRate: number, frameRate: FrameRate): number | null {
   const m = /^\s*(-?\d+(?:[.,]\d*)?|-?[.,]\d+)\s*([a-z]*)\s*$/i.exec(text);
   if (!m) return null;
   const n = Number(m[1]!.replace(',', '.'));
@@ -66,5 +67,5 @@ export function parseDelay(text: string, unit: DelayUnit, sampleRate: number, fr
   if (u === undefined || !Number.isFinite(n)) return null;
   const samples =
     u === 'samples' ? n : u === 's' ? n * sampleRate : u === 'ms' ? (n / 1000) * sampleRate : (n / fps(frameRate)) * sampleRate;
-  return Math.min(max, Math.max(0, Math.round(samples)));
+  return Math.round(samples);
 }

@@ -3,8 +3,9 @@
   // leaving the field writes it; Escape restores the current value; arrow
   // keys step one unit (Shift: a tenth). A suffix (ms, f, smp, s) overrides
   // the selected unit for one entry. A channel's entry shows the range of
-  // its delay line and is capped at it; without a line it is greyed out and
-  // writes nothing.
+  // its delay line; without a line it is greyed out and writes nothing. A
+  // value outside the range is never capped: the field is restored and the
+  // range shown as an error.
   import type { ChannelShape } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { delayMax, delayRange, formatDelay, fromSamples, parseDelay, type DelayUnit } from '../lib/audio/delay';
@@ -31,15 +32,22 @@
     shape.frameRate.denominator === 1 ? `${shape.frameRate.numerator}` : (shape.frameRate.numerator / shape.frameRate.denominator).toFixed(2),
   );
   let input: HTMLInputElement | undefined = $state();
+  /** The last entry was outside the range: the range shows as an error. */
+  let refused = $state(false);
 
   function write(samples: number): void {
     if (max === null) return;
+    refused = samples < 0 || samples > max;
+    if (refused) {
+      if (input) input.value = shown;
+      return;
+    }
     if (input) input.value = formatDelay(samples, unit, shape.sampleRate, shape.frameRate);
     if (samples !== value) mixer.set(path, samples);
   }
   function commit(): void {
     if (!input) return;
-    const samples = parseDelay(input.value, unit, shape.sampleRate, shape.frameRate, max ?? 0);
+    const samples = parseDelay(input.value, unit, shape.sampleRate, shape.frameRate);
     if (samples === null) input.value = shown;
     else write(samples);
   }
@@ -54,8 +62,7 @@
       e.preventDefault();
       const one = fromSamples(1, unit, shape.sampleRate, shape.frameRate);
       const step = (e.shiftKey ? 0.1 : 1) / one;
-      const next = Math.min(max ?? 0, Math.max(0, Math.round(value + (e.key === 'ArrowUp' ? step : -step))));
-      write(next);
+      write(Math.round(value + (e.key === 'ArrowUp' ? step : -step)));
     }
   }
 </script>
@@ -74,7 +81,8 @@
     onkeydown={keydown}
     onfocus={() => input?.select()}
     aria-label={`${label} in ${UNITS.find((u) => u.id === unit)!.name}, up to ${Number(((max ?? 0) / shape.sampleRate).toFixed(2))} seconds`}
-    aria-describedby={channel ? `${path}-range` : undefined}
+    aria-describedby={channel || refused ? `${path}-range` : undefined}
+    aria-invalid={refused}
     data-path={path}
   />
   <div class="units" role="radiogroup" aria-label={`${label} unit`}>
@@ -90,8 +98,10 @@
       >
     {/each}
   </div>
-  {#if channel}
-    <span class="range" id={`${path}-range`}>{max === null ? 'No delay line' : delayRange(max, unit, shape.sampleRate, shape.frameRate)}</span>
+  {#if channel || refused}
+    <span class="range" class:error={refused} id={`${path}-range`} role={refused ? 'alert' : undefined}
+      >{max === null ? 'No delay line' : delayRange(max, unit, shape.sampleRate, shape.frameRate)}</span
+    >
   {/if}
 </div>
 
@@ -138,5 +148,8 @@
     grid-column: 2 / -1;
     font-size: 11px;
     color: var(--text-dim);
+  }
+  .range.error {
+    color: var(--err);
   }
 </style>

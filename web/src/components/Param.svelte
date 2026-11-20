@@ -28,7 +28,10 @@
 
   let field: HTMLInputElement | undefined = $state();
 
-  /** Writes a typed value, clamped and rounded like the slider's. */
+  /**
+   * Writes a typed value, rounded like the slider's. One outside min..max
+   * is never clamped: the field is restored and the range shown as an error.
+   */
   function commit(): void {
     if (!field) return;
     const typed = parseEntry(field.value, min);
@@ -36,7 +39,12 @@
       field.value = fit(shown, 8);
       return;
     }
-    const v = Number((Math.round(Math.min(max, Math.max(min, typed)) / step) * step).toFixed(4));
+    if (typed < min || typed > max) {
+      field.value = fit(shown, 8);
+      mixer.notify('error', `${label} takes ${min} to ${max}${unit}`, path);
+      return;
+    }
+    const v = Number((Math.round(typed / step) * step).toFixed(4));
     if (v !== value) mixer.set(path, v);
     field.value = fit(format ? format(v) : `${Number(v.toFixed(step < 1 ? 1 : 0))}${unit}`, 8);
   }

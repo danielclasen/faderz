@@ -526,19 +526,34 @@ test('enters a channel delay in frames and shows it in ms', { tag: '@mock' }, as
   await patch(request, '/channels/ch2/delay', 0);
 });
 
-test('shows a channel delay range in the selected unit and caps an entry at the delay line', { tag: '@mock' }, async ({ page, request }) => {
+// An entry past the line is refused, never capped: a capped delay is one
+// nobody typed, and lip sync off by the difference goes unnoticed.
+test('shows a channel delay range in the selected unit and refuses an entry past the delay line', { tag: '@mock' }, async ({ page, request }) => {
   await live(page);
   await page.locator('[data-channel="st1"] .head').click();
   const panel = page.getByRole('region', { name: 'Music processing' });
   await expect(panel.getByText('0 to 100.0 ms')).toBeVisible();
   await panel.getByRole('radio', { name: 'frames' }).click();
-  await expect(panel.getByText('0 to 2.50 fr')).toBeVisible();
+  const range = panel.getByText('0 to 2.50 fr');
+  await expect(range).toBeVisible();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
   const entry = panel.locator('input[data-path="/channels/st1/delay"]');
-  await entry.fill('1 s');
+  await entry.fill('2');
   await entry.press('Enter');
   await settled(page);
+  expect((await serverState(request)).state.channels['st1']!.delay).toBe(3840);
+  await entry.fill('1 s');
+  await entry.press('Enter');
+  await expect(panel.getByRole('alert')).toHaveText('0 to 2.50 fr');
+  await expect(entry).toHaveAttribute('aria-invalid', 'true');
+  await expect(entry).toHaveValue('2.00');
+  await entry.press('ArrowUp');
+  await expect(entry).toHaveValue('2.00');
+  await entry.fill('2.5');
+  await entry.press('Enter');
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await settled(page);
   expect((await serverState(request)).state.channels['st1']!.delay).toBe(4800);
-  await expect(entry).toHaveValue('2.50');
   await patch(request, '/channels/st1/delay', 0);
 });
 
@@ -588,6 +603,12 @@ test('sets AFV rise, hold, fall and closed level from the AFV view', async ({ pa
   await off.press('Tab');
   await settled(page);
   expect((await serverState(request)).state.afv['ch13']).toMatchObject({ holdMs: 300, offLevel: -20 });
+  // Past the range: refused and restored, never clamped.
+  await hold.fill('999999');
+  await hold.press('Enter');
+  await expect(hold).toHaveValue('300');
+  await expect(page.getByText(/Amb 1 AFV hold time takes 0 to 10000 ms/)).toBeVisible();
+  expect((await serverState(request)).state.afv['ch13']!.holdMs).toBe(300);
   await patch(request, '/afv/ch13/holdMs', 0);
   await patch(request, '/afv/ch13/offLevel', -90);
 });
@@ -1127,6 +1148,12 @@ test('types an EQ frequency and a gate threshold into the processing panel', asy
   await thr.fill('-42');
   await thr.press('Enter');
   await settled(page);
+  // Past the range: refused and restored, never clamped.
+  const typed = await freq.inputValue();
+  await freq.fill('99k');
+  await freq.press('Enter');
+  await expect(freq).toHaveValue(typed);
+  await expect(page.getByText(/Freq takes 20 to 20000/)).toBeVisible();
   const ch = (await serverState(request)).state.channels['ch5']!;
   expect(ch.eq.bands[1]!.freq).toBe(1200);
   expect(ch.gate.threshold).toBe(-42);
