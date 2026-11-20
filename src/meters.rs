@@ -288,14 +288,16 @@ const LRA_SETTLED: u64 = 60 * 48_000;
 /// Samples in one meter window.
 const WINDOW: u64 = 4_800;
 
-/// Bit 0 `integratedValid`: nothing dropped since the measurement
-/// started. Bit 1 `lraStable`: that, and 60 s measured since.
+/// Bit 0 `integratedValid`: an integrated loudness with no slice since
+/// the measurement started a gap or lost. Bit 1 `lraStable`: that, and
+/// 60 s measured since.
 fn flags(m: &OutputMeters) -> i16 {
     let measured = match (m.window, m.since) {
         (Some(w), Some(since)) => ((w + 1) * WINDOW).saturating_sub(since),
         _ => 0,
     };
-    i16::from(m.valid) | i16::from(m.valid && measured >= LRA_SETTLED) << 1
+    let valid = m.integrated.is_some() && m.gaps == 0 && m.lost == 0;
+    i16::from(valid) | i16::from(valid && measured >= LRA_SETTLED) << 1
 }
 
 /// A full-scale-1.0 level in centi-dB; silence is the floor, NaN null.
@@ -612,7 +614,6 @@ mod tests {
         let pgm = OutputMeters {
             window: Some(10),
             since: Some(0),
-            valid: true,
             peak: vec![lin(0.0), lin(3.21)],
             true_peak: vec![lin(0.5), 0.0],
             rms: vec![lin(-18.0), lin(-18.5)],
@@ -638,22 +639,24 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// Loudness: integratedValid while nothing was dropped, lraStable from
-    /// 60 s of measurement on.
+    /// Loudness: integratedValid while a measurement has no gap and lost
+    /// no slice, lraStable from 60 s of measurement on.
     #[test]
-    fn the_loudness_flags_follow_validity_and_measured_time() {
-        let m = |valid, window| OutputMeters {
-            valid,
+    fn the_loudness_flags_follow_gaps_and_measured_time() {
+        let m = |gaps, lost, window| OutputMeters {
+            gaps,
+            lost,
             window: Some(window),
             since: Some(4_800),
             integrated: Some(-23.0),
             range: Some(5.0),
             ..Default::default()
         };
-        assert_eq!(flags(&m(true, 10)), 1);
-        assert_eq!(flags(&m(true, 599)), 1);
-        assert_eq!(flags(&m(true, 600)), 3);
-        assert_eq!(flags(&m(false, 600)), 0);
-        assert_eq!(flags(&OutputMeters::default()), 0);
+        assert_eq!(flags(&m(0, 0, 10)), 1);
+        assert_eq!(flags(&m(0, 0, 599)), 1);
+        assert_eq!(flags(&m(0, 0, 600)), 3);
+        assert_eq!(flags(&m(1, 0, 600)), 0, "a gap");
+        assert_eq!(flags(&m(0, 1, 600)), 0, "a slice lost");
+        assert_eq!(flags(&OutputMeters::default()), 0, "nothing measured");
     }
 }
