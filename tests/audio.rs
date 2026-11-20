@@ -1574,6 +1574,13 @@ async fn the_engine_counters_reach_every_connection() {
         for i in &inputs[1..] {
             assert_ne!(i["state"], "attached", "{mode}: {i}");
         }
+        // Each loudness measurement, the bus's and the mix-minus's.
+        let loudness = first["loudness"].as_array().unwrap();
+        let ids: Vec<&str> = loudness.iter().map(|l| l["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["pgm", "mm1"], "{mode}");
+        for l in loudness {
+            assert!(l["gaps"].is_u64() && l["lost"].is_u64(), "{mode}: {l}");
+        }
         // Then once a second: two more within 3 s, not in one burst.
         let (_, _) = next_of(&mut ws, "counters").await;
         let at = Instant::now();
@@ -1584,6 +1591,83 @@ async fn the_engine_counters_reach_every_connection() {
             "{mode}: {gap:?} between two counters messages"
         );
     }
+    server.stop().await;
+}
+
+/// The `loudness` entry of `id` in the next `counters` message on `ws`.
+async fn loudness_of(ws: &mut Ws, id: &str) -> Value {
+    let (m, _) = next_of(ws, "counters").await;
+    let all = m["loudness"].as_array().unwrap().clone();
+    all.into_iter()
+        .find(|l| l["id"] == id)
+        .unwrap_or_else(|| panic!("no loudness of {id} in {m}"))
+}
+
+/// The `counters` message names each loudness measurement's start and
+/// whether it started at the last reset applied: none was, so each
+/// restarted; a reset of pgm starts pgm's there, and mm1's still did not.
+/// An input that stops while it feeds the programme is taken down by the
+/// engine's log: its slices count as gaps, and the integrated loudness
+/// carries on over them, valid and shown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_input_counts_gaps_and_the_integrated_loudness_holds() {
+    const INTEGRATED: usize = PGM_PEAK + 8;
+    const FLAGS: usize = PGM_PEAK + 13;
+    let domain = domain("loud-gaps");
+    let data = data("loud-gaps");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let ch1 = Source::sine(&domain.0, &flows.ch1, 0.5, 440);
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.pgm).await;
+    patch(&server, &[("/channels/ch1/fader", json!(0))]).await;
+    let session = "session-g-0123456789abcdef";
+    let url = format!("ws://{}/api/v1/ws?session={session}", server.api);
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    let hello = json!({ "type": "hello", "session": session, "kind": "ui", "mode": "primary" });
+    ws.send(Message::text(hello.to_string())).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut pgm = loudness_of(&mut ws, "pgm").await;
+    while pgm["since"].is_null() {
+        assert!(Instant::now() < deadline, "pgm measures: {pgm}");
+        pgm = loudness_of(&mut ws, "pgm").await;
+    }
+    assert_eq!(pgm["restarted"], true, "no reset applied: {pgm}");
+    let since = pgm["since"].as_str().unwrap().to_owned();
+
+    let (status, body) = post(server.api, "/loudness/reset", &json!({ "ids": ["pgm"] })).await;
+    assert_eq!(status, 204, "{body}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while pgm["restarted"] != false || pgm["since"] == since.as_str() {
+        assert!(Instant::now() < deadline, "the reset starts pgm: {pgm}");
+        pgm = loudness_of(&mut ws, "pgm").await;
+    }
+    assert!(
+        pgm["since"].as_str().unwrap() > since.as_str(),
+        "{since} -> {pgm}"
+    );
+    let mm1 = loudness_of(&mut ws, "mm1").await;
+    assert_eq!(mm1["restarted"], true, "mm1 was not reset: {mm1}");
+
+    // ch1 stops: the engine prunes it, its log takes it down, and the
+    // programme's slices are gaps from then on.
+    let gaps = pgm["gaps"].as_u64().unwrap();
+    drop(ch1);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while pgm["gaps"].as_u64().unwrap() <= gaps + 10 {
+        assert!(Instant::now() < deadline, "no gaps counted: {pgm}");
+        pgm = loudness_of(&mut ws, "pgm").await;
+    }
+    assert_eq!(pgm["restarted"], false, "a gap restarts nothing: {pgm}");
+    let v = meter_values(&server, 1).await;
+    assert_ne!(v[INTEGRATED], i16::MIN, "integrated loudness shown: {v:?}");
+    assert_eq!(v[FLAGS] & 1, 1, "integrated loudness valid: {v:?}");
     server.stop().await;
 }
 

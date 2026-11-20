@@ -68,7 +68,9 @@ fn ducking() -> Vec<(&'static str, Value)> {
 struct Set {
     at: Dir,
     domain: Dir,
-    _sources: Vec<Source>,
+    /// The sources, in the order the set was given them; dropping one
+    /// stops its flow.
+    sources: Vec<Source>,
     inputs: Value,
     outputs: Value,
     shape: Value,
@@ -138,7 +140,7 @@ impl Set {
             tls: certificates(&at.0, REPLICAS),
             at,
             domain,
-            _sources: sources,
+            sources,
             inputs,
             outputs: Value::Object(outputs),
             shape,
@@ -715,10 +717,7 @@ fn every_replicas_meters_follow_the_faders() {
 /// A reset of an output's loudness posted to one replica restarts the
 /// measurement on every replica: the highest momentary loudness since
 /// the last reset falls on each to the level the output has then, and
-/// the replicas agree on that highest momentary loudness. Not on the
-/// integrated loudness: samplez-dsp keeps it invalid after a gap in the
-/// meter slices until the next reset (loudness.rs, `Loudness::gap`), so
-/// a starved host would leave it unmeasured.
+/// the replicas agree on that highest momentary loudness.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -787,6 +786,125 @@ fn a_loudness_reset_restarts_every_replicas_measurement() {
         !each.contains(&null) && spread <= 5
     });
     assert!(agree, "highest momentary loudness {each:?} centi-LU");
+}
+
+/// Replica `n`'s loudness measurement of `id` as its `counters` message
+/// carries it.
+fn loudness(nodes: &[Option<Node>], n: usize, id: &str) -> Value {
+    let audio = node(nodes, n).server.audio.clone().expect("an engine");
+    let (counters, _) = audio.readings();
+    let all = counters["loudness"].as_array().unwrap().clone();
+    all.into_iter().find(|l| l["id"] == id).expect("measured")
+}
+
+/// A reset starts every replica's measurement at its index, so none
+/// reports it restarted; a replica restarted after it measures from its
+/// own start and reports so, while the others do not. An input that
+/// stops while it feeds the programme is taken down by the log on every
+/// replica: each counts its slices as gaps, alike on those that lost
+/// none, and keeps its integrated loudness.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_restarted_replica_reports_its_measurement_restarted_and_every_one_counts_gaps() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut set, listeners) = Set::new("gaps");
+    let mut nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/ch1/fader", json!(0)),
+            ("/channels/ch2/mute", json!(true)),
+        ],
+    );
+    let api = node(&nodes, 1).server.api;
+    let (status, body) =
+        node(&nodes, 1)
+            .runtime
+            .block_on(post(api, "/loudness/reset", &json!({ "ids": ["pgm"] })));
+    assert_eq!(status, 204, "{body}");
+    for n in 0..REPLICAS {
+        let started = until(30, || loudness(&nodes, n, "pgm")["restarted"] == false);
+        assert!(
+            started,
+            "replica {n}: {}: {}",
+            loudness(&nodes, n, "pgm"),
+            states(&nodes)
+        );
+    }
+
+    // A follower killed and started again after the reset.
+    let leader = node(&nodes, 0).ops("/readyz").1["replica"]["leader"].clone();
+    let again = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).ops("/readyz").1["replica"]["id"] != leader)
+        .unwrap();
+    nodes[again].take().unwrap().kill();
+    nodes[again] = Some(set.start(again, None));
+    steady(&nodes, again);
+    let measures = until(30, || !loudness(&nodes, again, "pgm")["since"].is_null());
+    assert!(
+        measures,
+        "the restarted replica measures: {}",
+        states(&nodes)
+    );
+    for n in 0..REPLICAS {
+        let l = loudness(&nodes, n, "pgm");
+        assert_eq!(l["restarted"], n == again, "replica {n}: {l}");
+    }
+
+    // ch1 stops: every replica counts the programme's slices as gaps
+    // while the log holds it down and its fader is open.
+    let before: Vec<u64> = (0..REPLICAS)
+        .map(|n| loudness(&nodes, n, "pgm")["gaps"].as_u64().unwrap())
+        .collect();
+    drop(set.sources.remove(0));
+    for (n, before) in before.iter().enumerate() {
+        let counted = until(30, || {
+            loudness(&nodes, n, "pgm")["gaps"].as_u64().unwrap() > before + 10
+        });
+        assert!(
+            counted,
+            "replica {n} counts no gaps: {}: {}",
+            loudness(&nodes, n, "pgm"),
+            states(&nodes)
+        );
+    }
+    // Closed, ch1 feeds the programme nothing: the counts hold.
+    write(&nodes, 0, &[("/channels/ch1/fader", json!(-90))]);
+    let mut last = Vec::new();
+    let held = until(30, || {
+        let now: Vec<Value> = (0..REPLICAS).map(|n| loudness(&nodes, n, "pgm")).collect();
+        let same = now == last;
+        last = now;
+        std::thread::sleep(Duration::from_millis(1500));
+        same
+    });
+    assert!(held, "the gap counts do not settle: {last:?}");
+    let whole: Vec<&Value> = last.iter().filter(|l| l["lost"] == 0).collect();
+    assert!(
+        whole.windows(2).all(|w| w[0]["gaps"] == w[1]["gaps"]),
+        "replicas that lost no slice count other gaps: {last:?}"
+    );
+    for n in 0..REPLICAS {
+        let audio = node(&nodes, n).server.audio.clone().unwrap();
+        let status = audio.engine().status();
+        assert!(
+            status.outputs[0].meters.integrated.is_some(),
+            "replica {n} dropped its integrated loudness: {:?}",
+            status.outputs[0].meters
+        );
+    }
+    for node in nodes.into_iter().flatten() {
+        node.kill();
+    }
 }
 
 /// Every replica of a set with engines lists all three in its `replicas`

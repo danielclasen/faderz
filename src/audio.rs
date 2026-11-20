@@ -24,7 +24,7 @@ use samplez::{
     Counters, DuckSetting, DuckTargets, Engine, Entry, EntryError, GainError, InputState,
     InputStatus, Replication, Report, ResetError, Targets,
 };
-use samplez_dsp::StripParam;
+use samplez_dsp::{StripParam, WINDOW};
 use samplez_replica::Replica;
 use samplez_replica::bridge::EngineAudio;
 use samplez_replica::contact::Timing;
@@ -110,6 +110,11 @@ pub struct Audio {
     resent: AtomicU64,
     resend_pending: Gauge,
     inputs: Mutex<InputHealth>,
+    /// Per bus, aux or mix-minus, the sample index its measurement starts
+    /// at after the last reset this engine applied: the reset delta's
+    /// `atIndex` placed as the engine places it; none before the first,
+    /// or for one applied without its delta ([`Audio::follow_resets`]).
+    reset_at: Mutex<BTreeMap<String, u64>>,
 }
 
 /// What the engine was sent: every coefficient, each input's flow, none
@@ -257,6 +262,7 @@ impl Audio {
                 &[],
             ),
             inputs: Mutex::new(InputHealth::new(metrics, shape)),
+            reset_at: Mutex::default(),
             ops,
         }
     }
@@ -472,7 +478,9 @@ impl Audio {
         }
     }
 
-    /// Restarts the measurement of bus `id` at `at` rounded up to a block.
+    /// Restarts the measurement of bus `id` at `at` rounded up to a block,
+    /// and notes where it starts then; `at` 0 is a reset whose index is
+    /// not known, which notes none.
     async fn reset_loudness(&self, layout: &Layout, id: &str, at: u64) {
         debug_assert!(self.block > 0, "a block size to place the reset in");
         let Some(meter) = layout.loudness_meter(id) else {
@@ -480,6 +488,13 @@ impl Audio {
             return;
         };
         let mut at = at.next_multiple_of(self.block);
+        {
+            let mut noted = self.reset_at.lock().expect("reset_at lock poisoned");
+            match at {
+                0 => noted.remove(id),
+                at => noted.insert(id.to_owned(), at.next_multiple_of(WINDOW)),
+            };
+        }
         loop {
             match self.engine.reset_loudness(meter, at) {
                 Ok(()) => return,
@@ -708,8 +723,39 @@ impl Audio {
                 })
             })
             .collect();
-        let counters = json!({ "values": self.counters(&status), "inputs": inputs });
+        let counters = json!({
+            "values": self.counters(&status),
+            "inputs": inputs,
+            "loudness": self.loudness(&status),
+        });
         (counters, engine_status(&status))
+    }
+
+    /// Model `LoudnessHealth` of each bus, aux and mix-minus output in
+    /// shape order: the gaps and lost slices of its measurement, when it
+    /// started in UTC, and whether it restarted ([`restarted`]).
+    fn loudness(&self, status: &samplez::Status) -> Vec<Value> {
+        let layout = Layout::of(&self.shape);
+        let now = crate::replica::tai_samples();
+        let reset_at = self.reset_at.lock().expect("reset_at lock poisoned");
+        let ids = (self.shape.buses.iter().map(|b| &b.id))
+            .chain(self.shape.auxes.iter().map(|a| &a.id))
+            .chain(self.shape.mix_minus.iter().map(|m| &m.id));
+        ids.filter_map(|id| {
+            let meter = layout.loudness_meter(id)?;
+            let meters = match meter.checked_sub(status.outputs.len()) {
+                None => &status.outputs.get(meter)?.meters,
+                Some(m) => &status.meters.get(m)?.meters,
+            };
+            Some(json!({
+                "id": id,
+                "gaps": meters.gaps,
+                "lost": meters.lost,
+                "since": meters.since.map(|i| utc_of(i, now)),
+                "restarted": restarted(meters.since, reset_at.get(id).copied(), now),
+            }))
+        })
+        .collect()
     }
 
     /// The model `Counters` of the `counters` message: the engine's counts
@@ -805,6 +851,39 @@ fn hold_entry(held: &mut Targets, entry: Entry) {
         }
         _ => {}
     }
+}
+
+/// How long after the index a reset starts at a measurement that has not
+/// moved to it yet counts as pending, not restarted: the counters read
+/// the engine's status once a second.
+const RESET_PENDING: u64 = 2 * crate::replica::RATE;
+
+/// Whether a measurement that started at `since` did not start at the
+/// last reset this replica applied, which starts it at `reset_at`: none
+/// was applied, or it started elsewhere, as one does that restarted with
+/// its process after the reset. Within [`RESET_PENDING`] of `reset_at` at
+/// `now` the reset is pending, not missed. A measurement not started yet
+/// has not restarted.
+fn restarted(since: Option<u64>, reset_at: Option<u64>, now: u64) -> bool {
+    match (since, reset_at) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(since), Some(at)) => since != at && now >= at.saturating_add(RESET_PENDING),
+    }
+}
+
+/// Sample index `index` of libmxl's clock, CLOCK_TAI in samples, in RFC
+/// 3339 UTC: placed back from the system clock by how far it lies behind
+/// `now`, the same clock's index now, so the TAI-UTC offset falls out.
+fn utc_of(index: u64, now: u64) -> String {
+    let behind = Duration::from_nanos(
+        (now.saturating_sub(index) as u128 * 1_000_000_000 / u128::from(crate::replica::RATE))
+            as u64,
+    );
+    let at = std::time::SystemTime::now()
+        .checked_sub(behind)
+        .unwrap_or(std::time::UNIX_EPOCH);
+    crate::app::rfc3339(at)
 }
 
 /// The engine counters [`Audio::counters`] carries, by field name.
@@ -1182,6 +1261,37 @@ pub fn owned_state_of(replica: &Replica<Mixer>) -> (Value, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A measurement restarted when no reset was applied, or when it
+    /// started elsewhere than the last one applied starts it, once that
+    /// start is past by [`RESET_PENDING`]; one not started has not.
+    #[test]
+    fn a_measurement_restarted_unless_it_started_at_the_last_reset() {
+        let at = 100 * WINDOW;
+        let later = at + RESET_PENDING;
+        assert!(!restarted(None, None, later));
+        assert!(!restarted(None, Some(at), later));
+        // None applied: it started with the process.
+        assert!(restarted(Some(7 * WINDOW), None, later));
+        assert!(!restarted(Some(at), Some(at), later));
+        // Started elsewhere: with the process after the reset, or late.
+        assert!(restarted(Some(at + WINDOW), Some(at), later));
+        assert!(restarted(Some(at - WINDOW), Some(at), later));
+        // Applied, and not reached yet: pending.
+        assert!(!restarted(Some(at - WINDOW), Some(at), later - 1));
+    }
+
+    /// A start on libmxl's clock reads as the UTC time that far back from
+    /// now.
+    #[test]
+    fn a_start_reads_as_utc_that_far_back() {
+        let now = crate::replica::tai_samples();
+        let minute = crate::app::rfc3339(std::time::SystemTime::now() - Duration::from_secs(60));
+        let since = utc_of(now - 60 * crate::replica::RATE, now);
+        // Equal to the minute: both read the system clock within it.
+        assert_eq!(since[..17], minute[..17], "{since} {minute}");
+        assert!(since.ends_with('Z'), "{since}");
+    }
 
     #[test]
     fn a_reset_path_names_its_bus() {

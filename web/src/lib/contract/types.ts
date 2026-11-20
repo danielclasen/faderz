@@ -576,11 +576,24 @@ export interface InputHealth {
   lateBlocks: number;
   tooLateBlocks: number;
 }
+/** A bus, aux or mix-minus output's loudness measurement as the replica's engine runs it (model.schema.json LoudnessHealth). */
+export interface LoudnessHealth {
+  id: Id;
+  /** 10 ms slices that were gaps: an input down, or a loudness not finite. Equal on every replica that lost none. */
+  gaps: number;
+  /** 10 ms slices this replica did not meter whole. */
+  lost: number;
+  /** When the measurement started, RFC 3339 UTC; null before it measured. */
+  since: string | null;
+  /** It did not start at the last reset this replica applied, or none was applied. */
+  restarted: boolean;
+}
 export interface CountersMessage {
   type: 'counters';
   replica: ReplicaRef;
   values: Record<string, number>;
   inputs: InputHealth[];
+  loudness: LoudnessHealth[];
 }
 export interface ErrorMessage {
   type: 'error';

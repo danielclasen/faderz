@@ -3385,6 +3385,45 @@
         }
       }
     },
+    "LoudnessHealth": {
+      "description": "The loudness measurement of a bus, aux or mix-minus output as the sending replica's engine runs it, in the same reading as the counters beside it. The integrated loudness and range carry on over gaps and lost slices, leaving them out.",
+      "type": "object",
+      "required": [
+        "id",
+        "gaps",
+        "lost",
+        "since",
+        "restarted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "gaps": {
+          "description": "10 ms slices since the measurement started that were gaps: an input taken down by the log fed the output, or the loudness was not finite. Equal on every replica that lost none.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "lost": {
+          "description": "10 ms slices since the measurement started that this replica did not meter whole, such as samples an overrun skipped while its host was starved of CPU; on this replica alone, so its integrated loudness may differ slightly from the other replicas'.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "since": {
+          "description": "When the measurement started, in UTC: at the reset that started it, or at the engine's start; null before it measured anything.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "restarted": {
+          "description": "The measurement did not start at the last loudness reset this replica applied, or none was applied: its process started after that reset, or there was none, so programme loudness before since is not in it.",
+          "type": "boolean"
+        }
+      }
+    },
     "ScribbleColor": {
       "description": "Operator-assigned colour of a channel's scribble strip; none shows the plain strip.",
       "type": "string",

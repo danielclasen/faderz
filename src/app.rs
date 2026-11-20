@@ -80,9 +80,9 @@ pub struct App {
     /// When each asking session last had a control request for a path
     /// forwarded.
     requests: Mutex<BTreeMap<(SessionKey, String), Instant>>,
-    /// The engine's counters and inputs last read, as the `values` and
-    /// `inputs` of the `counters` message ([`App::count`]); none without
-    /// an engine.
+    /// The engine's counters, inputs and loudness measurements last read,
+    /// as the `values`, `inputs` and `loudness` of the `counters` message
+    /// ([`App::count`]); none without an engine.
     counters: Mutex<Option<Value>>,
     /// The engine's inputs and outputs last read ([`App::count`]); none
     /// without an engine.
@@ -462,8 +462,9 @@ impl App {
         serde_json::from_str::<Value>(&delta.text).ok()?["atIndex"].as_u64()
     }
 
-    /// The `counters` message of the engine's counters and inputs last
-    /// read; none before the first read or without an engine.
+    /// The `counters` message of the engine's counters, inputs and
+    /// loudness measurements last read; none before the first read or
+    /// without an engine.
     pub fn counters_message(&self) -> Option<String> {
         let read = self
             .counters
@@ -475,6 +476,7 @@ impl App {
             "replica": self.replica_ref(),
             "values": read["values"],
             "inputs": read["inputs"],
+            "loudness": read["loudness"],
         });
         Some(m.to_string())
     }

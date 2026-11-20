@@ -298,13 +298,14 @@
       ]
     },
     "Counters": {
-      "description": "Engine counters of the sending replica and its engine's inputs, from one reading, on every connection, standby ones included: after the snapshot or resume that answers its hello, and once per second. A replica that runs no engine sends none. A client takes them from its primary connection only; a standby connection receives them so a promoted standby has them at once.",
+      "description": "Engine counters of the sending replica, its engine's inputs and its loudness measurements, from one reading, on every connection, standby ones included: after the snapshot or resume that answers its hello, and once per second. A replica that runs no engine sends none. A client takes them from its primary connection only; a standby connection receives them so a promoted standby has them at once.",
       "type": "object",
       "required": [
         "type",
         "replica",
         "values",
-        "inputs"
+        "inputs",
+        "loudness"
       ],
       "additionalProperties": false,
       "properties": {
@@ -322,6 +323,13 @@
           "type": "array",
           "items": {
             "$ref": "model.schema.json#/$defs/InputHealth"
+          }
+        },
+        "loudness": {
+          "description": "One per bus, aux and mix-minus output, in shape order: its loudness measurement's gaps, lost slices and start. Kept out of the meter frames, which carry the readings.",
+          "type": "array",
+          "items": {
+            "$ref": "model.schema.json#/$defs/LoudnessHealth"
           }
         }
       }

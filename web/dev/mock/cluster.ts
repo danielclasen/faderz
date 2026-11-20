@@ -151,6 +151,8 @@ export interface Replica {
   counters: Record<string, number>;
   /** Each channel's input as this replica's engine reads it. */
   inputs: InputHealth[];
+  /** Each bus, aux and mix-minus loudness measurement: its gaps and lost slices, its start (ms since the epoch) and whether it restarted. */
+  loudness: Map<string, { gaps: number; lost: number; since: number; restarted: boolean }>;
 }
 
 /** One command applied to the state, as GET /__mock/audit lists it. */
@@ -276,6 +278,8 @@ export interface ClusterOptions {
 
 /** The input the mock prunes by default: VT 2, whose clip server is gone. */
 export const FAULTY_INPUT = 'st3';
+/** 10 ms slices per second: each is a gap of every measurement the faulty input feeds. */
+const SLICES_PER_S = 100;
 /** Blocks per second the faulty input has silenced. */
 const SILENCED_PER_S = 200;
 
@@ -379,6 +383,10 @@ export class Cluster {
         lateBlocks: 0,
         tooLateBlocks: 0,
       })),
+      // No reset yet: each measures from the engine's start.
+      loudness: new Map(
+        [...this.shape.buses, ...this.shape.auxes, ...this.shape.mixMinus].map((e) => [e.id, { gaps: 0, lost: 0, since: Date.now(), restarted: true }]),
+      ),
     }));
     this.storeScene('Opening', null);
     this.storeScene('Interview', null);
@@ -512,7 +520,12 @@ export class Cluster {
     const r = this.replica(id);
     if (!r) return false;
     for (const c of [...r.conns]) if (r.frozen !== 'none') c.close();
-    if (!r.healthy) r.meterSequence = 0;
+    if (!r.healthy) {
+      r.meterSequence = 0;
+      // Its process started again: each measurement starts with it, not at the last reset.
+      const now = Date.now();
+      for (const id of r.loudness.keys()) r.loudness.set(id, { gaps: 0, lost: 0, since: now, restarted: true });
+    }
     r.healthy = true;
     r.frozen = 'none';
     r.partitioned = false;
@@ -750,7 +763,8 @@ export class Cluster {
 
   private emitCounters(conn: Conn): void {
     const r = conn.replica;
-    this.emit(conn, { type: 'counters', replica: this.ref(r), values: { ...r.counters }, inputs: r.inputs.map((i) => ({ ...i })) });
+    const loudness = [...r.loudness].map(([id, l]) => ({ id, gaps: l.gaps, lost: l.lost, since: new Date(l.since).toISOString(), restarted: l.restarted }));
+    this.emit(conn, { type: 'counters', replica: this.ref(r), values: { ...r.counters }, inputs: r.inputs.map((i) => ({ ...i })), loudness });
   }
 
   /**
@@ -1370,6 +1384,7 @@ export class Cluster {
     for (const r of this.replicas) {
       if (!this.ready(r)) continue;
       for (const i of r.inputs) if (i.state === 'pruned') r.counters['input_silenced_blocks_total']! += SILENCED_PER_S;
+      for (const id of this.fedByFaulty(r)) r.loudness.get(id)!.gaps += SLICES_PER_S;
       // With automation, now and then a late block on an input that is
       // read, as a jittery source gives, a late output block or a late change.
       const read = r.inputs.filter((i) => i.state === 'attached');
@@ -1446,7 +1461,22 @@ export class Cluster {
   }
 
   resetLoudness(ids: string[]): void {
-    for (const r of this.replicas) r.meters.resetLoudness(ids);
+    const now = Date.now();
+    for (const r of this.replicas) {
+      r.meters.resetLoudness(ids);
+      for (const id of ids) r.loudness.set(id, { gaps: 0, lost: 0, since: now, restarted: false });
+    }
+  }
+
+  /** The buses, auxes and mix-minus outputs a pruned input of `r` feeds: its slices are gaps of their measurements. */
+  private fedByFaulty(r: Replica): string[] {
+    const pruned = r.inputs.filter((i) => i.state === 'pruned').map((i) => this.state.channels[i.channel]!);
+    if (pruned.length === 0) return [];
+    return [
+      ...this.shape.buses.filter((b) => pruned.some((c) => c.routes[b.id])).map((b) => b.id),
+      ...this.shape.auxes.filter((a) => pruned.some((c) => c.sends[a.id]?.on)).map((a) => a.id),
+      ...this.shape.mixMinus.filter((mm) => pruned.some((c) => c.routes[mm.bus])).map((mm) => mm.id),
+    ];
   }
 
   private broadcastReplicas(): void {

@@ -351,6 +351,23 @@ describe('hello', () => {
     expect(next.values['input_silenced_blocks_total']).toBeGreaterThan(first.values['input_silenced_blocks_total']!);
   });
 
+  it('names each loudness measurement: restarted until a reset starts it, and gaps where the faulty input feeds it', async () => {
+    const c = await new Client().open();
+    await c.hello();
+    const first = (await c.next((m) => m.type === 'counters', 0, 1500)) as CountersMessage;
+    const ids = [...cluster.shape.buses, ...cluster.shape.auxes, ...cluster.shape.mixMinus].map((e) => e.id);
+    expect(first.loudness.map((l) => l.id)).toEqual(ids);
+    // No reset yet: each measures from the engine's start.
+    for (const l of first.loudness) expect(l).toMatchObject({ restarted: true, lost: 0, since: expect.any(String) });
+    const fed = cluster.shape.buses.find((b) => cluster.state.channels[FAULTY_INPUT]!.routes[b.id])!.id;
+    const at = (m: CountersMessage, id: string) => m.loudness.find((l) => l.id === id)!;
+    expect((await rest('POST', '/loudness/reset', { ids: [fed] })).status).toBe(204);
+    const after = (await c.next((m) => m.type === 'counters' && !at(m as CountersMessage, fed).restarted, c.messages.length, 2500)) as CountersMessage;
+    expect(Date.parse(at(after, fed).since!)).toBeGreaterThan(Date.parse(at(first, fed).since!));
+    const later = (await c.next((m) => m !== after && m.type === 'counters', c.messages.length, 2500)) as CountersMessage;
+    expect(at(later, fed).gaps).toBeGreaterThan(at(after, fed).gaps);
+  });
+
   it('is answered as a console client with kind console', async () => {
     const session = CONSOLE_SESSIONS['mcu-1']!;
     const c = await new Client(session, 'console').open();

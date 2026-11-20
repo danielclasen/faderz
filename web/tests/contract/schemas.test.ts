@@ -429,7 +429,7 @@ describe('WebSocket messages', () => {
     // <replica>:<32 hex>:<n> with a 63-character replica id.
     ['owner of a long connection id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, connection: `${'r'.repeat(63)}:${'0f'.repeat(16)}:18446744073709551615` } }] }],
     ['503 not applied', { type: 'error', replica, code: 503, message: 'not applied', commandId: cmd, path: '/channels/ch1/fader' }],
-    ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 }, inputs: [{ channel: 'ch1', state: 'pruned', up: false, lateBlocks: 3, tooLateBlocks: 0 }] }],
+    ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 }, inputs: [{ channel: 'ch1', state: 'pruned', up: false, lateBlocks: 3, tooLateBlocks: 0 }], loudness: [{ id: 'pgm', gaps: 2, lost: 1, since: '2026-11-20T09:14:03.120Z', restarted: true }] }],
     ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
     ['selections', { type: 'selections', replica, selections: [{ session: owner, element: 'ch3' }, { session: { ...owner, handle: 'Rk9vYmFyLWJhei1xdXV4LT' }, element: 'pgm20' }] }],
     ['no selections', { type: 'selections', replica, selections: [] }],
@@ -566,13 +566,27 @@ describe('engine counters', () => {
     expect(new Set(names.map((n) => schema.properties[n]!.title)).size, 'titles are distinct').toBe(names.length);
   });
 
-  it('refuse a counters message with a counter they do not name, or without the inputs', () => {
+  it('refuse a counters message with a counter they do not name, or without the inputs or the loudness', () => {
     const contract = new Contract();
     const replica = { id: 'r1', role: 'leader' };
     const inputs = [{ channel: 'ch1', state: 'attached', up: true, lateBlocks: 0, tooLateBlocks: 0 }];
-    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs })).not.toThrow();
-    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { afv_late_total: 1 }, inputs })).toThrow();
-    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 } })).toThrow();
-    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: {}, inputs: [{ ...inputs[0], state: 'gone' }] })).toThrow();
+    const loudness: unknown[] = [];
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs, loudness })).not.toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { afv_late_total: 1 }, inputs, loudness })).toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, loudness })).toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs })).toThrow();
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: {}, inputs: [{ ...inputs[0], state: 'gone' }], loudness })).toThrow();
+  });
+
+  it('take a loudness measurement with its gaps, lost slices, start and restart, and refuse one without', () => {
+    const contract = new Contract();
+    const replica = { id: 'r1', role: 'leader' };
+    const ok = { id: 'pgm', gaps: 0, lost: 0, since: null, restarted: false };
+    const message = (l: object) => ({ type: 'counters', replica, values: {}, inputs: [], loudness: [l] });
+    expect(() => contract.assertServerMessage(message(ok))).not.toThrow();
+    expect(() => contract.assertServerMessage(message({ ...ok, since: '2026-11-20T09:14:03.120Z', restarted: true }))).not.toThrow();
+    for (const bad of [{ ...ok, gaps: -1 }, { ...ok, since: 'yesterday' }, { ...ok, restarted: undefined }, { ...ok, sinceIndex: 4800 }]) {
+      expect(() => contract.assertServerMessage(message(bad)), JSON.stringify(bad)).toThrow();
+    }
   });
 });
