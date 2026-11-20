@@ -93,9 +93,10 @@
   .update.shown {
     visibility: visible;
   }
-  /* The narrowest header has no room for the key: the account pill
+  /* The narrowest header, and a short screen's, which holds the notice
+     line, have no room for the key: the account pill
      carries the dot and its menu the update. */
-  @media (max-width: 429px) {
+  @media (max-width: 429px), (max-height: 500px) {
     .update {
       display: none;
     }

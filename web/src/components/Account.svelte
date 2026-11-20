@@ -32,8 +32,8 @@
     busyLabel?: string;
     run: () => void | Promise<void>;
   }
-  /** Below 430 px the header has no UPDATE key: this pill and menu stand in for it. */
-  const narrow = new MediaQuery('(max-width: 429px)');
+  /** Below 430 px, and on a short screen where the header holds the notice line, the header has no UPDATE key: this pill and menu stand in for it. */
+  const narrow = new MediaQuery('(max-width: 429px), (max-height: 500px)');
   const newer = $derived(narrow.current ? update.version(mixer.status.build) : null);
   const label = $derived(`Account${name ? ` ${name}` : ''}${session?.role ? `, ${session.role}` : ''}${newer !== null && update.fresh(mixer.status.build) ? ', a new faderz version is running' : ''}`);
   const entries = $derived<Entry[]>([
