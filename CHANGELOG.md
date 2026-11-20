@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/danielclasen/faderz/compare/v0.4.8...v0.4.9) (2026-11-20)
+
+
+### Features
+
+* **audio:** apply the bus and aux true-peak limiter ([#141](https://github.com/danielclasen/faderz/issues/141)) ([1d62235](https://github.com/danielclasen/faderz/commit/1d62235f26764e98aadd06e977061c78fb0fcfb5))
+
 ## [0.4.8](https://github.com/danielclasen/faderz/compare/v0.4.7...v0.4.8) (2026-11-20)
 
 
