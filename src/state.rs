@@ -19,6 +19,18 @@ use crate::duck;
 use crate::mix::{self, Wiring};
 use crate::shape::Shape;
 
+/// How far past this replica's estimate of the processed index, in
+/// samples, a recall's crossfade starts: the longest lead the log stamps
+/// a command with, the highest `maxApplyLeadMs` plus samplez's
+/// `EXTRA_LEAD`. A recall taking effect by then plays its whole fade; one
+/// taking effect later, such as one that switches inputs and waits for
+/// an engine generation, joins its fade where it has got to.
+pub fn crossfade_lead(rate: u64) -> u64 {
+    let ms = *crate::config::MAX_APPLY_LEAD_MS.end()
+        + samplez_replica::schedule::EXTRA_LEAD.as_millis() as u64;
+    ms * rate / 1000
+}
+
 /// The version of how a command applies, how [`Mixer::targets`] derives
 /// engine targets from the state, and what save and load produce
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
@@ -1507,11 +1519,16 @@ impl Mixer {
     /// left as it was keeps its fade. Every gain is the one the engine
     /// takes, an invalid one 0 ([`samplez_dsp::valid_gain`]).
     fn fading<T>(&mut self, fade: Option<Crossfade>, f: impl FnOnce(&mut Mixer) -> T) -> T {
-        // Fades ended by the new fade's start, a logged index every
-        // replica applies alike, go: their gains hold the scene's values.
+        // Fades ended by the index the recall was received at, its
+        // logged start less the lead, go: no replica applies the recall
+        // earlier, so their gains hold the scene's values by then, and a
+        // fade still running where the recall applies is not cut short.
         if let Some(c) = fade {
+            let received = c
+                .start
+                .saturating_sub(crossfade_lead(u64::from(self.shape().sample_rate)));
             for cell in self.fading.iter_mut().flatten() {
-                if cell.is_some_and(|f| f.start + u64::from(f.len) <= c.start) {
+                if cell.is_some_and(|f| f.start + u64::from(f.len) <= received) {
                     *cell = None;
                 }
             }
@@ -4809,7 +4826,7 @@ mod tests {
         assert!(t.fading.is_empty(), "{:?}", t.fading);
     }
 
-    /// A recall starting at or after a running fade's end drops that fade
+    /// A recall received at or after a running fade's end drops that fade
     /// where it leaves the gain alone: the gain holds the scene's value, and
     /// the fades a set carries stay bounded by the gains still moving.
     #[test]
@@ -4819,6 +4836,8 @@ mod tests {
             len: 48_000,
         };
         let end = xf.start + u64::from(xf.len);
+        // A recall starting at s was received at s less the lead.
+        let lead = crossfade_lead(48_000);
         // Both channels fade up to A; C then takes ch1 down again from
         // `start`, leaving ch2 at A's value.
         let ch2_after = |start: u64| {
@@ -4842,10 +4861,10 @@ mod tests {
             t.fading[1].clone()
         };
         assert!(
-            ch2_after(end - 1).iter().any(Option::is_some),
-            "before A's end, ch2's fade runs on"
+            ch2_after(end + lead - 1).iter().any(Option::is_some),
+            "received before A's end, ch2's fade runs on"
         );
-        let ended = ch2_after(end);
+        let ended = ch2_after(end + lead);
         assert!(ended.iter().all(Option::is_none), "{ended:?}");
     }
 

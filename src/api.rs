@@ -368,18 +368,6 @@ async fn delete_scene(
     run.await.unwrap_or_else(|e| e)
 }
 
-/// How far past this replica's estimate of the processed index, in
-/// samples, a recall's crossfade starts: the longest lead the log stamps
-/// a command with, the highest `maxApplyLeadMs` plus samplez's
-/// `EXTRA_LEAD`. A recall taking effect by then plays its whole fade; one
-/// taking effect later, such as one that switches inputs and waits for
-/// an engine generation, joins its fade where it has got to.
-fn crossfade_lead(rate: u64) -> u64 {
-    let ms = *crate::config::MAX_APPLY_LEAD_MS.end()
-        + samplez_replica::schedule::EXTRA_LEAD.as_millis() as u64;
-    ms * rate / 1000
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecallBody {
@@ -404,9 +392,11 @@ async fn recall_scene(
             ));
         }
         let owner = owner(identity.map(|Extension(i)| i));
+        // tai_samples counts at replica::RATE, the one rate the model's
+        // Shape.sampleRate allows, so it and the shape's rate agree.
         let rate = u64::from(app.with_state(|sm| sm.product.shape().sample_rate));
         let fade = (b.crossfade_ms > 0).then(|| Crossfade {
-            start: tai_samples() + crossfade_lead(rate),
+            start: tai_samples() + crate::state::crossfade_lead(rate),
             len: (u64::from(b.crossfade_ms) * rate / 1000) as u32,
         });
         let command = Command::Recall {

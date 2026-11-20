@@ -212,8 +212,14 @@ switches inputs and waits for an engine generation, does not play the
 part of the fade already past: each gain steps by that elapsed share of
 its swing, and one applied after the fade's end steps to the scene's
 value. A recall that re-routes can therefore click by most of its swing.
-This holds until the engine ramps a gain joining a fade already started
-from its held value into the fade.
+A recall during a running fade has the same limit at the other end: each
+gain it changes still fading starts its new fade from where the running
+fade will be at the new fade's start, and holds that value from the
+index the recall applies at until then, so it steps there by the
+running fade's progress over that gap (up to the lead). The recall's
+apply index does not reach the product's derivation, which would let
+the new fade start there. Both hold until the engine ramps a gain
+joining a fade from its held value.
 
 During a fade, a write that moves a fading gain, such as a fader move,
 ends that gain's fade: the gain ramps from where the fade has got to,
