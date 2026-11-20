@@ -46,6 +46,12 @@ const BACKEND = process.env['FADERZ_E2E_BACKEND'];
 const BACKEND_PORT = PORT + 3;
 export const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const BACKEND_DIR = resolve('node_modules/.cache/faderz-e2e-backend');
+/**
+ * The backend's replica data, on tmpfs where there is one: on the disk the
+ * builds write to, one fsync of its log can outlast the 2 s a write waits
+ * to commit, and a write is refused with 503 "timed out".
+ */
+const BACKEND_DATA = existsSync('/dev/shm') ? `/dev/shm/faderz-e2e-backend-${process.getuid?.() ?? 0}` : `${BACKEND_DIR}/data`;
 if (BACKEND) {
   mkdirSync(BACKEND_DIR, { recursive: true });
   const listener = (port: number) => ({ bind: '127.0.0.1', port });
@@ -55,7 +61,7 @@ if (BACKEND) {
       allowedHosts: [LAN],
       allowedOrigins: [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, LAN_URL, `https://127.0.0.1:${PORT + 1}`],
     },
-    replica: { name: 'r1', dataDir: `${BACKEND_DIR}/data` },
+    replica: { name: 'r1', dataDir: BACKEND_DATA },
     shape: exampleShape(),
   };
   writeFileSync(`${BACKEND_DIR}/config.json`, JSON.stringify(config, null, 2));
@@ -113,7 +119,7 @@ export default defineConfig({
       ? [
           {
             // A fresh data directory: every run starts from an empty state.
-            command: `rm -rf '${BACKEND_DIR}/data' && exec '${resolve(BACKEND)}' --config '${BACKEND_DIR}/config.json'`,
+            command: `rm -rf '${BACKEND_DATA}' && exec '${resolve(BACKEND)}' --config '${BACKEND_DIR}/config.json'`,
             url: `${BACKEND_URL}/api/v1/replicas`,
             reuseExistingServer: false,
           },
