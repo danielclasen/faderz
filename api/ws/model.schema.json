@@ -3277,7 +3277,7 @@
       }
     },
     "Tone": {
-      "description": "Line-up tone: a 1 kHz sine at level dBFS (sample peak) on every leg. While on, each output in targets (bus, aux or mix-minus ids) carries the tone in place of its mix, after its fader and before its limiter. EBU R 68 aligns at -18 dBFS, SMPTE practice at -20 dBFS. ident true identifies the legs: the tone stops on one leg at a time in layout order, for 250 ms each second.",
+      "description": "Line-up tone: a 1 kHz sine at level dBFS (sample peak) on every leg. While on, each output in targets (bus, aux or mix-minus ids) carries the tone in place of its mix, after its fader and before its limiter, and its meters show the tone; a monitor playing it plays its mix. EBU R 68 aligns at -18 dBFS, SMPTE practice at -20 dBFS. ident true identifies the legs: the tone stops on one leg at a time in layout order, for 250 ms each, then sounds on all of them for 250 ms. One generator feeds every target, with the legs of the widest bus, aux or mix-minus or output carrying one; a target with fewer legs sounds on all of its own while a leg it lacks is cut. on, targets and level ramp as a gain does.",
       "type": "object",
       "required": [
         "on",

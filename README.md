@@ -61,7 +61,7 @@ late by the limiter's look-ahead, 53 samples (about 1.1 ms at 48 kHz), whether
 the limiter is on or off, so that turning it on needs no restart; an
 output carrying a mix-minus, a direct out or the monitor is not. The rest of the state is kept, shown and replicated but not
 applied to the audio in this version: bus and aux EQ,
-dynamics and delay, the line-up tone on outputs (`/tone`), and the AFV rise, hold and fall
+dynamics and delay, and the AFV rise, hold and fall
 times.
 
 A channel delays its input by its `delay`, in samples, exactly, for lip
@@ -97,6 +97,21 @@ time in leg order, for 250 ms each, then sounds on every leg for
 250 ms. A scene recall leaves the tone as it is. A snapshot of a state
 with a tone channel carries the shape's `tone`, which faderz 0.4.9 and
 earlier do not read either.
+
+The line-up tone (`/tone`) is a 1 kHz sine at `level`, -30 to 0 dBFS
+sample peak, on every leg. While `on`, each output whose bus, aux or
+mix-minus is in `targets` carries the tone in place of its mix, after
+the element's fader and before the output's limiter, so the fader does
+not scale it and the limiter still applies; the element's meters show
+the tone, and a monitor playing the element plays its mix. Off, or for
+an element not in `targets`, the mix is as without it. Turning it on or
+off, a target and a level change ramp over `engine.rampSamples` as a
+gain does. With `ident` the tone stops on one leg at a time in layout
+order, for 250 ms each, then sounds on every leg for 250 ms. One
+generator, an engine input of its own that is no channel and has no
+NMOS receiver, feeds every target, with the legs of the widest bus, aux
+or mix-minus or output carrying one: a target with fewer legs sounds on
+all of its own while a leg it lacks is cut.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is

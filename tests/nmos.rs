@@ -183,6 +183,13 @@ async fn is05_activations_route_the_engine_and_survive_a_restart() {
     let ch1 = format!("receivers/{}", id_of(&server, "receivers", "Pres 1").await);
     let ch2 = format!("receivers/{}", id_of(&server, "receivers", "Pres 2").await);
     let pgm = format!("senders/{}", id_of(&server, "senders", "PGM out").await);
+    // A receiver per channel, and none for the engine's line-up tone input.
+    let (_, receivers) = request(server.nmos, "GET", "/x-nmos/node/v1.3/receivers/", None).await;
+    let labels: Vec<&str> = (receivers.as_array().unwrap().iter())
+        .map(|r| r["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    assert!(labels.contains(&"Pres 1") && labels.contains(&"Pres 2"));
     let a = active(&server, &ch1).await;
     assert_eq!(a["transport_params"][0]["mxl_flow_id"], f.ch1.as_str());
     assert_eq!(a["transport_params"][0]["mxl_domain_id"], DOMAIN);

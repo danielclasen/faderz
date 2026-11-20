@@ -1204,7 +1204,8 @@ impl Config {
 
     /// The engine configuration of the `mxl` section, with a matrix of
     /// zeros: one input per channel reading its flow of input a, or a tone
-    /// generator, one
+    /// generator, then the line-up tone's generator
+    /// ([`crate::mix::TONE_INPUT`]), one
     /// output per output of the shape writing this replica's flow
     /// ([`Config::member_flows`]), one meter per bus, aux,
     /// mix-minus and monitor output no full-width output carries, and the columns a
@@ -1291,6 +1292,11 @@ impl Config {
             }
             inputs.push(engine_input);
         }
+        inputs.push(json!({
+            "name": crate::mix::TONE_INPUT,
+            "tone": {},
+            "channels": crate::mix::tone_width(shape),
+        }));
         let mut outputs = Vec::new();
         // Per output, the flow of each ordinal.
         let mut members: Vec<Vec<String>> = Vec::new();
@@ -1350,7 +1356,8 @@ impl Config {
         {
             return Err(format!("mxl.outputs.{id}: not an output of the shape"));
         }
-        let rows: usize = shape.channels.iter().map(|c| c.width).sum();
+        let rows: usize =
+            (shape.channels.iter().map(|c| c.width).sum::<usize>()) + crate::mix::tone_width(shape);
         let columns: usize = (shape.outputs.iter().map(|o| o.width))
             .chain(shape.meter_columns().iter().map(|m| m.1))
             .sum();
@@ -2127,7 +2134,8 @@ mod tests {
         let engine: Vec<u32> = (c.audio.unwrap().inputs.iter())
             .map(|i| i.max_delay_samples)
             .collect();
-        assert_eq!(engine, [960, 0, 240_000]);
+        // The line-up tone's input last, which has no line.
+        assert_eq!(engine, [960, 0, 240_000, 0]);
         // 0 is no line.
         let (_, shape, _) =
             Config::parse(&config(json!(0), json!(0), json!({})), || unreachable!()).unwrap();
@@ -2468,6 +2476,38 @@ mod tests {
                 .wiring
                 .is_empty()
         );
+    }
+
+    /// The line-up tone's generator is the engine's last input, after the
+    /// channels', as wide as the widest bus, aux or mix-minus column,
+    /// with no flow; the matrix has its rows. It is no channel, so it is
+    /// wired to nothing.
+    #[test]
+    fn the_line_up_tone_is_the_engines_last_input() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let config = json!({
+            "replica": { "name": "r1" },
+            "shape": small(),
+            "mxl": {
+                "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                "inputs": { "ch1": { "flow": id(1), "altFlow": id(5) },
+                            "ch2": { "flow": id(2) }, "st1": { "flow": id(3) } },
+                "outputs": { "out-pgm": { "flow": id(4) } },
+            },
+        });
+        let (c, shape, _) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
+        let engine = c.audio.as_ref().unwrap();
+        let names: Vec<&str> = engine.inputs.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["ch1", "ch2", "st1", crate::mix::TONE_INPUT]);
+        let tone = &engine.inputs[3];
+        assert!(tone.tone.is_some() && tone.flow_id.is_none() && tone.domain.is_none());
+        assert_eq!(tone.channels, 2, "pgm, cf and mm1 are stereo");
+        assert_eq!(
+            engine.matrix.len(),
+            4 + 2,
+            "the channels' legs, then the tone's"
+        );
+        assert_eq!(c.wiring.len(), shape.channels.len());
     }
 
     /// `replica.maxApplyLeadMs` is 50 unless set, and is taken from 30 to

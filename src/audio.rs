@@ -561,8 +561,10 @@ impl Audio {
         // After a refusal every limiter, delay, tone, setting and mask goes
         // again on the next write.
         sent.ducks = (!refused).then_some(held);
-        for (slot, flow) in targets.flows.into_iter().enumerate() {
-            while flow != sent.routed[slot] {
+        // The line-up tone's slot, past the channels', reads no flow.
+        let flows = targets.flows.into_iter().zip(&mut sent.routed);
+        for (slot, (flow, routed)) in flows.enumerate() {
+            while flow != *routed {
                 let sent_now = match &flow {
                     Some(f) => self.engine.route(slot, f, at),
                     None => self.engine.detach(slot, at),
@@ -575,7 +577,7 @@ impl Audio {
                         if flow.is_none() {
                             at = at.max(k.next_multiple_of(self.block));
                         }
-                        sent.routed[slot].clone_from(&flow);
+                        routed.clone_from(&flow);
                     }
                     Err(EntryError::Full) => tokio::time::sleep(FULL_RETRY).await,
                     Err(e) => {
@@ -724,7 +726,7 @@ impl Audio {
     /// reading of the engine's status.
     pub fn readings(&self) -> (Value, Value) {
         let status = self.engine.status();
-        let inputs: Vec<Value> = (status.inputs.iter())
+        let inputs: Vec<Value> = channel_inputs(&status)
             .map(|i| {
                 json!({
                     "channel": i.name,
@@ -800,12 +802,18 @@ fn input_state(state: InputState) -> &'static str {
     }
 }
 
+/// The engine's inputs that are channels': all but the line-up tone's
+/// ([`mix::TONE_INPUT`]).
+fn channel_inputs(status: &samplez::Status) -> impl Iterator<Item = &InputStatus> {
+    (status.inputs.iter()).filter(|i| i.name != mix::TONE_INPUT)
+}
+
 /// The engine of `GET /status`: per channel its input's state in the
 /// engine, whether the log has it up, the flow it reads and its blocks
 /// copied, late and too late; per output whether it is enabled and
 /// realised, and why not.
 fn engine_status(status: &samplez::Status) -> Value {
-    let inputs: Vec<Value> = (status.inputs.iter())
+    let inputs: Vec<Value> = channel_inputs(status)
         .map(|i| {
             json!({
                 "channel": i.name,

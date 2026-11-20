@@ -1621,17 +1621,136 @@ async fn a_channel_delay_plays_its_input_exactly_that_late() {
 /// The left leg of `flow` over the 100 ms ending 100 ms behind libmxl's
 /// clock: its sample peak and its rising zero crossings per second.
 fn tone_of(domain: &Path, flow: &str, rate: u64) -> (f32, u64) {
+    tone_legs(domain, flow, rate)[0]
+}
+
+/// [`tone_of`] of both legs of `flow`.
+fn tone_legs(domain: &Path, flow: &str, rate: u64) -> [(f32, u64); 2] {
     let api = api();
     let to = time::timestamp_to_index(&api, time::now(&api)) - rate / 10;
-    let left: Vec<f32> = (span(domain, flow, to - rate / 10, to).iter())
-        .map(|s| s.0)
+    let legs = span(domain, flow, to - rate / 10, to);
+    [0, 1].map(|l| {
+        let leg: Vec<f32> = (legs.iter())
+            .map(|s| if l == 0 { s.0 } else { s.1 })
+            .collect();
+        let peak = leg.iter().fold(0.0f32, |p, v| p.max(v.abs()));
+        let rising = leg.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        (peak, rising as u64 * 10)
+    })
+}
+
+/// The line-up tone (`/tone`) replaces the mix of each output whose
+/// source it targets with a 1 kHz sine at its sample-peak level on every
+/// leg, after the element's fader: the programme carries the tone and
+/// none of its mix, a fader move in a write heard elsewhere leaves it as
+/// it is, the mix-minus output beside it keeps its mix, and off brings
+/// the programme's mix back. Its engine input is no channel: the shape,
+/// the state and the status list the channels alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_line_up_tone_replaces_the_mix_of_its_targets() {
+    let domain = domain("line-up");
+    let data = data("line-up");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let rate = shape()["sampleRate"].as_u64().unwrap();
+    let _st1 = Source::start(&domain.0, &flows.st1, ST1.to_vec());
+    let server = start(&data.0, &domain.0, &flows).await;
+    appears(&domain.0, &flows.mm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    let mut mm = Reader::new(&domain.0, &flows.mm);
+    patch(&server, &[("/channels/st1/fader", json!(0))]).await;
+    pgm.expect(ST1[0], ST1[1], "the programme carries its mix")
+        .await;
+    mm.expect(ST1[0], ST1[1], "the mix-minus carries its mix")
+        .await;
+
+    let gain = |db: f32| 10f32.powf(db / 20.0);
+    // On both legs within a crossing of 1 kHz over the 100 ms read, and
+    // at the level: the mix, a constant, would lift the peak.
+    let tone = async |what: &str| {
+        let heard = || {
+            (tone_legs(&domain.0, &flows.pgm, rate).iter())
+                .all(|(peak, hz)| hz.abs_diff(1000) <= 10 && (peak - gain(-20.0)).abs() <= 1e-4)
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !heard() {
+            assert!(
+                Instant::now() < deadline,
+                "{what}: 1 kHz at -20 dBFS not heard; read {:?}",
+                tone_legs(&domain.0, &flows.pgm, rate)
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    patch(
+        &server,
+        &[
+            ("/tone/level", json!(-20)),
+            ("/tone/targets", json!(["pgm"])),
+            ("/tone/on", json!(true)),
+        ],
+    )
+    .await;
+    tone("the tone in place of the programme's mix").await;
+    mm.expect(ST1[0], ST1[1], "the mix-minus keeps its mix")
+        .await;
+    // The programme's fader in one write with st1's, which the
+    // mix-minus carries: once that is heard, so is the fader.
+    patch(
+        &server,
+        &[
+            ("/buses/pgm/fader", json!(-20)),
+            ("/channels/st1/fader", json!(-6)),
+        ],
+    )
+    .await;
+    let st1 = ST1.map(|v| v * gain(-6.0));
+    mm.expect(st1[0], st1[1], "st1's fader on the mix-minus")
+        .await;
+    tone("the tone, the programme's fader moved").await;
+    patch(&server, &[("/tone/on", json!(false))]).await;
+    let pgm_mix = st1.map(|v| v * gain(-20.0));
+    pgm.expect(
+        pgm_mix[0],
+        pgm_mix[1],
+        "off: the programme's mix, after its fader",
+    )
+    .await;
+
+    let engine = server.audio.as_ref().unwrap().engine().status();
+    let tone_input = engine.inputs.last().unwrap();
+    assert_eq!(
+        (tone_input.name.as_str(), tone_input.state),
+        ("/tone", samplez::InputState::Tone)
+    );
+    let channels = ["ch1", "ch2", "st1"];
+    let (code, body) = get(server.api, "/api/v1/state").await;
+    assert_eq!(code, 200, "{body}");
+    let doc: Value = serde_json::from_str(&body).unwrap();
+    let ids: Vec<&str> = (doc["shape"]["channels"].as_array().unwrap().iter())
+        .map(|c| c["id"].as_str().unwrap())
         .collect();
-    let peak = left.iter().fold(0.0f32, |p, v| p.max(v.abs()));
-    let rising = left
-        .windows(2)
-        .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
-        .count();
-    (peak, rising as u64 * 10)
+    assert_eq!(ids, channels, "the shape's channels");
+    let keys: Vec<&String> = doc["state"]["channels"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect();
+    assert_eq!(keys, channels, "the state's channels");
+    let (code, body) = get(server.api, "/api/v1/status").await;
+    assert_eq!(code, 200, "{body}");
+    let status: Value = serde_json::from_str(&body).unwrap();
+    let inputs: Vec<&str> = (status["engine"]["inputs"].as_array().unwrap().iter())
+        .map(|i| i["channel"].as_str().unwrap())
+        .collect();
+    assert_eq!(inputs, channels, "the status's channel inputs");
+    server.stop().await;
 }
 
 /// A tone channel plays samplez's generator as its state sets it, with

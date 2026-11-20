@@ -186,8 +186,9 @@ pub fn key_gain(state: &Value, id: &str, tap: &str) -> f32 {
 /// meters what goes out. A mix-minus that carries its talkback
 /// interrupt ([`mix::talkback`]) has no mask, and neither has a monitor
 /// playing it. While anything solos the monitor plays the
-/// listens, no destination, and none of its columns is masked. None
-/// without duck groups.
+/// listens, no destination, and none of its columns is masked. The
+/// line-up tone's rows, which no group lowers, have none. None without
+/// duck groups.
 pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
     if shape.ducks.is_empty() {
         return Vec::new();
@@ -218,12 +219,14 @@ pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
             std::iter::repeat_n(bits, width)
         })
         .collect();
+    let tone = vec![0; columns.len()];
     (shape.channels.iter())
         .flat_map(|c| {
             let lowered = groups(&|d| d["channels"][&c.id]["target"] == true);
             let row: Vec<u8> = columns.iter().map(|&bits| bits & lowered).collect();
             std::iter::repeat_n(row, c.width)
         })
+        .chain(std::iter::repeat_n(tone, mix::tone_width(shape)))
         .collect()
 }
 
@@ -375,10 +378,12 @@ mod tests {
                 ("/ducks/comm/destinations/pgm", json!(true)),
             ],
         );
-        // Rows ch1, ch2, st1 L R, sur x6; columns out-51 x6, out-lr x2,
-        // then the meters of cf x2, aux1 and mon x2, which follows pgm.
+        // Rows ch1, ch2, st1 L R, sur x6, the line-up tone x6, which no
+        // group lowers; columns out-51 x6, out-lr x2, then the meters of
+        // cf x2, aux1 and mon x2, which follows pgm.
         let m = masks(&shape, &state);
-        assert_eq!(m[4..], [[1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1]; 6]);
+        assert_eq!(m[4..10], [[1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1]; 6]);
+        assert_eq!(m[10..], [[0; 13]; 6]);
         assert!(m[..4].iter().flatten().all(|&b| b == 0));
         assert_eq!(columns(&shape), (0..13).collect::<Vec<_>>());
     }

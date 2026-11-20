@@ -36,7 +36,7 @@ pub fn crossfade_lead(rate: u64) -> u64 {
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
 /// change to any of them takes another version, so replicas deriving
 /// differently never run side by side.
-pub const DERIVATION_VERSION: u32 = 7;
+pub const DERIVATION_VERSION: u32 = 8;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
@@ -4094,8 +4094,12 @@ mod tests {
         Apply { generation }
     }
 
+    /// The flows of channels reading `ids`, then the line-up tone's slot,
+    /// which reads none.
     fn flows(ids: &[&str]) -> Vec<Option<String>> {
-        ids.iter().map(|id| Some((*id).to_owned())).collect()
+        (ids.iter().map(|id| Some((*id).to_owned())))
+            .chain([None])
+            .collect()
     }
 
     fn gain_bits(t: &Targets) -> Vec<Vec<u32>> {
@@ -4148,6 +4152,7 @@ mod tests {
         let shape = m.shape();
         let strips: Vec<Vec<StripParam>> = (shape.channels.iter())
             .map(|c| strip::params(&m.state()["channels"][&c.id], c.width))
+            .chain([Vec::new()])
             .collect();
         assert_eq!(
             gain_bits(&t),
@@ -4327,7 +4332,7 @@ mod tests {
             let some = |next: &mut dyn FnMut(u64) -> u64| -> Value {
                 json!(channels.iter().filter(|_| next(3) == 0).collect::<Vec<_>>())
             };
-            match next(41) {
+            match next(42) {
                 0 => (format!("/channels/{ch}/fader"), db),
                 1 => (format!("/channels/{ch}/mute"), flag),
                 2 => (
@@ -4468,6 +4473,16 @@ mod tests {
                         json!(-(next(601) as f64) / 10.0),
                     ),
                     _ => (format!("/channels/{ch}/tone/ident"), flag),
+                },
+                // The line-up tone, on any of the elements it can replace.
+                40 => match next(4) {
+                    0 => ("/tone/on".into(), flag),
+                    1 => (
+                        "/tone/targets".into(),
+                        json!(sources.iter().filter(|_| next(2) == 0).collect::<Vec<_>>()),
+                    ),
+                    2 => ("/tone/level".into(), json!(-(next(301) as f64) / 10.0)),
+                    _ => ("/tone/ident".into(), flag),
                 },
                 _ => ("/metering/loudness/preset".into(), json!("atsc")),
             }
@@ -5025,14 +5040,14 @@ mod tests {
             level_db,
             ident,
         };
-        assert_eq!(before.tones, [None, None, Some(tone(440, -20.0, false))]);
+        // The line-up tone's slot last, at its initial -18 dBFS.
+        let line_up = Some(tone(1000, -18.0, false));
         assert_eq!(
-            before.flows,
-            flows(&["a1", "a2"])
-                .into_iter()
-                .chain([None])
-                .collect::<Vec<_>>()
+            before.tones,
+            [None, None, Some(tone(440, -20.0, false)), line_up]
         );
+        let a = |id: &str| Some(id.to_owned());
+        assert_eq!(before.flows, [a("a1"), a("a2"), None, None]);
         assert!(!m.engine_view().detached[2], "not an IS-05 detach");
         assert_ne!(m.config_hash(), wired().config_hash());
 

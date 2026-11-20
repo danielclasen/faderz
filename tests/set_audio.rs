@@ -1701,6 +1701,108 @@ fn every_replica_plays_a_tone_channel_alike() {
     }
 }
 
+/// The line-up tone is replicated state: through `/tone` writes and a
+/// fader move sent to each replica in turn, the programme and the
+/// mix-minus outputs of every replica carry the same bits, and the tone
+/// is heard on the programme at its level.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_plays_the_line_up_tone_alike() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch", "name": "Pres", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "vcas": [], "monitorOutputs": [],
+        "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let (set, listeners) = Set::with("line-up", shape, &["out-pgm", "out-mm"], |domain| {
+        let src = new_id();
+        let sources = vec![Source::sine(domain, &src, 0.5, 440)];
+        (sources, json!({ "ch": { "flow": src } }))
+    });
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let engines =
+        || -> Vec<Weak<Audio>> { (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect() };
+    let read =
+        |members: &[String]| Outputs::read(set.domain.0.clone(), members.to_vec(), engines());
+    let (pgm, pgm_reader) = read(&set.members);
+    let (mm, mm_reader) = read(&set.mm_members);
+    let from = Outputs::now() + 1;
+    write(&nodes, 0, &[("/channels/ch/fader", json!(0))]);
+    let level = -12.0;
+    let writes = [
+        ("/tone/targets", json!(["pgm", "mm1"])),
+        ("/tone/on", json!(true)),
+        ("/tone/level", json!(level)),
+        ("/tone/ident", json!(true)),
+        ("/buses/pgm/fader", json!(-10)),
+        ("/tone/ident", json!(false)),
+        ("/tone/targets", json!(["pgm"])),
+        ("/tone/on", json!(false)),
+    ];
+    for (i, (path, value)) in writes.into_iter().enumerate() {
+        // Long enough for every replica to play each setting a while.
+        std::thread::sleep(Duration::from_millis(400));
+        write(&nodes, i % REPLICAS, &[(path, value)]);
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    // A window of the tone on both legs: its energy is the window's
+    // samples times the square of the sample peak, two legs of half that.
+    let peak = 10f64.powf(level / 20.0);
+    let tone = ((WINDOW * B) as f64 * peak * peak).log10() * 1000.0;
+    for (what, outputs) in [("programme", &pgm), ("mix-minus", &mm)] {
+        for a in 0..REPLICAS {
+            for b in a + 1..REPLICAS {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                let c = loop {
+                    let c = outputs.compare(a, b, from);
+                    if c.compared >= 2_500 || Instant::now() >= deadline {
+                        break c;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                };
+                assert!(
+                    c.compared >= 2_500 && c.differing.is_empty(),
+                    "{what}: replicas {a} and {b}: {c:?}: {}",
+                    states(&nodes)
+                );
+                assert!(
+                    c.levels.len() >= 4,
+                    "{what}: the writes moved nothing: {c:?}"
+                );
+                assert!(
+                    (c.levels.iter()).any(|&l| (l as f64 - tone).abs() <= 2.0),
+                    "{what}: no tone at {level} dBFS ({tone:.0}): {c:?}"
+                );
+            }
+        }
+    }
+    for outputs in [&pgm, &mm] {
+        outputs.stop.store(true, Ordering::Relaxed);
+    }
+    pgm_reader.join().unwrap();
+    mm_reader.join().unwrap();
+    for node in nodes.into_iter().flatten() {
+        node.kill();
+    }
+}
+
 /// A channel's delay is replicated state: every replica plays a pulse on
 /// the input exactly that many samples late, and at 0 not late at all,
 /// the three writing the same bits.
