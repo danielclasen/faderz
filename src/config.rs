@@ -54,7 +54,10 @@ pub struct Config {
     /// here, and `delayBudgetSamples`, [`Config::delay_budget`].
     #[serde(default)]
     pub engine: Map<String, Value>,
-    /// samplez's RT thread settings (`enabled`, `priority`, `rtCpu`).
+    /// samplez's RT thread settings (`enabled`, `priority`, `rtCpu`,
+    /// `isolateRtCpu`). With the RT thread pinned to `rtCpu`,
+    /// `isolateRtCpu` (default true) keeps every thread started after it,
+    /// faderz's own included, off that CPU.
     #[serde(default)]
     pub rt: Map<String, Value>,
     /// NMOS registration and IS-05 connections over MXL.
