@@ -71,7 +71,15 @@ line takes no delay but 0, and at 0 a channel is not late at all. A write
 past the line is refused. The shape gives each channel's line as
 `maxDelay` in samples. The lines are allocated at start and together hold
 at most `engine.delayBudgetSamples` samples, a line counting once per leg;
-a longer line is a configuration change and a restart.
+a longer line is a configuration change and a restart. A recall whose
+scene holds a delay past the line, shortened since the scene was stored,
+sets that channel's delay to 0 and names the channel in its answer's
+`delaysNotApplied`.
+
+Once a channel has a line, a snapshot carries it as the shape's
+`maxDelay`, and a recall that set a delay to 0 carries its answer;
+faderz 0.4.9 and earlier read neither. Rolling back to such a release
+needs the data volume cleared, or every `maxDelayMs` removed first.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is

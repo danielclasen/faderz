@@ -667,6 +667,10 @@ export interface CommandResult {
   revision: Revision;
   atIndex?: number;
 }
+export interface RecallResult extends CommandResult {
+  /** Channels whose stored delay is past their delay line: the recall set their delay to 0. */
+  delaysNotApplied?: Id[];
+}
 export interface ApiError {
   code: 400 | 403 | 404 | 409;
   message: string;

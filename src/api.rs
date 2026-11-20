@@ -131,7 +131,7 @@ async fn run(app: &App, owner: &Owner, id: &str, command: Command) -> Result<Ack
         Some(Answer::NotFound { message }) => Err(error(StatusCode::NOT_FOUND, message)),
         Some(Answer::Invalid { message }) => Err(error(StatusCode::BAD_REQUEST, message)),
         Some(Answer::Refused { message }) => Err(error(StatusCode::CONFLICT, message)),
-        Some(Answer::Scene { .. } | Answer::Created) | None => Ok(ack),
+        Some(Answer::Scene { .. } | Answer::Created | Answer::Recalled { .. }) | None => Ok(ack),
     }
 }
 
@@ -397,7 +397,11 @@ async fn recall_scene(
             at: now_rfc3339(),
         };
         let ack = run(&app, &owner, &b.command_id, command).await?;
-        Ok(Json(result(&app, &ack, true).await).into_response())
+        let mut body = result(&app, &ack, true).await;
+        if let Some(Answer::Recalled { delays }) = app.answer(&SessionKey::from(&owner), &ack) {
+            body["delaysNotApplied"] = json!(delays);
+        }
+        Ok(Json(body).into_response())
     };
     run.await.unwrap_or_else(|e| e)
 }

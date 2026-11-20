@@ -300,7 +300,7 @@ paths:
         "503":
           $ref: "#/components/responses/NotApplied"
         "200":
-          $ref: "#/components/responses/CommandResult"
+          $ref: "#/components/responses/RecallResult"
         "400":
           $ref: "#/components/responses/Error"
         "404":
@@ -841,6 +841,33 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/CommandResult"
+    RecallResult:
+      description: The scene was recalled.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [result, revision]
+            additionalProperties: false
+            properties:
+              commandId:
+                $ref: "./ws/model.schema.json#/$defs/CommandId"
+              result:
+                type: string
+                enum: [applied, duplicate, noop]
+              revision:
+                $ref: "./ws/model.schema.json#/$defs/Revision"
+              atIndex:
+                $ref: "./ws/model.schema.json#/$defs/SampleIndex"
+              delaysNotApplied:
+                description: |
+                  Channels whose stored delay is past their delay line, shortened
+                  since the scene was stored: the recall set their delay to 0.
+                  Absent when there are none.
+                type: array
+                minItems: 1
+                items:
+                  $ref: "./ws/model.schema.json#/$defs/Id"
     SceneResult:
       description: The scene was stored.
       content:

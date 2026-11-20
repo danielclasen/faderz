@@ -364,6 +364,9 @@ pub enum Answer {
     Refused { message: String },
     /// The console a `PutConsole` created.
     Created,
+    /// The channels a `Recall` set to a delay of 0: their stored delay is
+    /// past their delay line.
+    Recalled { delays: Vec<String> },
 }
 
 /// What one command or expiry changed, for [`Product::delta`].
@@ -910,7 +913,9 @@ impl Mixer {
             Command::Patch { changes, .. } => (changes.iter())
                 .map(|c| (c.path.clone(), c.value.clone()))
                 .collect(),
-            Command::Recall { scene, .. } => self.recall_writes(scene).unwrap_or_default(),
+            Command::Recall { scene, .. } => (self.recall_writes(scene))
+                .map(|(written, _)| written)
+                .unwrap_or_default(),
             _ => Vec::new(),
         }
     }
@@ -1433,29 +1438,45 @@ impl Mixer {
         at: &str,
         ctx: &Apply,
     ) -> Effect<Edits> {
-        let Some(mut written) = self.recall_writes(scene) else {
+        let Some((mut written, delays)) = self.recall_writes(scene) else {
             let message = format!("unknown scene {scene}");
             return self.refuse(session, id, Answer::NotFound { message });
         };
         if let Some(answer) = self.reroute_refusal(ctx, &written) {
             return self.refuse(session, id, answer);
         }
+        if !delays.is_empty() {
+            self.record(session, id, Answer::Recalled { delays });
+        }
         written.push(("/sceneRecalled".into(), json!({ "id": scene, "at": at })));
         changed(self.write(written))
     }
 
-    /// The leaves a recall of `scene` writes, none for an unknown scene.
-    fn recall_writes(&self, scene: &str) -> Option<Vec<(String, Value)>> {
+    /// The leaves a recall of `scene` writes, none for an unknown scene,
+    /// and the channels whose stored delay their delay line no longer
+    /// takes: those recall a delay of 0.
+    fn recall_writes(&self, scene: &str) -> Option<(Leaves, Vec<String>)> {
         let data = self.scenes.get(scene)?;
-        let mut written: Vec<(String, Value)> = self
-            .recalled(data)
-            .into_iter()
-            // A scene keeps the ids of the shape it was stored in.
-            .filter(|(path, v)| {
-                self.state.pointer(path).is_some_and(|current| current != v)
-                    && self.check_references(path, v).is_ok()
-            })
-            .collect();
+        let mut written = Vec::new();
+        let mut short = Vec::new();
+        for (path, mut v) in self.recalled(data) {
+            let Some(current) = self.state.pointer(&path) else {
+                continue;
+            };
+            // A scene keeps the ids and delays of the shape it was stored
+            // in.
+            if let Err(e) = self.check_references(&path, &v) {
+                let Some(channel) = delayed_channel(&path) else {
+                    continue;
+                };
+                tracing::warn!(scene, channel, "recall sets the delay to 0: {e}");
+                short.push(channel);
+                v = json!(0);
+            }
+            if *current != v {
+                written.push((path, v));
+            }
+        }
         // With a channel added since the scene was stored, a group's
         // triggers can pass the limit: that group keeps its routing, as
         // if it were recall-safe, so its members and destinations stay a
@@ -1468,7 +1489,7 @@ impl Mixer {
             );
             written.retain(|(p, _)| duck::routing_of(p) != Some(group.as_str()));
         }
-        Some(written)
+        Some((written, short))
     }
 
     /// The leaves of the scene `data` a recall writes: those of the groups
@@ -1771,6 +1792,9 @@ impl Mixer {
             if fits {
                 set_at(&mut state, &path, value);
             } else {
+                if let Some(channel) = delayed_channel(&path) {
+                    tracing::warn!(channel, %value, "the delay line no longer takes the saved delay: 0");
+                }
                 dropped.push(path);
             }
         }
@@ -2153,6 +2177,17 @@ fn changed(values: Vec<(String, Value)>) -> Effect<Edits> {
             values,
             ..Edits::default()
         })
+    }
+}
+
+/// Leaves to write, as paths and values.
+type Leaves = Vec<(String, Value)>;
+
+/// The channel whose delay `path` is.
+fn delayed_channel(path: &str) -> Option<String> {
+    match tokens(path).as_slice() {
+        [group, channel, leaf] if group == "channels" && leaf == "delay" => Some(channel.clone()),
+        _ => None,
     }
 }
 
@@ -4603,6 +4638,46 @@ mod tests {
         let mut same = delayed(960);
         same.load(&m.save()).unwrap();
         assert_eq!(same.targets().unwrap().delays, [960, 0, 0]);
+    }
+
+    /// A scene's delay that the channel's line, shortened since the scene
+    /// was stored, no longer takes recalls 0 rather than leaving the
+    /// delay as it was, and the recall's answer names the channel, so
+    /// the console can say so. One within the line recalls as stored,
+    /// with no answer.
+    #[test]
+    fn a_recalled_delay_past_the_line_is_0_and_answered() {
+        let mut m = delayed(960);
+        patch(&mut m, "p1", &[("/channels/ch1/delay", json!(960))]);
+        let scene = store(&mut m, "s1", None, "Lip sync");
+        let recall = |m: &mut Mixer, id: &str| {
+            rest(
+                m,
+                Command::Recall {
+                    id: id.into(),
+                    scene: scene.clone(),
+                    at: "2026-11-15T12:01:00.000Z".into(),
+                },
+            )
+        };
+
+        let mut shorter = delayed(480);
+        shorter.load(&m.save()).unwrap();
+        patch(&mut shorter, "p2", &[("/channels/ch1/delay", json!(240))]);
+        recall(&mut shorter, "r1");
+        assert_eq!(shorter.state()["channels"]["ch1"]["delay"], 0);
+        assert_eq!(shorter.targets().unwrap().delays, [0, 0, 0]);
+        assert_eq!(
+            shorter.answer(&rest_key(), "r1"),
+            Some(&Answer::Recalled {
+                delays: vec!["ch1".into()]
+            })
+        );
+
+        patch(&mut m, "p3", &[("/channels/ch1/delay", json!(0))]);
+        recall(&mut m, "r2");
+        assert_eq!(m.state()["channels"]["ch1"]["delay"], 960);
+        assert_eq!(m.answer(&rest_key(), "r2"), None);
     }
 
     /// A snapshot carries its format: a binary that reads the earlier

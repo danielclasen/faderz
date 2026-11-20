@@ -519,7 +519,7 @@ fn refusal(app: &App, id: &str, path: &str, answer: &state::Answer) -> Message {
         state::Answer::NotFound { message } => error(app, 404, message, Some((id, path))),
         state::Answer::Invalid { message } => error(app, 400, message, Some((id, path))),
         state::Answer::Refused { message } => error(app, 409, message, Some((id, path))),
-        state::Answer::Scene { .. } | state::Answer::Created => {
+        state::Answer::Scene { .. } | state::Answer::Created | state::Answer::Recalled { .. } => {
             error(app, 400, "not a control command", Some((id, path)))
         }
     }

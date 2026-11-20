@@ -1048,6 +1048,12 @@ impl Config {
                     shape.sample_rate
                 ));
             }
+            if ms > 0.0 && samples == 0.0 {
+                return Err(format!(
+                    "mxl.inputs.{}.maxDelayMs {ms}: under one sample at {} Hz; 0 for no line",
+                    c.id, shape.sample_rate
+                ));
+            }
             if samples > 0.0 {
                 c.max_delay = Some(samples as u32);
                 lines.push((c.id.clone(), samples as u64 * c.width as u64));
@@ -1907,6 +1913,13 @@ mod tests {
         let e =
             Config::parse(&config(json!(-1), json!(0), json!({})), || unreachable!()).unwrap_err();
         assert!(e.contains("mxl.inputs.ch1.maxDelayMs -1"), "{e}");
+        // A line too short for one sample is refused, not taken as none.
+        let e = Config::parse(&config(json!(0.01), json!(0), json!({})), || unreachable!())
+            .unwrap_err();
+        assert!(
+            e.contains("mxl.inputs.ch1.maxDelayMs 0.01: under one sample"),
+            "{e}"
+        );
 
         let mut set: Value = serde_json::from_str(&config(json!(0), json!(0), json!({}))).unwrap();
         set["shape"]["channels"][0]["maxDelay"] = json!(960);
