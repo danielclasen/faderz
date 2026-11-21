@@ -116,6 +116,8 @@ describe('counterInfo', () => {
   it('names a counter for people from the contract, and one it does not know by its key', () => {
     expect(counterInfo('deadline_miss_total')).toMatchObject({ label: 'Late output blocks', fault: true });
     expect(counterInfo('meter_dropped_total').fault).toBe(false);
+    // A late tally is the switcher's, not this replica's: it lights no lamp.
+    expect(counterInfo('afv_late_total').fault).toBe(false);
     expect(counterInfo('something_new_total')).toEqual({ label: 'something_new', help: '', fault: false });
   });
 });

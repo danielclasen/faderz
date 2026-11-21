@@ -286,7 +286,8 @@ selected. The ENGINE lamp in the status bar opens the engine's counters
 of the replica serving the screen, each under a name for people with an
 (i) that explains it, and shows WARN while a counter whose rise is a
 fault (a late output block, a lost input block, a late change) rose in
-the last 10 s. An input that delivers nothing usable is named on the
+the last 10 s. A late tally (`afv_late_total`) is the switcher's fault,
+not the replica's, and lights no lamp. An input that delivers nothing usable is named on the
 lamp and in the counters with the reason: its flow stopped, the set
 took it down, or its blocks came late. The names and explanations are
 those of `api/ws/counters.schema.json`.
