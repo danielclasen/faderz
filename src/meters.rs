@@ -399,6 +399,8 @@ mod tests {
             peak,
             rms: Vec::new(),
             momentary,
+            true_peak: Vec::new(),
+            max_true_peak: Vec::new(),
         }
     }
 

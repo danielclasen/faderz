@@ -8,7 +8,8 @@ repository = "https://github.com/danielclasen/faderz"
 description = "Operated multichannel broadcast audio mixer over MXL"
 publish = false
 
-# Every samplez crate at the same release.
+# Every samplez crate at the same release. Pinned to a main revision until
+# the v0.20.0 tag, which replaces the rev here.
 [dependencies]
 axum = { version = "=0.8.9", features = ["ws"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["alloc"] }
@@ -17,12 +18,12 @@ libc = "=0.2.191"
 libm = "=0.2.16"
 openraft = "=0.9.26"
 rust-embed = { version = "=8.14.0", features = ["debug-embed", "deterministic-timestamps", "include-exclude", "mime-guess"] }
-samplez = { git = "https://github.com/danielclasen/samplez", tag = "v0.19.0", version = "=0.19.0" }
-samplez-dsp = { git = "https://github.com/danielclasen/samplez", tag = "v0.19.0", version = "=0.19.0" }
-samplez-mxl = { git = "https://github.com/danielclasen/samplez", tag = "v0.19.0", version = "=0.19.0" }
-samplez-nmos = { git = "https://github.com/danielclasen/samplez", tag = "v0.19.0", version = "=0.19.0" }
-samplez-replica = { git = "https://github.com/danielclasen/samplez", tag = "v0.19.0", version = "=0.19.0" }
-samplez-service = { git = "https://github.com/danielclasen/samplez", tag = "v0.19.0", version = "=0.19.0" }
+samplez = { git = "https://github.com/danielclasen/samplez", rev = "78d91000e332871fbc9cf39414429bebcb5ee4b5" }
+samplez-dsp = { git = "https://github.com/danielclasen/samplez", rev = "78d91000e332871fbc9cf39414429bebcb5ee4b5" }
+samplez-mxl = { git = "https://github.com/danielclasen/samplez", rev = "78d91000e332871fbc9cf39414429bebcb5ee4b5" }
+samplez-nmos = { git = "https://github.com/danielclasen/samplez", rev = "78d91000e332871fbc9cf39414429bebcb5ee4b5" }
+samplez-replica = { git = "https://github.com/danielclasen/samplez", rev = "78d91000e332871fbc9cf39414429bebcb5ee4b5" }
+samplez-service = { git = "https://github.com/danielclasen/samplez", rev = "78d91000e332871fbc9cf39414429bebcb5ee4b5" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 tokio = { version = "=1.54.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }

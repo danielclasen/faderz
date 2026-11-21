@@ -4181,7 +4181,10 @@ mod tests {
     }
 
     fn ordered(generation: Option<bool>) -> Apply {
-        Apply { generation }
+        Apply {
+            generation,
+            at_index: None,
+        }
     }
 
     /// The flows of channels reading `ids`, then the slots of the line-up
