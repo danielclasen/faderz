@@ -99,6 +99,14 @@ async function writeAcross(
   await expect(page.getByTestId(`fader-value-${channel}`)).toHaveText('-3.0');
 }
 
+// The mock answers REST without keep-alive: a test that reused a pooled
+// socket the server closes after 5 s idle would get ECONNRESET.
+test('the mock answers REST without keep-alive', { tag: '@mock' }, async ({ request }) => {
+  const res = await request.get('/api/v1/state');
+  expect(res.ok()).toBe(true);
+  expect(res.headers()['connection']).toBe('close');
+});
+
 test('two clients move different faders at the same time and see each other', { tag: '@mock' }, async ({ browser, baseURL, request }) => {
   await patch(request, '/channels/ch5/fader', -20);
   await patch(request, '/channels/ch6/fader', -20);
