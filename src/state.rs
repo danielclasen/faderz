@@ -36,7 +36,7 @@ pub fn crossfade_lead(rate: u64) -> u64 {
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
 /// change to any of them takes another version, so replicas deriving
 /// differently never run side by side.
-pub const DERIVATION_VERSION: u32 = 9;
+pub const DERIVATION_VERSION: u32 = 10;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
@@ -264,6 +264,26 @@ pub struct Ports {
     /// The scheduled activations, one per port at most.
     #[serde(default)]
     scheduled: Vec<Scheduled>,
+    /// The change that last changed each port's `/active`, by receiver
+    /// and by sender; none for a port no change has changed.
+    #[serde(default)]
+    receiver_changes: BTreeMap<String, PortChange>,
+    #[serde(default)]
+    sender_changes: BTreeMap<String, PortChange>,
+}
+
+/// A replicated change of a port's `/active`: the port's IS-04 version
+/// from it on and the id of the command that made it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortChange {
+    /// TAI nanoseconds: the time of the index the command's entry takes
+    /// effect at ([`Apply::at_index`]), or the nanosecond after the
+    /// port's previous version where that is not later, as
+    /// `samplez_nmos::Nmos::replicated_change` sets a version, so every
+    /// replica serves this one.
+    pub version: u64,
+    pub id: String,
 }
 
 /// A scheduled activation the state holds until it is fired or
@@ -521,6 +541,9 @@ pub struct Mixer {
     /// transition changed, shaped as the targets' gains, or empty for
     /// none ([`Mixer::fading`]).
     fading: Vec<Vec<Option<Fade>>>,
+    /// The ports whose `/active` the command being applied changed, for
+    /// [`Mixer::stamp`]; empty between commands.
+    touched: Vec<PortRef>,
 }
 
 /// A snapshot from [`FORMAT`] on.
@@ -835,6 +858,7 @@ impl Mixer {
         }
         // An activation supersedes one scheduled for the port.
         self.ports.scheduled.retain(|s| s.port != *port);
+        self.touch(port.clone());
         Effect::Changed(Edits::default())
     }
 
@@ -925,6 +949,46 @@ impl Mixer {
         &self.ports.scheduled
     }
 
+    /// The change that last changed `port`'s `/active`, none before the
+    /// first.
+    pub fn port_change(&self, port: &PortRef) -> Option<&PortChange> {
+        match port {
+            PortRef::Receiver(id) => self.ports.receiver_changes.get(id),
+            PortRef::Sender(id) => self.ports.sender_changes.get(id),
+        }
+    }
+
+    fn touch(&mut self, port: PortRef) {
+        if !self.touched.contains(&port) {
+            self.touched.push(port);
+        }
+    }
+
+    /// Records command `id` as the change of each port it changed
+    /// ([`PortChange`]), its entry taking effect at `at_index`.
+    fn stamp(&mut self, id: &str, at_index: Option<u64>) {
+        if self.touched.is_empty() {
+            return;
+        }
+        let rate = u128::from(self.shape().sample_rate);
+        let at = at_index.map_or(0, |i| {
+            u64::try_from(u128::from(i) * 1_000_000_000 / rate).unwrap_or(u64::MAX)
+        });
+        for port in std::mem::take(&mut self.touched) {
+            let (changes, key) = match port {
+                PortRef::Receiver(id) => (&mut self.ports.receiver_changes, id),
+                PortRef::Sender(id) => (&mut self.ports.sender_changes, id),
+            };
+            // A port starts at 0:0, so its first change is at least 1.
+            let after = changes.get(&key).map_or(1, |c| c.version + 1);
+            let change = PortChange {
+                version: at.max(after),
+                id: id.to_owned(),
+            };
+            changes.insert(key, change);
+        }
+    }
+
     /// Why `active` cannot be activated on `port`, as [`Mixer::connect`]
     /// refuses it.
     fn check_connection(&self, port: &PortRef, active: &Connection) -> Result<(), Answer> {
@@ -974,6 +1038,7 @@ impl Mixer {
                 if let Some(r) = self.ports.receivers.get_mut(channel) {
                     r.flow = Some(flow);
                 }
+                self.touch(PortRef::Receiver(channel.clone()));
             }
         }
     }
@@ -2077,6 +2142,7 @@ impl Product for Mixer {
             return Effect::Unchanged;
         };
         let session = origin.key();
+        self.touched.clear();
         let timing = match &command {
             Command::Recall { fade: Some(c), .. } => Timing::All(*c),
             Command::Tally {
@@ -2085,7 +2151,7 @@ impl Product for Mixer {
             } => Timing::Afv(*t),
             _ => Timing::Cut,
         };
-        self.fading(timing, |m| match &command {
+        let effect = self.fading(timing, |m| match &command {
             Command::Control(c) => m.control(origin, c, ctx),
             Command::Patch { id, changes } => m.patch(&session, id, changes, ctx),
             Command::StoreScene {
@@ -2122,7 +2188,9 @@ impl Product for Mixer {
             Command::ControlRequest { path, from, at, .. } => {
                 m.control_request(&session, path, from, *at)
             }
-        })
+        });
+        self.stamp(command.id(), ctx.at_index);
+        effect
     }
 
     /// [`mix::targets`] of the state, as every write keeps them, with
@@ -2176,7 +2244,10 @@ impl Product for Mixer {
     /// Releases every control `session` holds and disconnects its
     /// consoles.
     fn expire(&mut self, session: &SessionKey) -> Effect<Edits> {
-        self.fading(Timing::Cut, |m| m.end_lease(session))
+        self.touched.clear();
+        let effect = self.fading(Timing::Cut, |m| m.end_lease(session));
+        self.stamp("", None);
+        effect
     }
 
     fn forget(&mut self, session: &SessionKey) {
@@ -5568,6 +5639,61 @@ mod tests {
         let mut back = wired();
         back.load(&serde_json::to_vec(&v).unwrap()).unwrap();
         assert_eq!(back.targets(), wired().targets());
+    }
+
+    /// A change of a port's `/active` records its version, the TAI time
+    /// of the index its entry takes effect at, so every replica gives
+    /// the port the same one; a second change at that time takes the
+    /// next nanosecond, as samplez-nmos sets a version. A switch between
+    /// a channel's inputs changes its receiver, a fader write changes no
+    /// port, and a snapshot keeps the versions.
+    #[test]
+    fn a_port_change_records_the_version_of_its_entry() {
+        let mut m = wired();
+        let rate = u64::from(m.shape().sample_rate);
+        let run = |m: &mut Mixer, id: &str, active: Connection, at_index: Option<u64>| {
+            let c = Command::Connect {
+                id: id.into(),
+                port: receiver("ch1"),
+                active,
+            };
+            let ctx = Apply {
+                generation: Some(true),
+                at_index,
+            };
+            m.apply(&origin("rest"), &serde_json::to_vec(&c).unwrap(), &ctx)
+        };
+        // 2.5 s after the epoch of the flows' indexes.
+        run(&mut m, "n1", conn(true, Some(F1)), Some(rate * 5 / 2));
+        let change = |m: &Mixer, port: &PortRef| m.port_change(port).cloned();
+        let first = PortChange {
+            version: 2_500_000_000,
+            id: "n1".into(),
+        };
+        assert_eq!(change(&m, &receiver("ch1")), Some(first));
+        run(&mut m, "n2", conn(false, Some(F1)), Some(rate * 5 / 2));
+        let second = PortChange {
+            version: 2_500_000_001,
+            id: "n2".into(),
+        };
+        assert_eq!(change(&m, &receiver("ch1")), Some(second.clone()));
+        let pgm = PortRef::Sender("out-pgm".into());
+        assert_eq!(change(&m, &pgm), None, "no change of the sender");
+
+        assert_eq!(change(&m, &receiver("ch2")), None);
+        set(&mut m, "s", 1, "/channels/ch2/fader", json!(-10));
+        assert_eq!(change(&m, &receiver("ch2")), None, "a fader is no port");
+        set(&mut m, "s", 2, "/channels/ch2/input", json!("b"));
+        let switched = PortChange {
+            version: 1,
+            id: "s-2".into(),
+        };
+        assert_eq!(change(&m, &receiver("ch2")), Some(switched.clone()));
+
+        let mut back = wired();
+        back.load(&m.save()).unwrap();
+        assert_eq!(change(&back, &receiver("ch1")), Some(second));
+        assert_eq!(change(&back, &receiver("ch2")), Some(switched));
     }
 
     /// The state is a function of the log: a snapshot, one an older

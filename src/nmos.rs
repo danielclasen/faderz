@@ -29,9 +29,9 @@ use openraft::ServerState;
 use samplez_mxl::{Instance, MxlApi};
 use samplez_nmos::uuid::Uuid;
 use samplez_nmos::{
-    Active, Applied, Asset, BoxFuture, ChannelCount, ChannelDesc, Connections, Fail, FlowSeen,
-    NmosConfig, NodeModel, Port, PortKey, ReceiverDesc, Reject, SenderDesc, Store, SystemTai, Tai,
-    TaiClock,
+    ActivationMode, Active, Applied, Asset, BoxFuture, ChannelCount, ChannelDesc, Connections,
+    Fail, FlowSeen, NmosConfig, NodeModel, Port, PortKey, ReceiverDesc, Reject, Replicated,
+    SenderDesc, Store, SystemTai, Tai, TaiClock,
 };
 use samplez_replica::Replica;
 use samplez_replica::entry::SessionKey;
@@ -91,6 +91,13 @@ pub struct Node {
     peers: Vec<(String, String)>,
     /// Each port's place by whether it is a sender and its IS-04 id.
     ids: BTreeMap<(bool, String), usize>,
+    /// Whether every version comes from the state, as in a set
+    /// (`samplez_nmos::Nmos::with_versions`).
+    shared: bool,
+    /// With shared versions, the version of each port's change in the
+    /// state this node last handed samplez-nmos, TAI nanoseconds, in the
+    /// node's order.
+    passed: Mutex<Vec<u64>>,
 }
 
 /// A port as [`actives`] reads it from the state.
@@ -207,7 +214,9 @@ impl Node {
         let ids = port_ids(&seed, &ports);
         let api = samplez_mxl::load(&mxl.library_path).map_err(|e| format!("nmos: {e}"))?;
         let paths = mxl.domains.iter().map(|d| (d.name.clone(), d.path.clone()));
-        let conns = Arc::new(Conns {
+        let instance = crate::app::uuid().map_err(|e| format!("nmos: {e}"))?;
+        let conns = Arc::new_cyclic(|me| Conns {
+            me: me.clone(),
             app,
             ports: ports.clone(),
             resolver: Arc::new(Resolver {
@@ -219,10 +228,27 @@ impl Node {
             }),
             seen: Mutex::new(vec![0; model.senders.len() + model.receivers.len()]),
             asked: Mutex::new(vec![None; model.senders.len() + model.receivers.len()]),
-            instance: crate::app::uuid().map_err(|e| format!("nmos: {e}"))?,
+            instance,
+            node: Mutex::default(),
         });
-        let shown = crate::app::with_state(replica, |sm| actives(&sm.product, &ports));
-        let store = Loaded(ports.iter().map(Model::key).zip(shown).collect());
+        let (shown, activations, versions) = crate::app::with_state(replica, |sm| {
+            let m = &sm.product;
+            let activations: Vec<_> = (ports.iter())
+                .map(|p| connection_of(m, p).and_then(|c| c.activation.as_ref()))
+                .map(|a| a.and_then(nmos_activation))
+                .collect();
+            let versions: Vec<u64> = (ports.iter())
+                .map(|p| m.port_change(&p.port_ref()).map_or(0, |c| c.version))
+                .collect();
+            (actives(m, &ports), activations, versions)
+        });
+        let keys = || ports.iter().map(Model::key);
+        let store = Loaded {
+            active: keys().zip(shown).collect(),
+            activations: (keys().zip(activations))
+                .filter_map(|(k, a)| Some((k, a?)))
+                .collect(),
+        };
         let cfg = NmosConfig {
             seed: seed.clone(),
             advertise_host: nmos.advertise_host.clone(),
@@ -244,8 +270,21 @@ impl Node {
             continue_held: config.set.is_some(),
             dns_sd_domain: nmos.registry.dns_sd_domain.clone(),
         };
-        let node = samplez_nmos::Nmos::new(model, cfg, conns.clone(), &store, SystemTai)
-            .map_err(|e| e.to_string())?;
+        // A set's replicas serve one Node, so every version comes from
+        // the state: each replica serves the same documents.
+        let shared = config.set.is_some();
+        let node = if shared {
+            let tai: BTreeMap<PortKey, Tai> = (keys().zip(&versions))
+                .map(|(k, v)| (k, Tai::from_nanos(u128::from(*v))))
+                .collect();
+            samplez_nmos::Nmos::with_versions(model, cfg, conns.clone(), &store, SystemTai, &tai)
+        } else {
+            samplez_nmos::Nmos::new(model, cfg, conns.clone(), &store, SystemTai)
+        }
+        .map_err(|e| e.to_string())?;
+        if shared {
+            *conns.node.lock().expect("node lock poisoned") = Some(node.clone());
+        }
         node.register_metrics(metrics);
         let peers = match &config.set {
             Some(set) => {
@@ -265,6 +304,8 @@ impl Node {
                 .map_or(1, |s| usize::from(s.voters.replicas)),
             peers,
             ids,
+            shared,
+            passed: Mutex::new(versions),
         })
     }
 
@@ -493,11 +534,8 @@ impl Node {
             return response;
         }
         let connection = self.replica.upgrade().and_then(|r| {
-            crate::app::with_state(&r, |sm| match &self.ports[index] {
-                Model::Sender { output, .. } => sm.product.sender(output).cloned(),
-                Model::Receiver { channel, .. } => {
-                    sm.product.receiver(channel).and_then(|(c, _)| c.cloned())
-                }
+            crate::app::with_state(&r, |sm| {
+                connection_of(&sm.product, &self.ports[index]).cloned()
             })
         });
         let Some(a) = connection.and_then(|c| c.activation) else {
@@ -601,6 +639,10 @@ impl Node {
             // Also when nothing is applied: a port left alone is looked
             // at again.
             let _ = tokio::time::timeout(FOLLOW_TICK, replica.applied(revision + 1)).await;
+            if self.shared {
+                revision = self.replicate(&replica, false);
+                continue;
+            }
             let (now, scheduled);
             (now, scheduled, revision) = crate::app::with_state(&replica, |sm| {
                 // Only a schedule whose time has come holds a port: until
@@ -631,6 +673,62 @@ impl Node {
         }
     }
 
+    /// With shared versions, hands samplez-nmos each port's change in the
+    /// state since the one it took last, as the replicated change it is,
+    /// and at a takeover moves every version up to the state's. Returns
+    /// the state's revision.
+    fn replicate(&self, replica: &Replica<Mixer>, takeover: bool) -> u64 {
+        let mut passed = self.passed.lock().expect("passed lock poisoned");
+        let (changed, versions, revision) = crate::app::with_state(replica, |sm| {
+            let m = &sm.product;
+            let versions: Vec<_> = (self.ports.iter())
+                .map(|p| m.port_change(&p.port_ref()).cloned())
+                .collect();
+            let changed: Vec<_> = (self.ports.iter().enumerate())
+                .filter(|(i, _)| {
+                    versions[*i]
+                        .as_ref()
+                        .is_some_and(|c| c.version > passed[*i])
+                })
+                .map(|(i, p)| {
+                    let activation = connection_of(m, p).and_then(|c| c.activation.as_ref());
+                    let change = Replicated {
+                        active: actives(m, std::slice::from_ref(p)).remove(0),
+                        activation: activation.and_then(nmos_activation),
+                    };
+                    (i, change)
+                })
+                .collect();
+            (changed, versions, sm.revision)
+        });
+        for (index, change) in changed {
+            let Some(made) = &versions[index] else {
+                continue;
+            };
+            let port = self.conns.port(index);
+            let version = Tai::from_nanos(u128::from(made.version));
+            let served = self.conns.served(index, &made.id);
+            let stamped = self.nmos.replicated_change(port, &change, version, served);
+            if stamped.version != version {
+                tracing::warn!(
+                    port = index,
+                    "nmos: version {} set where the state holds {version}",
+                    stamped.version
+                );
+            }
+            passed[index] = made.version;
+            self.conns.saw(index, stamped.generation);
+        }
+        if takeover {
+            let keys = self.ports.iter().map(Model::key);
+            let held: BTreeMap<PortKey, Tai> = (keys.zip(&versions))
+                .filter_map(|(k, c)| Some((k, Tai::from_nanos(u128::from(c.as_ref()?.version)))))
+                .collect();
+            self.nmos.set_versions(&held);
+        }
+        revision
+    }
+
     /// Runs the registration while this replica leads; the new leader
     /// registers the same Node.
     async fn register(&self) {
@@ -659,6 +757,11 @@ impl Node {
                 continue;
             }
             tracing::info!("nmos: leading, registering the node");
+            if self.shared
+                && let Some(replica) = self.replica.upgrade()
+            {
+                self.replicate(&replica, true);
+            }
             let lost = async {
                 loop {
                     let changed = tokio::time::timeout(LEAD_CHECK, metrics.changed()).await;
@@ -672,6 +775,13 @@ impl Node {
                 () = lost => tracing::info!("nmos: no longer leading, the leader registers the node"),
             }
         }
+    }
+}
+
+impl Drop for Node {
+    /// Ends the cycle between the node and its [`Conns`].
+    fn drop(&mut self) {
+        *self.conns.node.lock().expect("node lock poisoned") = None;
     }
 }
 
@@ -746,6 +856,45 @@ fn active(c: &Connection) -> Active {
     }
 }
 
+/// The connection the state holds for port `p`, none before its first
+/// activation.
+fn connection_of<'m>(mixer: &'m Mixer, p: &Model) -> Option<&'m Connection> {
+    match p {
+        Model::Sender { output, .. } => mixer.sender(output),
+        Model::Receiver { channel, .. } => mixer.receiver(channel).and_then(|(c, _)| c),
+    }
+}
+
+/// A state's activation as samplez-nmos shows it; none for one it cannot
+/// read.
+fn nmos_activation(a: &Activation) -> Option<samplez_nmos::Activation> {
+    let mode = match a.mode.as_str() {
+        "activate_immediate" => ActivationMode::Immediate,
+        "activate_scheduled_absolute" => ActivationMode::ScheduledAbsolute,
+        "activate_scheduled_relative" => ActivationMode::ScheduledRelative,
+        _ => return None,
+    };
+    Some(samplez_nmos::Activation {
+        mode,
+        requested: a.requested.clone(),
+        time: a.time.parse().ok()?,
+    })
+}
+
+/// An activation of samplez-nmos as the state keeps it.
+fn state_activation(a: &samplez_nmos::Activation) -> Activation {
+    let mode = match a.mode {
+        ActivationMode::Immediate => "activate_immediate",
+        ActivationMode::ScheduledAbsolute => "activate_scheduled_absolute",
+        ActivationMode::ScheduledRelative => "activate_scheduled_relative",
+    };
+    Activation {
+        mode: mode.into(),
+        requested: a.requested.clone(),
+        time: a.time.to_string(),
+    }
+}
+
 fn connection(a: &Active, activation: Option<Activation>) -> Connection {
     let text = |v: Option<Uuid>| v.map(|u| u.to_string());
     Connection {
@@ -757,18 +906,29 @@ fn connection(a: &Active, activation: Option<Activation>) -> Connection {
     }
 }
 
-/// Each port's `/active` at start, from the state.
-struct Loaded(BTreeMap<PortKey, Active>);
+/// Each port's `/active` at start and the activation it shows, from the
+/// state.
+struct Loaded {
+    active: BTreeMap<PortKey, Active>,
+    activations: BTreeMap<PortKey, samplez_nmos::Activation>,
+}
 
 impl Store for Loaded {
     fn load(&self) -> BTreeMap<PortKey, Active> {
-        self.0.clone()
+        self.active.clone()
+    }
+
+    fn activations(&self) -> BTreeMap<PortKey, samplez_nmos::Activation> {
+        self.activations.clone()
     }
 }
 
 /// faderz's side of IS-05: checks a receiver's flow in its domain and
 /// orders each activation through the replicated log.
 struct Conns {
+    /// Itself, for the task an activation is ordered on, which outlives
+    /// its apply.
+    me: Weak<Conns>,
     app: Arc<App>,
     ports: Arc<Vec<Model>>,
     resolver: Arc<Resolver>,
@@ -782,17 +942,46 @@ struct Conns {
     /// activation staged here, until it is taken into the state with its
     /// schedule ([`Conns::schedule`]).
     asked: Mutex<Vec<Option<Activation>>>,
+    /// The node, with shared versions, for the change an apply in flight
+    /// makes (`samplez_nmos::Nmos::activation`); none otherwise and once
+    /// the [`Node`] is dropped.
+    node: Mutex<Option<samplez_nmos::Nmos>>,
 }
 
 impl Conns {
-    fn index(&self, port: Port) -> usize {
-        let senders = (self.ports.iter())
+    fn senders(&self) -> usize {
+        (self.ports.iter())
             .filter(|p| matches!(p, Model::Sender { .. }))
-            .count();
+            .count()
+    }
+
+    fn index(&self, port: Port) -> usize {
         match port {
             Port::Sender(i) => i,
-            Port::Receiver(i) => senders + i,
+            Port::Receiver(i) => self.senders() + i,
         }
+    }
+
+    /// The port at `index`, [`Conns::index`]'s inverse.
+    fn port(&self, index: usize) -> Port {
+        match index.checked_sub(self.senders()) {
+            None => Port::Sender(index),
+            Some(i) => Port::Receiver(i),
+        }
+    }
+
+    /// The generation of this replica's apply that ordered command `id`
+    /// on the port at `index`, from the id [`Conns::order`] gives it;
+    /// none for another replica's or another command's.
+    fn served(&self, index: usize, id: &str) -> Option<u64> {
+        let rest = id.strip_prefix(&self.instance)?.strip_prefix('-')?;
+        let (port, rest) = rest.split_once('-')?;
+        if port.parse::<usize>().ok()? != index {
+            return None;
+        }
+        let (generation, attempt) = rest.split_once('-')?;
+        attempt.parse::<usize>().ok()?;
+        generation.parse().ok()
     }
 
     /// Notes generation `g` of the port at `index`; whether it is not
@@ -853,66 +1042,87 @@ impl Resolver {
 }
 
 impl Conns {
-    /// Orders `command(attempt)` and waits until it is applied; a refusal
-    /// for being ordered off the generation path is sent again under a
-    /// new id, and while the replica has no room for another command in
-    /// flight it waits, up to shortly before the apply timeout.
+    /// [`submit`] through this replica.
     async fn submit(&self, command: impl Fn(usize) -> Command) -> Result<(), Fail> {
-        let owner = Owner {
-            principal: SESSION.into(),
-            session: SESSION.into(),
-            role: Role::Operator,
-            connection: SESSION.into(),
-        };
-        let session = SessionKey::from(&owner);
-        let deadline = tokio::time::Instant::now()
-            + samplez_nmos::DEFAULT_APPLY_TIMEOUT.saturating_sub(BUSY_MARGIN);
-        for attempt in 0..RESENDS {
-            let command = command(attempt);
-            let id = command.id().to_owned();
-            let body = serde_json::to_vec(&command).expect("a command serializes");
-            let ack = loop {
-                match self.app.commands.begin(&owner, &id) {
-                    Begin::Duplicate(ack) => break ack,
-                    Begin::Busy if tokio::time::Instant::now() < deadline => {
-                        tokio::time::sleep(FOLLOW_TICK).await;
-                    }
-                    Begin::Busy => return Err(Fail("too many commands in flight".into())),
-                    Begin::New(pending) => {
-                        break (pending.submit(body.clone().into()).await)
-                            .map_err(|e| Fail(format!("not applied: {e}")))?;
-                    }
-                }
-            };
-            match self.app.answer(&session, &ack) {
-                Some(Answer::Refused { .. }) if attempt + 1 < RESENDS => {}
-                Some(
-                    Answer::Refused { message }
-                    | Answer::Invalid { message }
-                    | Answer::NotFound { message },
-                ) => return Err(Fail(message)),
-                _ => return Ok(()),
-            }
-        }
-        unreachable!("the last attempt returns")
+        submit(&self.app, command).await
     }
 
-    /// Orders `active` for the port at `index` and waits until it is
-    /// applied.
-    async fn order(&self, index: usize, active: &Active, generation: u64) -> Result<(), Fail> {
+    /// Orders `active` for the port at `index` with `activation`, an
+    /// immediate one now when none, and waits until it is applied.
+    async fn order(
+        &self,
+        index: usize,
+        active: &Active,
+        activation: Option<Activation>,
+        generation: u64,
+    ) -> Result<(), Fail> {
         let port = self.ports[index].port_ref();
-        let now = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
-        let immediate = Activation {
-            mode: "activate_immediate".into(),
-            requested: None,
-            time: tai_text(now),
-        };
+        let activation = activation.unwrap_or_else(|| {
+            let now = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
+            Activation {
+                mode: "activate_immediate".into(),
+                requested: None,
+                time: tai_text(now),
+            }
+        });
         self.submit(|attempt| Command::Connect {
             id: format!("{}-{index}-{generation}-{attempt}", self.instance),
             port: port.clone(),
-            active: connection(active, Some(immediate.clone())),
+            active: connection(active, Some(activation.clone())),
         })
         .await
+    }
+
+    /// After an activation of the port at `index` failed, with shared
+    /// versions: orders the port's connection in the state disabled, so
+    /// every replica ends on `master_enable` false, as IS-05 has a failed
+    /// activation end, where samplez-nmos records the failure only. Again
+    /// after [`FIRE_RETRY`] until the state holds it disabled or another
+    /// change of the port came after the failed one, as when the set had
+    /// no quorum.
+    async fn disable(&self, index: usize, activation: Option<Activation>, generation: u64) {
+        let port = self.ports[index].port_ref();
+        let before = self
+            .app
+            .with_state(|sm| sm.product.port_change(&port).cloned());
+        {
+            let id = format!("{}-{index}-{generation}-off", self.instance);
+            let mut logged = false;
+            loop {
+                let (current, change) = self.app.with_state(|sm| {
+                    let current = actives(&sm.product, &self.ports[index..=index]).remove(0);
+                    (current, sm.product.port_change(&port).cloned())
+                });
+                let later = change != before
+                    && change.is_some_and(|c| self.served(index, &c.id) != Some(generation));
+                if later || !current.master_enable {
+                    return;
+                }
+                let off = Active {
+                    master_enable: false,
+                    ..current
+                };
+                let off = connection(&off, activation.clone());
+                let ordered = submit(&self.app, |attempt| Command::Connect {
+                    id: format!("{id}-{attempt}"),
+                    port: port.clone(),
+                    active: off.clone(),
+                })
+                .await;
+                match ordered {
+                    Ok(()) => return,
+                    Err(Fail(e)) if !logged => {
+                        logged = true;
+                        tracing::warn!(
+                            port = index,
+                            "nmos: a failed activation is not disabled yet: {e}"
+                        );
+                    }
+                    Err(_) => {}
+                }
+                tokio::time::sleep(FIRE_RETRY).await;
+            }
+        }
     }
 
     /// Takes a scheduled activation for `at` into the state. samplez-nmos
@@ -1004,6 +1214,50 @@ impl Conns {
     }
 }
 
+/// Orders `command(attempt)` and waits until it is applied; a refusal
+/// for being ordered off the generation path is sent again under a new
+/// id, and while the replica has no room for another command in flight
+/// it waits, up to shortly before the apply timeout.
+async fn submit(app: &App, command: impl Fn(usize) -> Command) -> Result<(), Fail> {
+    let owner = Owner {
+        principal: SESSION.into(),
+        session: SESSION.into(),
+        role: Role::Operator,
+        connection: SESSION.into(),
+    };
+    let session = SessionKey::from(&owner);
+    let deadline = tokio::time::Instant::now()
+        + samplez_nmos::DEFAULT_APPLY_TIMEOUT.saturating_sub(BUSY_MARGIN);
+    for attempt in 0..RESENDS {
+        let command = command(attempt);
+        let id = command.id().to_owned();
+        let body = serde_json::to_vec(&command).expect("a command serializes");
+        let ack = loop {
+            match app.commands.begin(&owner, &id) {
+                Begin::Duplicate(ack) => break ack,
+                Begin::Busy if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(FOLLOW_TICK).await;
+                }
+                Begin::Busy => return Err(Fail("too many commands in flight".into())),
+                Begin::New(pending) => {
+                    break (pending.submit(body.clone().into()).await)
+                        .map_err(|e| Fail(format!("not applied: {e}")))?;
+                }
+            }
+        };
+        match app.answer(&session, &ack) {
+            Some(Answer::Refused { .. }) if attempt + 1 < RESENDS => {}
+            Some(
+                Answer::Refused { message }
+                | Answer::Invalid { message }
+                | Answer::NotFound { message },
+            ) => return Err(Fail(message)),
+            _ => return Ok(()),
+        }
+    }
+    unreachable!("the last attempt returns")
+}
+
 impl Connections for Conns {
     fn resolve(&self, port: Port, flow: Uuid) -> BoxFuture<'_, Result<FlowSeen, Reject>> {
         Box::pin(async move {
@@ -1037,10 +1291,33 @@ impl Connections for Conns {
             if !self.saw(index, generation) {
                 return Ok(());
             }
-            match at {
-                Some(at) => self.schedule(index, &active, at, generation).await,
-                None => self.order(index, &active, generation).await,
+            if let Some(at) = at {
+                return self.schedule(index, &active, at, generation).await;
             }
+            // With shared versions, the activation samplez-nmos shows for
+            // this apply, so every replica's `/active` shows the same.
+            let node = self.node.lock().expect("node lock poisoned").clone();
+            let activation = (node.as_ref())
+                .and_then(|n| n.activation(port, generation)?.activation)
+                .map(|a| state_activation(&a));
+            let Some(me) = self.me.upgrade().filter(|_| node.is_some()) else {
+                return self.order(index, &active, None, generation).await;
+            };
+            // On a task of its own: samplez-nmos drops an apply at its
+            // timeout, and a failed one still has to be disabled.
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                let ordered = me
+                    .order(index, &active, activation.clone(), generation)
+                    .await;
+                let failed = ordered.is_err();
+                let _ = tx.send(ordered);
+                if failed {
+                    me.disable(index, activation, generation).await;
+                }
+            });
+            rx.await
+                .unwrap_or_else(|_| Err(Fail("the activation's task ended".into())))
         })
     }
 }
