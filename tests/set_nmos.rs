@@ -1457,6 +1457,33 @@ fn every_replica_serves_the_versions_the_registry_holds() {
         (0..REPLICAS).all(|n| shows(&nodes, n, &ch1) == set.other)
     });
     assert!(shown, "the activation did not reach every replica");
+    // A scheduled activation of the connection a port holds goes through
+    // the log: every replica's /active shows its mode, requested time
+    // and activation time alike once it fires.
+    activate(&nodes, 0, &pgm, json!({ "master_enable": true }));
+    let now = samplez_nmos::TaiClock::now(&samplez_nmos::SystemTai).as_nanos();
+    let absolute = format!("{}:0", now / 1_000_000_000 + 3);
+    for (mode, requested) in [
+        ("activate_scheduled_relative", "0:300000000"),
+        ("activate_scheduled_absolute", absolute.as_str()),
+    ] {
+        let staged = json!({
+            "master_enable": true,
+            "activation": { "mode": mode, "requested_time": requested },
+        });
+        let path = format!("{CONNECTION}/{pgm}/staged");
+        let (status, body) = node(&nodes, 0).nmos_led("PATCH", &path, Some(&staged));
+        assert_eq!(status, 202, "{body}");
+        let mut seen = Vec::new();
+        let alike = until(20, || {
+            seen = (0..REPLICAS)
+                .map(|n| active(&nodes, n, &pgm)["activation"].clone())
+                .collect();
+            seen.iter()
+                .all(|a| *a == seen[0] && a["mode"] == mode && a["requested_time"] == requested)
+        });
+        assert!(alike, "{mode}: the replicas' /active show {seen:#?}");
+    }
     agree(&nodes, &registry, "after the changes");
     // A set whose outputs are all disabled has no committing donor, so a
     // diverged replica cannot resync: the sender is enabled again before
@@ -1534,9 +1561,10 @@ fn every_replica_serves_the_versions_the_registry_holds() {
     }
 }
 
-/// An activation that fails ends disabled on every replica, as IS-05 has
-/// a failed activation end: samplez-nmos records the failure only, and
-/// the set orders the port disabled once it can. Here the leader has no
+/// An activation that fails ends disabled on every replica, as
+/// samplez-nmos settles a failed apply without shared versions: with them
+/// it records the failure only, and the set orders the port disabled
+/// once it can. Here the leader has no
 /// quorum when it applies the activation; once a follower is back, every
 /// replica's state and `/active` hold the port disabled, at one version.
 #[test]

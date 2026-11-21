@@ -468,6 +468,37 @@ async fn a_scheduled_activation_keeps_the_mode_and_requested_time_it_was_staged_
     let left = (server.app.replica.store()).with_state(|sm| sm.product.scheduled().to_vec());
     assert_eq!(left.len(), 1, "{left:?}");
     assert_eq!(left[0].port, PortRef::Receiver("ch1".into()));
+
+    // A scheduled activation of a sender's connection as it is, as an
+    // IS-05 controller sends to move a port's activation alone, is taken
+    // and fires: /active shows its mode and requested time once it is
+    // due, not the activation before it.
+    let pgm = id_of(&server, "senders", "PGM out").await;
+    let path = format!("{CONNECTION}/senders/{pgm}/staged");
+    // As in an IS-05 suite: the sender activated at once first, so the
+    // state holds a connection with an immediate activation.
+    activate(
+        &server,
+        &format!("senders/{pgm}"),
+        json!({ "master_enable": true }),
+    )
+    .await;
+    let same = json!({
+        "master_enable": true,
+        "activation": { "mode": "activate_scheduled_relative", "requested_time": "0:300000000" },
+    });
+    let (status, body) = request(server.nmos, "PATCH", &path, Some(&same)).await;
+    assert_eq!(status, 202, "{body}");
+    let port = format!("senders/{pgm}");
+    until(
+        "the sender's /active shows the scheduled activation",
+        async || {
+            let a = active(&server, &port).await;
+            a["activation"]["mode"] == "activate_scheduled_relative"
+                && a["activation"]["requested_time"] == "0:300000000"
+        },
+    )
+    .await;
     server.stop().await;
 }
 

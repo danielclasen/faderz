@@ -1159,7 +1159,8 @@ impl Conns {
             (current, pending)
         });
         let id = |attempt| format!("{}-{index}-{generation}-{attempt}", self.instance);
-        match scheduling(active, &current, pending, at) {
+        let asked_here = self.asked.lock().expect("asked lock poisoned")[index].is_some();
+        match scheduling(active, &current, pending, at, asked_here) {
             Scheduling::Nothing => Ok(()),
             Scheduling::Cancel => {
                 self.submit(|attempt| Command::Unschedule {
@@ -1374,11 +1375,19 @@ enum Scheduling {
 /// `current` and its scheduled activation in the state due at `pending`:
 /// samplez-nmos cancels one it applied by handing over, for the same
 /// time, the connection the port shows. One that carries the state's
-/// connection is a cancel of the port's scheduled activation for that
-/// time when there is one, of nothing otherwise, and never a schedule
-/// of its own; any other is a scheduled activation to take.
-fn scheduling(active: &Active, current: &Active, pending: Option<u64>, at: u64) -> Scheduling {
-    match (active == current, pending == Some(at)) {
+/// connection, with no scheduled request staged here for the port
+/// (`asked`), is a cancel of the port's scheduled activation for that
+/// time when there is one, of nothing otherwise; any other is a
+/// scheduled activation to take, the state's connection with a new
+/// activation among them.
+fn scheduling(
+    active: &Active,
+    current: &Active,
+    pending: Option<u64>,
+    at: u64,
+    asked: bool,
+) -> Scheduling {
+    match (active == current && !asked, pending == Some(at)) {
         (true, true) => Scheduling::Cancel,
         (true, false) => Scheduling::Nothing,
         (false, _) => Scheduling::Take,
@@ -1978,11 +1987,26 @@ mod tests {
             domain: None,
             flow: flow(n),
         };
-        assert_eq!(scheduling(&on(1), &on(1), Some(5), 5), Scheduling::Cancel);
-        assert_eq!(scheduling(&on(1), &on(1), None, 5), Scheduling::Nothing);
-        assert_eq!(scheduling(&on(1), &on(1), Some(6), 5), Scheduling::Nothing);
-        assert_eq!(scheduling(&on(2), &on(1), Some(5), 5), Scheduling::Take);
-        assert_eq!(scheduling(&on(2), &on(1), None, 5), Scheduling::Take);
+        assert_eq!(
+            scheduling(&on(1), &on(1), Some(5), 5, false),
+            Scheduling::Cancel
+        );
+        assert_eq!(
+            scheduling(&on(1), &on(1), None, 5, false),
+            Scheduling::Nothing
+        );
+        assert_eq!(
+            scheduling(&on(1), &on(1), Some(6), 5, false),
+            Scheduling::Nothing
+        );
+        assert_eq!(
+            scheduling(&on(2), &on(1), Some(5), 5, false),
+            Scheduling::Take
+        );
+        assert_eq!(scheduling(&on(2), &on(1), None, 5, false), Scheduling::Take);
+        // A scheduled request staged here for the connection as it is, a
+        // controller moving the port's activation alone, is taken.
+        assert_eq!(scheduling(&on(1), &on(1), None, 5, true), Scheduling::Take);
     }
 
     #[test]
