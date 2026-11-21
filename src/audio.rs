@@ -127,6 +127,9 @@ struct Sent {
     /// not sent, as all are at start: the engine's strip passes its input
     /// unchanged until set.
     strips: Vec<Vec<Option<StripParam>>>,
+    /// Each output's strip parameters ([`strip::output_strips`]), as
+    /// `strips`.
+    output_strips: Vec<Vec<Option<StripParam>>>,
     /// The limiters, input delays, tone generators, duck groups and masks
     /// the engine holds, as targets; `None` after a resend asked for, when
     /// every limiter, delay, tone, setting and mask goes again.
@@ -147,6 +150,7 @@ impl Sent {
     fn clear(&mut self, engine: &Engine) {
         self.matrix.iter_mut().flatten().for_each(|g| *g = f32::NAN);
         self.strips.iter_mut().flatten().for_each(|p| *p = None);
+        (self.output_strips.iter_mut().flatten()).for_each(|p| *p = None);
         self.ducks = None;
         self.loudness_held = false;
         let status = engine.status();
@@ -336,6 +340,9 @@ impl Audio {
                 .iter()
                 .map(|c| vec![None; strip::params(&Value::Null, c.width).len()])
                 .collect(),
+            output_strips: (strip::output_strips(&self.shape, &Value::Null).into_iter())
+                .map(|p| vec![None; p.len()])
+                .collect(),
             // What an engine holds before any duck entry: every group at
             // its defaults and every mask 0.
             ducks: Some(Targets {
@@ -494,6 +501,18 @@ impl Audio {
                 if *p != Some(n)
                     && self
                         .send(&mut at, |at| self.engine.set_strip(slot, n, at))
+                        .await
+                {
+                    *p = Some(n);
+                }
+            }
+        }
+        let output_strips = sent.output_strips.iter_mut().zip(targets.output_strips);
+        for (output, (sent, next)) in output_strips.enumerate() {
+            for (p, n) in sent.iter_mut().zip(next) {
+                if *p != Some(n)
+                    && self
+                        .send(&mut at, |at| self.engine.set_output_strip(output, n, at))
                         .await
                 {
                     *p = Some(n);

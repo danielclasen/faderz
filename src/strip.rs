@@ -2,8 +2,8 @@
 //! input's strip in the engine (`samplez_dsp::strip`): trim, leg trim,
 //! polarity, high-pass, the four EQ bands, gate, compressor and their
 //! order. The model's ranges are the strip's. Also each channel's input
-//! delay and a tone channel's generator, and each output's limiter, from
-//! the bus or aux it carries.
+//! delay and a tone channel's generator, and each output's strip and
+//! limiter, from the bus, aux or mix-minus output it carries.
 
 use samplez_dsp::{
     BandType, CompParams, EqBand, GateParams, LimiterParams, StripParam, ToneParams,
@@ -42,11 +42,19 @@ pub fn params(c: &Value, width: usize) -> Vec<StripParam> {
         enabled: on(&c["hpf"]["enabled"]),
         freq: num(&c["hpf"]["freq"]),
     });
-    p.push(StripParam::Eq {
-        enabled: on(&c["eq"]["enabled"]),
-    });
+    p.extend(processing(c));
+    p
+}
+
+/// The EQ, gate, compressor and their order of `e`, a channel's state
+/// or the state of a bus, aux or mix-minus output (model `BusState`,
+/// `MixMinusState`), always the same parameters in the same order.
+fn processing(e: &Value) -> Vec<StripParam> {
+    let mut p = vec![StripParam::Eq {
+        enabled: on(&e["eq"]["enabled"]),
+    }];
     for band in 0..samplez_dsp::strip::EQ_BANDS {
-        let b = &c["eq"]["bands"][band];
+        let b = &e["eq"]["bands"][band];
         let kind = match b["type"].as_str() {
             Some("lowShelf") => BandType::LowShelf,
             Some("highShelf") => BandType::HighShelf,
@@ -62,7 +70,7 @@ pub fn params(c: &Value, width: usize) -> Vec<StripParam> {
             },
         });
     }
-    let g = &c["gate"];
+    let g = &e["gate"];
     p.push(StripParam::Gate(GateParams {
         enabled: on(&g["enabled"]),
         threshold_db: num(&g["threshold"]),
@@ -70,7 +78,7 @@ pub fn params(c: &Value, width: usize) -> Vec<StripParam> {
         attack_ms: num(&g["attack"]),
         release_ms: num(&g["release"]),
     }));
-    let k = &c["comp"];
+    let k = &e["comp"];
     p.push(StripParam::Comp(CompParams {
         enabled: on(&k["enabled"]),
         threshold_db: num(&k["threshold"]),
@@ -81,7 +89,7 @@ pub fn params(c: &Value, width: usize) -> Vec<StripParam> {
         makeup_db: num(&k["makeup"]),
     }));
     p.push(StripParam::DynamicsBeforeEq {
-        enabled: on(&c["dynamicsBeforeEq"]),
+        enabled: on(&e["dynamicsBeforeEq"]),
     });
     p
 }
@@ -105,6 +113,34 @@ pub fn tone(c: &Value) -> ToneParams {
     }
 }
 
+/// The state of the bus, aux or mix-minus output `id` in `state`; null
+/// for any other element.
+fn element<'s>(state: &'s Value, id: &str) -> &'s Value {
+    (["buses", "auxes", "mixMinus"].into_iter())
+        .map(|group| &state[group][id])
+        .find(|e| !e.is_null())
+        .unwrap_or(&Value::Null)
+}
+
+/// Per output of `shape`, the strip of the bus, aux or mix-minus output
+/// it carries in `state` ([`processing`]): EQ, gate, compressor and
+/// their order, after the element's fader and before the output's
+/// limiter. Empty for an output carrying anything else, which has no
+/// strip in the engine ([`Shape::has_strip`]). A bus's polarity is not
+/// in it: the gain matrix applies it per leg of the bus, before an
+/// output folds the bus down.
+pub fn output_strips(shape: &Shape, state: &Value) -> Vec<Vec<StripParam>> {
+    (shape.outputs.iter())
+        .map(|o| {
+            if shape.has_strip(&o.source) {
+                processing(element(state, &o.source))
+            } else {
+                Vec::new()
+            }
+        })
+        .collect()
+}
+
 /// Per output of `shape`, the limiter of the bus or aux it carries in
 /// `state`; none for an output carrying anything else, which has no
 /// limiter in the engine ([`Shape::has_limiter`]). The model has no release
@@ -113,10 +149,7 @@ pub fn limiters(shape: &Shape, state: &Value) -> Vec<Option<LimiterParams>> {
     (shape.outputs.iter())
         .map(|o| {
             shape.has_limiter(&o.source).then(|| {
-                let l = match &state["buses"][&o.source] {
-                    Value::Null => &state["auxes"][&o.source]["limiter"],
-                    bus => &bus["limiter"],
-                };
+                let l = &element(state, &o.source)["limiter"];
                 LimiterParams {
                     enabled: on(&l["enabled"]),
                     ceiling_db: num(&l["ceiling"]),
@@ -282,6 +315,128 @@ mod tests {
         );
         for p in limiters(&shape, &state).into_iter().flatten() {
             p.check().unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        }
+    }
+
+    /// An output carrying a bus, an aux or a mix-minus output takes that
+    /// element's EQ, gate, compressor and their order, whichever output
+    /// reads it, a narrower one included; an output carrying the monitor
+    /// has no strip. A bus's polarity is not in it.
+    #[test]
+    fn each_output_takes_its_elements_strip() {
+        let mut v = small();
+        v["outputs"] = json!([
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-pgm-m", "name": "PGM mono", "source": "pgm", "width": 1, "layout": "mono" },
+            { "id": "out-aux", "name": "IFB", "source": "aux1", "width": 1, "layout": "mono" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+            { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" },
+            { "id": "out-cf", "name": "Clean", "source": "cf", "width": 2, "layout": "stereo" },
+        ]);
+        let shape = Shape::parse(&v).unwrap();
+        let mut state = shape.initial_state();
+        state["buses"]["pgm"]["polarity"] = json!([true, false]);
+        state["buses"]["pgm"]["eq"]["enabled"] = json!(true);
+        state["buses"]["pgm"]["eq"]["bands"][1]["gain"] = json!(6);
+        state["auxes"]["aux1"]["comp"]["enabled"] = json!(true);
+        state["auxes"]["aux1"]["comp"]["ratio"] = json!(8);
+        state["mixMinus"]["mm1"]["gate"]["enabled"] = json!(true);
+        state["mixMinus"]["mm1"]["dynamicsBeforeEq"] = json!(true);
+        let strips = output_strips(&shape, &state);
+        let of = processing;
+        assert_eq!(strips[0], of(&state["buses"]["pgm"]));
+        assert_eq!(strips[0][0], StripParam::Eq { enabled: true });
+        assert_eq!(
+            strips[0][2],
+            StripParam::EqBand {
+                band: 1,
+                value: EqBand {
+                    kind: BandType::Peak,
+                    freq: 400.0,
+                    gain_db: 6.0,
+                    q: 1.0
+                },
+            }
+        );
+        assert_eq!(strips[1], strips[0], "the mono fold-down takes the bus's");
+        assert_eq!(strips[2], of(&state["auxes"]["aux1"]));
+        assert_eq!(strips[3], of(&state["mixMinus"]["mm1"]));
+        assert_eq!(strips[4], Vec::new(), "the monitor output has none");
+        assert_eq!(strips[5], of(&state["buses"]["cf"]));
+        let off = of(&shape.initial_state()["buses"]["cf"]);
+        for (n, s) in strips.iter().enumerate().filter(|(n, _)| *n != 4) {
+            assert_eq!(s.len(), 8, "output {n}: EQ, 4 bands, gate, comp, order");
+            assert_eq!(*s != off, n != 5, "output {n}");
+            assert!(
+                !s.iter().any(|p| matches!(p, StripParam::Polarity { .. })),
+                "output {n}"
+            );
+        }
+        assert_eq!(
+            strips[3].last(),
+            Some(&StripParam::DynamicsBeforeEq { enabled: true })
+        );
+    }
+
+    /// Every EQ, gate and compressor value the state takes for a bus, an
+    /// aux or a mix-minus output is one the output strip takes, at the
+    /// model's extremes, at every output width: no stored value is
+    /// refused by the engine for good.
+    #[test]
+    fn every_output_strip_value_the_state_takes_the_engine_takes() {
+        let model: Value =
+            serde_json::from_str(include_str!("../api/ws/model.schema.json")).unwrap();
+        let bound = |def: &str, end: &str| model["$defs"][def][end].as_f64().unwrap();
+        let mut v = small();
+        v["outputs"] = json!([
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-pgm-m", "name": "PGM mono", "source": "pgm", "width": 1, "layout": "mono" },
+            { "id": "out-aux", "name": "IFB", "source": "aux1", "width": 1, "layout": "mono" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+        ]);
+        let shape = Shape::parse(&v).unwrap();
+        let mixer = crate::state::Mixer::new(shape.clone());
+        for end in ["minimum", "maximum"] {
+            let mut state = shape.initial_state();
+            for e in ["/buses/pgm", "/auxes/aux1", "/mixMinus/mm1"] {
+                let mut leaves = vec![
+                    ("eq/enabled".to_owned(), json!(true)),
+                    ("gate/enabled".to_owned(), json!(true)),
+                    ("comp/enabled".to_owned(), json!(true)),
+                    ("dynamicsBeforeEq".to_owned(), json!(true)),
+                ];
+                for band in 0..4 {
+                    for (key, def) in [("freq", "EqFreq"), ("gain", "EqGain"), ("q", "EqQ")] {
+                        leaves.push((format!("eq/bands/{band}/{key}"), json!(bound(def, end))));
+                    }
+                }
+                for (key, def) in [
+                    ("gate/threshold", "GateThreshold"),
+                    ("gate/range", "GateRange"),
+                    ("gate/attack", "AttackMs"),
+                    ("gate/release", "ReleaseMs"),
+                    ("comp/threshold", "CompThreshold"),
+                    ("comp/ratio", "CompRatio"),
+                    ("comp/attack", "AttackMs"),
+                    ("comp/release", "ReleaseMs"),
+                    ("comp/makeup", "MakeupDb"),
+                ] {
+                    leaves.push((key.to_owned(), json!(bound(def, end))));
+                }
+                for (leaf, value) in leaves {
+                    let path = format!("{e}/{leaf}");
+                    assert!(mixer.check_write(&path, &value).is_ok(), "{path} {value}");
+                    *state.pointer_mut(&path).unwrap() = value;
+                }
+            }
+            let strips = output_strips(&shape, &state);
+            for (o, params) in shape.outputs.iter().zip(&strips) {
+                assert_eq!(params.len(), 8, "{}", o.id);
+                for p in params {
+                    p.check(o.width)
+                        .unwrap_or_else(|e| panic!("{} at the {end}: {p:?}: {e}", o.id));
+                }
+            }
         }
     }
 

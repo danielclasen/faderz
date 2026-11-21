@@ -224,7 +224,7 @@ function leaves(value: unknown, base: string, out: Change[] = []): Change[] {
 export function recallGroup(path: string): RecallGroup | null {
   const [group, , key] = parsePointer(path);
   if (group === 'afv') return key === 'open' ? null : 'afv';
-  if (group === 'mixMinus') return key === 'exclude' ? 'routing' : key === 'interrupt' ? null : (key as RecallGroup);
+  if (group === 'mixMinus' && (key === 'exclude' || key === 'interrupt')) return key === 'exclude' ? 'routing' : null;
   if (group === 'vcas') return key === 'offset' ? 'fader' : key === 'members' ? 'routing' : key === 'solo' ? null : 'mute';
   if (group === 'ducks') return duckRecallGroup(parsePointer(path).slice(2));
   switch (key) {

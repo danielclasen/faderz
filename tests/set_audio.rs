@@ -1700,6 +1700,170 @@ fn every_replica_applies_a_bus_limiter_alike() {
     }
 }
 
+/// A bus's and a mix-minus output's EQ and dynamics are replicated
+/// state: through writes sent to each replica in turn, each moves the
+/// level of the outputs carrying that element alone, and every replica
+/// writes the same bits to each. A replica killed and started again on
+/// its volume, its strips rebuilt with no filter history, writes its
+/// peers' bits again.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_applies_a_bus_strip_alike() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "st", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [],
+        "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
+        "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+        ],
+    });
+    // A quarter-rate sine, 12 kHz at 48 kHz: every sample is 0.25 in
+    // magnitude.
+    let amp = 0.25 * std::f32::consts::SQRT_2;
+    let (set, listeners) = Set::with("busstrip", shape, &["out-pgm", "out-mm"], |domain| {
+        let src = new_id();
+        (
+            vec![Source::off_crest(domain, &src, 2, amp)],
+            json!({ "st": { "flow": src } }),
+        )
+    });
+    let mut nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let flows = |output: &str| -> Vec<String> {
+        (set.outputs[output]["flows"].as_array().unwrap().iter())
+            .map(|f| f.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (pgm, mm) = (flows("out-pgm"), flows("out-mm"));
+    write(&nodes, 0, &[("/channels/st/fader", json!(0))]);
+    // Block `k` of every replica's member flow of an output, both legs
+    // planar, once all read.
+    let blocks = |flows: &[String], k: u64| -> Option<Vec<Vec<f32>>> {
+        (flows.iter())
+            .map(|f| {
+                let generation = attach(&set.domain.0, f)?;
+                let mut buf = vec![0.0f32; 2 * B as usize];
+                let input = generation.input(0).unwrap();
+                let o = input.read(&mut SlotState::default(), k, &GroupWait::Skipped, &mut buf);
+                (o == Outcome::Copy).then_some(buf)
+            })
+            .collect()
+    };
+    let bits = |b: &[f32]| b.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    let peak = |b: &[f32]| b.iter().fold(0.0f32, |p, v| p.max(v.abs()));
+    // Until every replica writes the same bits to both outputs and their
+    // sample peaks are `want`, within `tol`.
+    let alike = |nodes: &[Option<Node>], want: (f32, f32), tol: f32, what: &str| {
+        let mut last = None;
+        let read = until(20, || {
+            let k = Outputs::now();
+            let (Some(p), Some(m)) = (blocks(&pgm, k), blocks(&mm, k)) else {
+                return false;
+            };
+            let same = |b: &[Vec<f32>]| b.iter().all(|r| bits(r) == bits(&b[0]));
+            let peaks = (peak(&p[0]), peak(&m[0]));
+            last = Some((peaks, same(&p), same(&m)));
+            same(&p)
+                && same(&m)
+                && (peaks.0 - want.0).abs() <= tol
+                && (peaks.1 - want.1).abs() <= tol
+        });
+        assert!(
+            read,
+            "{what}: wanted peaks {want:?}, read ((pgm, mm), pgm alike, mm alike) {last:?}: {}",
+            states(nodes)
+        );
+    };
+    let s = 0.25f32;
+    alike(&nodes, (s, s), 1e-4, "processing off");
+    // A bell has no phase shift at its centre: the samples scale by its
+    // gain.
+    let bell = |e: &str, band: usize, db: i32| -> Vec<(String, Value)> {
+        vec![
+            (format!("/{e}/eq/enabled"), json!(true)),
+            (format!("/{e}/eq/bands/{band}/type"), json!("peak")),
+            (format!("/{e}/eq/bands/{band}/freq"), json!(12_000)),
+            (format!("/{e}/eq/bands/{band}/gain"), json!(db)),
+            (format!("/{e}/eq/bands/{band}/q"), json!(1)),
+        ]
+    };
+    let send = |nodes: &[Option<Node>], n: usize, changes: Vec<(String, Value)>| {
+        let changes: Vec<(&str, Value)> = (changes.iter())
+            .map(|(p, v)| (p.as_str(), v.clone()))
+            .collect();
+        write(nodes, n, &changes);
+    };
+    let db = |d: f32| 10f32.powf(d / 20.0);
+    send(&nodes, 0, bell("buses/pgm", 1, 6));
+    alike(&nodes, (s * db(6.0), s), 1e-3, "a +6 dB bus bell");
+    send(&nodes, 1, bell("mixMinus/mm1", 2, -6));
+    alike(
+        &nodes,
+        (s * db(6.0), s * db(-6.0)),
+        1e-3,
+        "a -6 dB mix-minus bell",
+    );
+    // A compressor far over its threshold takes the bus down by more
+    // than 20 dB.
+    send(
+        &nodes,
+        2,
+        vec![
+            ("/buses/pgm/comp/enabled".into(), json!(true)),
+            ("/buses/pgm/comp/threshold".into(), json!(-40)),
+            ("/buses/pgm/comp/ratio".into(), json!(20)),
+            ("/buses/pgm/comp/attack".into(), json!(0.1)),
+            ("/buses/pgm/comp/release".into(), json!(50)),
+        ],
+    );
+    let squeezed = until(20, || {
+        blocks(&pgm, Outputs::now()).is_some_and(|p| peak(&p[0]) < s * db(-20.0))
+    });
+    assert!(squeezed, "the bus compressor: {}", states(&nodes));
+    // Settled, every replica writes the same bits again.
+    let settled = |nodes: &[Option<Node>], what: &str| {
+        let mut last = None;
+        let read = until(30, || {
+            let k = Outputs::now();
+            let (Some(p), Some(m)) = (blocks(&pgm, k), blocks(&mm, k)) else {
+                return false;
+            };
+            let same = |b: &[Vec<f32>]| b.iter().all(|r| bits(r) == bits(&b[0]));
+            last = Some((peak(&p[0]), peak(&m[0]), same(&p), same(&m)));
+            same(&p) && same(&m) && (peak(&m[0]) - s * db(-6.0)).abs() <= 1e-3
+        });
+        assert!(
+            read,
+            "{what}: read (pgm, mm, pgm alike, mm alike) {last:?}: {}",
+            states(nodes)
+        );
+    };
+    settled(&nodes, "the bus compressor");
+    let leader = node(&nodes, 0).ops("/readyz").1["replica"]["leader"].clone();
+    let killed = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).ops("/readyz").1["replica"]["id"] != leader)
+        .unwrap();
+    nodes[killed].take().unwrap().kill();
+    nodes[killed] = Some(set.start(killed, None));
+    steady(&nodes, killed);
+    settled(&nodes, "after a replica restarted");
+}
+
 /// A tone channel's generator is replicated state: through level,
 /// frequency and ident writes sent to each replica in turn, every replica
 /// writes the same bits, and each write moves the programme's level.

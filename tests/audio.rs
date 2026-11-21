@@ -2321,6 +2321,140 @@ async fn the_strip_processes_each_channel() {
     server.stop().await;
 }
 
+/// A bus's EQ and compressor process every output carrying the bus, a
+/// mono fold-down included, in their order; the mix-minus output and the
+/// monitor, which sum the bus's channels, do not hear them. A mix-minus
+/// output's own EQ processes its output alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bus_strip_processes_every_output_carrying_it() {
+    let domain = domain("busstrip");
+    let data = data("busstrip");
+    let ids: Vec<String> = (0..5).map(|_| new_id()).collect();
+    let mut shape = shape();
+    shape["channels"] =
+        json!([{ "id": "ch", "name": "Tone", "width": 1, "layout": "mono", "altInput": false }]);
+    shape["outputs"] = json!([
+        { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        { "id": "out-pgm-m", "name": "PGM mono", "source": "pgm", "width": 1, "layout": "mono" },
+        { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+        { "id": "out-mon", "name": "Monitor", "source": "mon", "width": 2, "layout": "stereo" },
+    ]);
+    let _tone = Source::sine(&domain.0, &ids[0], 0.1, 1_000);
+    let server = start_with(
+        &data.0,
+        &domain.0,
+        shape,
+        json!({ "ch": { "flow": ids[0] } }),
+        json!({
+            "out-pgm": { "flow": ids[1] },
+            "out-pgm-m": { "flow": ids[2] },
+            "out-mm": { "flow": ids[3] },
+            "out-mon": { "flow": ids[4] },
+        }),
+    )
+    .await;
+    for id in &ids[1..] {
+        appears(&domain.0, id).await;
+    }
+    let mut pgm = Reader::new(&domain.0, &ids[1]);
+    let mut mono = Reader::wide(&domain.0, &ids[2], 1);
+    let mut mm = Reader::new(&domain.0, &ids[3]);
+    let mut mon = Reader::new(&domain.0, &ids[4]);
+    // Hard left at 0 dB: the bus's left leg, which the mono output sums
+    // with the right at -6 dB.
+    patch(
+        &server,
+        &[
+            ("/channels/ch/fader", json!(0)),
+            ("/channels/ch/pan/lr", json!(-1)),
+        ],
+    )
+    .await;
+    pgm.expect_peak(0.1, 0.001, "the 1 kHz tone, bus EQ off")
+        .await;
+    mono.expect_peak(0.05, 0.001, "the fold-down, bus EQ off")
+        .await;
+    mm.expect_peak(0.1, 0.001, "the mix-minus, bus EQ off")
+        .await;
+    // The monitor plays the bus at its own level.
+    let monitor = 0.1 * 10f32.powf(-10.0 / 20.0);
+    mon.expect_peak(monitor, 0.001, "the monitor, bus EQ off")
+        .await;
+
+    patch(
+        &server,
+        &[
+            ("/buses/pgm/eq/enabled", json!(true)),
+            ("/buses/pgm/eq/bands/1/type", json!("peak")),
+            ("/buses/pgm/eq/bands/1/freq", json!(1000)),
+            ("/buses/pgm/eq/bands/1/gain", json!(12)),
+            ("/buses/pgm/eq/bands/1/q", json!(1)),
+        ],
+    )
+    .await;
+    // A bell has no phase shift at its centre: the samples scale by +12 dB.
+    let lift = 10f32.powf(12.0 / 20.0);
+    pgm.expect_peak(0.1 * lift, 0.002, "a +12 dB bus bell")
+        .await;
+    mono.expect_peak(0.05 * lift, 0.002, "the fold-down after a +12 dB bus bell")
+        .await;
+    // Read after the bus's outputs moved, so over the same blocks.
+    mm.expect_peak(0.1, 0.001, "the mix-minus under a bus bell")
+        .await;
+    mon.expect_peak(monitor, 0.001, "the monitor under a bus bell")
+        .await;
+
+    // A near-limiter at -20 dBFS: after the bell it takes the tone down
+    // by about 11 dB, the fold-down's by about 5 dB; before it, the tone
+    // only reaches its threshold, the fold-down's stays below it.
+    patch(
+        &server,
+        &[
+            ("/buses/pgm/comp/enabled", json!(true)),
+            ("/buses/pgm/comp/threshold", json!(-20)),
+            ("/buses/pgm/comp/ratio", json!(20)),
+            ("/buses/pgm/comp/attack", json!(0.1)),
+            ("/buses/pgm/comp/release", json!(50)),
+        ],
+    )
+    .await;
+    pgm.expect_peak(0.11, 0.03, "the bus compressor after the EQ")
+        .await;
+    mono.expect_peak(0.11, 0.03, "the fold-down's compressor after the EQ")
+        .await;
+    patch(&server, &[("/buses/pgm/dynamicsBeforeEq", json!(true))]).await;
+    pgm.expect_peak(0.1 * lift, 0.002, "the bus compressor before the EQ")
+        .await;
+    mono.expect_peak(
+        0.05 * lift,
+        0.002,
+        "the fold-down's compressor before the EQ",
+    )
+    .await;
+    mm.expect_peak(0.1, 0.001, "the mix-minus under the bus's processing")
+        .await;
+
+    // The mix-minus output's own EQ: -12 dB at 1 kHz, on it alone.
+    patch(
+        &server,
+        &[
+            ("/mixMinus/mm1/eq/enabled", json!(true)),
+            ("/mixMinus/mm1/eq/bands/1/type", json!("peak")),
+            ("/mixMinus/mm1/eq/bands/1/freq", json!(1000)),
+            ("/mixMinus/mm1/eq/bands/1/gain", json!(-12)),
+            ("/mixMinus/mm1/eq/bands/1/q", json!(1)),
+        ],
+    )
+    .await;
+    mm.expect_peak(0.1 / lift, 0.001, "a -12 dB mix-minus bell")
+        .await;
+    pgm.expect_peak(0.1 * lift, 0.002, "the bus under a mix-minus bell")
+        .await;
+    mon.expect_peak(monitor, 0.001, "the monitor under a mix-minus bell")
+        .await;
+    server.stop().await;
+}
+
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 
 /// The next text message of `ws` of type `kind`, checked against the

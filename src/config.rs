@@ -1318,6 +1318,7 @@ impl Config {
                 "role": "Audio",
                 "channels": o.width,
                 "loudnessChannels": loudness_channels(&o.layout),
+                "strip": shape.has_strip(&o.source),
                 "limiter": shape.has_limiter(&o.source),
                 "correlation": o.layout == "stereo",
             }));
@@ -2573,6 +2574,49 @@ mod tests {
             .map(|m| (m.name.as_str(), m.correlation))
             .collect();
         assert_eq!(meters, [("cf", true), ("aux1", false), ("mon", true)]);
+    }
+
+    /// The engine gives an output a strip exactly when it carries a bus,
+    /// an aux or a mix-minus output, and a limiter exactly when it
+    /// carries a bus or an aux.
+    #[test]
+    fn outputs_carrying_a_bus_aux_or_mix_minus_have_a_strip() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let mut shape = small();
+        shape["outputs"] = json!([
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-aux", "name": "IFB", "source": "aux1", "width": 1, "layout": "mono" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+            { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" },
+            { "id": "out-st1", "name": "Music", "source": "st1", "width": 2, "layout": "stereo" },
+        ]);
+        let config = json!({
+            "replica": { "name": "r1" },
+            "shape": shape,
+            "mxl": {
+                "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                "inputs": { "ch1": { "flow": id(1), "altFlow": id(2) },
+                            "ch2": { "flow": id(3) }, "st1": { "flow": id(4) } },
+                "outputs": { "out-pgm": { "flow": id(5) }, "out-aux": { "flow": id(6) },
+                             "out-mm": { "flow": id(7) }, "out-mon": { "flow": id(8) },
+                             "out-st1": { "flow": id(9) } },
+            },
+        });
+        let (c, _, _) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
+        let engine = c.audio.as_ref().unwrap();
+        let flags: Vec<(&str, bool, bool)> = (engine.outputs.iter())
+            .map(|o| (o.name.as_str(), o.strip, o.limiter))
+            .collect();
+        assert_eq!(
+            flags,
+            [
+                ("out-pgm", true, true),
+                ("out-aux", true, true),
+                ("out-mm", true, false),
+                ("out-mon", false, false),
+                ("out-st1", false, false),
+            ]
+        );
     }
 
     /// `replica.maxApplyLeadMs` is 50 unless set, and is taken from 30 to

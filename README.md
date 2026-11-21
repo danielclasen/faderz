@@ -56,13 +56,37 @@ mutes, bus and aux polarity, mix-minus exclusions and talkback
 interrupts, the monitor's source, channel and VCA PFL and AFL listening
 (PFL over AFL; PFL centred before the pan, AFL at the pan before the AFV
 stage), fold-down, image, level, dim, talkback dim, cut, mono and speaker mutes
-and solos, duck groups, the channel delay, the bus and aux true-peak
-limiter on every output carrying that bus or aux, and the scene crossfade. An output carrying a bus or aux is
+and solos, duck groups, the channel delay, the bus, aux and mix-minus EQ,
+gate and compressor on every output carrying that element, the bus and
+aux true-peak limiter on every output carrying that bus or aux, and the
+scene crossfade. An output carrying a bus or aux is
 late by the limiter's look-ahead, 53 samples (about 1.1 ms at 48 kHz), whether
 the limiter is on or off, so that turning it on needs no restart; an
 output carrying a mix-minus, a direct out or the monitor is not. The rest of the state is kept, shown and replicated but not
-applied to the audio in this version: bus and aux EQ,
-dynamics and delay.
+applied to the audio in this version: bus and aux delay.
+
+A bus's, aux's or mix-minus output's EQ, gate and compressor, in its
+`dynamicsBeforeEq` order, run on each output carrying it, after the
+element's fader and mute and before the output's limiter: on the mix,
+on the line-up tone while it replaces the mix, and on a mix-minus
+output's talkback while it interrupts. A bus's polarity stays in the
+mix, per leg of the bus. An output narrower than its element processes
+the fold-down, so a stereo and a mono output of one bus each compress
+on their own signal. The monitor, AFL and the mix-minus outputs of a
+bus sum the element's channels and do not hear its processing, as they
+do not hear its limiter. A bus's, aux's or mix-minus output's meter
+reads the level after its processing and limiter when the element has
+an output of its full width, the first such output in `outputs`; it
+reads the element's matrix columns, before any processing, when the
+element has none. An output narrower than its element, a fold-down,
+has no meter of its own. Line up with bus processing flat. A mix-minus
+output's EQ and dynamics are set through `PATCH /api/v1/state` and the
+WebSocket `set` message at `/mixMinus/<id>/eq/...`, `gate/...`,
+`comp/...` and `dynamicsBeforeEq`; the console has no control for
+them. faderz 0.4.10 and earlier kept bus and aux EQ and
+dynamics without applying them: a state or scene that stored them on
+plays them from the first release that applies them, and a mix-minus
+output's processing starts off and flat.
 
 A channel delays its input by its `delay`, in samples, exactly, for lip
 sync: opt-in per channel through `mxl.inputs.<channel>.maxDelayMs`, the
@@ -101,8 +125,9 @@ earlier do not read either.
 The line-up tone (`/tone`) is a 1 kHz sine at `level`, -30 to 0 dBFS
 sample peak, on every leg. While `on`, each output whose bus, aux or
 mix-minus is in `targets` carries the tone in place of its mix, after
-the element's fader and before the output's limiter, so the fader does
-not scale it and the limiter still applies; an output narrower than its
+the element's fader and before the output's strip and limiter, so the
+fader does not scale it and the element's EQ, dynamics and limiter still
+apply; an output narrower than its
 element carries the tone's first legs. The element's meters show the
 tone, and a monitor playing the element plays the tone as it plays a
 source, through its own level, dim, downmix, mono and speaker controls;

@@ -1024,7 +1024,7 @@
       }
     },
     "BusState": {
-      "description": "Bus processing: the channel strip without trim, HPF and pan, plus an output limiter. Used for buses and auxes.",
+      "description": "Bus processing: the channel strip without trim, HPF and pan, plus an output limiter. Used for buses and auxes. polarity applies per leg of the element, before any output folds it down. eq, gate, comp and dynamicsBeforeEq run on every output flow carrying the element, on what its columns carry (the mix after the element's fader and mute, or the line-up tone while it replaces the mix), before the output's limiter; an output narrower than the element processes its fold-down, so its dynamics detect on the folded signal. The monitor, AFL and every mix-minus output sum the element's channels and do not hear this processing. A bus's delay is kept and shown but not applied.",
       "type": "object",
       "required": [
         "polarity",
@@ -1070,9 +1070,14 @@
       }
     },
     "MixMinusState": {
+      "description": "eq, gate, comp and dynamicsBeforeEq run on every output flow carrying the mix-minus output, on what its columns carry: the sum after the mix-minus fader and mute, the talkback while interrupted, the line-up tone while it replaces the mix. An output narrower than the mix-minus output processes its fold-down. The monitor playing the mix-minus output sums its channels and does not hear this processing.",
       "type": "object",
       "required": [
         "exclude",
+        "eq",
+        "gate",
+        "comp",
+        "dynamicsBeforeEq",
         "fader",
         "mute",
         "interrupt"
@@ -1082,6 +1087,19 @@
         "exclude": {
           "description": "Channel ids left out of the sum.",
           "$ref": "#/$defs/IdSet"
+        },
+        "eq": {
+          "$ref": "#/$defs/Eq"
+        },
+        "gate": {
+          "$ref": "#/$defs/Gate"
+        },
+        "comp": {
+          "$ref": "#/$defs/Comp"
+        },
+        "dynamicsBeforeEq": {
+          "description": "false runs EQ before gate and compressor (the default order), true runs gate and compressor before EQ.",
+          "type": "boolean"
         },
         "fader": {
           "$ref": "#/$defs/FaderDb"
@@ -1784,7 +1802,7 @@
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
         },
         {
-          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|fader|mute|interrupt/(source|active))$"
+          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|fader|mute|interrupt/(source|active))$"
         },
         {
           "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/(offset|mute|members|solo)$"
@@ -1824,6 +1842,9 @@
         },
         {
           "pattern": "^/(channels|buses|auxes)/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup)|delay)$"
+        },
+        {
+          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup))$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/limiter/ceiling$"

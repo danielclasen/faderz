@@ -221,6 +221,10 @@ export interface Interrupt {
 }
 export interface MixMinusState {
   exclude: Id[];
+  eq: Eq;
+  gate: Gate;
+  comp: Comp;
+  dynamicsBeforeEq: boolean;
   fader: number;
   mute: boolean;
   interrupt: Interrupt;

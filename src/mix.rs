@@ -549,7 +549,7 @@ pub(crate) fn flow<'w>(state: &Value, id: &str, w: &'w Wiring) -> &'w str {
 
 /// Everything the engine of `shape` plays from `state`: the gain matrix
 /// ([`matrix`]), each channel's strip ([`strip::params`]) and input
-/// delay ([`strip::delay`]), each tone channel's generator ([`strip::tone`]), each output's limiter ([`strip::limiters`]), the duck groups ([`duck::targets`])
+/// delay ([`strip::delay`]), each tone channel's generator ([`strip::tone`]), each output's strip ([`strip::output_strips`]) and limiter ([`strip::limiters`]), the duck groups ([`duck::targets`])
 /// and masks ([`duck::masks`]) and the flow its selected input reads
 /// ([`selected`]), one slot per channel; then a slot per line-up tone
 /// generator ([`tone_widths`]), which reads no flow, has no strip and
@@ -693,6 +693,7 @@ impl Derived {
                     .map(|c| (c.tone.is_some()).then(|| strip::tone(&state["channels"][&c.id])))
                     .chain(generators.iter().map(|_| Some(line_up(state))))
                     .collect(),
+                output_strips: strip::output_strips(shape, state),
                 limiters: strip::limiters(shape, state),
                 ducks: duck::targets(shape, state),
                 masks: duck::masks(shape, state),
@@ -786,9 +787,10 @@ impl Derived {
                 *tone = Some(line_up(state));
             }
         }
-        // A bus or aux write may move a limiter: one per output, each
-        // read in full.
+        // A bus, aux or mix-minus write may move an output's strip or
+        // limiter: one per output, each read in full.
         if !moved.elements.is_empty() {
+            self.targets.output_strips = strip::output_strips(shape, state);
             self.targets.limiters = strip::limiters(shape, state);
         }
         // A handful of groups, each read in full: a key gain follows its
