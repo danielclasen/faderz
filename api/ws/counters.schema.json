@@ -67,12 +67,12 @@
     },
     "generation_past_margin_total": {
       "title": "Tight input switches",
-      "description": "Input re-routes whose new source was handed to the engine less than 2 ms before they took effect, whether or not it was ready in time. 0 is normal; a rise means a source switch came close to a gap.",
+      "description": "Input re-routes whose new source reached the engine less than 2 ms before they took effect. 0 is normal; one still in time is a near miss that did not affect the audio and does not light WARN, a late one counts in Late input switches too.",
       "$ref": "#/$defs/Count"
     },
     "afv_late_total": {
       "title": "Late tallies",
-      "description": "Tallies that named a moment before this replica received them.",
+      "description": "Tallies that named a moment before this replica received them. 0 is normal; a rise is the switcher's fault, not this replica's, and does not light WARN.",
       "$ref": "#/$defs/Count"
     },
     "strip_refused_total": {
