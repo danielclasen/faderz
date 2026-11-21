@@ -618,9 +618,12 @@ ready and, in a set of one, the engine plays the state.
   while it or another audio replica commits, in any state. One that has
   not committed since it started passes once it commits, except a pod
   below the baseline's versions, which passes while another commits.
-  While no replica commits, every one fails. A replica with no output
-  enabled passes while withdrawn. The first replica of a new set to
-  commit turns ready, and the set with it. A learner is never ready. In
+  While no replica commits, every one fails, but a withdrawn replica
+  with no output enabled passes. Out of contact a replica keeps its last
+  `/readyz` value for `rollout::DEPARTED` (3 s), then passes only while
+  it commits. The first replica of a new set to commit turns ready; the
+  others each once they commit. The set's only voter passes once it has
+  caught up. A learner is never ready. In
   a rollout, a new pod waiting for its hand-over fails `/readyz` until it
   commits; the leader names it without reading readiness. A release
   that never commits therefore stops the StatefulSet at its first new
