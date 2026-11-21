@@ -230,6 +230,7 @@ impl Node {
             asked: Mutex::new(vec![None; model.senders.len() + model.receivers.len()]),
             instance,
             node: Mutex::default(),
+            tasks: Mutex::default(),
         });
         let (shown, activations, versions) = crate::app::with_state(replica, |sm| {
             let m = &sm.product;
@@ -779,9 +780,15 @@ impl Node {
 }
 
 impl Drop for Node {
-    /// Ends the cycle between the node and its [`Conns`].
+    /// Ends the cycle between the node and its [`Conns`], and the tasks
+    /// that order activations or disable failed ones.
     fn drop(&mut self) {
         *self.conns.node.lock().expect("node lock poisoned") = None;
+        self.conns
+            .tasks
+            .lock()
+            .expect("tasks lock poisoned")
+            .abort_all();
     }
 }
 
@@ -946,6 +953,9 @@ struct Conns {
     /// makes (`samplez_nmos::Nmos::activation`); none otherwise and once
     /// the [`Node`] is dropped.
     node: Mutex<Option<samplez_nmos::Nmos>>,
+    /// The tasks activations are ordered and failed ones disabled on,
+    /// aborted when the [`Node`] is dropped.
+    tasks: Mutex<tokio::task::JoinSet<()>>,
 }
 
 impl Conns {
@@ -1075,8 +1085,9 @@ impl Conns {
 
     /// After an activation of the port at `index` failed, with shared
     /// versions: orders the port's connection in the state disabled, so
-    /// every replica ends on `master_enable` false, as IS-05 has a failed
-    /// activation end, where samplez-nmos records the failure only. Again
+    /// every replica ends on `master_enable` false, as samplez-nmos
+    /// settles a failed apply without shared versions, where with them it
+    /// records the failure only. Again
     /// after [`FIRE_RETRY`] until the state holds it disabled or another
     /// change of the port came after the failed one, as when the set had
     /// no quorum.
@@ -1306,16 +1317,20 @@ impl Connections for Conns {
             // On a task of its own: samplez-nmos drops an apply at its
             // timeout, and a failed one still has to be disabled.
             let (tx, rx) = tokio::sync::oneshot::channel();
-            tokio::spawn(async move {
-                let ordered = me
-                    .order(index, &active, activation.clone(), generation)
-                    .await;
-                let failed = ordered.is_err();
-                let _ = tx.send(ordered);
-                if failed {
-                    me.disable(index, activation, generation).await;
-                }
-            });
+            {
+                let mut tasks = self.tasks.lock().expect("tasks lock poisoned");
+                while tasks.try_join_next().is_some() {}
+                tasks.spawn(async move {
+                    let ordered = me
+                        .order(index, &active, activation.clone(), generation)
+                        .await;
+                    let failed = ordered.is_err();
+                    let _ = tx.send(ordered);
+                    if failed {
+                        me.disable(index, activation, generation).await;
+                    }
+                });
+            }
             rx.await
                 .unwrap_or_else(|_| Err(Fail("the activation's task ended".into())))
         })
