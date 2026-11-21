@@ -4094,11 +4094,11 @@ mod tests {
         Apply { generation }
     }
 
-    /// The flows of channels reading `ids`, then the line-up tone's slot,
-    /// which reads none.
+    /// The flows of channels reading `ids`, then the slots of the line-up
+    /// tone's mono and stereo generators, which read none.
     fn flows(ids: &[&str]) -> Vec<Option<String>> {
         (ids.iter().map(|id| Some((*id).to_owned())))
-            .chain([None])
+            .chain([None, None])
             .collect()
     }
 
@@ -4152,7 +4152,7 @@ mod tests {
         let shape = m.shape();
         let strips: Vec<Vec<StripParam>> = (shape.channels.iter())
             .map(|c| strip::params(&m.state()["channels"][&c.id], c.width))
-            .chain([Vec::new()])
+            .chain([Vec::new(), Vec::new()])
             .collect();
         assert_eq!(
             gain_bits(&t),
@@ -5040,14 +5040,15 @@ mod tests {
             level_db,
             ident,
         };
-        // The line-up tone's slot last, at its initial -18 dBFS.
+        // The line-up tone's mono and stereo generators' slots last, at
+        // its initial -18 dBFS.
         let line_up = Some(tone(1000, -18.0, false));
         assert_eq!(
             before.tones,
-            [None, None, Some(tone(440, -20.0, false)), line_up]
+            [None, None, Some(tone(440, -20.0, false)), line_up, line_up]
         );
         let a = |id: &str| Some(id.to_owned());
-        assert_eq!(before.flows, [a("a1"), a("a2"), None, None]);
+        assert_eq!(before.flows, [a("a1"), a("a2"), None, None, None]);
         assert!(!m.engine_view().detached[2], "not an IS-05 detach");
         assert_ne!(m.config_hash(), wired().config_hash());
 

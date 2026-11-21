@@ -226,7 +226,10 @@ pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
             let row: Vec<u8> = columns.iter().map(|&bits| bits & lowered).collect();
             std::iter::repeat_n(row, c.width)
         })
-        .chain(std::iter::repeat_n(tone, mix::tone_width(shape)))
+        .chain(std::iter::repeat_n(
+            tone,
+            mix::tone_widths(shape).iter().sum(),
+        ))
         .collect()
 }
 
@@ -378,12 +381,12 @@ mod tests {
                 ("/ducks/comm/destinations/pgm", json!(true)),
             ],
         );
-        // Rows ch1, ch2, st1 L R, sur x6, the line-up tone x6, which no
-        // group lowers; columns out-51 x6, out-lr x2, then the meters of
-        // cf x2, aux1 and mon x2, which follows pgm.
+        // Rows ch1, ch2, st1 L R, sur x6, the line-up tone's generators
+        // x1, x2 and x6, which no group lowers; columns out-51 x6, out-lr
+        // x2, then the meters of cf x2, aux1 and mon x2, which follows pgm.
         let m = masks(&shape, &state);
         assert_eq!(m[4..10], [[1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1]; 6]);
-        assert_eq!(m[10..], [[0; 13]; 6]);
+        assert_eq!(m[10..], [[0; 13]; 9]);
         assert!(m[..4].iter().flatten().all(|&b| b == 0));
         assert_eq!(columns(&shape), (0..13).collect::<Vec<_>>());
     }

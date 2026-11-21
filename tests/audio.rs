@@ -1727,7 +1727,7 @@ async fn the_line_up_tone_replaces_the_mix_of_its_targets() {
     let tone_input = engine.inputs.last().unwrap();
     assert_eq!(
         (tone_input.name.as_str(), tone_input.state),
-        ("/tone", samplez::InputState::Tone)
+        ("/tone/2", samplez::InputState::Tone)
     );
     let channels = ["ch1", "ch2", "st1"];
     let (code, body) = get(server.api, "/api/v1/state").await;
@@ -1750,6 +1750,147 @@ async fn the_line_up_tone_replaces_the_mix_of_its_targets() {
         .map(|i| i["channel"].as_str().unwrap())
         .collect();
     assert_eq!(inputs, channels, "the status's channel inputs");
+    server.stop().await;
+}
+
+/// Polls `flow`, `legs` wide, from sample index `from` on, until each
+/// window of the line-up tone's ident cycle over `legs` legs has been
+/// read: in window `w`, leg `w mod (legs + 1)` is cut and every other leg
+/// carries the tone at sample peak `peak`, so the last window of the
+/// cycle sounds on every leg. A block is judged only when every tone
+/// index it can carry, whatever the limiter's delay, lies in one window
+/// away from the ident's fades.
+async fn idents(domain: &Path, flow: &str, legs: usize, from: u64, peak: f32, what: &str) {
+    let rate = shape()["sampleRate"].as_u64().unwrap();
+    let (window, edge) = (rate / 4, rate / 100);
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    let cycle = legs as u64 + 1;
+    let mut reader = Reader::wide(domain, flow, legs as u32);
+    let api = api();
+    let n = B as usize;
+    let mut seen = std::collections::BTreeSet::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while seen.len() < cycle as usize {
+        assert!(Instant::now() < deadline, "{what}: windows read {seen:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let k = time::timestamp_to_index(&api, time::now(&api)) / B - 100;
+        let (lo, hi) = (k * B - late - edge, k * B + B + edge);
+        if k * B < from || lo / window != (hi - 1) / window {
+            continue;
+        }
+        let input = reader.generation.input(0).unwrap();
+        let read = input.read(&mut reader.state, k, &GroupWait::Skipped, &mut reader.buf);
+        if read != Outcome::Copy {
+            continue;
+        }
+        let w = lo / window;
+        let cut = (w % cycle) as usize;
+        for (leg, samples) in reader.buf.chunks(n).enumerate() {
+            let got = samples.iter().fold(0.0f32, |p, v| p.max(v.abs()));
+            let want = if leg == cut { 0.0 } else { peak };
+            assert!(
+                (got - want).abs() <= 1e-4,
+                "{what}: block {k}, window {w}: leg {leg} peaks at {got}, not {want}"
+            );
+        }
+        seen.insert(w % cycle);
+    }
+}
+
+/// With the ident on, each target of the line-up tone cuts its own legs
+/// in turn, a stereo programme and a 5.1 clean feed at once: the
+/// programme L, then R, then both sound; the clean feed each of its six
+/// legs, then all of them. A monitor playing the programme carries what
+/// the programme's output does, the tone and its ident, at the
+/// monitor's level, and none of the mix it replaces.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_line_up_target_idents_its_own_legs() {
+    let domain = domain("line-up-ident");
+    let data = data("line-up-ident");
+    let (ch, pgm, s51, mon) = (new_id(), new_id(), new_id(), new_id());
+    let _ch = Source::start(&domain.0, &ch, vec![CH1]);
+    let output = |id: &str, source: &str, width: u32, layout: &str| json!({ "id": id, "name": id, "source": source, "width": width, "layout": layout });
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch", "name": "Pres", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [
+            { "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" },
+            { "id": "s51", "name": "Clean 5.1", "kind": "cleanFeed", "width": 6, "layout": "5.1" },
+        ],
+        "auxes": [], "mixMinus": [], "vcas": [],
+        "monitorOutputs": [{ "id": "mon", "name": "Monitor", "width": 2, "layout": "stereo" }],
+        "outputs": [
+            output("out-pgm", "pgm", 2, "stereo"),
+            output("out-51", "s51", 6, "5.1"),
+            output("out-mon", "mon", 2, "stereo"),
+        ],
+    });
+    let server = start_with(
+        &data.0,
+        &domain.0,
+        shape,
+        json!({ "ch": { "flow": ch } }),
+        json!({
+            "out-pgm": { "flow": pgm },
+            "out-51": { "flow": s51 },
+            "out-mon": { "flow": mon },
+        }),
+    )
+    .await;
+    for flow in [&pgm, &s51, &mon] {
+        appears(&domain.0, flow).await;
+    }
+    patch(
+        &server,
+        &[
+            ("/channels/ch/fader", json!(0)),
+            ("/channels/ch/routes/pgm", json!(true)),
+            ("/channels/ch/routes/s51", json!(true)),
+            ("/buses/pgm/fader", json!(0)),
+            ("/buses/s51/fader", json!(0)),
+            ("/monitor/source", json!("pgm")),
+            ("/monitor/level", json!(0)),
+        ],
+    )
+    .await;
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    Reader::new(&domain.0, &mon)
+        .expect(CH1 * h, CH1 * h, "the monitor plays the programme's mix")
+        .await;
+    patch(
+        &server,
+        &[
+            ("/tone/level", json!(-20)),
+            ("/tone/targets", json!(["pgm", "s51"])),
+            ("/tone/ident", json!(true)),
+            ("/tone/on", json!(true)),
+        ],
+    )
+    .await;
+    // Past the ramps the writes start.
+    let api = api();
+    let from = time::timestamp_to_index(&api, time::now(&api)) + 48000 / 2;
+    let peak = 10f32.powf(-20.0 / 20.0);
+    idents(&domain.0, &pgm, 2, from, peak, "the stereo programme").await;
+    idents(&domain.0, &s51, 6, from, peak, "the 5.1 clean feed").await;
+    idents(
+        &domain.0,
+        &mon,
+        2,
+        from,
+        peak,
+        "the monitor on the programme",
+    )
+    .await;
+    let engine = server.audio.as_ref().unwrap().engine().status();
+    let tones: Vec<&str> = (engine.inputs.iter())
+        .filter(|i| i.state == samplez::InputState::Tone)
+        .map(|i| i.name.as_str())
+        .collect();
+    assert_eq!(tones, ["/tone/2", "/tone/6"], "a generator per width");
     server.stop().await;
 }
 

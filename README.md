@@ -102,16 +102,19 @@ The line-up tone (`/tone`) is a 1 kHz sine at `level`, -30 to 0 dBFS
 sample peak, on every leg. While `on`, each output whose bus, aux or
 mix-minus is in `targets` carries the tone in place of its mix, after
 the element's fader and before the output's limiter, so the fader does
-not scale it and the limiter still applies; the element's meters show
-the tone, and a monitor playing the element plays its mix. Off, or for
-an element not in `targets`, the mix is as without it. Turning it on or
-off, a target and a level change ramp over `engine.rampSamples` as a
-gain does. With `ident` the tone stops on one leg at a time in layout
-order, for 250 ms each, then sounds on every leg for 250 ms. One
-generator, an engine input of its own that is no channel and has no
-NMOS receiver, feeds every target, with the legs of the widest bus, aux
-or mix-minus or output carrying one: a target with fewer legs sounds on
-all of its own while a leg it lacks is cut.
+not scale it and the limiter still applies; an output narrower than its
+element carries the tone's first legs. The element's meters show the
+tone, and a monitor playing the element plays the tone as it plays a
+source, through its own level, dim, downmix, mono and speaker controls;
+while a channel or VCA solos, the monitor plays the listen sum. Off, or
+for an element not in `targets`, the mix is as without it. Turning it
+on or off, a target and a level change ramp over `engine.rampSamples`
+as a gain does. With `ident` the tone stops on one of the target's legs
+at a time in layout order, for 250 ms each, then sounds on every leg
+for 250 ms: a stereo target cuts L, then R, a 5.1 target each of its
+six legs. Each distinct width of a bus, aux or mix-minus has a generator
+of that many legs, an engine input of its own that is no channel and
+has no NMOS receiver, and each target plays the one as wide as it is.
 
 A mix-minus carrying its talkback is never ducked: its duck masks, and
 those of a monitor playing it, are lifted until the interrupt is

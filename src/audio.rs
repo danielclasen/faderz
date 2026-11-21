@@ -803,9 +803,9 @@ fn input_state(state: InputState) -> &'static str {
 }
 
 /// The engine's inputs that are channels': all but the line-up tone's
-/// ([`mix::TONE_INPUT`]).
+/// ([`mix::tone_input`]).
 fn channel_inputs(status: &samplez::Status) -> impl Iterator<Item = &InputStatus> {
-    (status.inputs.iter()).filter(|i| i.name != mix::TONE_INPUT)
+    (status.inputs.iter()).filter(|i| !i.name.starts_with(mix::TONE_INPUT))
 }
 
 /// The engine of `GET /status`: per channel its input's state in the

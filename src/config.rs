@@ -1204,8 +1204,8 @@ impl Config {
 
     /// The engine configuration of the `mxl` section, with a matrix of
     /// zeros: one input per channel reading its flow of input a, or a tone
-    /// generator, then the line-up tone's generator
-    /// ([`crate::mix::TONE_INPUT`]), one
+    /// generator, then the line-up tone's generators
+    /// ([`crate::mix::tone_widths`]), one
     /// output per output of the shape writing this replica's flow
     /// ([`Config::member_flows`]), one meter per bus, aux,
     /// mix-minus and monitor output no full-width output carries, and the columns a
@@ -1292,11 +1292,13 @@ impl Config {
             }
             inputs.push(engine_input);
         }
-        inputs.push(json!({
-            "name": crate::mix::TONE_INPUT,
-            "tone": {},
-            "channels": crate::mix::tone_width(shape),
-        }));
+        for width in crate::mix::tone_widths(shape) {
+            inputs.push(json!({
+                "name": crate::mix::tone_input(width),
+                "tone": {},
+                "channels": width,
+            }));
+        }
         let mut outputs = Vec::new();
         // Per output, the flow of each ordinal.
         let mut members: Vec<Vec<String>> = Vec::new();
@@ -1356,8 +1358,9 @@ impl Config {
         {
             return Err(format!("mxl.outputs.{id}: not an output of the shape"));
         }
-        let rows: usize =
-            (shape.channels.iter().map(|c| c.width).sum::<usize>()) + crate::mix::tone_width(shape);
+        let rows: usize = (shape.channels.iter().map(|c| c.width))
+            .chain(crate::mix::tone_widths(shape))
+            .sum();
         let columns: usize = (shape.outputs.iter().map(|o| o.width))
             .chain(shape.meter_columns().iter().map(|m| m.1))
             .sum();
@@ -2134,8 +2137,9 @@ mod tests {
         let engine: Vec<u32> = (c.audio.unwrap().inputs.iter())
             .map(|i| i.max_delay_samples)
             .collect();
-        // The line-up tone's input last, which has no line.
-        assert_eq!(engine, [960, 0, 240_000, 0]);
+        // The line-up tone's mono and stereo inputs last, which have no
+        // line.
+        assert_eq!(engine, [960, 0, 240_000, 0, 0]);
         // 0 is no line.
         let (_, shape, _) =
             Config::parse(&config(json!(0), json!(0), json!({})), || unreachable!()).unwrap();
@@ -2478,12 +2482,12 @@ mod tests {
         );
     }
 
-    /// The line-up tone's generator is the engine's last input, after the
-    /// channels', as wide as the widest bus, aux or mix-minus column,
-    /// with no flow; the matrix has its rows. It is no channel, so it is
-    /// wired to nothing.
+    /// The line-up tone's generators are the engine's last inputs, after
+    /// the channels', one per distinct width of a bus, aux or mix-minus,
+    /// narrowest first and as wide, with no flow; the matrix has their
+    /// rows. They are no channel, so they are wired to nothing.
     #[test]
-    fn the_line_up_tone_is_the_engines_last_input() {
+    fn the_line_up_tones_are_the_engines_last_inputs() {
         let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
         let config = json!({
             "replica": { "name": "r1" },
@@ -2498,14 +2502,15 @@ mod tests {
         let (c, shape, _) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
         let engine = c.audio.as_ref().unwrap();
         let names: Vec<&str> = engine.inputs.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, ["ch1", "ch2", "st1", crate::mix::TONE_INPUT]);
-        let tone = &engine.inputs[3];
-        assert!(tone.tone.is_some() && tone.flow_id.is_none() && tone.domain.is_none());
-        assert_eq!(tone.channels, 2, "pgm, cf and mm1 are stereo");
+        assert_eq!(names, ["ch1", "ch2", "st1", "/tone/1", "/tone/2"]);
+        for (tone, width) in engine.inputs[3..].iter().zip([1, 2]) {
+            assert!(tone.tone.is_some() && tone.flow_id.is_none() && tone.domain.is_none());
+            assert_eq!(tone.channels, width, "aux1 is mono, pgm, cf and mm1 stereo");
+        }
         assert_eq!(
             engine.matrix.len(),
-            4 + 2,
-            "the channels' legs, then the tone's"
+            4 + 1 + 2,
+            "the channels' legs, then the tones'"
         );
         assert_eq!(c.wiring.len(), shape.channels.len());
     }

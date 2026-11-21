@@ -301,6 +301,16 @@ impl Outputs {
         flows: Vec<String>,
         engines: Vec<Weak<Audio>>,
     ) -> (Arc<Outputs>, std::thread::JoinHandle<()>) {
+        Outputs::read_wide(domain, flows, engines, 2)
+    }
+
+    /// [`Outputs::read`] of flows of `channels` legs.
+    fn read_wide(
+        domain: PathBuf,
+        flows: Vec<String>,
+        engines: Vec<Weak<Audio>>,
+        channels: u32,
+    ) -> (Arc<Outputs>, std::thread::JoinHandle<()>) {
         let outputs = Arc::new(Outputs {
             blocks: Mutex::new(vec![BTreeMap::new(); flows.len()]),
             engines: Mutex::new(engines),
@@ -311,12 +321,13 @@ impl Outputs {
             let mut readers: Vec<Option<(Generation, SlotState)>> =
                 flows.iter().map(|_| None).collect();
             let mut next = vec![0u64; flows.len()];
-            let mut buf = vec![0.0f32; 2 * B as usize];
+            let mut buf = vec![0.0f32; channels as usize * B as usize];
             while !out.stop.load(Ordering::Relaxed) {
                 let last = Outputs::now();
                 for (n, flow) in flows.iter().enumerate() {
                     if readers[n].is_none() {
-                        readers[n] = attach(&domain, flow).map(|g| (g, SlotState::default()));
+                        readers[n] =
+                            attach_wide(&domain, flow, channels).map(|g| (g, SlotState::default()));
                     }
                     let Some((generation, state)) = readers[n].as_mut() else {
                         continue;
@@ -1701,10 +1712,13 @@ fn every_replica_plays_a_tone_channel_alike() {
     }
 }
 
-/// The line-up tone is replicated state: through `/tone` writes and a
-/// fader move sent to each replica in turn, the programme and the
-/// mix-minus outputs of every replica carry the same bits, and the tone
-/// is heard on the programme at its level.
+/// The line-up tone is replicated state: through `/tone` writes, a fader
+/// move and a monitor source sent to each replica in turn, the
+/// programme, mix-minus, 5.1 clean feed and monitor outputs of every
+/// replica carry the same bits, with the ident of the stereo and the 5.1
+/// generators and the monitor on a target, and the tone is heard at its
+/// level on the programme, the mix-minus and the monitor playing the
+/// programme.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -1718,15 +1732,22 @@ fn every_replica_plays_the_line_up_tone_alike() {
         "channels": [
             { "id": "ch", "name": "Pres", "width": 1, "layout": "mono", "altInput": false },
         ],
-        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
-        "auxes": [], "vcas": [], "monitorOutputs": [],
+        "buses": [
+            { "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" },
+            { "id": "s51", "name": "Clean 5.1", "kind": "cleanFeed", "width": 6, "layout": "5.1" },
+        ],
+        "auxes": [], "vcas": [],
+        "monitorOutputs": [{ "id": "mon", "name": "Monitor", "width": 2, "layout": "stereo" }],
         "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
         "outputs": [
             { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
             { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+            { "id": "out-51", "name": "Clean 5.1", "source": "s51", "width": 6, "layout": "5.1" },
+            { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" },
         ],
     });
-    let (set, listeners) = Set::with("line-up", shape, &["out-pgm", "out-mm"], |domain| {
+    let outputs = ["out-pgm", "out-mm", "out-51", "out-mon"];
+    let (set, listeners) = Set::with("line-up", shape, &outputs, |domain| {
         let src = new_id();
         let sources = vec![Source::sine(domain, &src, 0.5, 440)];
         (sources, json!({ "ch": { "flow": src } }))
@@ -1739,25 +1760,48 @@ fn every_replica_plays_the_line_up_tone_alike() {
     }
     let engines =
         || -> Vec<Weak<Audio>> { (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect() };
-    let read =
-        |members: &[String]| Outputs::read(set.domain.0.clone(), members.to_vec(), engines());
-    let (pgm, pgm_reader) = read(&set.members);
-    let (mm, mm_reader) = read(&set.mm_members);
+    let flows = |output: &str| -> Vec<String> {
+        (set.outputs[output]["flows"].as_array().unwrap().iter())
+            .map(|f| f.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let read = |output: &str, legs: u32| {
+        Outputs::read_wide(set.domain.0.clone(), flows(output), engines(), legs)
+    };
+    let read = [
+        ("programme", read("out-pgm", 2)),
+        ("mix-minus", read("out-mm", 2)),
+        ("5.1 clean feed", read("out-51", 6)),
+        ("monitor", read("out-mon", 2)),
+    ];
     let from = Outputs::now() + 1;
-    write(&nodes, 0, &[("/channels/ch/fader", json!(0))]);
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/ch/fader", json!(0)),
+            ("/channels/ch/routes/pgm", json!(true)),
+            ("/channels/ch/routes/s51", json!(true)),
+            ("/buses/s51/fader", json!(0)),
+            ("/monitor/level", json!(0)),
+            ("/monitor/source", json!("pgm")),
+        ],
+    );
     let level = -12.0;
     let writes = [
-        ("/tone/targets", json!(["pgm", "mm1"])),
+        ("/tone/targets", json!(["pgm", "mm1", "s51"])),
         ("/tone/on", json!(true)),
         ("/tone/level", json!(level)),
         ("/tone/ident", json!(true)),
         ("/buses/pgm/fader", json!(-10)),
         ("/tone/ident", json!(false)),
+        ("/monitor/source", json!("s51")),
         ("/tone/targets", json!(["pgm"])),
         ("/tone/on", json!(false)),
     ];
     for (i, (path, value)) in writes.into_iter().enumerate() {
-        // Long enough for every replica to play each setting a while.
+        // Long enough for every replica to play each setting a while,
+        // the 5.1 ident's cycle of 1.75 s across two of them.
         std::thread::sleep(Duration::from_millis(400));
         write(&nodes, i % REPLICAS, &[(path, value)]);
     }
@@ -1766,7 +1810,7 @@ fn every_replica_plays_the_line_up_tone_alike() {
     // samples times the square of the sample peak, two legs of half that.
     let peak = 10f64.powf(level / 20.0);
     let tone = ((WINDOW * B) as f64 * peak * peak).log10() * 1000.0;
-    for (what, outputs) in [("programme", &pgm), ("mix-minus", &mm)] {
+    for (what, (outputs, _)) in &read {
         for a in 0..REPLICAS {
             for b in a + 1..REPLICAS {
                 let deadline = Instant::now() + Duration::from_secs(30);
@@ -1786,18 +1830,22 @@ fn every_replica_plays_the_line_up_tone_alike() {
                     c.levels.len() >= 4,
                     "{what}: the writes moved nothing: {c:?}"
                 );
-                assert!(
-                    (c.levels.iter()).any(|&l| (l as f64 - tone).abs() <= 2.0),
-                    "{what}: no tone at {level} dBFS ({tone:.0}): {c:?}"
-                );
+                // The monitor at 0 dB on the programme: its tone.
+                if *what != "5.1 clean feed" {
+                    assert!(
+                        (c.levels.iter()).any(|&l| (l as f64 - tone).abs() <= 2.0),
+                        "{what}: no tone at {level} dBFS ({tone:.0}): {c:?}"
+                    );
+                }
             }
         }
     }
-    for outputs in [&pgm, &mm] {
+    for (_, (outputs, _)) in &read {
         outputs.stop.store(true, Ordering::Relaxed);
     }
-    pgm_reader.join().unwrap();
-    mm_reader.join().unwrap();
+    for (_, (_, reader)) in read {
+        reader.join().unwrap();
+    }
     for node in nodes.into_iter().flatten() {
         node.kill();
     }
