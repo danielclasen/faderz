@@ -17,8 +17,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -220,10 +218,6 @@ impl Node {
                 instances: Mutex::default(),
             }),
             seen: Mutex::new(vec![0; model.senders.len() + model.receivers.len()]),
-            // Every port's `/active` starts as the state holds it.
-            foreign: (0..model.senders.len() + model.receivers.len())
-                .map(|_| AtomicBool::new(true))
-                .collect(),
             asked: Mutex::new(vec![None; model.senders.len() + model.receivers.len()]),
             instance: crate::app::uuid().map_err(|e| format!("nmos: {e}"))?,
         });
@@ -487,13 +481,15 @@ impl Node {
         })
     }
 
-    /// `/active` of a port the state last changed shows the activation
-    /// the state holds for it, not the one this replica last served.
+    /// `/active` shows the activation the state holds for the port, the
+    /// replicated entry's, on every replica alike: not the one this
+    /// replica's NMOS layer served, which takes its time from this
+    /// replica's clock.
     async fn active_view(&self, path: &str, response: Response) -> Response {
         let Some(index) = self.index_of(path) else {
             return response;
         };
-        if !response.status().is_success() || !self.conns.foreign[index].load(Relaxed) {
+        if !response.status().is_success() {
             return response;
         }
         let connection = self.replica.upgrade().and_then(|r| {
@@ -631,7 +627,6 @@ impl Node {
                 }
                 let generation = self.nmos.external_change(port.port, active.clone());
                 self.conns.saw(index, generation);
-                self.conns.foreign[index].store(true, Relaxed);
             }
         }
     }
@@ -783,10 +778,6 @@ struct Conns {
     /// Drawn at start: activations' command ids are unique across
     /// restarts.
     instance: String,
-    /// Per port, whether its `/active` was last written from the state
-    /// rather than by an activation this replica served: its
-    /// `activation` is then the state's.
-    foreign: Vec<AtomicBool>,
     /// Per port, the mode and requested time of the last scheduled
     /// activation staged here, until it is taken into the state with its
     /// schedule ([`Conns::schedule`]).
@@ -1048,12 +1039,7 @@ impl Connections for Conns {
             }
             match at {
                 Some(at) => self.schedule(index, &active, at, generation).await,
-                None => {
-                    // This replica writes the port's `/active` itself again;
-                    // a schedule does so only once it fires.
-                    self.foreign[index].store(false, Relaxed);
-                    self.order(index, &active, generation).await
-                }
+                None => self.order(index, &active, generation).await,
             }
         })
     }

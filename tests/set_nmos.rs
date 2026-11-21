@@ -729,6 +729,15 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         assert_eq!(a["mode"], "activate_immediate", "replica {n}: {a}");
         assert!(a["activation_time"].is_string(), "replica {n}: {a}");
     }
+    // The activation time is the replicated entry's: alike on every
+    // replica.
+    let times: Vec<Value> = (0..REPLICAS)
+        .map(|n| active(&nodes, n, &ch1)["activation"]["activation_time"].clone())
+        .collect();
+    assert!(
+        times.windows(2).all(|w| w[0] == w[1]),
+        "activation_time by replica: {times:?}"
+    );
     // A request marked forwarded that reaches a follower is not staged
     // there.
     let marked = node(&nodes, fa).runtime.block_on(request_with(
