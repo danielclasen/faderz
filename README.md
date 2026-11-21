@@ -212,9 +212,8 @@ the transition starts at into the replicated log: the tally's
 `atIndex`, else its `at` read as TAI, else its receipt plus the lead a
 scene crossfade takes, so every replica of a set fades alike.
 `PUT /api/v1/afv/tally` takes that lead. A tally whose index is already
-past at its receipt counts in `afv_late_total` and does not play the
-part of its transition already past: each gain steps to where its fade
-has got to, as a late recall does. A fader move during the transition
+past at its receipt counts in `afv_late_total` and joins its transition
+without a step, as a late recall does. A fader move during the transition
 ends the fade of the gains it moves, and a recall fades from where the
 transition has got to, as during a crossfade. A recall during a stage's
 hold drops the rest of the hold. A tally more than 60 s ahead is
@@ -260,18 +259,15 @@ samplez's `EXTRA_LEAD`, so the whole fade plays and every replica of a
 set fades alike.
 
 A recall whose entry applies after its fade start, such as one that
-switches inputs and waits for an engine generation, does not play the
-part of the fade already past: each gain steps by that elapsed share of
-its swing, and one applied after the fade's end steps to the scene's
-value. A recall that re-routes can therefore click by most of its swing.
-A recall during a running fade has the same limit at the other end: each
-gain it changes still fading starts its new fade from where the running
-fade will be at the new fade's start, and holds that value from the
-index the recall applies at until then, so it steps there by the
-running fade's progress over that gap (up to the lead). The recall's
-apply index does not reach the product's derivation, which would let
-the new fade start there. Both hold until the engine ramps a gain
-joining a fade from its held value.
+switches inputs and waits for an engine generation, joins its fade
+without a step: each gain ramps in a straight line from the value it
+holds to the scene's, ending where the fade ends and taking at least the
+ramp length, or over the ramp length once the fade has ended. A recall
+during a running fade has a limit at the other end: each gain it
+changes still fading starts its new fade from where the running fade
+will be at the new fade's start, and holds that value from the index
+the recall applies at until then, so it steps there by the running
+fade's progress over that gap (up to the lead).
 
 During a fade, a write that moves a fading gain, such as a fader move,
 ends that gain's fade: the gain ramps from where the fade has got to,

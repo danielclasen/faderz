@@ -24,7 +24,7 @@ use crate::shape::Shape;
 /// a command with, the highest `maxApplyLeadMs` plus samplez's
 /// `EXTRA_LEAD`. A recall taking effect by then plays its whole fade; one
 /// taking effect later, such as one that switches inputs and waits for
-/// an engine generation, joins its fade where it has got to.
+/// an engine generation, joins its fade from the value each gain holds.
 pub fn crossfade_lead(rate: u64) -> u64 {
     let ms = *crate::config::MAX_APPLY_LEAD_MS.end()
         + samplez_replica::schedule::EXTRA_LEAD.as_millis() as u64;

@@ -295,8 +295,10 @@ paths:
         samplez's EXTRA_LEAD; 0 is a cut, each gain ramping over the
         engine's ramp length. A later write that moves a fading gain ends
         its fade. A recall applied after its fade start, such as one that
-        switches inputs, steps each gain by the share of the fade already
-        past, and to the scene's value once the fade has ended. A recall
+        switches inputs, joins its fade without a step: each gain ramps in
+        a straight line from the value it holds to the scene's, ending
+        where the fade ends and taking at least the engine's ramp length,
+        or over the ramp length once the fade has ended. A recall
         during a running fade starts each still-fading gain's new fade from
         where the running fade will be at the new start, so that gain steps
         by the running fade's progress between the apply index and the new
@@ -340,10 +342,9 @@ paths:
         atIndex, else at read as TAI on the flows' sample index, else its
         receipt plus the lead a scene recall's crossfade takes, so every
         replica fades alike. A tally whose atIndex or at lies in the past
-        counts in afv_late_total and does not play the part of its
-        transition already past: each gain steps to where its fade has got
-        to at the index the tally applies at. One more than 60 s ahead is
-        refused.
+        counts in afv_late_total and joins its transition without a step,
+        as a recall applied after its fade start does. One more than 60 s
+        ahead is refused.
       parameters:
         - $ref: "#/components/parameters/RequestHeader"
       requestBody:
