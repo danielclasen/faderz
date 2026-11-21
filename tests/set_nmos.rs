@@ -1464,7 +1464,7 @@ fn every_replica_serves_the_versions_the_registry_holds() {
     let now = samplez_nmos::TaiClock::now(&samplez_nmos::SystemTai).as_nanos();
     let absolute = format!("{}:0", now / 1_000_000_000 + 3);
     for (mode, requested) in [
-        ("activate_scheduled_relative", "0:300000000"),
+        ("activate_scheduled_relative", "0:200000000"),
         ("activate_scheduled_absolute", absolute.as_str()),
     ] {
         let staged = json!({
@@ -1474,6 +1474,15 @@ fn every_replica_serves_the_versions_the_registry_holds() {
         let path = format!("{CONNECTION}/{pgm}/staged");
         let (status, body) = node(&nodes, 0).nmos_led("PATCH", &path, Some(&staged));
         assert_eq!(status, 202, "{body}");
+        if mode == "activate_scheduled_relative" {
+            // As the AMWA IS-05 suite reads it: once, 200 ms after the
+            // request, on every replica.
+            std::thread::sleep(Duration::from_millis(200));
+            for n in 0..REPLICAS {
+                let a = active(&nodes, n, &pgm)["activation"].clone();
+                assert_eq!(a["mode"], mode, "replica {n} at the activation time: {a}");
+            }
+        }
         let mut seen = Vec::new();
         let alike = until(20, || {
             seen = (0..REPLICAS)
@@ -1483,6 +1492,10 @@ fn every_replica_serves_the_versions_the_registry_holds() {
                 .all(|a| *a == seen[0] && a["mode"] == mode && a["requested_time"] == requested)
         });
         assert!(alike, "{mode}: the replicas' /active show {seen:#?}");
+        let fired = until(20, || {
+            (0..REPLICAS).all(|n| node(&nodes, n).scheduled() == 0)
+        });
+        assert!(fired, "{mode}: the schedule did not fire");
     }
     agree(&nodes, &registry, "after the changes");
     // A set whose outputs are all disabled has no committing donor, so a

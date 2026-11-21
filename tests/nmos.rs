@@ -485,20 +485,19 @@ async fn a_scheduled_activation_keeps_the_mode_and_requested_time_it_was_staged_
     .await;
     let same = json!({
         "master_enable": true,
-        "activation": { "mode": "activate_scheduled_relative", "requested_time": "0:300000000" },
+        "activation": { "mode": "activate_scheduled_relative", "requested_time": "0:200000000" },
     });
     let (status, body) = request(server.nmos, "PATCH", &path, Some(&same)).await;
     assert_eq!(status, 202, "{body}");
-    let port = format!("senders/{pgm}");
-    until(
-        "the sender's /active shows the scheduled activation",
-        async || {
-            let a = active(&server, &port).await;
-            a["activation"]["mode"] == "activate_scheduled_relative"
-                && a["activation"]["requested_time"] == "0:300000000"
-        },
-    )
-    .await;
+    // As the AMWA IS-05 suite reads it: once, 200 ms after the request,
+    // when the activation time has come.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let a = active(&server, &format!("senders/{pgm}")).await;
+    assert_eq!(
+        a["activation"]["mode"], "activate_scheduled_relative",
+        "{a}"
+    );
+    assert_eq!(a["activation"]["requested_time"], "0:200000000", "{a}");
     server.stop().await;
 }
 

@@ -534,12 +534,21 @@ impl Node {
         if !response.status().is_success() {
             return response;
         }
-        let connection = self.replica.upgrade().and_then(|r| {
+        // A scheduled activation whose time has come shows as it fires
+        // from that time on, as every replica's state holds it since it
+        // was staged; the Fire that records it commits later.
+        let port = self.ports[index].port_ref();
+        let due = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
+        let shown = self.replica.upgrade().and_then(|r| {
             crate::app::with_state(&r, |sm| {
-                connection_of(&sm.product, &self.ports[index]).cloned()
+                let m = &sm.product;
+                let fired = (m.scheduled().iter()).find(|s| s.port == port && s.at <= due);
+                (fired.map(Scheduled::fired)).or_else(|| {
+                    connection_of(m, &self.ports[index]).and_then(|c| c.activation.clone())
+                })
             })
         });
-        let Some(a) = connection.and_then(|c| c.activation) else {
+        let Some(a) = shown else {
             return response;
         };
         with_json(response, |v| {

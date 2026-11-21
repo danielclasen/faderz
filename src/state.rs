@@ -299,6 +299,22 @@ pub struct Scheduled {
     pub at: u64,
 }
 
+impl Scheduled {
+    /// The activation it records when it fires ([`Command::Fire`]).
+    pub fn fired(&self) -> Activation {
+        let at = tai_text(self.at);
+        let (mode, requested) = match &self.active.activation {
+            Some(a) => (a.mode.clone(), a.requested.clone()),
+            None => ("activate_scheduled_absolute".into(), Some(at.clone())),
+        };
+        Activation {
+            mode,
+            requested,
+            time: at,
+        }
+    }
+}
+
 /// A channel's flows of input a and b that activations named.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -928,18 +944,9 @@ impl Mixer {
         // and fires it as absolute all the same, so during a rolling
         // upgrade `/active` can show either until every replica runs
         // this release; the activation itself is the same on all.
-        let at = tai_text(s.at);
-        let (mode, requested) = match &s.active.activation {
-            Some(a) => (a.mode.clone(), a.requested.clone()),
-            None => ("activate_scheduled_absolute".into(), Some(at.clone())),
-        };
         let active = Connection {
-            activation: Some(Activation {
-                mode,
-                requested,
-                time: at,
-            }),
-            ..s.active
+            activation: Some(s.fired()),
+            ..s.active.clone()
         };
         self.connect(session, id, &s.port, &active, ctx)
     }
