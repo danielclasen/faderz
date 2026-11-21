@@ -252,7 +252,24 @@ async fn presence_and_selections_stay_on_their_replica() {
         .expect("replica 1's presence within 10 s");
     // A second client of replica 0 sees a's selection; b, on replica 1,
     // never does.
-    let mut a2 = client(&servers[0], "session-c-0123456789abcdef").await;
+    let sc = "session-c-0123456789abcdef";
+    let mut a2 = client(&servers[0], sc).await;
+    // With b connected to replica 1 all along, replica 0's presence after
+    // a2 joins lists a and a2 and still not b.
+    let both = tokio::time::timeout(wait, async {
+        loop {
+            let m = next_of(&mut a, "presence").await;
+            let handles: Vec<String> = (m["sessions"].as_array().into_iter().flatten())
+                .map(|s| s["handle"].as_str().unwrap_or("").to_owned())
+                .collect();
+            if handles.contains(&handle(sc)) {
+                return (m, handles);
+            }
+        }
+    })
+    .await
+    .expect("replica 0's presence with a2 within 10 s");
+    assert_eq!(both.1, [handle(sa), handle(sc)], "{}", both.0);
     let select = json!({ "type": "select", "element": "ch1" });
     a.send(Message::text(select.to_string())).await.unwrap();
     let seen = tokio::time::timeout(wait, async {

@@ -9,7 +9,7 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -58,17 +58,60 @@ fn afv() -> Vec<(&'static str, Value)> {
 
 /// Command `i` of the session, through the running replica `first`
 /// names: every 13th a tally of cam1, preview and program in turn, which
-/// closes and opens ch2's AFV stage; the others [`command`].
+/// closes and opens ch2's AFV stage ([`tallied`]); the others
+/// [`command`].
 fn step(nodes: &[Option<Node>], first: usize, i: usize) {
     if i % 13 == 12 {
-        let state = if (i / 13).is_multiple_of(2) {
-            "preview"
-        } else {
-            "program"
-        };
+        let preview = (i / 13).is_multiple_of(2);
+        let state = if preview { "preview" } else { "program" };
         post_tally(nodes, first, "cam1", state);
+        for n in (0..REPLICAS).filter(|&n| nodes[n].is_some()) {
+            tallied(node(nodes, n), n, !preview);
+        }
     } else {
         write(nodes, first, &command(i));
+    }
+}
+
+/// Tallies whose closed stage [`tallied`] saw lower ch2 on the
+/// programme: ch2 open on it, not muted or routed off at the time.
+static AFV_CLOSED: AtomicUsize = AtomicUsize::new(0);
+
+/// Waits until replica `n` holds ch2's AFV stage `open`, then asserts the
+/// gain it derives for ch2 on the programme is the open one, or that
+/// lowered by the stage's off level, -20 dB, when closed.
+fn tallied(node: &Node, n: usize, open: bool) {
+    let read = || {
+        faderz::app::with_state(&node.server.app.replica, |sm| {
+            let product = &sm.product;
+            let targets = samplez_replica::state_machine::Product::targets(product);
+            let mut state = product.state().clone();
+            let held = state["afv"]["ch2"]["open"] == json!(open);
+            state["afv"]["ch2"]["open"] = json!(true);
+            let reference = faderz::mix::matrix(product.shape(), &state);
+            // ch2 is row 1; out-pgm's two legs are columns 0 and 1.
+            let gains = targets.map(|t| [t.gains[1][0], t.gains[1][1]]);
+            (held, gains, [reference[1][0], reference[1][1]])
+        })
+    };
+    let mut last = read();
+    let held = until(10, || {
+        last = read();
+        last.0
+    });
+    assert!(held, "replica {n}: /afv/ch2/open not {open} within 10 s");
+    let (_, gains, reference) = last;
+    let gains = gains.expect("targets");
+    let scale = if open { 1.0 } else { 10f32.powf(-20.0 / 20.0) };
+    for (leg, (got, of)) in gains.iter().zip(reference).enumerate() {
+        let want = of * scale;
+        assert!(
+            (got - want).abs() <= 1e-6 * want.abs().max(1e-3),
+            "replica {n}, leg {leg}, AFV open {open}: gain {got}, wanted {want}"
+        );
+    }
+    if !open && reference.iter().all(|&g| g > 0.0) {
+        AFV_CLOSED.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -1436,6 +1479,10 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     std::thread::sleep(Duration::from_millis(500));
     agree(&nodes, &outputs, from, 300);
 
+    assert!(
+        AFV_CLOSED.load(Ordering::Relaxed) > 0,
+        "no tally closed ch2's AFV stage while ch2 was on the programme"
+    );
     outputs.stop.store(true, Ordering::Relaxed);
     reader.join().unwrap();
     for node in nodes.into_iter().flatten() {
