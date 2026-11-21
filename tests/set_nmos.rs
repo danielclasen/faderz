@@ -1106,7 +1106,9 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
 
     // The other follower killed, the leader has no quorum: it stops
     // heartbeating, and an activation on it fails and its /active shows
-    // the state's connection again.
+    // the state's connection again. With shared versions a failed apply
+    // shows the replicated connection at once, so the activation may
+    // never be seen there.
     nodes[other].take().unwrap().kill();
     std::thread::sleep(Duration::from_secs(3));
     let quiet = Instant::now();
@@ -1122,11 +1124,6 @@ fn the_set_is_one_node_that_the_leader_registers_and_every_replica_connects() {
         new,
         &ch1,
         json!({ "transport_params": [{ "mxl_flow_id": set.ch1 }] }),
-    );
-    assert_eq!(
-        shows(&nodes, new, &ch1),
-        set.ch1,
-        "/active shows the activation at once"
     );
     let back = until(30, || {
         let a = active(&nodes, new, &ch1);
@@ -1370,6 +1367,241 @@ fn a_replica_down_while_a_channel_is_detached_writes_none_of_it_on_its_return() 
         c.committed > 100,
         "the restarted replica committed little: {c:?}"
     );
+    for node in nodes.into_iter().flatten() {
+        node.kill();
+    }
+}
+
+/// The version of every resource replica `n`'s Node API serves, by id.
+fn versions(nodes: &[Option<Node>], n: usize) -> BTreeMap<String, String> {
+    let mut versions = BTreeMap::new();
+    for kind in [
+        "self",
+        "devices",
+        "sources",
+        "flows",
+        "senders",
+        "receivers",
+    ] {
+        let (_, v) = node(nodes, n).nmos("GET", &format!("/x-nmos/node/v1.3/{kind}/"), None);
+        for r in v.as_array().cloned().unwrap_or_else(|| vec![v.clone()]) {
+            let id = r["id"].as_str().unwrap().to_owned();
+            versions.insert(id, r["version"].as_str().unwrap().to_owned());
+        }
+    }
+    versions
+}
+
+/// Waits until every running replica serves each resource at one
+/// version, and the Node at the one the registry holds for it.
+fn agree(nodes: &[Option<Node>], registry: &Shared, what: &str) {
+    let running: Vec<usize> = (0..REPLICAS).filter(|&n| nodes[n].is_some()).collect();
+    let mut last = Vec::new();
+    let agreed = until(20, || {
+        last = running.iter().map(|&n| versions(nodes, n)).collect();
+        let (_, node_self) = node(nodes, running[0]).nmos("GET", "/x-nmos/node/v1.3/self", None);
+        let id = node_self["id"].as_str().unwrap().to_owned();
+        let held = registry.lock().unwrap().versions.get(&id).cloned();
+        last.iter().all(|v| *v == last[0]) && held.as_ref() == last[0].get(&id)
+    });
+    assert!(
+        agreed,
+        "{what}: the replicas serve {last:#?}, the registry holds {:#?}",
+        registry.lock().unwrap().versions
+    );
+}
+
+/// Every replica serves each resource at the version the registry
+/// holds: a port's version is the time of the replicated change that
+/// last changed it, kept in the state, and the Node's, the Device's and
+/// a sender's Source's and Flow's follow from the ports'. So the
+/// replicas agree with each other and with what the leader registered,
+/// after a leader change, and after a follower rebuilt from a peer's
+/// snapshot, whose versions come with the state.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_serves_the_versions_the_registry_holds() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
+    let (registry, addr) = registry::start();
+    let (set, listeners) = Set::new("versions", addr, None);
+    let mut nodes: Vec<Option<Node>> = listeners
+        .into_iter()
+        .enumerate()
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let ch1 = format!("receivers/{}", id_of(&nodes, 0, "receivers", "Pres 1"));
+    let pgm = format!("senders/{}", id_of(&nodes, 0, "senders", "PGM out"));
+    activate(
+        &nodes,
+        0,
+        &ch1,
+        json!({ "transport_params": [{ "mxl_flow_id": set.other }] }),
+    );
+    activate(&nodes, 1, &pgm, json!({ "master_enable": false }));
+    write(
+        &nodes,
+        2,
+        json!([{ "path": "/channels/ch2/input", "value": "b" }]),
+    );
+    let shown = until(20, || {
+        (0..REPLICAS).all(|n| shows(&nodes, n, &ch1) == set.other)
+    });
+    assert!(shown, "the activation did not reach every replica");
+    agree(&nodes, &registry, "after the changes");
+    activate(&nodes, 2, &pgm, json!({ "master_enable": true }));
+    let enabled = until(20, || {
+        (0..REPLICAS).all(|n| active(&nodes, n, &pgm)["master_enable"] == true)
+    });
+    assert!(enabled, "the sender was not enabled again");
+
+    let leader = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).leads())
+        .expect("a leader");
+    nodes[leader].take().unwrap().stop();
+    let next = until(30, || {
+        (0..REPLICAS).any(|n| nodes[n].as_ref().is_some_and(Node::leads))
+    });
+    assert!(
+        next,
+        "no leader after the leader stopped: {}",
+        states(&nodes)
+    );
+    agree(&nodes, &registry, "after the leader change");
+    let survivor = (0..REPLICAS).find(|&n| nodes[n].is_some()).unwrap();
+    activate(
+        &nodes,
+        survivor,
+        &ch1,
+        json!({ "transport_params": [{ "mxl_flow_id": set.ch1 }] }),
+    );
+    agree(&nodes, &registry, "after a change under the new leader");
+
+    nodes[leader] = Some(set.start(leader, None));
+    steady(&nodes, leader);
+    let leader = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).leads())
+        .expect("a leader");
+    let rebuilt = (0..REPLICAS).find(|&n| n != leader).unwrap();
+    nodes[rebuilt].take().unwrap().kill();
+    // Its volume gone and every peer's log purged up to a snapshot, it
+    // takes the state, the versions with it, from a peer's snapshot.
+    std::fs::remove_dir_all(set.at.0.join(format!("data-{rebuilt}"))).unwrap();
+    for n in (0..REPLICAS).filter(|&n| n != rebuilt) {
+        let node = node(&nodes, n);
+        let raft = node.server.app.replica.raft().clone();
+        let applied = raft.metrics().borrow().last_applied.map(|l| l.index);
+        node.runtime
+            .block_on(raft.trigger().snapshot())
+            .expect("a snapshot triggered");
+        let taken = until(10, || {
+            raft.metrics().borrow().snapshot.map(|l| l.index) >= applied
+        });
+        assert!(taken, "replica {n} took no snapshot");
+        let upto = raft.metrics().borrow().snapshot.unwrap().index;
+        node.runtime
+            .block_on(raft.trigger().purge_log(upto))
+            .expect("a purge triggered");
+        let purged = until(10, || {
+            raft.metrics()
+                .borrow()
+                .purged
+                .is_some_and(|l| l.index >= upto)
+        });
+        assert!(purged, "replica {n} kept its log up to {upto}");
+    }
+    nodes[rebuilt] = Some(set.start(rebuilt, None));
+    steady(&nodes, rebuilt);
+    agree(
+        &nodes,
+        &registry,
+        "after a follower was rebuilt from a snapshot",
+    );
+    for node in nodes.into_iter().flatten() {
+        node.kill();
+    }
+}
+
+/// An activation that fails ends disabled on every replica, as IS-05 has
+/// a failed activation end: samplez-nmos records the failure only, and
+/// the set orders the port disabled once it can. Here the leader has no
+/// quorum when it applies the activation; once a follower is back, every
+/// replica's state and `/active` hold the port disabled, at one version.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_failed_activation_ends_disabled_on_every_replica() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
+    let (registry, addr) = registry::start();
+    let (set, listeners) = Set::new("failed", addr, None);
+    let mut nodes: Vec<Option<Node>> = listeners
+        .into_iter()
+        .enumerate()
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let ch1 = format!("receivers/{}", id_of(&nodes, 0, "receivers", "Pres 1"));
+    let leader = (0..REPLICAS)
+        .find(|&n| node(&nodes, n).leads())
+        .expect("a leader");
+    let followers: Vec<usize> = (0..REPLICAS).filter(|&n| n != leader).collect();
+    for &f in &followers {
+        nodes[f].take().unwrap().kill();
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    activate(
+        &nodes,
+        leader,
+        &ch1,
+        json!({ "transport_params": [{ "mxl_flow_id": set.other }] }),
+    );
+    let failed = until(30, || shows(&nodes, leader, &ch1) == set.ch1);
+    assert!(
+        failed,
+        "the activation did not fail: {}",
+        active(&nodes, leader, &ch1)
+    );
+
+    let back = followers[0];
+    nodes[back] = Some(set.start(back, None));
+    steady(&nodes, back);
+    let disabled = until(30, || {
+        [leader, back]
+            .iter()
+            .all(|&n| active(&nodes, n, &ch1)["master_enable"] == false)
+    });
+    assert!(
+        disabled,
+        "a replica shows the failed activation enabled: {} {}",
+        active(&nodes, leader, &ch1),
+        active(&nodes, back, &ch1)
+    );
+    for n in [leader, back] {
+        let detached = (node(&nodes, n).server.app.replica.store())
+            .with_state(|sm| sm.product.receiver("ch1").and_then(|(c, _)| c.cloned()));
+        assert!(
+            detached.as_ref().is_some_and(|c| !c.master_enable),
+            "replica {n}'s state holds {detached:?}"
+        );
+    }
+    agree(&nodes, &registry, "after the failed activation");
     for node in nodes.into_iter().flatten() {
         node.kill();
     }

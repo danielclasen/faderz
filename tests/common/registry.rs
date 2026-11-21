@@ -30,11 +30,12 @@ pub struct Seen {
 }
 
 /// A Registration API, as far as a node's registration uses it: the
-/// resources it holds by id, each Node's last heartbeat, and every
-/// request it took.
+/// resources it holds by id, with the version each was last POSTed at,
+/// each Node's last heartbeat, and every request it took.
 #[derive(Default)]
 pub struct Registry {
     pub resources: BTreeMap<String, String>,
+    pub versions: BTreeMap<String, String>,
     pub heartbeats: BTreeMap<String, Instant>,
     pub seen: Vec<Seen>,
 }
@@ -51,6 +52,7 @@ impl Registry {
         for id in expired {
             self.heartbeats.remove(&id);
             self.resources.clear();
+            self.versions.clear();
         }
     }
 
@@ -122,6 +124,8 @@ async fn answer(
             let v: Value = serde_json::from_slice(&body).unwrap_or_default();
             let kind = v["type"].as_str().unwrap_or_default().to_owned();
             let id = v["data"]["id"].as_str().unwrap_or_default().to_owned();
+            let version = v["data"]["version"].as_str().unwrap_or_default();
+            r.versions.insert(id.clone(), version.to_owned());
             seen.resource = Some((kind.clone(), id.clone()));
             if kind == "node" {
                 r.heartbeats.insert(id.clone(), Instant::now());
@@ -144,13 +148,17 @@ async fn answer(
         (&Method::DELETE, ["resource", "nodes", id]) => {
             if r.heartbeats.remove(*id).is_some() {
                 r.resources.clear();
+                r.versions.clear();
                 (StatusCode::NO_CONTENT, String::new())
             } else {
                 (StatusCode::NOT_FOUND, String::new())
             }
         }
         (&Method::DELETE, ["resource", _, id]) => match r.resources.remove(*id) {
-            Some(_) => (StatusCode::NO_CONTENT, String::new()),
+            Some(_) => {
+                r.versions.remove(*id);
+                (StatusCode::NO_CONTENT, String::new())
+            }
             None => (StatusCode::NOT_FOUND, String::new()),
         },
         _ => (StatusCode::BAD_REQUEST, String::new()),
