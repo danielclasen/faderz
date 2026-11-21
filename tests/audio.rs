@@ -1244,7 +1244,20 @@ async fn element_and_duck_meters_read_their_signals() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     for step in metered::steps() {
-        patch(&server, &step.changes).await;
+        if !step.changes.is_empty() {
+            patch(&server, &step.changes).await;
+        }
+        if !step.resets.is_empty() {
+            // Every short-term window then holds the signal alone.
+            tokio::time::sleep(Duration::from_millis(3500)).await;
+            let (status, body) = post(
+                server.api,
+                "/loudness/reset",
+                &json!({ "ids": step.resets }),
+            )
+            .await;
+            assert_eq!(status, 204, "{body}");
+        }
         // A momentary loudness takes 400 ms to measure.
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {

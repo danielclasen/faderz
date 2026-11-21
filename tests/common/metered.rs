@@ -41,6 +41,9 @@ pub fn shape() -> Value {
 pub struct Step {
     pub what: &'static str,
     pub changes: Vec<(&'static str, Value)>,
+    /// The elements whose loudness is reset after the changes, once the
+    /// signal has held for a short-term window.
+    pub resets: &'static [&'static str],
     /// Index in the frame's values, value and tolerance, centi-units.
     pub values: Vec<(usize, i16, i16)>,
 }
@@ -76,6 +79,25 @@ pub fn steps() -> Vec<Step> {
             (e + 6, centi(tone + db - 3.0103), 10),
         ]
     };
+    // A constant measured from a reset taken while it held: integrated
+    // and short-term loudness as the momentary, no loudness range, the
+    // maxima as the present values, the integrated loudness valid and
+    // the range not yet stable (that takes 60 s).
+    let settled = |id: &str, db: f32| {
+        let e = at(id);
+        let loudness = centi(tone + db - 3.0103);
+        vec![
+            (e + 7, loudness, 10),
+            (e + 8, loudness, 15),
+            (e + 9, 0, 10),
+            (e + 10, loudness, 10),
+            (e + 11, loudness, 10),
+            (e + 13, 1, 0),
+        ]
+    };
+    let mut measured = settled("pgm", -6.0);
+    measured.extend(settled("mm1", 0.0));
+    measured.extend(settled("aux1", -12.0));
     let mut buses = element("pgm", -6.0);
     buses.extend(element("mm1", 0.0));
     buses.extend(element("aux1", -12.0));
@@ -83,6 +105,7 @@ pub fn steps() -> Vec<Step> {
     vec![
         Step {
             what: "the tone and the constant on the bus, mix-minus and aux",
+            resets: &[],
             changes: vec![
                 ("/channels/tone/fader", json!(0)),
                 ("/channels/tone/pan/lr", json!(-1)),
@@ -102,6 +125,7 @@ pub fn steps() -> Vec<Step> {
         // silent channel: the tone's meters stay as they are.
         Step {
             what: "a key 6 dB under the threshold",
+            resets: &[],
             changes: vec![
                 ("/channels/key/fader", json!(-24)),
                 ("/channels/key/routes/pgm", json!(false)),
@@ -118,13 +142,21 @@ pub fn steps() -> Vec<Step> {
         },
         Step {
             what: "a key over the threshold",
+            resets: &[],
             changes: vec![("/channels/key/fader", json!(0))],
             values: vec![(duck, key(0.0), 5), (duck + 1, 10_000, 0), (duck + 2, 1, 0)],
         },
         Step {
             what: "the key under the threshold again",
+            resets: &[],
             changes: vec![("/channels/key/fader", json!(-24))],
             values: vec![(duck, key(-24.0), 5), (duck + 1, 0, 0), (duck + 2, 0, 0)],
+        },
+        Step {
+            what: "the loudness measured from a reset while the signal held",
+            resets: &["pgm", "mm1", "aux1"],
+            changes: vec![],
+            values: measured,
         },
     ]
 }

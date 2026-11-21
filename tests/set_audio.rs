@@ -46,6 +46,32 @@ fn shape() -> Value {
     })
 }
 
+/// ch2's AFV stage, which the tallies of [`step`] close to -20 dB and
+/// open again.
+fn afv() -> Vec<(&'static str, Value)> {
+    vec![
+        ("/afv/ch2/enabled", json!(true)),
+        ("/afv/ch2/offLevel", json!(-20)),
+        ("/afv/ch2/source", json!("cam1")),
+    ]
+}
+
+/// Command `i` of the session, through the running replica `first`
+/// names: every 13th a tally of cam1, preview and program in turn, which
+/// closes and opens ch2's AFV stage; the others [`command`].
+fn step(nodes: &[Option<Node>], first: usize, i: usize) {
+    if i % 13 == 12 {
+        let state = if (i / 13).is_multiple_of(2) {
+            "preview"
+        } else {
+            "program"
+        };
+        post_tally(nodes, first, "cam1", state);
+    } else {
+        write(nodes, first, &command(i));
+    }
+}
+
 /// The duck group: ch1 keys it after its fader, so the faders of
 /// [`command`] trigger and release it (ch1's sine at -6 dBFS reaches the
 /// threshold with its fader above -14 dB), and it lowers ch2 in the
@@ -1224,8 +1250,9 @@ fn an_input_goes_down_only_once_a_majority_loses_it() {
 /// running the first commits alone and the second stays a learner, and
 /// once the third starts all three are voters and commit. Every replica
 /// of the set then writes the same audio through a session of faders,
-/// trims, mutes, routes and input switches, with a duck group keyed by one
-/// channel's fader lowering the other. A follower killed meanwhile misses
+/// trims, mutes, routes, input switches and tallies closing and opening
+/// an AFV stage, with a duck group keyed by one channel's fader lowering
+/// the other. A follower killed meanwhile misses
 /// commands, input switches among them; started again on its volume it
 /// catches up, commits again and writes what the others write. The leader
 /// killed, the other two elect another and go on writing alike; it comes
@@ -1327,6 +1354,7 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     assert!(nodes_ids.is_superset(&leaders), "{nodes_ids:?} {leaders:?}");
 
     write(&nodes, 0, &ducking());
+    write(&nodes, 0, &afv());
     let from = Outputs::now() + 1;
     // The largest envelope the duck group reached on a replica while in
     // auto, from three commands (120 ms, past the release) after it was
@@ -1339,7 +1367,7 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     };
     let mut keyed = 0.0f32;
     for i in 0..42 {
-        write(&nodes, i, &command(i));
+        step(&nodes, i, i);
         std::thread::sleep(Duration::from_millis(40));
         if (i.saturating_sub(3)..=i).any(latched) {
             continue;
@@ -1369,7 +1397,7 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     let gone = until(10, || !flow.exists());
     assert!(gone, "the killed replica's engine still holds its flow");
     for i in 42..70 {
-        write(&nodes, alive[i % 2], &command(i));
+        step(&nodes, alive[i % 2], i);
         std::thread::sleep(Duration::from_millis(40));
     }
     nodes[killed] = Some(set.start(killed, None));
@@ -1378,7 +1406,7 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     steady(&nodes, killed);
     let from = Outputs::now() + 1;
     for i in 70..98 {
-        write(&nodes, i, &command(i));
+        step(&nodes, i, i);
         std::thread::sleep(Duration::from_millis(40));
     }
     std::thread::sleep(Duration::from_millis(500));
@@ -1392,7 +1420,7 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     nodes[killed].take().unwrap().kill();
     let from = Outputs::now() + 1;
     for i in 98..126 {
-        write(&nodes, i, &command(i));
+        step(&nodes, i, i);
         std::thread::sleep(Duration::from_millis(40));
     }
     std::thread::sleep(Duration::from_millis(500));
@@ -1402,7 +1430,7 @@ fn replicas_write_equal_audio_and_a_restarted_one_catches_up() {
     steady(&nodes, killed);
     let from = Outputs::now() + 1;
     for i in 126..154 {
-        write(&nodes, i, &command(i));
+        step(&nodes, i, i);
         std::thread::sleep(Duration::from_millis(40));
     }
     std::thread::sleep(Duration::from_millis(500));
@@ -3190,7 +3218,14 @@ fn every_replica_meters_its_elements_and_duck_groups() {
     });
     let nodes = run(&set, listeners);
     for (i, step) in metered::steps().iter().enumerate() {
-        write(&nodes, i, &step.changes);
+        if !step.changes.is_empty() {
+            write(&nodes, i, &step.changes);
+        }
+        if !step.resets.is_empty() {
+            // Every short-term window then holds the signal alone.
+            std::thread::sleep(Duration::from_millis(3500));
+            post_any(&nodes, i, "/loudness/reset", &json!({ "ids": step.resets }));
+        }
         for n in 0..REPLICAS {
             let mut wrong = Vec::new();
             // A momentary loudness takes 400 ms to measure.

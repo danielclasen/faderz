@@ -214,6 +214,78 @@ async fn a_write_to_one_replica_reaches_the_clients_of_another() {
     }
 }
 
+/// Waits for `ws`'s replica to list its own session `own` in presence,
+/// and asserts it lists that one alone and never `other`.
+async fn alone(ws: &mut Ws, own: String, other: String) {
+    loop {
+        let m = next_of(ws, "presence").await;
+        let handles: Vec<String> = (m["sessions"].as_array().into_iter().flatten())
+            .map(|s| s["handle"].as_str().unwrap_or("").to_owned())
+            .collect();
+        assert!(!handles.contains(&other), "{m}");
+        if handles.contains(&own) {
+            assert_eq!(handles, [own], "{m}");
+            return;
+        }
+    }
+}
+
+/// Presence and selections are not replicated: each replica lists the
+/// sessions connected to it alone, and a selection made on one reaches
+/// that replica's connections and no other replica's. A client takes
+/// both from its primary connection (server-message.schema.json).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn presence_and_selections_stay_on_their_replica() {
+    let at = scratch("presence");
+    let servers = start_set(&at.0, Arc::default()).await;
+    formed(&servers).await;
+    let handle = |s: &str| samplez_service::OwnerHandle::of(s).as_str().to_owned();
+    let (sa, sb) = ("session-a-0123456789abcdef", "session-b-0123456789abcdef");
+    let mut a = client(&servers[0], sa).await;
+    let mut b = client(&servers[1], sb).await;
+    let wait = Duration::from_secs(10);
+    tokio::time::timeout(wait, alone(&mut a, handle(sa), handle(sb)))
+        .await
+        .expect("replica 0's presence within 10 s");
+    tokio::time::timeout(wait, alone(&mut b, handle(sb), handle(sa)))
+        .await
+        .expect("replica 1's presence within 10 s");
+    // A second client of replica 0 sees a's selection; b, on replica 1,
+    // never does.
+    let mut a2 = client(&servers[0], "session-c-0123456789abcdef").await;
+    let select = json!({ "type": "select", "element": "ch1" });
+    a.send(Message::text(select.to_string())).await.unwrap();
+    let seen = tokio::time::timeout(wait, async {
+        loop {
+            let m = next_of(&mut a2, "selections").await;
+            if m["selections"].as_array().is_some_and(|l| !l.is_empty()) {
+                return m;
+            }
+        }
+    })
+    .await
+    .expect("a's selection on replica 0 within 10 s");
+    assert_eq!(seen["selections"][0]["element"], "ch1", "{seen}");
+    assert_eq!(
+        seen["selections"][0]["session"]["handle"],
+        handle(sa),
+        "{seen}"
+    );
+    let mut on_b = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            on_b.push(next_of(&mut b, "selections").await);
+        }
+    })
+    .await;
+    for m in &on_b {
+        assert_eq!(m["selections"], json!([]), "replica 1 sent {m}");
+    }
+    for server in servers {
+        server.stop().await;
+    }
+}
+
 /// A control request reaches the holder's connection on another replica:
 /// the holder touches a control on replica 2, a client of replica 0 asks
 /// for it, and the holder's connection on replica 2 gets the request.
