@@ -104,12 +104,11 @@ pause into the derived targets, which would raise the derivation
 version; it stays at 4 there only because that release is the first
 under explicit versions, whose roll is a hand-over anyway.
 
-The release that takes samplez 0.20.0 raises samplez's compute version
-(`samplez::COMPUTE_VERSION`) from 1 to 2 and its protocol
-(`samplez_replica::PROTOCOL`) from 3 to 4, which makes its roll a
-hand-over whatever the derivation version does. It also raises the
-derivation version to 10, as the state records each IS-05 port's
-version for the shared NMOS versions.
+The release that takes samplez v0.20.0 runs at
+`samplez::COMPUTE_VERSION` 2 (from 1), `samplez_replica::PROTOCOL` 4
+(from 3) and `DERIVATION_VERSION` 10 (from 9), the state recording each
+IS-05 port's version for the shared NMOS versions. Its roll is a
+hand-over.
 
 ## Build and test
 
