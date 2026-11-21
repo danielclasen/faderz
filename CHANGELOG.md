@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.10](https://github.com/danielclasen/faderz/compare/v0.4.9...v0.4.10) (2026-11-21)
+
+
+### Features
+
+* **audio:** apply the channel delay for lip sync ([#146](https://github.com/danielclasen/faderz/issues/146)) ([c842d8c](https://github.com/danielclasen/faderz/commit/c842d8c814a6d5ce528e56438fda1bbe45bc9147))
+* **audio:** decide input liveness by a majority of the set ([04a760e](https://github.com/danielclasen/faderz/commit/04a760e793cb8eaacc272bf411ebba9cb145d160))
+* **audio:** play a line-up tone generator as a channel's input ([04a760e](https://github.com/danielclasen/faderz/commit/04a760e793cb8eaacc272bf411ebba9cb145d160))
+* **audio:** play the line-up tone on its target outputs ([04a760e](https://github.com/danielclasen/faderz/commit/04a760e793cb8eaacc272bf411ebba9cb145d160))
+* **scenes:** crossfade a scene recall over its crossfade time ([#149](https://github.com/danielclasen/faderz/issues/149)) ([64bcc84](https://github.com/danielclasen/faderz/commit/64bcc84568741d249e1309f83dcebaecdfcaf496))
+
+
+### Bug Fixes
+
+* **deps:** take samplez 0.19.0 for the keyless hand-over and readiness ([04a760e](https://github.com/danielclasen/faderz/commit/04a760e793cb8eaacc272bf411ebba9cb145d160))
+
 ## [0.4.9](https://github.com/danielclasen/faderz/compare/v0.4.8...v0.4.9) (2026-11-20)
 
 
