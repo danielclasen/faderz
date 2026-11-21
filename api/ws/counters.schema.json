@@ -65,6 +65,11 @@
       "description": "Input re-routes that took effect before the new source was ready, so the channel was silent until it was. 0 is normal; a rise is a short gap at a source switch.",
       "$ref": "#/$defs/Count"
     },
+    "generation_past_margin_total": {
+      "title": "Tight input switches",
+      "description": "Input re-routes whose new source was handed to the engine less than 2 ms before they took effect, whether or not it was ready in time. 0 is normal; a rise means a source switch came close to a gap.",
+      "$ref": "#/$defs/Count"
+    },
     "afv_late_total": {
       "title": "Late tallies",
       "description": "Tallies that named a moment before this replica received them.",

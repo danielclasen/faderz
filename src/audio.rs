@@ -953,7 +953,7 @@ fn utc_of(index: u64, now: u64) -> String {
 }
 
 /// The engine counters [`Audio::counters`] carries, by field name.
-fn engine_counters(c: &Counters) -> [(&'static str, &AtomicU64); 19] {
+fn engine_counters(c: &Counters) -> [(&'static str, &AtomicU64); 20] {
     [
         ("deadline_miss", &c.deadline_miss),
         ("overrun_skipped_samples", &c.overrun_skipped_samples),
@@ -966,6 +966,7 @@ fn engine_counters(c: &Counters) -> [(&'static str, &AtomicU64); 19] {
         ("output_failed_writes", &c.output_failed_writes),
         ("command_late", &c.command_late),
         ("generation_late", &c.generation_late),
+        ("generation_past_margin", &c.generation_past_margin),
         ("strip_refused", &c.strip_refused),
         ("late_routes_lost", &c.late_routes_lost),
         ("blocks_withheld", &c.blocks_withheld),

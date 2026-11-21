@@ -30,6 +30,7 @@ export const FAULTS: ReadonlySet<string> = new Set([
   'output_failed_writes_total',
   'command_late_total',
   'generation_late_total',
+  'generation_past_margin_total',
   'strip_refused_total',
 ]);
 
