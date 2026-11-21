@@ -67,7 +67,7 @@
     },
     "afv_late_total": {
       "title": "Late tallies",
-      "description": "Tallies that reached this replica after the moment they name, so their AFV transition was heard from where it had got to. 0 is normal; a rise means the switcher sent a tally too late, a steady climb that it always does. A fault of the switcher, not of this replica, so it does not light WARN.",
+      "description": "Tallies that named a moment before this replica received them.",
       "$ref": "#/$defs/Count"
     },
     "strip_refused_total": {

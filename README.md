@@ -216,8 +216,9 @@ past at its receipt counts in `afv_late_total` and does not play the
 part of its transition already past: each gain steps to where its fade
 has got to, as a late recall does. A fader move during the transition
 ends the fade of the gains it moves, and a recall fades from where the
-transition has got to, as during a crossfade. A tally more than 60 s
-ahead is refused.
+transition has got to, as during a crossfade. A recall during a stage's
+hold drops the rest of the hold. A tally more than 60 s ahead is
+refused.
 
 ![The AFV view with CAM1 on programme and CAM2 on preview, and the channels following them](docs/screenshots/afv-tally.png)
 
@@ -287,10 +288,10 @@ of the replica serving the screen, each under a name for people with an
 (i) that explains it, and shows WARN while a counter whose rise is a
 fault (a late output block, a lost input block, a late change) rose in
 the last 10 s. A late tally (`afv_late_total`) is the switcher's fault,
-not the replica's, and lights no lamp. An input that delivers nothing usable is named on the
-lamp and in the counters with the reason: its flow stopped, the set
-took it down, or its blocks came late. The names and explanations are
-those of `api/ws/counters.schema.json`.
+not the replica's, and lights no lamp. An input that delivers nothing
+usable is named on the lamp and in the counters with the reason: its
+flow stopped, the set took it down, or its blocks came late. The names
+and explanations are those of `api/ws/counters.schema.json`.
 
 ![The USERS panel listing three operators, one holding the Guest 2 fader and one with Lead Vox selected, and two connected control surfaces](docs/screenshots/users.png)
 
