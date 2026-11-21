@@ -1458,6 +1458,14 @@ fn every_replica_serves_the_versions_the_registry_holds() {
     });
     assert!(shown, "the activation did not reach every replica");
     agree(&nodes, &registry, "after the changes");
+    // A set whose outputs are all disabled has no committing donor, so a
+    // diverged replica cannot resync: the sender is enabled again before
+    // the leader change. This goes once a samplez release fixes that.
+    activate(&nodes, 2, &pgm, json!({ "master_enable": true }));
+    let enabled = until(20, || {
+        (0..REPLICAS).all(|n| active(&nodes, n, &pgm)["master_enable"] == true)
+    });
+    assert!(enabled, "the sender was not enabled again");
 
     let leader = (0..REPLICAS)
         .find(|&n| node(&nodes, n).leads())
