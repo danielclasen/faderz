@@ -5654,6 +5654,23 @@ mod tests {
         assert_eq!(back.targets(), wired().targets());
     }
 
+    /// A scheduled activation is shown as fired only when Mixer::fire
+    /// would activate it.
+    #[test]
+    fn a_schedule_fires_only_when_its_connection_checks_out() {
+        let m = wired();
+        let s = |port: PortRef| Scheduled {
+            id: "s".into(),
+            port,
+            active: conn(true, Some(F1)),
+            at: 5,
+        };
+        assert!(m.fires(&s(receiver("ch1"))));
+        // One Mixer::fire drops, here a receiver the shape lacks, is not
+        // shown as fired on /active.
+        assert!(!m.fires(&s(receiver("nope"))));
+    }
+
     /// A change of a port's `/active` records its version, the TAI time
     /// of the index its entry takes effect at, so every replica gives
     /// the port the same one; a second change at that time takes the

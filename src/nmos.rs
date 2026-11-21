@@ -495,7 +495,7 @@ impl Node {
         // One whose time has come counts as done, as `/active` shows it
         // fired: a cancel then has nothing pending to cancel.
         let due = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
-        if self.scheduled(index).is_none_or(|s| s.at <= due) {
+        if !pending(self.scheduled(index).as_ref(), due) {
             return Ok(());
         }
         self.conns.unschedule(index).await.map_err(|Fail(e)| {
@@ -858,6 +858,12 @@ fn active(c: &Connection) -> Active {
         domain: id(&c.domain),
         flow: id(&c.flow),
     }
+}
+
+/// Whether a cancel at `now` finds scheduled activation `s` pending: one
+/// whose time has come counts as done, as `/active` shows it fired.
+fn pending(s: Option<&Scheduled>, now: u64) -> bool {
+    s.is_some_and(|s| s.at > now)
 }
 
 /// `v`, a port's `/active`, as scheduled activation `s` makes it when it
@@ -2024,6 +2030,16 @@ mod tests {
             Scheduling::Take
         );
         assert_eq!(scheduling(&on(2), &on(1), None, 5, false), Scheduling::Take);
+        // A cancel finds a schedule pending only before its time.
+        let s = |at| Scheduled {
+            id: "s".into(),
+            port: PortRef::Sender("out-pgm".into()),
+            active: connection(&on(1), None),
+            at,
+        };
+        assert!(pending(Some(&s(5)), 4));
+        assert!(!pending(Some(&s(5)), 5), "due: counts as done");
+        assert!(!pending(None, 4));
         // A scheduled request staged here for the connection as it is, a
         // controller moving the port's activation alone, is taken.
         assert_eq!(scheduling(&on(1), &on(1), None, 5, true), Scheduling::Take);
