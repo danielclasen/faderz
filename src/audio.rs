@@ -985,6 +985,12 @@ struct InputHealth {
     blocks: Vec<[(Counter, u64); 3]>,
 }
 
+/// Whether a channel's input is live: an attached flow, or a tone
+/// generator, which reads no flow and is never pruned.
+fn attached(state: InputState) -> bool {
+    matches!(state, InputState::Attached | InputState::Tone)
+}
+
 impl InputHealth {
     fn new(metrics: &Metrics, shape: &Shape) -> InputHealth {
         let mut h = InputHealth {
@@ -996,8 +1002,9 @@ impl InputHealth {
             let l = [("channel", c.id.as_str())];
             h.attached.push(metrics.gauge(
                 "faderz_input_attached",
-                "1 while the engine reads the channel's input flow, 0 while it is \
-                 pruned and polled until it is readable again.",
+                "1 while the engine reads the channel's input flow, or plays its \
+                 line-up tone for a tone channel; 0 while it is pruned and polled \
+                 until it is readable again, or detached.",
                 &l,
             ));
             h.margin.push(metrics.gauge(
@@ -1032,7 +1039,7 @@ impl InputHealth {
     /// order.
     fn update(&mut self, inputs: &[InputStatus]) {
         for (i, input) in inputs.iter().enumerate().take(self.attached.len()) {
-            self.attached[i].set(f64::from(u8::from(input.state == InputState::Attached)));
+            self.attached[i].set(f64::from(u8::from(attached(input.state))));
             self.margin[i].set(margin_needed(input) as f64);
             let c = &input.counters;
             for ((counter, last), now) in self.blocks[i]
@@ -1252,6 +1259,16 @@ mod tests {
             resets_of(&state),
             BTreeMap::from([("a".to_owned(), 0), ("b".to_owned(), 3)])
         );
+    }
+
+    /// A tone channel's input is live for good, as an attached flow is;
+    /// a pruned or detached one is not.
+    #[test]
+    fn a_tone_input_counts_as_attached() {
+        assert!(attached(InputState::Attached));
+        assert!(attached(InputState::Tone));
+        assert!(!attached(InputState::Pruned));
+        assert!(!attached(InputState::Detached));
     }
 
     /// The margin an input needs is the larger of the two the engine
