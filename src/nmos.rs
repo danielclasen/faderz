@@ -1138,9 +1138,11 @@ impl Conns {
 
     /// Takes a scheduled activation for `at` into the state. samplez-nmos
     /// cancels one it applied by handing over, for the same `at`, the
-    /// connection the port shows: one that is the state's connection is
-    /// a cancel, of the port's scheduled activation when there is one
-    /// and of nothing otherwise, and never a schedule of its own.
+    /// connection the port shows: one that is the state's connection, with
+    /// no scheduled request staged here for the port, is a cancel of the
+    /// port's scheduled activation when there is one and of nothing
+    /// otherwise; any other, the state's connection with a new activation
+    /// among them, is a schedule to take ([`scheduling`]).
     async fn schedule(
         &self,
         index: usize,
