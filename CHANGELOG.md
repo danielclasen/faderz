@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.11](https://github.com/danielclasen/faderz/compare/v0.4.10...v0.4.11) (2026-11-21)
+
+
+### Features
+
+* **afv:** fade the AFV stage over its rise, hold and fall ([#155](https://github.com/danielclasen/faderz/issues/155)) ([65ed78a](https://github.com/danielclasen/faderz/commit/65ed78ada3b49271bf058ae311adf8f8286ffbc6))
+
+
+### Bug Fixes
+
+* **nmos:** show the replicated activation on every replica's /active ([#153](https://github.com/danielclasen/faderz/issues/153)) ([1796e53](https://github.com/danielclasen/faderz/commit/1796e537c4e0e661143f8601e41f7b1074eddce8))
+
 ## [0.4.10](https://github.com/danielclasen/faderz/compare/v0.4.9...v0.4.10) (2026-11-21)
 
 
