@@ -143,6 +143,7 @@ export class MockServer {
       const r = this.cluster.replica(one[1]!);
       if (!r || !r.healthy || r.frozen !== 'none') {
         res.statusCode = 503;
+        noKeepAlive(res);
         res.end();
         return;
       }
@@ -224,6 +225,7 @@ export class MockServer {
     } catch (e) {
       console.error('[faderz mock]', e);
       res.statusCode = 500;
+      noKeepAlive(res);
       res.end(String(e));
     }
   }
