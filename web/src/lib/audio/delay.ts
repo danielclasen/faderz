@@ -1,21 +1,18 @@
 // Delay entry and display in milliseconds, video frames or samples. The
 // contract stores integer samples at the shape sample rate (DelaySamples).
 
-import type { ChannelShape, FrameRate } from '../contract/types';
+import type { FrameRate } from '../contract/types';
 
 export type DelayUnit = 'ms' | 'frames' | 'samples';
-
-export const MAX_DELAY_SAMPLES = 240000;
 
 const UNIT_SUFFIX: Record<DelayUnit, string> = { ms: 'ms', frames: 'fr', samples: 'smp' };
 
 /**
- * The longest delay an element takes, in samples: a channel's delay line,
- * or null when it has none and takes no delay but 0; a bus or aux (no
- * channel) takes any.
+ * The longest delay an element takes, in samples: a channel's, bus's or
+ * aux's delay line, or null when it has none and takes no delay but 0.
  */
-export function delayMax(channel: ChannelShape | undefined): number | null {
-  return channel ? (channel.maxDelay ?? null) : MAX_DELAY_SAMPLES;
+export function delayMax(element: { maxDelay?: number }): number | null {
+  return element.maxDelay ?? null;
 }
 
 /** The range a delay entry takes, e.g. "0 to 100.0 ms". */

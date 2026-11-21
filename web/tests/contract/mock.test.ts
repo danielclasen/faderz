@@ -1480,6 +1480,13 @@ describe('REST', () => {
     expect(cluster.state.channels['st1']!.delay).toBe(4800);
     expect(await write('/channels/st1/delay', 4801)).toMatchObject({ status: 400, body: { message: 'channel st1 delays at most 4800 samples, its delay line' } });
     expect(await write('/channels/st4/delay', 1)).toMatchObject({ status: 400, body: { message: 'channel st4 has no delay line' } });
+    // A bus's or aux's line is that of the outputs carrying it.
+    expect(cluster.shape.buses.find((b) => b.id === 'pgm20')!.maxDelay).toBe(4800);
+    expect((await write('/buses/pgm20/delay', 4800)).status).toBe(200);
+    expect(await write('/buses/pgm20/delay', 4801)).toMatchObject({ status: 400, body: { message: 'bus pgm20 delays at most 4800 samples, its delay line' } });
+    expect(await write('/buses/me/delay', 1)).toMatchObject({ status: 400, body: { message: 'bus me has no delay line' } });
+    expect(await write('/auxes/aux1/delay', 1)).toMatchObject({ status: 400, body: { message: 'aux aux1 has no delay line' } });
+    await write('/buses/pgm20/delay', 0);
     expect((await write('/channels/st4/delay', 0)).status).toBe(200);
     const c = await new Client().open();
     await c.hello();

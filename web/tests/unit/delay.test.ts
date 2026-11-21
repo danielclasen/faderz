@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { delayMax, delayRange, formatDelay, MAX_DELAY_SAMPLES, parseDelay } from '../../src/lib/audio/delay';
-import type { ChannelShape } from '../../src/lib/contract/types';
+import { delayMax, delayRange, formatDelay, parseDelay } from '../../src/lib/audio/delay';
+import type { BusShape, ChannelShape, ElementShape } from '../../src/lib/contract/types';
 
 const SR = 48000;
 const PAL = { numerator: 25, denominator: 1 };
 const NTSC = { numerator: 30000, denominator: 1001 };
+// The longest line the engine allocates, 5 s at 48 kHz.
+const MAX_DELAY_SAMPLES = 240000;
 
 describe('delay entry', () => {
   it('reads a bare number in the selected unit', () => {
@@ -27,7 +29,6 @@ describe('delay entry', () => {
     expect(parseDelay('3 parsecs', 'ms', SR, PAL)).toBeNull();
     expect(parseDelay('-5', 'ms', SR, PAL)).toBe(-240);
     expect(parseDelay('9 s', 'ms', SR, PAL)).toBe(432000);
-    expect(MAX_DELAY_SAMPLES / SR).toBe(5);
   });
 
   it('shows ms to 0.1, frames to 0.01 and whole samples', () => {
@@ -37,13 +38,17 @@ describe('delay entry', () => {
     expect(formatDelay(1920, 'samples', SR, PAL)).toBe('1920');
   });
 
-  // The server refuses a channel delay past the channel's delay line, and any
-  // but 0 on a channel without one; buses and auxes take any DelaySamples.
-  it('takes a channel up to its delay line, none without one, and a bus or aux up to 5 s', () => {
+  // The server refuses a delay past the delay line of a channel, bus or
+  // aux, and any but 0 on one without a line.
+  it('takes a channel, bus or aux up to its delay line, and none without one', () => {
     const channel = (maxDelay?: number): ChannelShape => ({ id: 'ch1', name: 'Pres 1', width: 1, layout: 'mono', altInput: false, ...(maxDelay === undefined ? {} : { maxDelay }) });
+    const bus = (maxDelay?: number): BusShape => ({ id: 'pgm', name: 'PGM', kind: 'program', width: 2, layout: 'stereo', ...(maxDelay === undefined ? {} : { maxDelay }) });
     expect(delayMax(channel(4800))).toBe(4800);
     expect(delayMax(channel())).toBeNull();
-    expect(delayMax(undefined)).toBe(MAX_DELAY_SAMPLES);
+    expect(delayMax(bus(MAX_DELAY_SAMPLES))).toBe(MAX_DELAY_SAMPLES);
+    expect(delayMax(bus())).toBeNull();
+    const aux: ElementShape = { id: 'aux1', name: 'IFB 1', width: 1, layout: 'mono', maxDelay: 480 };
+    expect(delayMax(aux)).toBe(480);
   });
 
   it('shows the range in the selected unit', () => {

@@ -453,8 +453,8 @@ pub enum Answer {
     Refused { message: String },
     /// The console a `PutConsole` created.
     Created,
-    /// The channels a `Recall` set to a delay of 0: their stored delay is
-    /// past their delay line.
+    /// The channels, buses and auxes a `Recall` set to a delay of 0:
+    /// their stored delay is past their delay line.
     Recalled { delays: Vec<String> },
 }
 
@@ -1220,21 +1220,23 @@ impl Mixer {
                 .any(|c| &c.id == channel && c.alt_input)
         {
             return Err(format!("channel {channel} has no B input"));
-        } else if let [group, channel, leaf] = tokens(path).as_slice()
-            && (group.as_str(), leaf.as_str()) == ("channels", "delay")
-        {
-            // The engine refuses a delay past the input's line.
-            let line = (shape.channels.iter())
-                .find(|c| &c.id == channel)
-                .and_then(|c| c.max_delay);
+        } else if let Some(element) = delayed_element(path) {
+            // The engine refuses a delay past the line of the channel's
+            // input or of the bus's or aux's outputs.
+            let line = shape.delay_line(&element);
             let samples = value.as_u64().unwrap_or(0);
+            let kind = match tokens(path)[0].as_str() {
+                "channels" => "channel",
+                "buses" => "bus",
+                _ => "aux",
+            };
             match line {
                 None if samples > 0 => {
-                    return Err(format!("channel {channel} has no delay line"));
+                    return Err(format!("{kind} {element} has no delay line"));
                 }
                 Some(max) if samples > u64::from(max) => {
                     return Err(format!(
-                        "channel {channel} delays at most {max} samples, its delay line"
+                        "{kind} {element} delays at most {max} samples, its delay line"
                     ));
                 }
                 _ => {}
@@ -1763,11 +1765,11 @@ impl Mixer {
             // A scene keeps the ids and delays of the shape it was stored
             // in.
             if let Err(e) = self.check_references(&path, &v) {
-                let Some(channel) = delayed_channel(&path) else {
+                let Some(element) = delayed_element(&path) else {
                     continue;
                 };
-                tracing::warn!(scene, channel, "recall sets the delay to 0: {e}");
-                short.push(channel);
+                tracing::warn!(scene, element, "recall sets the delay to 0: {e}");
+                short.push(element);
                 v = json!(0);
             }
             if *current != v {
@@ -2089,8 +2091,8 @@ impl Mixer {
             if fits {
                 set_at(&mut state, &path, value);
             } else {
-                if let Some(channel) = delayed_channel(&path) {
-                    tracing::warn!(channel, %value, "the delay line no longer takes the saved delay: 0");
+                if let Some(element) = delayed_element(&path) {
+                    tracing::warn!(element, %value, "the delay line no longer takes the saved delay: 0");
                 }
                 dropped.push(path);
             }
@@ -2517,10 +2519,14 @@ fn changed(values: Vec<(String, Value)>) -> Effect<Edits> {
 /// Leaves to write, as paths and values.
 type Leaves = Vec<(String, Value)>;
 
-/// The channel whose delay `path` is.
-fn delayed_channel(path: &str) -> Option<String> {
+/// The channel, bus or aux whose delay `path` is.
+fn delayed_element(path: &str) -> Option<String> {
     match tokens(path).as_slice() {
-        [group, channel, leaf] if group == "channels" && leaf == "delay" => Some(channel.clone()),
+        [group, element, leaf]
+            if matches!(group.as_str(), "channels" | "buses" | "auxes") && leaf == "delay" =>
+        {
+            Some(element.clone())
+        }
         _ => None,
     }
 }
@@ -4430,7 +4436,8 @@ mod tests {
 
     /// [`wide_with`] with ch4 a tone channel at 440 Hz, -20 dBFS, wired
     /// to no flow, and an output carrying each aux, the mix-minus output
-    /// where there is one, and the clean feed folded to mono.
+    /// where there is one, and the clean feed folded to mono; the
+    /// programme bus has a delay line of 960 samples, aux2 one of 480.
     fn wide_toned(fold: bool) -> Mixer {
         let m = wide_with(fold);
         let mut shape = m.shape().clone();
@@ -4449,6 +4456,9 @@ mod tests {
         if !fold {
             shape.outputs.push(output("mm1", 2, "stereo"));
         }
+        shape.buses[0].max_delay = Some(960);
+        let aux2 = shape.auxes.iter().position(|a| a.id == "aux2").unwrap();
+        shape.auxes[aux2].max_delay = Some(480);
         let slot = (shape.channels.iter().position(|c| c.id == "ch4")).unwrap();
         shape.channels[slot].alt_input = false;
         shape.channels[slot].tone = Some(crate::shape::ChannelTone {
@@ -4543,7 +4553,7 @@ mod tests {
             let some = |next: &mut dyn FnMut(u64) -> u64| -> Value {
                 json!(channels.iter().filter(|_| next(3) == 0).collect::<Vec<_>>())
             };
-            match next(44) {
+            match next(45) {
                 0 => (format!("/channels/{ch}/fader"), db),
                 1 => (format!("/channels/{ch}/mute"), flag),
                 2 => (
@@ -4724,6 +4734,12 @@ mod tests {
                         _ => (format!("/{e}/limiter/ceiling"), json!(-(next(11) as f64))),
                     }
                 }
+                // Within pgm's and aux2's lines; any but 0 is refused on
+                // the others.
+                43 => (
+                    format!("/{}/delay", elements[next(4) as usize]),
+                    json!(next(3) * 480),
+                ),
                 _ => ("/metering/loudness/preset".into(), json!("atsc")),
             }
         };
@@ -4831,6 +4847,7 @@ mod tests {
                     format!("{:?}", whole.output_strips),
                     "{at}"
                 );
+                assert_eq!(kept.output_delays, whole.output_delays, "{at}");
                 assert_eq!(
                     format!("{:?}", kept.limiters),
                     format!("{:?}", whole.limiters),
@@ -5370,6 +5387,92 @@ mod tests {
         let mut same = delayed(960);
         same.load(&m.save()).unwrap();
         assert_eq!(same.targets().unwrap().delays, [960, 0, 0]);
+    }
+
+    /// `wired` with a stereo and a mono output of the programme bus, its
+    /// delay line `line` samples, and an output of aux1, which has none.
+    fn bus_delayed(line: u32) -> Mixer {
+        let m = wired();
+        let mut shape = m.shape().clone();
+        let output =
+            |id: &str, source: &str, width: usize, layout: &str| crate::shape::OutputShape {
+                id: id.into(),
+                name: id.into(),
+                source: source.into(),
+                width,
+                layout: layout.into(),
+            };
+        shape.outputs.extend([
+            output("out-pgm-m", "pgm", 1, "mono"),
+            output("out-aux", "aux1", 1, "mono"),
+        ]);
+        shape.buses[0].max_delay = Some(line);
+        Mixer::configured(shape, Vec::new(), m.wiring.clone())
+    }
+
+    /// A bus's delay is the delay target of every output carrying it, 0
+    /// by default, and reaches the engine as one `OutputDelay` entry per
+    /// such output. A write is refused past the bus's line and, on an aux
+    /// without one, for anything but 0. A loaded state whose bus delay
+    /// the configured line no longer takes drops it to 0, and a recall
+    /// sets it to 0 and names the bus in its answer.
+    #[test]
+    fn a_bus_delay_is_its_outputs_delay_within_its_line() {
+        let mut m = bus_delayed(960);
+        let before = m.targets().unwrap();
+        assert_eq!(before.output_delays, [0, 0, 0]);
+        patch(&mut m, "p1", &[("/buses/pgm/delay", json!(960))]);
+        let after = m.targets().unwrap();
+        assert_eq!(after.output_delays, [960, 960, 0]);
+        let entries: Vec<String> = (before.diff(&after).iter())
+            .filter(|e| matches!(e, samplez::engine::Entry::OutputDelay { .. }))
+            .map(|e| format!("{e:?}"))
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                "OutputDelay { output: 0, samples: 960 }",
+                "OutputDelay { output: 1, samples: 960 }"
+            ]
+        );
+        let refused = |m: &Mixer, path: &str, value: Value| match m.check_write(path, &value) {
+            Err(Answer::Invalid { message }) => message,
+            other => panic!("{path} {value}: {other:?}"),
+        };
+        let e = refused(&m, "/buses/pgm/delay", json!(961));
+        assert!(e.contains("bus pgm delays at most 960 samples"), "{e}");
+        let e = refused(&m, "/auxes/aux1/delay", json!(1));
+        assert!(e.contains("aux aux1 has no delay line"), "{e}");
+        let e = refused(&m, "/buses/cf/delay", json!(1));
+        assert!(e.contains("bus cf has no delay line"), "{e}");
+        m.check_write("/auxes/aux1/delay", &json!(0)).unwrap();
+
+        let scene = store(&mut m, "s1", None, "Lip sync");
+        let mut shorter = bus_delayed(480);
+        shorter.load(&m.save()).unwrap();
+        assert_eq!(shorter.state()["buses"]["pgm"]["delay"], 0);
+        assert_eq!(shorter.dropped, ["/buses/pgm/delay"]);
+        assert_eq!(shorter.targets().unwrap().output_delays, [0, 0, 0]);
+        patch(&mut shorter, "p2", &[("/buses/pgm/delay", json!(240))]);
+        rest(
+            &mut shorter,
+            Command::Recall {
+                id: "r1".into(),
+                scene,
+                at: "2026-11-21T12:01:00.000Z".into(),
+                fade: None,
+            },
+        );
+        assert_eq!(shorter.state()["buses"]["pgm"]["delay"], 0);
+        assert_eq!(
+            shorter.answer(&rest_key(), "r1"),
+            Some(&Answer::Recalled {
+                delays: vec!["pgm".into()]
+            })
+        );
+        let mut same = bus_delayed(960);
+        same.load(&m.save()).unwrap();
+        assert_eq!(same.targets().unwrap().output_delays, [960, 960, 0]);
     }
 
     /// `wired` with st1 a tone channel starting at 440 Hz, -20 dBFS, as

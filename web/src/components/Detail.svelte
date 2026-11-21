@@ -176,7 +176,7 @@
       {#if ch}
         <Param path={p('hpf', 'freq')} label="HPF" min={20} max={500} step={1} log format={(v) => `${formatFreq(v)} Hz`} />
       {/if}
-      <DelayEntry path={p('delay')} label="Delay" {channel} />
+      <DelayEntry path={p('delay')} label="Delay" {element} />
       {#if ch}
         {#each [['meterTap', 'Meter'], ['directOut', 'Direct']] as const as [key, caption] (key)}
           {@const path = key === 'meterTap' ? p('meterTap') : p('directOut', 'tap')}

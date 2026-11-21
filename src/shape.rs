@@ -72,6 +72,11 @@ pub struct BusShape {
     pub kind: String,
     pub width: usize,
     pub layout: String,
+    /// The longest delay the element's output delay line takes, in
+    /// samples, from `mxl.outputs.<id>.maxDelayMs` of the outputs
+    /// carrying it; none without a line.
+    #[serde(default, rename = "maxDelay", skip_serializing_if = "Option::is_none")]
+    pub max_delay: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,6 +86,11 @@ pub struct ElementShape {
     pub name: String,
     pub width: usize,
     pub layout: String,
+    /// The longest delay an aux's output delay line takes, in
+    /// samples, from `mxl.outputs.<id>.maxDelayMs` of the outputs
+    /// carrying it; none without a line.
+    #[serde(default, rename = "maxDelay", skip_serializing_if = "Option::is_none")]
+    pub max_delay: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -289,6 +299,19 @@ impl Shape {
     /// limiter: an output carrying one has the engine's limiter.
     pub fn has_limiter(&self, id: &str) -> bool {
         self.buses.iter().any(|e| e.id == id) || self.auxes.iter().any(|e| e.id == id)
+    }
+
+    /// The delay line of channel, bus or aux `id`, in samples: none for
+    /// one without a line or any other element.
+    pub fn delay_line(&self, id: &str) -> Option<u32> {
+        let channel = self
+            .channels
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.max_delay);
+        let bus = self.buses.iter().find(|e| e.id == id).map(|e| e.max_delay);
+        let aux = self.auxes.iter().find(|e| e.id == id).map(|e| e.max_delay);
+        channel.or(bus).or(aux).flatten()
     }
 
     /// Whether `id` names a bus, an aux or a mix-minus output, the

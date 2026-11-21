@@ -292,6 +292,14 @@ pub struct Output {
     /// enabled.
     #[serde(default)]
     pub merged_flow: Option<String>,
+    /// The output's delay line, for the delay of the bus or aux it
+    /// carries: the longest delay it takes, in ms at the shape's sample
+    /// rate, at most 5 s at 48 kHz, the same on every output carrying
+    /// that element. Absent or 0, the output has none and the element
+    /// takes no delay but 0. Allocated at start, it counts against
+    /// `engine.delayBudgetSamples` once per leg of the output.
+    #[serde(default)]
+    pub max_delay_ms: Option<f64>,
 }
 
 /// `readerMarginSamples` when the configuration sets none: 32 ms. An
@@ -1050,10 +1058,13 @@ impl Config {
     }
 
     /// Sets each channel's `maxDelay` in `shape` from
-    /// `mxl.inputs.<id>.maxDelayMs`, in samples at the shape's rate, and
-    /// refuses lines that together hold more history than
-    /// `engine.delayBudgetSamples`: a line times the channel's width,
-    /// summed over channels, as samplez counts it.
+    /// `mxl.inputs.<id>.maxDelayMs`, and each bus's and aux's from
+    /// `mxl.outputs.<output>.maxDelayMs` of the outputs carrying it,
+    /// which must agree, in samples at the shape's rate; refuses a line
+    /// on an output carrying anything else, and lines that together hold
+    /// more history than `engine.delayBudgetSamples`: a line times the
+    /// width of its channel or output, summed over all, as samplez
+    /// counts it.
     fn delay_lines(&self, shape: &mut Shape) -> Result<(), String> {
         if let Some(c) = shape.channels.iter().find(|c| c.max_delay.is_some()) {
             return Err(format!(
@@ -1061,33 +1072,84 @@ impl Config {
                 c.id, c.id
             ));
         }
+        let configured = (shape.buses.iter().map(|b| (&b.id, b.max_delay)))
+            .chain(shape.auxes.iter().map(|a| (&a.id, a.max_delay)))
+            .chain(shape.monitor_outputs.iter().map(|m| (&m.id, m.max_delay)));
+        if let Some((id, _)) = configured.into_iter().find(|(_, l)| l.is_some()) {
+            return Err(format!(
+                "shape: {id} maxDelay: set by mxl.outputs.<output>.maxDelayMs"
+            ));
+        }
         let Some(mxl) = &self.mxl else {
             return Ok(());
         };
         let rate = f64::from(shape.sample_rate);
-        let mut lines = Vec::new();
-        for c in &mut shape.channels {
-            let Some(ms) = mxl.inputs.get(&c.id).and_then(|i| i.max_delay_ms) else {
-                continue;
-            };
+        let samples = |at: &str, ms: f64| -> Result<u32, String> {
             let samples = (ms * rate / 1000.0).round();
             if !(0.0..=f64::from(samplez_dsp::MAX_DELAY_SAMPLES)).contains(&samples) {
                 return Err(format!(
-                    "mxl.inputs.{}.maxDelayMs {ms}: not in 0 to {} samples at {} Hz",
-                    c.id,
+                    "{at}.maxDelayMs {ms}: not in 0 to {} samples at {} Hz",
                     samplez_dsp::MAX_DELAY_SAMPLES,
                     shape.sample_rate
                 ));
             }
             if ms > 0.0 && samples == 0.0 {
                 return Err(format!(
-                    "mxl.inputs.{}.maxDelayMs {ms}: under one sample at {} Hz; 0 for no line",
-                    c.id, shape.sample_rate
+                    "{at}.maxDelayMs {ms}: under one sample at {} Hz; 0 for no line",
+                    shape.sample_rate
                 ));
             }
-            if samples > 0.0 {
-                c.max_delay = Some(samples as u32);
-                lines.push((c.id.clone(), samples as u64 * c.width as u64));
+            Ok(samples as u32)
+        };
+        let mut lines = Vec::new();
+        for c in &mut shape.channels {
+            let Some(ms) = mxl.inputs.get(&c.id).and_then(|i| i.max_delay_ms) else {
+                continue;
+            };
+            let line = samples(&format!("mxl.inputs.{}", c.id), ms)?;
+            if line > 0 {
+                c.max_delay = Some(line);
+                lines.push((c.id.clone(), u64::from(line) * c.width as u64));
+            }
+        }
+        // Each output's line, 0 for none; the outputs carrying one bus or
+        // aux take one line.
+        let mut carried: Vec<(String, u32, String)> = Vec::new();
+        for o in &shape.outputs {
+            let at = format!("mxl.outputs.{}", o.id);
+            let ms = mxl.outputs.get(&o.id).and_then(|m| m.max_delay_ms);
+            let line = ms.map_or(Ok(0), |ms| samples(&at, ms))?;
+            if !shape.has_limiter(&o.source) {
+                if line > 0 {
+                    return Err(format!(
+                        "{at}.maxDelayMs: the output carries {}, no bus or aux",
+                        o.source
+                    ));
+                }
+                continue;
+            }
+            if let Some((_, other, first)) = carried.iter().find(|(s, ..)| *s == o.source)
+                && *other != line
+            {
+                return Err(format!(
+                    "{at}.maxDelayMs: {line} samples, mxl.outputs.{first} carrying {} \
+                     takes {other}; every output carrying one bus or aux takes one line",
+                    o.source
+                ));
+            }
+            carried.push((o.source.clone(), line, o.id.clone()));
+            if line > 0 {
+                lines.push((o.id.clone(), u64::from(line) * o.width as u64));
+            }
+        }
+        for (source, line, _) in carried.iter().filter(|(_, l, _)| *l > 0) {
+            let bus = shape.buses.iter_mut().find(|b| b.id == *source);
+            match bus {
+                Some(b) => b.max_delay = Some(*line),
+                None => {
+                    let aux = shape.auxes.iter_mut().find(|a| a.id == *source);
+                    aux.expect("a bus or an aux").max_delay = Some(*line);
+                }
             }
         }
         let held: u64 = lines.iter().map(|(_, s)| s).sum();
@@ -1097,7 +1159,7 @@ impl Config {
                 .map(|(id, s)| format!("{id} ({s})"))
                 .collect();
             return Err(format!(
-                "mxl.inputs: the delay lines of {} hold {held} samples times legs, above \
+                "mxl: the delay lines of {} hold {held} samples times legs, above \
                  engine.delayBudgetSamples {budget}; shorten maxDelayMs or raise the budget",
                 list.join(", ")
             ));
@@ -1319,6 +1381,7 @@ impl Config {
                 "channels": o.width,
                 "loudnessChannels": loudness_channels(&o.layout),
                 "strip": shape.has_strip(&o.source),
+                "maxDelaySamples": shape.delay_line(&o.source).filter(|_| shape.has_limiter(&o.source)).unwrap_or(0),
                 "limiter": shape.has_limiter(&o.source),
                 "correlation": o.layout == "stereo",
             }));
@@ -2574,6 +2637,126 @@ mod tests {
             .map(|m| (m.name.as_str(), m.correlation))
             .collect();
         assert_eq!(meters, [("cf", true), ("aux1", false), ("mon", true)]);
+    }
+
+    /// A bus's or aux's delay line is opt-in per output carrying it, in
+    /// ms, the same on every one: the shape gives the element's line
+    /// (`maxDelay`) and the engine each such output's
+    /// (`maxDelaySamples`). Outputs that disagree, a line on an output
+    /// carrying no bus or aux, or one written into the shape are
+    /// refused, and the budget counts each output's line once per leg
+    /// beside the channels'.
+    #[test]
+    fn bus_delay_lines_are_per_output_and_within_the_budget() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-0000000000{n:02}");
+        let mut shape = small();
+        shape["outputs"] = json!([
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-pgm-m", "name": "PGM mono", "source": "pgm", "width": 1, "layout": "mono" },
+            { "id": "out-aux", "name": "IFB", "source": "aux1", "width": 1, "layout": "mono" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+        ]);
+        let config = |shape: &Value, lines: [Value; 4], engine: Value| {
+            let out = |n: u8, ms: &Value| json!({ "flow": id(n), "maxDelayMs": ms });
+            json!({
+                "replica": { "name": "r1" },
+                "shape": shape,
+                "engine": engine,
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                    "inputs": { "ch1": { "flow": id(1), "altFlow": id(5), "maxDelayMs": 20 },
+                                "ch2": { "flow": id(2) }, "st1": { "flow": id(3) } },
+                    "outputs": {
+                        "out-pgm": out(10, &lines[0]), "out-pgm-m": out(11, &lines[1]),
+                        "out-aux": out(12, &lines[2]), "out-mm": out(13, &lines[3]),
+                    },
+                },
+            })
+            .to_string()
+        };
+        let none = Value::Null;
+        let (c, parsed, _) = Config::parse(
+            &config(
+                &shape,
+                [json!(100), json!(100), json!(10), none.clone()],
+                json!({}),
+            ),
+            || unreachable!(),
+        )
+        .unwrap();
+        let lines: Vec<Option<u32>> = (parsed.buses.iter().map(|b| b.max_delay))
+            .chain(parsed.auxes.iter().map(|a| a.max_delay))
+            .collect();
+        assert_eq!(lines, [Some(4800), None, Some(480)]);
+        let engine: Vec<u32> = (c.audio.as_ref().unwrap().outputs.iter())
+            .map(|o| o.max_delay_samples)
+            .collect();
+        assert_eq!(engine, [4800, 4800, 480, 0]);
+        // The budget: ch1 960, PGM stereo and mono 3 legs of 4800, IFB
+        // 480; one sample short of it is refused, naming every share.
+        let held = 960 + 3 * 4800 + 480;
+        let e = Config::parse(
+            &config(
+                &shape,
+                [json!(100), json!(100), json!(10), none.clone()],
+                json!({ "delayBudgetSamples": held - 1 }),
+            ),
+            || unreachable!(),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("ch1 (960), out-pgm (9600), out-pgm-m (4800), out-aux (480)"),
+            "{e}"
+        );
+        Config::parse(
+            &config(
+                &shape,
+                [json!(100), json!(100), json!(10), none.clone()],
+                json!({ "delayBudgetSamples": held }),
+            ),
+            || unreachable!(),
+        )
+        .unwrap();
+        // The outputs of one bus disagree, one of them without a line
+        // included.
+        for mono in [json!(50), none.clone()] {
+            let e = Config::parse(
+                &config(
+                    &shape,
+                    [json!(100), mono, none.clone(), none.clone()],
+                    json!({}),
+                ),
+                || unreachable!(),
+            )
+            .unwrap_err();
+            assert!(e.contains("mxl.outputs.out-pgm-m.maxDelayMs"), "{e}");
+            assert!(e.contains("takes one line"), "{e}");
+        }
+        let e = Config::parse(
+            &config(
+                &shape,
+                [none.clone(), none.clone(), none.clone(), json!(10)],
+                json!({}),
+            ),
+            || unreachable!(),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("mxl.outputs.out-mm.maxDelayMs: the output carries mm1"),
+            "{e}"
+        );
+        let mut written = shape.clone();
+        written["auxes"][0]["maxDelay"] = json!(480);
+        let e = Config::parse(
+            &config(
+                &written,
+                [none.clone(), none.clone(), none.clone(), none],
+                json!({}),
+            ),
+            || unreachable!(),
+        )
+        .unwrap_err();
+        assert!(e.contains("aux1 maxDelay: set by mxl.outputs"), "{e}");
     }
 
     /// The engine gives an output a strip exactly when it carries a bus,

@@ -62,15 +62,15 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
     ...WIDE_CHANNELS.slice(0, channelCount - mono).map((c) => ({ ...c })),
   ];
   const buses: Shape['buses'] = [
-    { id: 'pgm51', name: 'PGM 5.1', kind: 'program', width: 6, layout: '5.1' },
-    { id: 'pgm20', name: 'PGM 2.0', kind: 'program', width: 2, layout: 'stereo' },
+    { id: 'pgm51', name: 'PGM 5.1', kind: 'program', width: 6, layout: '5.1', maxDelay: 4800 },
+    { id: 'pgm20', name: 'PGM 2.0', kind: 'program', width: 2, layout: 'stereo', maxDelay: 4800 },
     { id: 'me', name: 'M&E', kind: 'me', width: 2, layout: 'stereo' },
     { id: 'cf', name: 'Clean', kind: 'cleanFeed', width: 2, layout: 'stereo' },
   ];
   const auxes: ElementShape[] = [
     { id: 'aux1', name: 'IFB 1', width: 1, layout: 'mono' },
     { id: 'aux2', name: 'IFB 2', width: 1, layout: 'mono' },
-    { id: 'aux3', name: 'Stage', width: 2, layout: 'stereo' },
+    { id: 'aux3', name: 'Stage', width: 2, layout: 'stereo', maxDelay: 2400 },
     { id: 'aux4', name: 'Rec', width: 2, layout: 'stereo' },
   ];
   const mixMinus: Shape['mixMinus'] = [
@@ -112,13 +112,19 @@ export function exampleShape(channelCount = DEFAULT_CHANNELS): Shape {
 /**
  * The example shape without delay lines and tone generators, as a server
  * configuration takes it: the server sets each channel's maxDelay and
- * tone from mxl.inputs.<id>.maxDelayMs and .tone and refuses a shape that
+ * tone from mxl.inputs.<id>.maxDelayMs and .tone, each bus's and aux's
+ * maxDelay from mxl.outputs.<output>.maxDelayMs, and refuses a shape that
  * carries one. Without an mxl section, as the e2e and backend tests run
  * the binary, no channel has either.
  */
 export function configShape(channelCount = DEFAULT_CHANNELS): Shape {
   const shape = exampleShape(channelCount);
-  return { ...shape, channels: shape.channels.map(({ maxDelay: _, tone: __, ...c }) => c) };
+  return {
+    ...shape,
+    channels: shape.channels.map(({ maxDelay: _, tone: __, ...c }) => c),
+    buses: shape.buses.map(({ maxDelay: _, ...b }) => b),
+    auxes: shape.auxes.map(({ maxDelay: _, ...a }) => a),
+  };
 }
 
 function flatEq(): Eq {

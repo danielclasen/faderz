@@ -47,6 +47,8 @@ export interface ElementShape {
   name: string;
   width: Width;
   layout: Layout;
+  /** An aux's: longest delay, in samples, the delay line of every output carrying it takes; absent without one, and then only 0. */
+  maxDelay?: number;
 }
 export interface ChannelShape extends ElementShape {
   /** A second (B) input source is configured. */
@@ -86,6 +88,8 @@ export const SCRIBBLE_COLORS: readonly ScribbleColor[] = ['none', 'red', 'orange
 export type InputSelect = 'a' | 'b';
 export interface BusShape extends ElementShape {
   kind: BusKind;
+  /** Longest delay, in samples, the delay line of every output carrying the bus takes; absent without one, and then only 0. */
+  maxDelay?: number;
 }
 export interface MixMinusShape extends ElementShape {
   bus: Id;

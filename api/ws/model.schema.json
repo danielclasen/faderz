@@ -348,7 +348,7 @@
       "maximum": 24
     },
     "DelaySamples": {
-      "description": "Integer delay in samples at the shape sample rate, up to 5 s, for lip-sync against video processing chains. A channel's delay is applied to its input and takes at most its maxDelay.",
+      "description": "Integer delay in samples at the shape sample rate, up to 5 s, for lip-sync against video processing chains. A channel's delay is applied to its input, a bus's or aux's on every output flow carrying it, after its EQ and dynamics and before the output's limiter; each takes at most its maxDelay.",
       "type": "integer",
       "minimum": 0,
       "maximum": 240000
@@ -500,6 +500,10 @@
         },
         "layout": {
           "$ref": "#/$defs/Layout"
+        },
+        "maxDelay": {
+          "description": "The longest delay the element's output delay line takes, in samples; absent when the element has none, which then takes no delay but 0. Configured per output, the same on every output carrying the element; a longer line is a configuration change and a restart.",
+          "$ref": "#/$defs/DelaySamples"
         }
       }
     },
@@ -535,7 +539,7 @@
       }
     },
     "ElementShape": {
-      "description": "Aux bus or monitor output.",
+      "description": "Aux bus or monitor output. maxDelay is an aux's alone.",
       "type": "object",
       "required": [
         "id",
@@ -558,6 +562,10 @@
         },
         "layout": {
           "$ref": "#/$defs/Layout"
+        },
+        "maxDelay": {
+          "description": "The longest delay the element's output delay line takes, in samples; absent when the element has none, which then takes no delay but 0. Configured per output, the same on every output carrying the element; a longer line is a configuration change and a restart.",
+          "$ref": "#/$defs/DelaySamples"
         }
       }
     },
@@ -1024,7 +1032,7 @@
       }
     },
     "BusState": {
-      "description": "Bus processing: the channel strip without trim, HPF and pan, plus an output limiter. Used for buses and auxes. polarity applies per leg of the element, before any output folds it down. eq, gate, comp and dynamicsBeforeEq run on every output flow carrying the element, on what its columns carry (the mix after the element's fader and mute, or the line-up tone while it replaces the mix), before the output's limiter; an output narrower than the element processes its fold-down, so its dynamics detect on the folded signal. The monitor, AFL and every mix-minus output sum the element's channels and do not hear this processing. A bus's delay is kept and shown but not applied.",
+      "description": "Bus processing: the channel strip without trim, HPF and pan, plus an output limiter. Used for buses and auxes. polarity applies per leg of the element, before any output folds it down. eq, gate, comp and dynamicsBeforeEq run on every output flow carrying the element, on what its columns carry (the mix after the element's fader and mute, or the line-up tone while it replaces the mix), before the output's limiter; an output narrower than the element processes its fold-down, so its dynamics detect on the folded signal. The monitor, AFL and every mix-minus output sum the element's channels and do not hear this processing. delay delays every output flow carrying the element, after this processing and before the output's limiter, within the element's maxDelay.",
       "type": "object",
       "required": [
         "polarity",

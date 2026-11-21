@@ -2,22 +2,22 @@
   // Delay of a channel or bus, typed in ms, frames or samples. Enter or
   // leaving the field writes it; Escape restores the current value; arrow
   // keys step one unit (Shift: a tenth). A suffix (ms, f, smp, s) overrides
-  // the selected unit for one entry. A channel's entry shows the range of
-  // its delay line; without a line it is greyed out and writes nothing. A
+  // the selected unit for one entry. The entry shows the range of the
+  // element's delay line; without a line it is greyed out and writes nothing. A
   // value outside the range is never capped: the field is restored and the
   // range shown as an error.
-  import type { ChannelShape } from '../lib/contract/types';
+  import type { BusShape, ChannelShape, ElementShape } from '../lib/contract/types';
   import { getMixer } from '../lib/state/mixer.svelte';
   import { delayMax, delayRange, formatDelay, fromSamples, parseDelay, type DelayUnit } from '../lib/audio/delay';
 
   interface Props {
     path: string;
     label: string;
-    /** The channel whose delay this is; absent for a bus or aux. */
-    channel?: ChannelShape;
+    /** The channel, bus or aux whose delay this is. */
+    element: ChannelShape | BusShape | ElementShape;
   }
-  let { path, label, channel }: Props = $props();
-  const max = $derived(delayMax(channel));
+  let { path, label, element }: Props = $props();
+  const max = $derived(delayMax(element));
   const mixer = getMixer();
   const shape = $derived(mixer.shape!);
   const value = $derived(mixer.value<number>(path));
@@ -81,7 +81,7 @@
     onkeydown={keydown}
     onfocus={() => input?.select()}
     aria-label={`${label} in ${UNITS.find((u) => u.id === unit)!.name}, up to ${Number(((max ?? 0) / shape.sampleRate).toFixed(2))} seconds`}
-    aria-describedby={channel || refused ? `${path}-range` : undefined}
+    aria-describedby={`${path}-range`}
     aria-invalid={refused}
     data-path={path}
   />
@@ -98,11 +98,9 @@
       >
     {/each}
   </div>
-  {#if channel || refused}
-    <span class="range" class:error={refused} id={`${path}-range`} role={refused ? 'alert' : undefined}
-      >{max === null ? 'No delay line' : delayRange(max, unit, shape.sampleRate, shape.frameRate)}</span
-    >
-  {/if}
+  <span class="range" class:error={refused} id={`${path}-range`} role={refused ? 'alert' : undefined}
+    >{max === null ? 'No delay line' : delayRange(max, unit, shape.sampleRate, shape.frameRate)}</span
+  >
 </div>
 
 <style>

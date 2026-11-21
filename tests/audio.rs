@@ -1769,6 +1769,288 @@ async fn a_channel_delay_plays_its_input_exactly_that_late() {
     server.stop().await;
 }
 
+/// A bus's delay plays every output carrying it exactly that many samples
+/// late, a mono fold-down included, and a mix-minus output of the bus not
+/// late at all: both edges of a pulse land on each programme output at
+/// the limiter's look-ahead plus the delay, to the sample, and on the
+/// mix-minus output at once, at a delay off the block grid and at the
+/// full line. Started again on its data, as a restarted pod is, the
+/// server plays the stored delay from its start, with no write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bus_delay_plays_every_output_carrying_it_exactly_that_late() {
+    let domain = domain("busdelay");
+    // The pulses are read back from the outputs' history.
+    std::fs::write(
+        domain.0.join("options.json"),
+        r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
+    )
+    .unwrap();
+    let data = data("busdelay");
+    let (src, out, mono, mm) = (new_id(), new_id(), new_id(), new_id());
+    let rate: u64 = 48000;
+    let pulse = Arc::new([AtomicU64::new(u64::MAX), AtomicU64::new(u64::MAX)]);
+    let at = pulse.clone();
+    let _src = Source::signal(&domain.0, &src, 1, move |_, idx| {
+        let on = (at[0].load(Relaxed)..at[1].load(Relaxed)).contains(&idx);
+        if on { 0.5 } else { 0.0 }
+    });
+    // A line of 20 ms on both outputs of the bus.
+    let line = rate / 50;
+    let boot = async || {
+        let block = 48u64;
+        let server = start_engine(
+            &data.0,
+            &domain.0,
+            json!({
+                "sampleRate": rate,
+                "frameRate": { "numerator": 25, "denominator": 1 },
+                "channels": [
+                    { "id": "ch", "name": "Pres", "width": 1, "layout": "mono", "altInput": false },
+                ],
+                "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+                "auxes": [],
+                "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
+                "vcas": [], "monitorOutputs": [],
+                "outputs": [
+                    { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+                    { "id": "out-pgm-m", "name": "PGM mono", "source": "pgm", "width": 1, "layout": "mono" },
+                    { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+                ],
+            }),
+            json!({ "ch": { "flow": src } }),
+            json!({
+                "out-pgm": { "flow": out, "maxDelayMs": 20 },
+                "out-pgm-m": { "flow": mono, "maxDelayMs": 20 },
+                "out-mm": { "flow": mm },
+            }),
+            // As for the channel delay test: a debug engine on a loaded
+            // host computes each window whole only with time in hand.
+            json!({
+                "blockSize": block,
+                "readerMarginSamples": rate / 10,
+                "maxCatchupBlocks": rate / 10 / block,
+            }),
+        )
+        .await;
+        for id in [&out, &mono, &mm] {
+            appears(&domain.0, id).await;
+        }
+        server
+    };
+    let mut server = boot().await;
+    patch(
+        &server,
+        &[
+            ("/buses/pgm/fader", json!(0)),
+            ("/channels/ch/fader", json!(0)),
+            ("/channels/ch/routes/pgm", json!(true)),
+        ],
+    )
+    .await;
+    let api = api();
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    let now = || time::timestamp_to_index(&api, time::now(&api));
+    let off_grid = rate / 100 + 7;
+    // 0, a delay off the block grid, the full line, 0 again and off the
+    // grid again, each written; then a restart on that last one.
+    let steps = [0, off_grid, line, 0, off_grid].map(|d| (Some(d), d));
+    for (write, delay) in steps.into_iter().chain([(None, off_grid)]) {
+        match write {
+            Some(d) => patch(&server, &[("/buses/pgm/delay", json!(d))]).await,
+            None => {
+                server.stop().await;
+                server = boot().await;
+            }
+        }
+        let engine = server.audio.as_ref().unwrap().engine();
+        let skipped = || engine.counters().overrun_skipped_samples.load(Relaxed);
+        let skipped_before = skipped();
+        let start = now() + rate / 2 + 7;
+        let end = start + rate / 10;
+        pulse[1].store(end, Relaxed);
+        pulse[0].store(start, Relaxed);
+        let (from, to) = (start - rate / 10, end + line + late + rate / 10);
+        while now() <= to + rate / 2 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        pulse[0].store(u64::MAX, Relaxed);
+        let what = if write.is_some() {
+            "written"
+        } else {
+            "restarted"
+        };
+        assert_eq!(
+            skipped(),
+            skipped_before,
+            "delay {delay}, {what}: samples skipped, the engine was starved for over 100 ms"
+        );
+        for (flow, legs, lag, output) in [
+            (&out, 2, late + delay, "PGM"),
+            (&mono, 1, late + delay, "PGM mono"),
+            (&mm, 2, 0, "N-1"),
+        ] {
+            let heard: Vec<u64> = (span_left(&domain.0, flow, legs, from, to).iter())
+                .enumerate()
+                .filter(|(_, s)| s.abs() > 0.1)
+                .map(|(i, _)| from + i as u64)
+                .collect();
+            let (first, last) = (heard.first().copied(), heard.last().copied());
+            assert_eq!(
+                (first, last, heard.len() as u64),
+                (Some(start + lag), Some(end - 1 + lag), end - start),
+                "{output}, delay {delay}, {what}: the pulse [{start}, {end}) is heard from {first:?} to {last:?}"
+            );
+        }
+    }
+    server.stop().await;
+}
+
+/// A bus's and a mix-minus output's strip, flat or off, leaves every
+/// sample as no strip would, bit for bit: a state stored before the
+/// strips were applied plays as it did. Through a mono channel panned
+/// hard left at 0 dB, the left leg of the programme output is the source
+/// exactly, the limiter's look-ahead late, and that of the mix-minus
+/// output the source exactly: at start, with every EQ band, gate and
+/// compressor set but off and the dynamics first, and with the EQ on and
+/// every band at 0 dB.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flat_or_disabled_output_strip_leaves_every_sample() {
+    let domain = domain("flatstrip");
+    // The spans are read back from the outputs' history.
+    std::fs::write(
+        domain.0.join("options.json"),
+        r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
+    )
+    .unwrap();
+    let data = data("flatstrip");
+    let (src, out, mm) = (new_id(), new_id(), new_id());
+    let rate: u64 = 48000;
+    let block = 48u64;
+    // Exact in f32 and under any threshold the dynamics are set to below:
+    // a sawtooth of 997 steps of 1/2048, from -498/2048.
+    let source = |idx: u64| ((idx % 997) as f32 - 498.0) / 2048.0;
+    let _src = Source::signal(&domain.0, &src, 1, move |_, idx| source(idx));
+    let shape = json!({
+        "sampleRate": rate,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch", "name": "Pres", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [],
+        "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
+        "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let server = start_engine(
+        &data.0,
+        &domain.0,
+        shape,
+        json!({ "ch": { "flow": src } }),
+        json!({ "out-pgm": { "flow": out }, "out-mm": { "flow": mm } }),
+        // As for the delay tests: a debug engine on a loaded host computes
+        // each window whole only with time in hand.
+        json!({
+            "blockSize": block,
+            "readerMarginSamples": rate / 10,
+            "maxCatchupBlocks": rate / 10 / block,
+        }),
+    )
+    .await;
+    for id in [&out, &mm] {
+        appears(&domain.0, id).await;
+    }
+    patch(
+        &server,
+        &[
+            ("/buses/pgm/fader", json!(0)),
+            ("/channels/ch/fader", json!(0)),
+            ("/channels/ch/pan/lr", json!(-1)),
+            ("/channels/ch/routes/pgm", json!(true)),
+        ],
+    )
+    .await;
+    let api = api();
+    let engine = server.audio.as_ref().unwrap().engine();
+    let skipped = || engine.counters().overrun_skipped_samples.load(Relaxed);
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    let now = || time::timestamp_to_index(&api, time::now(&api));
+    // Every leaf of an element's EQ and dynamics, set or flat.
+    let strip = |e: &str, eq: bool, gain: i32| -> Vec<(String, Value)> {
+        let mut leaves = vec![
+            (format!("/{e}/eq/enabled"), json!(eq)),
+            (format!("/{e}/gate/enabled"), json!(false)),
+            (format!("/{e}/gate/threshold"), json!(-10)),
+            (format!("/{e}/gate/range"), json!(60)),
+            (format!("/{e}/comp/enabled"), json!(false)),
+            (format!("/{e}/comp/threshold"), json!(-40)),
+            (format!("/{e}/comp/ratio"), json!(20)),
+            (format!("/{e}/comp/makeup"), json!(6)),
+            (format!("/{e}/dynamicsBeforeEq"), json!(true)),
+        ];
+        for band in 0..4 {
+            leaves.push((format!("/{e}/eq/bands/{band}/type"), json!("peak")));
+            leaves.push((
+                format!("/{e}/eq/bands/{band}/freq"),
+                json!(250 * (band + 1)),
+            ));
+            leaves.push((format!("/{e}/eq/bands/{band}/gain"), json!(gain)));
+            leaves.push((format!("/{e}/eq/bands/{band}/q"), json!(1)));
+        }
+        leaves
+    };
+    let cases: [(&str, Vec<(String, Value)>); 3] = [
+        ("flat and off at start", Vec::new()),
+        (
+            "set and off",
+            [
+                strip("buses/pgm", false, 12),
+                strip("mixMinus/mm1", false, -9),
+            ]
+            .concat(),
+        ),
+        (
+            "EQ on, every band at 0 dB",
+            [strip("buses/pgm", true, 0), strip("mixMinus/mm1", true, 0)].concat(),
+        ),
+    ];
+    for (what, leaves) in cases {
+        let leaves: Vec<(&str, Value)> = (leaves.iter())
+            .map(|(p, v)| (p.as_str(), v.clone()))
+            .collect();
+        if !leaves.is_empty() {
+            patch(&server, &leaves).await;
+        }
+        let skipped_before = skipped();
+        // Half a second on, any ramp a write started is long over.
+        let from = now() + rate / 2 + 7;
+        let to = from + rate / 5;
+        while now() <= to + rate / 2 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            skipped(),
+            skipped_before,
+            "{what}: samples skipped, the engine was starved for over 100 ms"
+        );
+        for (flow, lag, output) in [(&out, late, "PGM"), (&mm, 0, "N-1")] {
+            let left = span_left(&domain.0, flow, 2, from, to);
+            let wrong = (left.iter().enumerate())
+                .map(|(i, v)| (from + i as u64, *v))
+                .find(|&(idx, v)| v.to_bits() != source(idx - lag).to_bits());
+            assert!(
+                wrong.is_none(),
+                "{output}, {what}: sample (index, value) {wrong:?} is not the source's {:?}",
+                wrong.map(|(idx, _)| source(idx - lag))
+            );
+        }
+    }
+    server.stop().await;
+}
+
 /// The left leg of `flow` over the 100 ms ending 100 ms behind libmxl's
 /// clock: its sample peak and its rising zero crossings per second.
 fn tone_of(domain: &Path, flow: &str, rate: u64) -> (f32, u64) {
@@ -2723,6 +3005,24 @@ fn span(domain: &Path, flow: &str, from: u64, to: u64) -> Vec<(f32, f32)> {
     legs.drain(..skip);
     legs.truncate((to - from) as usize);
     legs
+}
+
+/// The first leg of `flow`, `legs` wide, from sample `from` up to `to`,
+/// by sample index from `from`; every block must have been written.
+fn span_left(domain: &Path, flow: &str, legs: u32, from: u64, to: u64) -> Vec<f32> {
+    let mut reader = Reader::wide(domain, flow, legs);
+    let input = reader.generation.input(0).unwrap();
+    let mut state = SlotState::default();
+    let n = B as usize;
+    let mut left = Vec::new();
+    for k in from / B..=to / B {
+        let o = input.read(&mut state, k, &GroupWait::Skipped, &mut reader.buf);
+        assert_eq!(o, Outcome::Copy, "block {k} of {flow}");
+        left.extend_from_slice(&reader.buf[..n]);
+    }
+    left.drain(..(from % B) as usize);
+    left.truncate((to - from) as usize);
+    left
 }
 
 /// The commentary key, the ambience under it, mono and stereo.

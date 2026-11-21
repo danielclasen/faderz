@@ -130,7 +130,7 @@ struct Sent {
     /// Each output's strip parameters ([`strip::output_strips`]), as
     /// `strips`.
     output_strips: Vec<Vec<Option<StripParam>>>,
-    /// The limiters, input delays, tone generators, duck groups and masks
+    /// The limiters, input and output delays, tone generators, duck groups and masks
     /// the engine holds, as targets; `None` after a resend asked for, when
     /// every limiter, delay, tone, setting and mask goes again.
     ducks: Option<Targets>,
@@ -522,6 +522,7 @@ impl Audio {
         let next = Targets {
             limiters: targets.limiters,
             delays: targets.delays,
+            output_delays: targets.output_delays,
             tones: targets.tones,
             ducks: targets.ducks,
             masks: targets.masks,
@@ -541,6 +542,10 @@ impl Audio {
                 }
                 &Entry::Delay { slot, samples } => {
                     let set = |at| self.engine.set_delay(slot, samples, at);
+                    self.send(&mut at, set).await
+                }
+                &Entry::OutputDelay { output, samples } => {
+                    let set = |at| self.engine.set_output_delay(output, samples, at);
                     self.send(&mut at, set).await
                 }
                 &Entry::Tone {
@@ -858,7 +863,7 @@ fn engine_status(status: &samplez::Status) -> Value {
     json!({ "inputs": inputs, "outputs": outputs })
 }
 
-/// Notes in `held` the limiter, delay, tone, duck setting or mask `entry`
+/// Notes in `held` the limiter, input or output delay, tone, duck setting or mask `entry`
 /// sent.
 fn hold_entry(held: &mut Targets, entry: Entry) {
     match entry {
@@ -882,6 +887,12 @@ fn hold_entry(held: &mut Targets, entry: Entry) {
                 held.delays.resize(slot + 1, 0);
             }
             held.delays[slot] = samples;
+        }
+        Entry::OutputDelay { output, samples } => {
+            if held.output_delays.len() <= output {
+                held.output_delays.resize(output + 1, 0);
+            }
+            held.output_delays[output] = samples;
         }
         Entry::Limiter { output, params } => {
             if held.limiters.len() <= output {

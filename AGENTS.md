@@ -115,8 +115,9 @@ The release that takes samplez v0.22.0 runs at
 4), with `DERIVATION_VERSION` still 10. PROTOCOL 5 makes its roll a
 hand-over.
 
-The release that applies bus, aux and mix-minus EQ and dynamics on
-their outputs runs at `DERIVATION_VERSION` 11 (from 10).
+The release that applies bus, aux and mix-minus EQ and dynamics and
+bus and aux delay on their outputs runs at `DERIVATION_VERSION` 11
+(from 10).
 
 ## Build and test
 

@@ -94,8 +94,8 @@ fn processing(e: &Value) -> Vec<StripParam> {
     p
 }
 
-/// The input delay of channel state `c` (model `ChannelState`), in
-/// samples. A write is refused past the channel's delay line
+/// The delay of channel state `c` (model `ChannelState`) or of a bus's
+/// or aux's state (model `BusState`), in samples. A write is refused past the channel's delay line
 /// ([`crate::shape::ChannelShape::max_delay`]), so the engine takes it.
 pub fn delay(c: &Value) -> u32 {
     c["delay"].as_u64().unwrap_or(0) as u32
@@ -136,6 +136,23 @@ pub fn output_strips(shape: &Shape, state: &Value) -> Vec<Vec<StripParam>> {
                 processing(element(state, &o.source))
             } else {
                 Vec::new()
+            }
+        })
+        .collect()
+}
+
+/// Per output of `shape`, the delay of the bus or aux it carries in
+/// `state`, in samples, after its strip and before its limiter; 0 for an
+/// output carrying anything else. A write is refused past the element's
+/// delay line ([`Shape::delay_line`]), the line of every output carrying
+/// it, so the engine takes it.
+pub fn output_delays(shape: &Shape, state: &Value) -> Vec<u32> {
+    (shape.outputs.iter())
+        .map(|o| {
+            if shape.has_limiter(&o.source) {
+                delay(element(state, &o.source))
+            } else {
+                0
             }
         })
         .collect()
@@ -376,6 +393,27 @@ mod tests {
             strips[3].last(),
             Some(&StripParam::DynamicsBeforeEq { enabled: true })
         );
+    }
+
+    /// Every output carrying a bus or an aux takes that element's delay,
+    /// a narrower one included; an output carrying a mix-minus output or
+    /// the monitor takes none.
+    #[test]
+    fn each_output_takes_its_elements_delay() {
+        let mut v = small();
+        v["outputs"] = json!([
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-pgm-m", "name": "PGM mono", "source": "pgm", "width": 1, "layout": "mono" },
+            { "id": "out-aux", "name": "IFB", "source": "aux1", "width": 1, "layout": "mono" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+            { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" },
+            { "id": "out-cf", "name": "Clean", "source": "cf", "width": 2, "layout": "stereo" },
+        ]);
+        let shape = Shape::parse(&v).unwrap();
+        let mut state = shape.initial_state();
+        state["buses"]["pgm"]["delay"] = json!(960);
+        state["auxes"]["aux1"]["delay"] = json!(48);
+        assert_eq!(output_delays(&shape, &state), [960, 960, 48, 0, 0, 0]);
     }
 
     /// Every EQ, gate and compressor value the state takes for a bus, an

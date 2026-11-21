@@ -602,7 +602,7 @@ test('a channel reading a flow shows its source and no tone controls', async ({ 
   await expect(panel.getByRole('textbox', { name: 'Tone value, type to set' })).toHaveCount(0);
 });
 
-test('greys out the delay of a channel without a delay line and leaves a bus delay as it was', async ({ page, request }) => {
+test('greys out the delay of a channel or bus without a delay line and takes a bus delay within its line', async ({ page, request }) => {
   await live(page);
   await page.locator('[data-channel="st4"] .head').click();
   const panel = page.getByRole('region', { name: 'FX processing' });
@@ -610,17 +610,29 @@ test('greys out the delay of a channel without a delay line and leaves a bus del
   await expect(panel.getByText('No delay line')).toBeVisible();
   await expect(panel.getByRole('radio', { name: 'frames' })).toBeDisabled();
   await panel.getByRole('button', { name: 'Close processing' }).click();
+  // pgm20's outputs have a delay line only on the mock: the backend's
+  // configuration gives no output one.
   await page.locator('[data-master="pgm20"] .head').click();
   const bus = page.getByRole('region', { name: 'PGM 2.0 processing' });
   const entry = bus.locator('input[data-path="/buses/pgm20/delay"]');
-  await expect(entry).toBeEnabled();
-  await expect(bus.getByText('No delay line')).toHaveCount(0);
-  await entry.fill('40');
-  await entry.press('Enter');
-  await settled(page);
-  expect((await serverState(request)).state.buses['pgm20']!.delay).toBe(1920);
+  if (BACKEND) {
+    await expect(entry).toBeDisabled();
+    await expect(bus.getByText('No delay line')).toBeVisible();
+  } else {
+    await expect(entry).toBeEnabled();
+    await expect(bus.getByText('No delay line')).toHaveCount(0);
+    await entry.fill('40');
+    await entry.press('Enter');
+    await settled(page);
+    expect((await serverState(request)).state.buses['pgm20']!.delay).toBe(1920);
+    // Past the line: refused and restored, never clamped.
+    await entry.fill('101');
+    await entry.press('Enter');
+    await expect(entry).toHaveValue('40.0');
+    expect((await serverState(request)).state.buses['pgm20']!.delay).toBe(1920);
+    await patch(request, '/buses/pgm20/delay', 0);
+  }
   expect((await serverState(request)).state.channels['st4']!.delay).toBe(0);
-  await patch(request, '/buses/pgm20/delay', 0);
 });
 
 test('switches a programme bus limiter and the dynamics order from the processing panel', async ({ page, request }) => {

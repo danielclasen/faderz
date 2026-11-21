@@ -897,8 +897,9 @@ components:
                 $ref: "./ws/model.schema.json#/$defs/SampleIndex"
               delaysNotApplied:
                 description: |
-                  Channels whose stored delay is past their delay line, shortened
-                  since the scene was stored: the recall set their delay to 0.
+                  Channels, buses and auxes whose stored delay is past their delay
+                  line, shortened since the scene was stored: the recall set their
+                  delay to 0.
                   Absent when there are none.
                 type: array
                 minItems: 1
