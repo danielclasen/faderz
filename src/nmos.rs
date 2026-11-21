@@ -439,29 +439,7 @@ impl Node {
             && let Some(index) = single
             && let Some(s) = adopted(index)
         {
-            return with_json(response, |v| {
-                let at = tai_text(s.at);
-                let (mode, requested) = match &s.active.activation {
-                    Some(a) => (a.mode.clone(), a.requested.clone()),
-                    None => ("activate_scheduled_absolute".to_owned(), Some(at.clone())),
-                };
-                v["activation"] = serde_json::json!({
-                    "mode": mode,
-                    "requested_time": requested,
-                    "activation_time": at,
-                });
-                v["master_enable"] = s.active.master_enable.into();
-                let peer = match s.port {
-                    PortRef::Sender(_) => "receiver_id",
-                    PortRef::Receiver(_) => "sender_id",
-                };
-                v[peer] = s.active.peer.clone().into();
-                if let Some(leg) = v["transport_params"].get_mut(0) {
-                    leg["mxl_domain_id"] = s.active.domain.clone().into();
-                    leg["mxl_flow_id"] = s.active.flow.clone().into();
-                }
-            })
-            .await;
+            return with_json(response, |v| show_fired(v, &s)).await;
         }
         if method == axum::http::Method::GET
             || !response.status().is_success()
@@ -514,7 +492,10 @@ impl Node {
     /// is the answer to give, as the activation stays in the state and
     /// would fire.
     async fn cancel(&self, index: usize) -> Result<(), String> {
-        if self.scheduled(index).is_none() {
+        // One whose time has come counts as done, as `/active` shows it
+        // fired: a cancel then has nothing pending to cancel.
+        let due = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
+        if self.scheduled(index).is_none_or(|s| s.at <= due) {
             return Ok(());
         }
         self.conns.unschedule(index).await.map_err(|Fail(e)| {
@@ -539,16 +520,23 @@ impl Node {
         // was staged; the Fire that records it commits later.
         let port = self.ports[index].port_ref();
         let due = u64::try_from(SystemTai.now().as_nanos()).unwrap_or(u64::MAX);
-        let shown = self.replica.upgrade().and_then(|r| {
+        let shown = self.replica.upgrade().map(|r| {
             crate::app::with_state(&r, |sm| {
                 let m = &sm.product;
-                let fired = (m.scheduled().iter()).find(|s| s.port == port && s.at <= due);
-                (fired.map(Scheduled::fired)).or_else(|| {
-                    connection_of(m, &self.ports[index]).and_then(|c| c.activation.clone())
-                })
+                let fired = (m.scheduled().iter())
+                    .find(|s| s.port == port && s.at <= due && m.fires(s))
+                    .cloned();
+                let held = connection_of(m, &self.ports[index]).and_then(|c| c.activation.clone());
+                (fired, held)
             })
         });
-        let Some(a) = shown else {
+        let Some((fired, held)) = shown else {
+            return response;
+        };
+        if let Some(s) = fired {
+            return with_json(response, |v| show_fired(v, &s)).await;
+        }
+        let Some(a) = held else {
             return response;
         };
         with_json(response, |v| {
@@ -869,6 +857,27 @@ fn active(c: &Connection) -> Active {
         peer: id(&c.peer),
         domain: id(&c.domain),
         flow: id(&c.flow),
+    }
+}
+
+/// `v`, a port's `/active`, as scheduled activation `s` makes it when it
+/// fires: its activation, enable, peer and transport parameters.
+fn show_fired(v: &mut serde_json::Value, s: &Scheduled) {
+    let a = s.fired();
+    v["activation"] = serde_json::json!({
+        "mode": a.mode,
+        "requested_time": a.requested,
+        "activation_time": a.time,
+    });
+    v["master_enable"] = s.active.master_enable.into();
+    let peer = match s.port {
+        PortRef::Sender(_) => "receiver_id",
+        PortRef::Receiver(_) => "sender_id",
+    };
+    v[peer] = s.active.peer.clone().into();
+    if let Some(leg) = v["transport_params"].get_mut(0) {
+        leg["mxl_domain_id"] = s.active.domain.clone().into();
+        leg["mxl_flow_id"] = s.active.flow.clone().into();
     }
 }
 

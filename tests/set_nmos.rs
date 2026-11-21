@@ -1497,6 +1497,34 @@ fn every_replica_serves_the_versions_the_registry_holds() {
         });
         assert!(fired, "{mode}: the schedule did not fire");
     }
+    // A scheduled change of a receiver's connection reads the same on
+    // every replica at its time, the new flow and activation alike, though
+    // the Fire that records it has not committed yet.
+    let staged = json!({
+        "transport_params": [{ "mxl_flow_id": set.ch1 }],
+        "activation": { "mode": "activate_scheduled_relative", "requested_time": "0:200000000" },
+    });
+    let path = format!("{CONNECTION}/{ch1}/staged");
+    let (status, body) = node(&nodes, 0).nmos_led("PATCH", &path, Some(&staged));
+    assert_eq!(status, 202, "{body}");
+    std::thread::sleep(Duration::from_millis(200));
+    let seen: Vec<Value> = (0..REPLICAS).map(|n| active(&nodes, n, &ch1)).collect();
+    for (n, a) in seen.iter().enumerate() {
+        assert_eq!(*a, seen[0], "replica {n} at the activation time: {seen:#?}");
+    }
+    assert_eq!(
+        seen[0]["transport_params"][0]["mxl_flow_id"],
+        set.ch1.as_str(),
+        "{seen:#?}"
+    );
+    assert_eq!(
+        seen[0]["activation"]["mode"], "activate_scheduled_relative",
+        "{seen:#?}"
+    );
+    let fired = until(20, || {
+        (0..REPLICAS).all(|n| node(&nodes, n).scheduled() == 0)
+    });
+    assert!(fired, "the receiver's schedule did not fire");
     agree(&nodes, &registry, "after the changes");
     // A set whose outputs are all disabled has no committing donor, so a
     // diverged replica cannot resync: the sender is enabled again before

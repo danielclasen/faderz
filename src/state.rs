@@ -956,6 +956,12 @@ impl Mixer {
         &self.ports.scheduled
     }
 
+    /// Whether scheduled activation `s` activates when it fires, as
+    /// [`Mixer::fire`] checks it, rather than being dropped.
+    pub fn fires(&self, s: &Scheduled) -> bool {
+        self.check_connection(&s.port, &s.active).is_ok()
+    }
+
     /// The change that last changed `port`'s `/active`, none before the
     /// first.
     pub fn port_change(&self, port: &PortRef) -> Option<&PortChange> {
