@@ -832,6 +832,34 @@ async fn rest_answers_match_the_contract() {
             .0,
         200
     );
+    // Timed by atIndex or a TAI time; one that is no date-time, or takes
+    // effect over a minute ahead, is refused.
+    for (tally, status) in [
+        (
+            json!({ "source": "CAM1", "state": "preview", "atIndex": 48_000 }),
+            200,
+        ),
+        (
+            json!({ "source": "CAM1", "state": "program", "at": "2026-11-20T09:14:03.120Z", "transitionMs": 0 }),
+            200,
+        ),
+        (
+            json!({ "source": "CAM1", "state": "program", "at": "2026-11-20 09:14:03Z" }),
+            400,
+        ),
+        (
+            json!({ "source": "CAM1", "state": "program", "atIndex": u64::MAX }),
+            400,
+        ),
+    ] {
+        let schema = if status == 200 { RESULT } else { ERROR };
+        let body = tally.to_string();
+        let got = rest
+            .call("POST", "/afv/tally", Some(tally), Some(schema))
+            .await
+            .0;
+        assert_eq!(got, status, "{body}");
+    }
     let tally = json!({ "sources": { "CAM2": "preview" } });
     assert_eq!(
         rest.call("PUT", "/afv/tally", Some(tally), Some(RESULT))

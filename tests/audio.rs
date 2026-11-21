@@ -1215,6 +1215,144 @@ async fn a_scene_recall_crossfades_over_its_time() {
     server.stop().await;
 }
 
+/// A tally closing ch1's AFV stage holds the programme from the index it
+/// names for holdMs, then lowers it to offLevel over fallMs; one opening
+/// it raises it from that index over riseMs, and transitionMs takes the
+/// place of both lengths. Each edge lands on its sample, whether the
+/// tally names the index as atIndex or as a TAI time. A tally naming an
+/// index already past counts in afv_late_total.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_afv_stage_holds_falls_and_rises_on_its_times() {
+    let domain = domain("afv-times");
+    // The transitions fit in the domain's history.
+    std::fs::write(
+        domain.0.join("options.json"),
+        r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
+    )
+    .unwrap();
+    let data = data("afv-times");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let rate = shape()["sampleRate"].as_u64().unwrap();
+    let samples = |ms: u64| ms * rate / 1000;
+    let block = 48;
+    let server = start_engine(
+        &data.0,
+        &domain.0,
+        shape(),
+        json!({
+            "ch1": { "flow": flows.ch1 },
+            "ch2": { "flow": flows.ch2, "altFlow": flows.ch2b },
+            "st1": { "flow": flows.st1 },
+        }),
+        json!({ "out-pgm": { "flow": flows.pgm }, "out-mm": { "flow": flows.mm } }),
+        // Every sample of each transition is read, which a debug engine
+        // on a loaded host writes whole only with time in hand, as in
+        // a_burst_ducks_the_programme_but_not_the_me.
+        json!({
+            "blockSize": block,
+            "readerMarginSamples": samples(100),
+            "maxCatchupBlocks": samples(100) / block,
+        }),
+    )
+    .await;
+    appears(&domain.0, &flows.pgm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    let (rise, hold, fall, transition) = (100, 200, 300, 50);
+    let (high, low) = (CH1, CH1 * 10f32.powf(-20.0 / 20.0));
+    patch(
+        &server,
+        &[
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/channels/ch1/fader", json!(0)),
+            ("/afv/ch1/enabled", json!(true)),
+            ("/afv/ch1/source", json!("cam1")),
+            ("/afv/ch1/offLevel", json!(-20)),
+            ("/afv/ch1/riseMs", json!(rise)),
+            ("/afv/ch1/holdMs", json!(hold)),
+            ("/afv/ch1/fallMs", json!(fall)),
+        ],
+    )
+    .await;
+    pgm.expect(high, 0.0, "ch1 open").await;
+    let api = api();
+    let now = || time::timestamp_to_index(&api, time::now(&api));
+    // The programme output carries the bus's limiter, late by its
+    // look-ahead.
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    let near = |v: f32, want: f32| (v - want).abs() <= 1e-6;
+    // The tally, its transitionMs, whether it names a TAI time, and the
+    // hold and length its gain moves over.
+    for (state, transition_ms, tai, wait, len) in [
+        ("preview", None, false, hold, fall),
+        ("program", None, false, 0, rise),
+        ("preview", Some(transition), true, hold, transition),
+        ("program", Some(transition), false, 0, transition),
+    ] {
+        let what = format!("{state}, transitionMs {transition_ms:?}");
+        let (from, to) = if state == "program" {
+            (low, high)
+        } else {
+            (high, low)
+        };
+        // Half a second ahead, off the block grid, or on a whole
+        // millisecond for the time RFC 3339 carries.
+        let mut at = now() + samples(500) + 7;
+        let mut body = json!({ "source": "cam1", "state": state });
+        if tai {
+            at -= at % samples(1);
+            let since = Duration::from_secs(at / rate)
+                + Duration::from_nanos(at % rate * 1_000_000_000 / rate);
+            let t = std::time::UNIX_EPOCH + since;
+            body["at"] = json!(faderz::app::rfc3339(t));
+        } else {
+            body["atIndex"] = json!(at);
+        }
+        if let Some(t) = transition_ms {
+            body["transitionMs"] = json!(t);
+        }
+        posted(&server, "/afv/tally", &body).await;
+        let edge = at + samples(wait);
+        let end = edge + samples(len);
+        let (first, last) = (at - samples(100), end + samples(100));
+        // Written by then, with the 100 ms the clock leads the output by.
+        while now() <= last + late + samples(200) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let legs = span(&domain.0, &flows.pgm, first + late, last + late);
+        for (n, (l, _)) in (first..).zip(&legs) {
+            let i = n as i64 - at as i64;
+            if n <= edge {
+                assert!(near(*l, from), "{what}: {l} at {i} from the tally");
+            } else if n >= end {
+                assert!(near(*l, to), "{what}: {l} at {i} from the tally");
+            } else {
+                let (lo, hi) = (from.min(to), from.max(to));
+                assert!(
+                    lo < *l && *l < hi && !near(*l, from) && !near(*l, to),
+                    "{what}: {l} at {i} from the tally, in the transition"
+                );
+            }
+        }
+    }
+    let (_, metrics) = get(server.ops, "/metrics").await;
+    assert!(metrics.contains("faderz_afv_late_total 0\n"), "{metrics}");
+    // A second past: counted, and the stage closed at once.
+    let body = json!({ "source": "cam1", "state": "preview", "atIndex": now() - samples(1000) });
+    posted(&server, "/afv/tally", &body).await;
+    let (_, metrics) = get(server.ops, "/metrics").await;
+    assert!(metrics.contains("faderz_afv_late_total 1\n"), "{metrics}");
+    pgm.expect(low, 0.0, "a late tally applied").await;
+    server.stop().await;
+}
+
 /// A bus, a mix-minus and an aux each meter the tone they carry on its
 /// peak, true peak, RMS and momentary loudness, and a duck group meters
 /// its key, envelope and engagement while its key crosses the threshold,
@@ -2257,6 +2395,7 @@ async fn the_engine_counters_reach_every_connection() {
             "command_late_total",
             "strip_refused_total",
             "resends_total",
+            "afv_late_total",
         ] {
             assert!(values[name].is_u64(), "{mode}: {name} in {values:?}");
         }

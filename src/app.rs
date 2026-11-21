@@ -12,7 +12,7 @@ use samplez_replica::entry::{NodeId, SessionKey};
 use samplez_replica::membership;
 use samplez_replica::state_machine::StateMachine;
 use samplez_service::config::AuthMode;
-use samplez_service::metrics::Metrics;
+use samplez_service::metrics::{Counter, Metrics};
 use samplez_service::replica::{Ack, Begin, Commands, ReplicaInfo, Resolution};
 use samplez_service::ws::{Delta, Frame, Hub, Slot, To};
 use samplez_service::{Identity, Owner, Position, ReplicatedState};
@@ -92,6 +92,9 @@ pub struct App {
     caught_up: Mutex<BTreeMap<NodeId, Instant>>,
     /// When [`replicas`](App::replicas) last heard each other replica.
     heard: Mutex<BTreeMap<NodeId, Instant>>,
+    /// The tallies this replica took whose transition starts before it
+    /// took them, as the `counters` message's `afv_late_total`.
+    pub afv_late: Counter,
 }
 
 /// A connection counted by [`App::connected`]; dropping it counts it
@@ -321,6 +324,11 @@ impl App {
             engine: Mutex::default(),
             caught_up: Mutex::default(),
             heard: Mutex::default(),
+            afv_late: metrics.counter(
+                "faderz_afv_late_total",
+                "Tallies taken after the sample index their transition starts at.",
+                &[],
+            ),
         })
     }
 
@@ -463,18 +471,21 @@ impl App {
     }
 
     /// The `counters` message of the engine's counters, inputs and
-    /// loudness measurements last read; none before the first read or
-    /// without an engine.
+    /// loudness measurements last read, with the tallies taken late
+    /// ([`App::afv_late`]); none before the first read or without an
+    /// engine.
     pub fn counters_message(&self) -> Option<String> {
         let read = self
             .counters
             .lock()
             .expect("counters lock poisoned")
             .clone()?;
+        let mut values = read["values"].clone();
+        values["afv_late_total"] = json!(self.afv_late.get());
         let m = json!({
             "type": "counters",
             "replica": self.replica_ref(),
-            "values": read["values"],
+            "values": values,
             "inputs": read["inputs"],
             "loudness": read["loudness"],
         });

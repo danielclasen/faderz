@@ -36,7 +36,7 @@ pub fn crossfade_lead(rate: u64) -> u64 {
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
 /// change to any of them takes another version, so replicas deriving
 /// differently never run side by side.
-pub const DERIVATION_VERSION: u32 = 8;
+pub const DERIVATION_VERSION: u32 = 9;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
@@ -87,6 +87,9 @@ pub enum Command {
         id: String,
         sources: BTreeMap<String, String>,
         replace: bool,
+        /// None for a cut, as logged before AFV stages faded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transition: Option<Transition>,
     },
     /// A WebSocket `console`: registers or updates `console` as the
     /// origin session's.
@@ -161,6 +164,30 @@ pub enum Command {
 pub struct Crossfade {
     pub start: u64,
     pub len: u32,
+}
+
+/// A tally's transition: the sample index it takes effect at and the
+/// `transitionMs` it carried. The receiving replica chooses `start` and
+/// the log carries it, so every replica fades each AFV stage the tally
+/// opens or closes from the same index ([`Mixer::afv_fades`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    pub start: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_ms: Option<u32>,
+}
+
+/// How [`Mixer::fading`] times the gain targets a command changes.
+#[derive(Clone, Copy)]
+enum Timing {
+    /// None fades: the engine ramps each over the ramp length.
+    Cut,
+    /// Every one alike, a recall's crossfade.
+    All(Crossfade),
+    /// Those of each channel whose AFV stage a tally opens or closes, by
+    /// that stage's times ([`Mixer::afv_fades`]); the others none.
+    Afv(Transition),
 }
 
 impl Command {
@@ -490,8 +517,9 @@ pub struct Mixer {
     /// without an engine. Derived from the state alone, so neither
     /// replicated nor saved.
     derived: Option<mix::Derived>,
-    /// The fade of each gain a crossfading recall changed, shaped as the
-    /// targets' gains, or empty for none ([`Mixer::fading`]).
+    /// The fade of each gain a crossfading recall or a tally's AFV
+    /// transition changed, shaped as the targets' gains, or empty for
+    /// none ([`Mixer::fading`]).
     fading: Vec<Vec<Option<Fade>>>,
 }
 
@@ -1511,19 +1539,19 @@ impl Mixer {
     }
 
     /// Runs `f`, a command or a lease expiry, and keeps
-    /// [`Mixer::fading`] for each gain target it changes: with `fade`,
-    /// the gain ramps from the value it has at the fade's start, its
-    /// running fade's value there or its old target, to the new target;
-    /// without, it loses its fade, and the engine ramps it over the ramp
-    /// length from the value it holds when the change applies. A gain
-    /// left as it was keeps its fade. Every gain is the one the engine
-    /// takes, an invalid one 0 ([`samplez_dsp::valid_gain`]).
-    fn fading<T>(&mut self, fade: Option<Crossfade>, f: impl FnOnce(&mut Mixer) -> T) -> T {
+    /// [`Mixer::fading`] for each gain target it changes: with a fade
+    /// from `timing`, the gain ramps from the value it has at the fade's
+    /// start, its running fade's value there or its old target, to the
+    /// new target; without, it loses its fade, and the engine ramps it
+    /// over the ramp length from the value it holds when the change
+    /// applies. A gain left as it was keeps its fade. Every gain is the
+    /// one the engine takes, an invalid one 0 ([`samplez_dsp::valid_gain`]).
+    fn fading<T>(&mut self, timing: Timing, f: impl FnOnce(&mut Mixer) -> T) -> T {
         // Fades ended by the index the recall was received at, its
         // logged start less the lead, go: no replica applies the recall
         // earlier, so their gains hold the scene's values by then, and a
         // fade still running where the recall applies is not cut short.
-        if let Some(c) = fade {
+        if let Timing::All(c) = timing {
             let received = c
                 .start
                 .saturating_sub(crossfade_lead(u64::from(self.shape().sample_rate)));
@@ -1536,8 +1564,11 @@ impl Mixer {
                 self.fading.clear();
             }
         }
+        let opens = matches!(timing, Timing::Afv(_)).then(|| self.afv_opens());
         let before = match &self.derived {
-            Some(d) if fade.is_some() || !self.fading.is_empty() => Some(d.targets().gains.clone()),
+            Some(d) if !matches!(timing, Timing::Cut) || !self.fading.is_empty() => {
+                Some(d.targets().gains.clone())
+            }
             _ => None,
         };
         let out = f(self);
@@ -1545,11 +1576,19 @@ impl Mixer {
             return out;
         };
         let after = &d.targets().gains;
+        // Each row's fade; none past the end.
+        let timed = match (timing, opens) {
+            (Timing::Afv(t), Some(opens)) => self.afv_fades(&opens, t),
+            (Timing::All(c), _) => vec![Some(c); after.len()],
+            _ => Vec::new(),
+        };
         if self.fading.is_empty() {
             self.fading = after.iter().map(|row| vec![None; row.len()]).collect();
         }
         let valid = |g: f32| if samplez_dsp::valid_gain(g) { g } else { 0.0 };
-        for ((row, was), fades) in after.iter().zip(&before).zip(&mut self.fading) {
+        let rows = after.iter().zip(&before).zip(&mut self.fading);
+        for (r, ((row, was), fades)) in rows.enumerate() {
+            let fade = timed.get(r).copied().flatten();
             for ((&gain, &old), cell) in row.iter().zip(was).zip(fades) {
                 if valid(gain).to_bits() == valid(old).to_bits() {
                     continue;
@@ -1566,6 +1605,45 @@ impl Mixer {
             self.fading.clear();
         }
         out
+    }
+
+    /// Each channel's AFV stage open, by slot.
+    fn afv_opens(&self) -> Vec<bool> {
+        (self.shape().channels.iter())
+            .map(|c| self.state["afv"][&c.id]["open"] == true)
+            .collect()
+    }
+
+    /// The fade of each row of the gains for the tally `t`, the stages
+    /// having been open as `opens` says before it: per model
+    /// `AfvBinding`, a stage the tally opens rises from `t.start` over its
+    /// `riseMs`, one it closes waits its `holdMs` from there and falls
+    /// over its `fallMs`, `t.transitionMs` in place of both times. The
+    /// rows of a channel whose stage stays, and the line-up tone's, get
+    /// none.
+    fn afv_fades(&self, opens: &[bool], t: Transition) -> Vec<Option<Crossfade>> {
+        let rate = u64::from(self.shape().sample_rate);
+        let samples = |ms: u64| ms * rate / 1000;
+        let mut rows = Vec::new();
+        for (c, &was) in self.shape().channels.iter().zip(opens) {
+            let b = &self.state["afv"][&c.id];
+            let open = b["open"] == true;
+            let ms = |key: &str| b[key].as_f64().unwrap_or(0.0) as u64;
+            let fade = (open != was).then(|| {
+                let (hold, len) = if open {
+                    (0, ms("riseMs"))
+                } else {
+                    (ms("holdMs"), ms("fallMs"))
+                };
+                let len = t.transition_ms.map_or(len, u64::from);
+                Crossfade {
+                    start: t.start + samples(hold),
+                    len: samples(len) as u32,
+                }
+            });
+            rows.extend(std::iter::repeat_n(fade, c.width));
+        }
+        rows
     }
 
     /// Recalls `scene`: every stored leaf whose recall-safe group its
@@ -1999,11 +2077,15 @@ impl Product for Mixer {
             return Effect::Unchanged;
         };
         let session = origin.key();
-        let fade = match &command {
-            Command::Recall { fade, .. } => *fade,
-            _ => None,
+        let timing = match &command {
+            Command::Recall { fade: Some(c), .. } => Timing::All(*c),
+            Command::Tally {
+                transition: Some(t),
+                ..
+            } => Timing::Afv(*t),
+            _ => Timing::Cut,
         };
-        self.fading(fade, |m| match &command {
+        self.fading(timing, |m| match &command {
             Command::Control(c) => m.control(origin, c, ctx),
             Command::Patch { id, changes } => m.patch(&session, id, changes, ctx),
             Command::StoreScene {
@@ -2018,6 +2100,7 @@ impl Product for Mixer {
                 id,
                 sources,
                 replace,
+                ..
             } => m.tally(&session, id, sources, *replace),
             Command::Register {
                 id,
@@ -2093,7 +2176,7 @@ impl Product for Mixer {
     /// Releases every control `session` holds and disconnects its
     /// consoles.
     fn expire(&mut self, session: &SessionKey) -> Effect<Edits> {
-        self.fading(None, |m| m.end_lease(session))
+        self.fading(Timing::Cut, |m| m.end_lease(session))
     }
 
     fn forget(&mut self, session: &SessionKey) {
@@ -2870,6 +2953,7 @@ mod tests {
                     id: "t".into(),
                     sources,
                     replace,
+                    transition: None,
                 },
             )
         };
@@ -2885,6 +2969,7 @@ mod tests {
                 id: "t".into(),
                 sources,
                 replace: true,
+                transition: None,
             },
         ));
         assert!(
@@ -3014,6 +3099,7 @@ mod tests {
                 id: "t1".into(),
                 sources: BTreeMap::from([("CAM1".to_owned(), "program".to_owned())]),
                 replace: false,
+                transition: None,
             },
         );
         let talk = "/mixMinus/mm1/interrupt/active";
@@ -3287,6 +3373,7 @@ mod tests {
                 id: "t".into(),
                 sources,
                 replace: false,
+                transition: None,
             },
         ));
         assert!(v.contains(&("/afv/ch1/open".into(), json!(true))), "{v:?}");
@@ -3304,7 +3391,8 @@ mod tests {
                 Command::Tally {
                     id: "t1".into(),
                     sources,
-                    replace: false
+                    replace: false,
+                    transition: None,
                 }
             ),
             Effect::Changed(_)
@@ -3316,7 +3404,8 @@ mod tests {
                 Command::Tally {
                     id: "t2".into(),
                     sources: one,
-                    replace: false
+                    replace: false,
+                    transition: None,
                 }
             ),
             Effect::Changed(_)
@@ -3328,7 +3417,8 @@ mod tests {
                 Command::Tally {
                     id: "t3".into(),
                     sources: more,
-                    replace: false
+                    replace: false,
+                    transition: None,
                 }
             ),
             Effect::Unchanged
@@ -4200,6 +4290,7 @@ mod tests {
                     id: format!("t-{source}-{state}"),
                     sources: [(source.to_owned(), state.to_owned())].into(),
                     replace: false,
+                    transition: None,
                 },
             )
         };
@@ -4530,12 +4621,20 @@ mod tests {
                     },
                     15 => {
                         let state = ["program", "preview", "off"][next(3) as usize];
+                        let replace = next(2) == 0;
+                        // A transition fades the stages it moves, which a
+                        // save and load keeps.
+                        let transition = (next(2) == 0).then(|| Transition {
+                            start: next(96_000),
+                            transition_ms: (next(2) == 0).then(|| next(500) as u32),
+                        });
                         rest(
                             &mut m,
                             Command::Tally {
                                 id: format!("t{seq}"),
                                 sources: [("cam1".to_owned(), state.to_owned())].into(),
-                                replace: next(2) == 0,
+                                replace,
+                                transition,
                             },
                         )
                     }
@@ -4914,6 +5013,116 @@ mod tests {
         );
         let ended = ch2_after(end + lead);
         assert!(ended.iter().all(Option::is_none), "{ended:?}");
+    }
+
+    /// A tally fades the gains of each channel whose AFV stage it moves,
+    /// from the start its transition carries, per model `AfvBinding`: a
+    /// stage it closes waits its holdMs and falls over its fallMs, one it
+    /// opens rises over its riseMs from the start, and transitionMs takes
+    /// the place of both lengths, the hold kept. A channel whose stage is
+    /// disabled gets none, a fader move drops the fades of the gains it
+    /// moves, and a tally without a transition is a cut.
+    #[test]
+    fn a_tally_fades_the_afv_stages_it_moves_on_their_times() {
+        let mut m = wired();
+        patch(
+            &mut m,
+            "p0",
+            &[
+                ("/channels/ch1/fader", json!(0)),
+                ("/channels/ch2/fader", json!(0)),
+                ("/channels/st1/fader", json!(0)),
+                ("/afv/ch1/enabled", json!(true)),
+                ("/afv/ch1/source", json!("cam1")),
+                ("/afv/ch1/offLevel", json!(-20)),
+                ("/afv/ch1/riseMs", json!(100)),
+                ("/afv/ch1/holdMs", json!(250)),
+                ("/afv/ch1/fallMs", json!(500)),
+                ("/afv/st1/enabled", json!(true)),
+                ("/afv/st1/source", json!("cam1")),
+                ("/afv/st1/offLevel", json!(-30)),
+                ("/afv/st1/riseMs", json!(20)),
+                ("/afv/st1/holdMs", json!(0)),
+                ("/afv/st1/fallMs", json!(40)),
+                // Bound to the same source, but disabled.
+                ("/afv/ch2/source", json!("cam1")),
+            ],
+        );
+        let rate = u64::from(m.shape().sample_rate);
+        let samples = |ms: u64| ms * rate / 1000;
+        let tally = |m: &mut Mixer, id: &str, state: &str, transition| {
+            let sources = [("cam1".to_owned(), state.to_owned())].into();
+            let tally = Command::Tally {
+                id: id.into(),
+                sources,
+                replace: false,
+                transition,
+            };
+            assert!(matches!(rest(m, tally), Effect::Changed(_)));
+            m.targets().unwrap()
+        };
+        // Every gain that moved fades as `want` gives for its row, the
+        // start and length, from the target it had: each fade before
+        // ended by then. ch1's row and st1's two move, ch2's does not.
+        let check = |t: &Targets, before: &[Vec<f32>], want: &dyn Fn(usize) -> (u64, u64)| {
+            let mut moved = BTreeSet::new();
+            for (r, row) in t.gains.iter().enumerate() {
+                for (o, &g) in row.iter().enumerate() {
+                    let changed = before[r][o].to_bits() != g.to_bits();
+                    let fade = changed.then(|| {
+                        let (start, len) = want(r);
+                        Fade {
+                            from: before[r][o],
+                            start,
+                            len: len as u32,
+                        }
+                    });
+                    assert_eq!(t.fading[r][o], fade, "gain {r} -> {o}");
+                    if changed {
+                        moved.insert(r);
+                    }
+                }
+            }
+            assert_eq!(moved, BTreeSet::from([0, 2, 3]));
+        };
+        let open = m.targets().unwrap().gains;
+        let start = 96_000;
+        let timed = |start| {
+            Some(Transition {
+                start,
+                transition_ms: None,
+            })
+        };
+        let closed = tally(&mut m, "t1", "preview", timed(start));
+        assert_eq!(at(&m, "/afv/ch2/open"), &json!(true));
+        check(&closed, &open, &|r| match r {
+            0 => (start + samples(250), samples(500)),
+            _ => (start, samples(40)),
+        });
+        let start = 200_000;
+        let opened = tally(&mut m, "t2", "program", timed(start));
+        assert_eq!(opened.gains, open);
+        check(&opened, &closed.gains, &|r| match r {
+            0 => (start, samples(100)),
+            _ => (start, samples(20)),
+        });
+        let start = 300_000;
+        let transition = Some(Transition {
+            start,
+            transition_ms: Some(60),
+        });
+        let closed = tally(&mut m, "t3", "preview", transition);
+        check(&closed, &open, &|r| match r {
+            0 => (start + samples(250), samples(60)),
+            _ => (start, samples(60)),
+        });
+        // A fader move mid-transition drops ch1's fades and keeps st1's.
+        patch(&mut m, "p1", &[("/channels/ch1/fader", json!(-10))]);
+        let t = m.targets().unwrap();
+        assert!(t.fading[0].iter().all(Option::is_none), "{:?}", t.fading[0]);
+        assert!(t.fading[2].iter().any(Option::is_some), "{:?}", t.fading[2]);
+        let cut = tally(&mut m, "t4", "program", None);
+        assert!(cut.fading.is_empty(), "{:?}", cut.fading);
     }
 
     /// The configuration hash follows the shape, the declared consoles

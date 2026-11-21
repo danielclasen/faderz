@@ -3052,6 +3052,151 @@ fn a_scene_recall_crossfades_alike_on_every_replica() {
     reader.join().unwrap();
 }
 
+/// A tally's AFV transition fades every replica's programme bit for bit
+/// alike, from the index the replica taking it logged, its receipt plus
+/// the lead or its atIndex: one closing ch1's stage holds for holdMs and
+/// falls over fallMs, one opening it rises over riseMs, and transitionMs
+/// takes the place of both lengths. A replica fading from its own clock
+/// would start elsewhere and write other blocks than its peers.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn an_afv_transition_fades_alike_on_every_replica() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "ch1", "name": "Pres 1", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM out", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let rate = shape["sampleRate"].as_u64().unwrap();
+    let samples = |ms: u64| ms * rate / 1000;
+    let a = 0.5f32;
+    let (set, listeners) = Set::with("afv", shape, &["out-pgm"], |domain| {
+        let ch1 = new_id();
+        (
+            vec![Source::start(domain, &ch1, vec![a])],
+            json!({ "ch1": { "flow": ch1 } }),
+        )
+    });
+    let nodes = run(&set, listeners);
+    let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
+    let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
+    let low = 10f32.powf(-20.0 / 20.0);
+    let (rise, hold, fall, transition) = (100, 200, 300, 50);
+    write(
+        &nodes,
+        0,
+        &[
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/channels/ch1/fader", json!(0)),
+            ("/afv/ch1/enabled", json!(true)),
+            ("/afv/ch1/source", json!("cam1")),
+            ("/afv/ch1/offLevel", json!(-20)),
+            ("/afv/ch1/riseMs", json!(rise)),
+            ("/afv/ch1/holdMs", json!(hold)),
+            ("/afv/ch1/fallMs", json!(fall)),
+        ],
+    );
+    every_replica_writes(&set, &nodes, &set.members, &[a, 0.0], 1e-6, "ch1 open");
+    // A block's energy: the left leg alone carries ch1, constant.
+    let energy = |g: f32| f64::from(B as f32 * (a * g) * (a * g));
+    let at_level = |e: f64, g: f32| (e - energy(g)).abs() <= energy(g) * 1e-4;
+    // The programme output carries the bus's limiter, late by its
+    // look-ahead.
+    let late = samplez_dsp::LIMITER_DELAY as u64;
+    let api = api();
+    // The tally, its transitionMs, whether it names its index, and the
+    // hold and length its gain moves over.
+    let transitions = [
+        ("preview", None, false, hold, fall),
+        ("program", None, true, 0, rise),
+        ("preview", Some(transition), true, hold, transition),
+        ("program", Some(transition), false, 0, transition),
+    ];
+    for (n, (state, transition_ms, ahead, wait, len)) in transitions.into_iter().enumerate() {
+        let what = format!("{state}, transitionMs {transition_ms:?}, atIndex {ahead}");
+        let (from_gain, to_gain) = if state == "program" {
+            (low, 1.0)
+        } else {
+            (1.0, low)
+        };
+        let from = Outputs::now();
+        let mut body = json!({ "source": "cam1", "state": state });
+        // Half a second ahead, off the block grid.
+        let at = ahead.then(|| time::timestamp_to_index(&api, time::now(&api)) + samples(500) + 7);
+        if let Some(at) = at {
+            body["atIndex"] = json!(at);
+        }
+        if let Some(t) = transition_ms {
+            body["transitionMs"] = json!(t);
+        }
+        post_any(&nodes, n % REPLICAS, "/afv/tally", &body);
+        every_replica_writes(&set, &nodes, &set.members, &[a * to_gain, 0.0], 1e-6, &what);
+        // Every replica's blocks up to the transition's end, read.
+        let to = Outputs::now();
+        let read = until(10, || {
+            let blocks = outputs.blocks.lock().unwrap();
+            blocks.iter().all(|b| b.range(to..).next().is_some())
+        });
+        assert!(read, "{what}: the outputs not read: {}", states(&nodes));
+        for (x, y) in [(0, 1), (0, 2), (1, 2)] {
+            let c = outputs.compare(x, y, from);
+            assert!(
+                c.differing.is_empty(),
+                "{what}, replicas {x} and {y}: {c:?}"
+            );
+        }
+        let blocks = outputs.blocks.lock().unwrap();
+        let ramped: Vec<u64> = (blocks[0].range(from..to))
+            .filter(|(_, (_, e))| !at_level(*e, from_gain) && !at_level(*e, to_gain))
+            .map(|(k, _)| *k)
+            .collect();
+        // The transition compared on every replica: a block one withheld
+        // is not written, so it cannot be compared.
+        let alike = (ramped.iter())
+            .filter(|k| blocks.iter().all(|b| b.contains_key(k)))
+            .count();
+        assert!(
+            alike * 2 >= ramped.len(),
+            "{what}: {alike} of {} blocks committed by every replica",
+            ramped.len()
+        );
+        let len = samples(len);
+        let spanned = ramped.len() as u64 * B;
+        assert!(
+            (len / 2..=len + B).contains(&spanned),
+            "{what}, {len} samples: {spanned} samples between the levels"
+        );
+        // With atIndex, the level holds to the edge and is the new one
+        // from the end on, as the output carries them.
+        if let Some(at) = at {
+            let edge = at + samples(wait) + late;
+            for (&k, &(_, e)) in blocks[0].range(from..to) {
+                if (k + 1) * B <= edge + 1 {
+                    assert!(
+                        at_level(e, from_gain),
+                        "{what}: block {k} before the edge {edge}: {e}"
+                    );
+                }
+                if k * B >= edge + len {
+                    assert!(at_level(e, to_gain), "{what}: block {k} past the end: {e}");
+                }
+            }
+        }
+    }
+    outputs.stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
+}
+
 /// A replica rebuilt from a peer's snapshot in the middle of a crossfade
 /// takes the running fades with the state and writes, bit for bit, what
 /// its peers write for the rest of the fade.

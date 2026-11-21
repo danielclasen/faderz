@@ -1371,6 +1371,8 @@ mod tests {
         let sent: std::collections::BTreeSet<String> = (engine_counters(&c).iter())
             .map(|(name, _)| format!("{name}_total"))
             .chain(["input_too_late_blocks_total".into(), "resends_total".into()])
+            // App::counters_message adds the tallies taken late.
+            .chain(["afv_late_total".into()])
             .collect();
         assert_eq!(
             named,
