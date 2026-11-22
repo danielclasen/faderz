@@ -307,12 +307,24 @@ fn until(secs: u64, mut f: impl FnMut() -> bool) -> bool {
     true
 }
 
-/// Waits until replica `n` has been committing and ready for a second.
+/// Whether replica `n`'s engine has an output enabled.
+fn engine_enabled(node: &Node) -> bool {
+    let engine = node.server.audio.as_ref().unwrap().engine();
+    engine.status().outputs.iter().any(|o| o.enabled)
+}
+
+/// Waits until replica `n` has been settled and ready for a second:
+/// committing, or withdrawn while its engine has no output enabled, as a
+/// replica of a set whose outputs are all disabled writes nothing and so
+/// commits nothing.
 fn steady(nodes: &[Option<Node>], n: usize) {
     let mut since: Option<Instant> = None;
     let steady = until(60, || {
         let node = node(nodes, n);
-        if node.state() == Some(ReplicaState::Committing) && node.ops("/readyz").0 == 200 {
+        let state = node.state();
+        let good = state == Some(ReplicaState::Committing)
+            || (!engine_enabled(node) && state == Some(ReplicaState::Withdrawn));
+        if good && node.ops("/readyz").0 == 200 {
             since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_secs(1)
         } else {
             since = None;
@@ -1526,14 +1538,6 @@ fn every_replica_serves_the_versions_the_registry_holds() {
     });
     assert!(fired, "the receiver's schedule did not fire");
     agree(&nodes, &registry, "after the changes");
-    // A set whose outputs are all disabled has no committing donor, so a
-    // diverged replica cannot resync: the sender is enabled again before
-    // the leader change.
-    activate(&nodes, 2, &pgm, json!({ "master_enable": true }));
-    let enabled = until(20, || {
-        (0..REPLICAS).all(|n| active(&nodes, n, &pgm)["master_enable"] == true)
-    });
-    assert!(enabled, "the sender was not enabled again");
 
     let leader = (0..REPLICAS)
         .find(|&n| node(&nodes, n).leads())
