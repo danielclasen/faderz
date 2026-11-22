@@ -120,6 +120,12 @@ struct Reader {
     generation: Generation,
     state: SlotState,
     buf: Vec<f32>,
+    /// How many blocks behind the clock it reads: 100 (100 ms), plus the
+    /// engine's reader margin where a test sets one, as the engine writes
+    /// each block that much later ([`Reader::after_margin`]).
+    lag: u64,
+    /// What the last read of [`Reader::recent`] returned.
+    outcome: Option<Outcome>,
 }
 
 impl Reader {
@@ -147,16 +153,27 @@ impl Reader {
             generation,
             state: SlotState::default(),
             buf: vec![0.0; channels as usize * B as usize],
+            lag: 100,
+            outcome: None,
         }
+    }
+
+    /// The reader of an engine whose `readerMarginSamples` is `margin`:
+    /// the engine computes and writes each block that many samples after
+    /// its time, so a block 100 ms behind the clock is not written yet.
+    fn after_margin(mut self, margin: u64) -> Reader {
+        self.lag += margin.div_ceil(B);
+        self
     }
 
     /// A recent block, 100 ms behind the clock, when it was written:
     /// both legs, planar.
     fn recent(&mut self) -> Option<&[f32]> {
         let api = self.generation.api();
-        let k = time::timestamp_to_index(api, time::now(api)) / B - 100;
+        let k = time::timestamp_to_index(api, time::now(api)) / B - self.lag;
         let input = self.generation.input(0).unwrap();
         let o = input.read(&mut self.state, k, &GroupWait::Skipped, &mut self.buf);
+        self.outcome = Some(o);
         (o == Outcome::Copy).then_some(&self.buf[..])
     }
 
@@ -164,7 +181,7 @@ impl Reader {
     /// 100 ms behind the clock, when all were written.
     fn peaks(&mut self) -> Option<(f32, f32)> {
         let api = self.generation.api();
-        let last = time::timestamp_to_index(api, time::now(api)) / B - 100;
+        let last = time::timestamp_to_index(api, time::now(api)) / B - self.lag;
         let input = self.generation.input(0).unwrap();
         let n = B as usize;
         let mut peaks = (0.0f32, 0.0f32);
@@ -184,7 +201,7 @@ impl Reader {
     /// clock, oldest first.
     fn history(&mut self) -> Vec<f32> {
         let api = self.generation.api();
-        let last = time::timestamp_to_index(api, time::now(api)) / B - 100;
+        let last = time::timestamp_to_index(api, time::now(api)) / B - self.lag;
         let input = self.generation.input(0).unwrap();
         let n = B as usize;
         let mut left = Vec::new();
@@ -203,7 +220,7 @@ impl Reader {
     /// The block 100 ms behind libmxl's clock, written by now.
     fn behind(&self) -> u64 {
         let api = self.generation.api();
-        time::timestamp_to_index(api, time::now(api)) / B - 100
+        time::timestamp_to_index(api, time::now(api)) / B - self.lag
     }
 
     /// The left leg of every block from block `from` on, in order, until
@@ -275,7 +292,14 @@ impl Reader {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("{what}: expected ({left}, {right}), last read {last:?}");
+        match last {
+            Some(last) => panic!("{what}: expected ({left}, {right}), last read {last:?}"),
+            None => panic!(
+                "{what}: expected ({left}, {right}), no block read in 10 s {} blocks behind \
+                 the clock, last outcome {:?}",
+                self.lag, self.outcome
+            ),
+        }
     }
 }
 
@@ -1186,7 +1210,7 @@ async fn a_scene_recall_crossfades_over_its_time() {
     )
     .await;
     appears(&domain.0, &flows.pgm).await;
-    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    let mut pgm = Reader::new(&domain.0, &flows.pgm).after_margin(rate / 10);
     let deadline = Instant::now() + Duration::from_secs(10);
     while get(server.ops, "/readyz").await.0 != 200 {
         assert!(Instant::now() < deadline, "ready");
@@ -2642,7 +2666,7 @@ async fn a_diff_beyond_the_engines_queue_lands_whole() {
     )
     .await;
     appears(&domain.0, &pgm_id).await;
-    let mut pgm = Reader::new(&domain.0, &pgm_id);
+    let mut pgm = Reader::new(&domain.0, &pgm_id).after_margin(48_000 / 10);
     pgm.expect(0.0, 0.0, "every fader closed").await;
     // Centre pan: 2 N coefficients, beyond the engine's 64.
     let paths: Vec<String> = (0..N).map(|i| format!("/channels/c{i}/fader")).collect();
