@@ -42,47 +42,53 @@
 </script>
 
 <section class="master" class:selected style:width={element.width > 2 ? `${WIDE_BASE_W + element.width * LEG_W}px` : undefined} aria-label={`${element.name} master`} data-master={element.id}>
-  <button class="head" class:toned onclick={() => onselect?.(element.id)} disabled={!onselect} aria-pressed={selected} use:tip={element.name}>
-    <span class="name">{element.name}</span>
-    <!-- Every tag keeps its place, shown or not: the name never rewraps.
-         Under the kind, the width as a channel strip shows it; line-up
-         tone, which replaces the programme, shows in its place. -->
-    <span class="tags">
-      <span class="tag" class:blank={!tag}>{tag}</span>
-      <span class="second">
-        <span class="width" class:hidden={toned} data-testid={`layout-${element.id}`}><LayoutBadge layout={element.layout} /></span>
-        <span class="tag tone" class:shown={toned} data-testid={`tone-${element.id}`} aria-hidden={!toned}>TONE<span class="sr-only">: line-up tone {tone.level} dBFS replaces this output</span></span>
+  <div class="top">
+    <button class="head" class:toned onclick={() => onselect?.(element.id)} disabled={!onselect} aria-pressed={selected} use:tip={element.name}>
+      <span class="name">{element.name}</span>
+      <!-- Every tag keeps its place, shown or not: the name never rewraps.
+           Under the kind, the width as a channel strip shows it; line-up
+           tone, which replaces the programme, shows in its place. -->
+      <span class="tags">
+        <span class="tag" class:blank={!tag}>{tag}</span>
+        <span class="second">
+          <span class="width" class:hidden={toned} data-testid={`layout-${element.id}`}><LayoutBadge layout={element.layout} /></span>
+          <span class="tag tone" class:shown={toned} data-testid={`tone-${element.id}`} aria-hidden={!toned}>TONE<span class="sr-only">: line-up tone {tone.level} dBFS replaces this output</span></span>
+        </span>
       </span>
-    </span>
-  </button>
-  <Loudness {group} id={element.id} stereo={element.layout === 'stereo'} onreset={() => resetLoudness(mixer, [element.id])} />
-  {#if group === 'mixMinus'}
-    <TalkKey id={element.id} name={element.name} />
-  {:else if talkRow}
-    <div class="talk-space" aria-hidden="true"></div>
-  {/if}
-  <HoldMute path={path('mute')} name={element.name} />
-  <div class="fm">
-    <Fader path={path('fader')} label={`${element.name} fader`} />
-    <div class="meter">
-      <Meter {group} id={element.id} legs={element.width} scale="left" label={`${element.name} meter`} />
-    </div>
+    </button>
+    <Loudness {group} id={element.id} stereo={element.layout === 'stereo'} onreset={() => resetLoudness(mixer, [element.id])} />
+    {#if group === 'mixMinus'}
+      <TalkKey id={element.id} name={element.name} />
+    {:else if talkRow}
+      <div class="talk-space" aria-hidden="true"></div>
+    {/if}
+    <HoldMute path={path('mute')} name={element.name} />
+  </div>
+  <Fader path={path('fader')} label={`${element.name} fader`} />
+  <div class="meter">
+    <Meter {group} id={element.id} legs={element.width} scale="left" label={`${element.name} meter`} />
+  </div>
+  <div class="foot">
     <!-- Same geometry as the bars the meter layer draws: after the 18 px
          scale, one equal column per leg with a 1 px gap. -->
     <div class="legs" aria-hidden="true" style:grid-template-columns={`repeat(${labels.length}, minmax(0, 1fr))`}>
       {#each labels as l (l)}<span>{l}</span>{/each}
     </div>
+    <output class="num value"><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
   </div>
-  <output class="num value"><span class="fixed">{fit(formatDb(fader), 5)}</span></output>
 </section>
 
 <style>
+  /* Rows: the head and keys above the fader, the fader (at least 124 px)
+     and its meter, and the leg labels and value below. The fader takes
+     the first column. */
   .master {
     width: 104px;
     flex: none;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    display: grid;
+    grid-template-rows: auto minmax(124px, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 3px;
     padding: 4px 5px 6px;
     background: var(--panel);
     border-left: 1px solid var(--line);
@@ -90,6 +96,12 @@
   }
   .master.selected {
     box-shadow: inset 0 2px 0 var(--on);
+  }
+  .top {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   .head {
     all: unset;
@@ -172,16 +184,15 @@
   .talk-space {
     height: 53px;
   }
-  .fm {
-    flex: 1;
-    min-height: 140px;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    grid-template-rows: minmax(0, 1fr) auto;
-    gap: 3px;
-  }
   .meter {
     padding: 17px 0;
+  }
+  /* The legs under the meter's column, the value across both. */
+  .foot {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    row-gap: 4px;
   }
   .legs {
     grid-column: 2;
@@ -199,6 +210,7 @@
     white-space: nowrap;
   }
   .value {
+    grid-column: 1 / -1;
     font-size: 11.5px;
     text-align: center;
     background: var(--well);

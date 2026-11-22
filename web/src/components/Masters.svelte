@@ -83,12 +83,23 @@
     border-left: 2px solid var(--line-strong);
     background: var(--panel);
   }
-  /* As wide as its masters, wider than the pane where they scroll. */
+  /* As wide as its masters, wider than the pane where they scroll. Every
+     master takes the same three rows, what lies above its fader, the
+     fader and what lies below it, so every fader and its scale start and
+     end at the same height. */
   .row {
-    display: flex;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    grid-template-rows: auto 1fr auto;
+    row-gap: 4px;
     flex: 1;
     min-height: 0;
     min-width: max-content;
+  }
+  .row > :global(section) {
+    grid-row: 1 / -1;
+    grid-template-rows: subgrid;
   }
   /* Kept in view where the masters scroll sideways. As wide as the
      masters below it, whatever its tiles would take in one row: the tiles
@@ -155,6 +166,14 @@
     .row {
       flex: 1 0 auto;
       min-height: 560px;
+    }
+  }
+  /* The monitor's keys, finger-sized on a touch screen, set the row above
+     the faders; every fader keeps the travel a bus fader had there, and
+     the overlay scrolls. */
+  @media (max-width: 1399px) and (pointer: coarse) {
+    .row {
+      grid-template-rows: auto minmax(290px, 1fr) auto;
     }
   }
 </style>

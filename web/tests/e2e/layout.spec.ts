@@ -277,6 +277,39 @@ test('every fader fits its box, VCA masters included', async ({ page }) => {
   expect(over).toEqual([]);
 });
 
+test('every master fader has its track and scale at the same height', async ({ page }) => {
+  await live(page);
+  // Below 1400 px the masters lie over the strips while MASTERS is lit.
+  const masters = page.getByRole('button', { name: 'MASTERS' });
+  if (await masters.isVisible()) await masters.click();
+  const panel = page.getByTestId('masters');
+  await expect(panel).toBeVisible();
+  // One fader per VCA, bus and the monitor; masters scrolled out of a
+  // narrow overlay are measured too.
+  const faders = await panel.locator('.fader [role="slider"]').evaluateAll((tracks) =>
+    tracks.map((t) => {
+      const marks = [...t.parentElement!.querySelectorAll('.scale span')];
+      const at = (text: string) => {
+        const r = marks.find((m) => m.textContent!.trim() === text)!.getBoundingClientRect();
+        return r.top + r.height / 2;
+      };
+      const r = t.getBoundingClientRect();
+      return { label: t.getAttribute('aria-label')!, top: r.top, bottom: r.bottom, '0 dB': at('0'), '-10 dB': at('-10') };
+    }),
+  );
+  // Every VCA, every bus and the monitor.
+  expect(faders.length).toBe(await panel.locator('section[aria-label^="VCA "], section[data-master], #monitor').count());
+  expect(faders.map((f) => f.label)).toEqual(expect.arrayContaining(['Monitor level', expect.stringMatching(/^VCA /), expect.stringMatching(/^PGM/)]));
+  const off: string[] = [];
+  for (const key of ['top', 'bottom', '0 dB', '-10 dB'] as const) {
+    const ref = faders[0]!;
+    for (const f of faders) {
+      if (Math.abs(f[key] - ref[key]) > 1) off.push(`${key}: ${f.label} ${f[key].toFixed(1)} != ${ref.label} ${ref[key].toFixed(1)}`);
+    }
+  }
+  expect(off).toEqual([]);
+});
+
 test('every value field of a processing panel shows its whole value', async ({ page, request }) => {
   // The longest value a field takes: a limiter ceiling of "-0.5 dBTP".
   await patch(request, '/buses/pgm51/limiter/ceiling', -0.5);

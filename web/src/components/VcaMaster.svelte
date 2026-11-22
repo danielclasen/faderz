@@ -21,39 +21,48 @@
 </script>
 
 <section class="vca" aria-label={`VCA ${vca.name}`}>
-  <!-- A press spills the VCA: the strip area shows only its members. A
-       button, so the tooltip with the full name and the members reaches
-       the keyboard too. -->
-  <button
-    class="head"
-    onclick={() => document.dispatchEvent(new CustomEvent('faderz:spill', { detail: vca.id }))}
-    aria-label={`Spill VCA ${vca.name}: show only its members`}
-    use:tip={`VCA ${vca.name}: ${memberNames || 'no members'}. Press to show only its members on the strips.`}
-  >
-    <span class="kind">VCA</span>
-    <span class="name">{vca.name}</span>
-  </button>
-  <div class="members">
-    {members.length} ch
+  <div class="top">
+    <!-- A press spills the VCA: the strip area shows only its members. A
+         button, so the tooltip with the full name and the members reaches
+         the keyboard too. -->
+    <button
+      class="head"
+      onclick={() => document.dispatchEvent(new CustomEvent('faderz:spill', { detail: vca.id }))}
+      aria-label={`Spill VCA ${vca.name}: show only its members`}
+      use:tip={`VCA ${vca.name}: ${memberNames || 'no members'}. Press to show only its members on the strips.`}
+    >
+      <span class="kind">VCA</span>
+      <span class="name">{vca.name}</span>
+    </button>
+    <div class="members">
+      {members.length} ch
+    </div>
+    <button {@attach pendingWrite(mixer, vcaPath(vca.id, 'solo'))} class="key pfl" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`VCA ${vca.name} PFL, all members`}>PFL</button>
+    <button {@attach pendingWrite(mixer, vcaPath(vca.id, 'solo'))} class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`VCA ${vca.name} AFL, all members`}>AFL</button>
+    <button {@attach pendingWrite(mixer, vcaPath(vca.id, 'mute'))} class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
   </div>
-  <button {@attach pendingWrite(mixer, vcaPath(vca.id, 'solo'))} class="key pfl" aria-disabled={mixer.locked} aria-pressed={solo === 'pfl'} onclick={() => toggleSolo('pfl')} aria-label={`VCA ${vca.name} PFL, all members`}>PFL</button>
-  <button {@attach pendingWrite(mixer, vcaPath(vca.id, 'solo'))} class="key afl" aria-disabled={mixer.locked} aria-pressed={solo === 'afl'} onclick={() => toggleSolo('afl')} aria-label={`VCA ${vca.name} AFL, all members`}>AFL</button>
-  <button {@attach pendingWrite(mixer, vcaPath(vca.id, 'mute'))} class="key mute" aria-disabled={mixer.locked} aria-pressed={mute} onclick={() => mixer.set(vcaPath(vca.id, 'mute'), !mute)} aria-label={`VCA ${vca.name} mute`}>MUTE</button>
   <div class="f"><Fader path={vcaPath(vca.id, 'offset')} label={`VCA ${vca.name} offset`} /></div>
   <output class="num value"><span class="fixed">{fit(formatDb(offset), 5)}</span></output>
 </section>
 
 <style>
-  /* 52 px of fader (scale and track) inside the padding and border. */
+  /* 52 px of fader (scale and track) inside the padding and border.
+     Rows: the keys above the fader, the fader, the value below it. */
   .vca {
     width: 62px;
     flex: none;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
     padding: 4px 4px 6px;
     background: var(--panel-2);
     border-left: 1px solid var(--line);
+  }
+  .top {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   .head {
     all: unset;
@@ -92,10 +101,10 @@
     padding: 0 2px;
   }
   .f {
-    flex: 1;
     min-height: 140px;
   }
   .value {
+    align-self: end;
     font-size: 11px;
     text-align: center;
     background: var(--well);
