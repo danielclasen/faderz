@@ -246,6 +246,15 @@ impl Node {
         runtime.shutdown_timeout(Duration::from_secs(5));
     }
 
+    /// Whether the replica's applied state enables an output: the
+    /// replicated targets, not what its engine runs.
+    fn enables_an_output(&self) -> bool {
+        (self.server.app.replica.store()).with_state(|sm| {
+            samplez_replica::state_machine::Product::targets(&sm.product)
+                .is_some_and(|t| t.outputs.iter().any(|&enabled| enabled))
+        })
+    }
+
     /// The connections the replica's state holds scheduled.
     fn scheduled(&self) -> usize {
         (self.server.app.replica.store()).with_state(|sm| sm.product.scheduled().len())
@@ -307,24 +316,41 @@ fn until(secs: u64, mut f: impl FnMut() -> bool) -> bool {
     true
 }
 
-/// Whether replica `n`'s engine has an output enabled.
-fn engine_enabled(node: &Node) -> bool {
-    let engine = node.server.audio.as_ref().unwrap().engine();
-    engine.status().outputs.iter().any(|o| o.enabled)
+/// Whether a replica in `state` is settled, given whether the applied
+/// state of each live replica enables an output: committing, or
+/// withdrawn while none does, as a set whose outputs are all disabled
+/// writes nothing and so commits nothing. A replica withdrawn while a
+/// peer's state enables an output has not settled, whatever its own
+/// state or engine reads.
+fn settled(state: Option<ReplicaState>, enabled: &[bool]) -> bool {
+    state == Some(ReplicaState::Committing)
+        || (state == Some(ReplicaState::Withdrawn) && !enabled.contains(&true))
 }
 
-/// Waits until replica `n` has been settled and ready for a second:
-/// committing, or withdrawn while its engine has no output enabled, as a
-/// replica of a set whose outputs are all disabled writes nothing and so
-/// commits nothing.
+/// A replica withdrawn counts as settled only while no live replica's
+/// state enables an output.
+#[test]
+fn a_withdrawn_replica_is_settled_only_while_no_replica_enables_an_output() {
+    let withdrawn = Some(ReplicaState::Withdrawn);
+    assert!(settled(withdrawn, &[false, false, false]));
+    assert!(
+        !settled(withdrawn, &[false, true, false]),
+        "a peer enables one"
+    );
+    let committing = Some(ReplicaState::Committing);
+    assert!(settled(committing, &[true, true, true]));
+    assert!(!settled(None, &[false, false, false]));
+}
+
+/// Waits until replica `n` has been [`settled`] and ready for a second.
 fn steady(nodes: &[Option<Node>], n: usize) {
     let mut since: Option<Instant> = None;
     let steady = until(60, || {
+        let enabled: Vec<bool> = (nodes.iter().flatten())
+            .map(Node::enables_an_output)
+            .collect();
         let node = node(nodes, n);
-        let state = node.state();
-        let good = state == Some(ReplicaState::Committing)
-            || (!engine_enabled(node) && state == Some(ReplicaState::Withdrawn));
-        if good && node.ops("/readyz").0 == 200 {
+        if settled(node.state(), &enabled) && node.ops("/readyz").0 == 200 {
             since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_secs(1)
         } else {
             since = None;
