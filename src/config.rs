@@ -1273,7 +1273,10 @@ impl Config {
     /// mix-minus and monitor output no full-width output carries, and the columns a
     /// duck group can lower ([`crate::duck::columns`]). Every channel's
     /// input meters its true peak, before its strip as well as after it,
-    /// and every stereo output and meter the correlation of its legs.
+    /// and every stereo output and meter the correlation of its legs. A
+    /// channel with a direct out also feeds matrix rows before its strip
+    /// ([`crate::mix::pre_rows`]), so the direct out's input tap is a state
+    /// change alone.
     fn audio(&self, shape: &Shape) -> Result<Option<samplez::Config>, String> {
         let Some(mxl) = &self.mxl else {
             return Ok(None);
@@ -1319,6 +1322,7 @@ impl Config {
                     "maxDelaySamples": c.max_delay.unwrap_or(0),
                     "truePeak": true,
                     "preStripMeter": true,
+                    "preStripRows": shape.has_direct_out(&c.id),
                 }));
                 continue;
             }
@@ -1342,6 +1346,7 @@ impl Config {
                 "maxDelaySamples": c.max_delay.unwrap_or(0),
                 "truePeak": true,
                 "preStripMeter": true,
+                "preStripRows": shape.has_direct_out(&c.id),
             });
             if let Some(legs) = &input.channels {
                 if legs.len() != c.width {
@@ -1432,7 +1437,8 @@ impl Config {
         }
         let rows: usize = (shape.channels.iter().map(|c| c.width))
             .chain(crate::mix::tone_widths(shape))
-            .sum();
+            .sum::<usize>()
+            + crate::mix::pre_strip_rows(shape);
         let columns: usize = (shape.outputs.iter().map(|o| o.width))
             .chain(shape.meter_columns().iter().map(|m| m.1))
             .sum();
@@ -2585,6 +2591,53 @@ mod tests {
             "the channels' legs, then the tones'"
         );
         assert_eq!(c.wiring.len(), shape.channels.len());
+    }
+
+    /// A channel with a direct out, of a flow or a tone, feeds the
+    /// matrix before its strip as well, so its direct out can take the
+    /// input tap; one without has no such rows. samplez adds them after
+    /// every input's own rows, the line-up tones' included, in input
+    /// order, and the matrix counts them.
+    #[test]
+    fn a_channel_with_a_direct_out_has_pre_strip_rows_after_every_input() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let mut shape = small();
+        for (out, source, width, layout) in [("do2", "ch2", 1, "mono"), ("dst", "st1", 2, "stereo")]
+        {
+            shape["outputs"].as_array_mut().unwrap().push(json!({
+                "id": out, "name": out, "source": source, "width": width, "layout": layout,
+            }));
+        }
+        let config = json!({
+            "replica": { "name": "r1" },
+            "shape": shape,
+            "mxl": {
+                "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                "inputs": { "ch1": { "flow": id(1), "altFlow": id(5) },
+                            "ch2": { "tone": {} }, "st1": { "flow": id(3) } },
+                "outputs": { "out-pgm": { "flow": id(4) }, "do2": { "flow": id(6) },
+                             "dst": { "flow": id(7) } },
+            },
+        });
+        let (c, shape, _) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
+        let engine = c.audio.as_ref().unwrap();
+        let rows: Vec<(&str, bool)> = (engine.inputs.iter())
+            .map(|i| (i.name.as_str(), i.pre_strip_rows))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("ch1", false),
+                ("ch2", true),
+                ("st1", true),
+                ("/tone/1", false),
+                ("/tone/2", false),
+            ]
+        );
+        assert_eq!(engine.rows(), 4 + 1 + 2 + 1 + 2);
+        assert_eq!(engine.matrix.len(), engine.rows());
+        // After the channels' 4 legs and the tones' 3, ch2's then st1's.
+        assert_eq!(crate::mix::pre_rows(&shape), [None, Some(7), Some(8)]);
     }
 
     /// Every channel's input, a flow's or a tone's, meters its true peak,

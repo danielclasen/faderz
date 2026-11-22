@@ -1769,6 +1769,76 @@ async fn a_channel_delay_plays_its_input_exactly_that_late() {
     server.stop().await;
 }
 
+/// A direct out at the input tap carries its channel's input after the
+/// channel delay and before the strip, and one at preFader after it
+/// ([`direct::check`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_direct_out_at_the_input_tap_is_delayed_but_not_processed() {
+    let domain = domain("direct-input");
+    // The pulses are read back from the outputs' history.
+    std::fs::write(
+        domain.0.join("options.json"),
+        r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
+    )
+    .unwrap();
+    let data = data("direct-input");
+    let (src, at_input, pre_fader) = (new_id(), new_id(), new_id());
+    let rate = direct::RATE;
+    let block = 48u64;
+    let pulse = Arc::new([AtomicU64::new(u64::MAX), AtomicU64::new(u64::MAX)]);
+    let at = pulse.clone();
+    let _src = Source::signal(&domain.0, &src, 1, move |_, idx| {
+        let on = (at[0].load(Relaxed)..at[1].load(Relaxed)).contains(&idx);
+        if on { direct::PULSE } else { 0.0 }
+    });
+    let server = start_engine(
+        &data.0,
+        &domain.0,
+        direct::shape(),
+        direct::inputs(&src),
+        json!({ "do-in": { "flow": at_input }, "do-pre": { "flow": pre_fader } }),
+        // As for the channel delay test.
+        json!({
+            "blockSize": block,
+            "readerMarginSamples": rate / 10,
+            "maxCatchupBlocks": rate / 10 / block,
+        }),
+    )
+    .await;
+    appears(&domain.0, &at_input).await;
+    appears(&domain.0, &pre_fader).await;
+    patch(&server, &direct::changes()).await;
+    let api = api();
+    let engine = server.audio.as_ref().unwrap().engine();
+    let skipped = engine.counters().overrun_skipped_samples.load(Relaxed);
+    let now = || time::timestamp_to_index(&api, time::now(&api));
+    // A pulse of 100 ms from 0.5 s on, off the block grid: the changes
+    // have applied and the delay's crossfade ended long before.
+    let start = now() + rate / 2 + 7;
+    let end = start + rate / 10;
+    pulse[1].store(end, Relaxed);
+    pulse[0].store(start, Relaxed);
+    let (from, to) = (start - rate / 10, end + direct::DELAY + rate / 10);
+    // Written by then, with the 100 ms the clock leads the output by.
+    while now() <= to + rate / 2 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    pulse[0].store(u64::MAX, Relaxed);
+    assert_eq!(
+        engine.counters().overrun_skipped_samples.load(Relaxed),
+        skipped,
+        "samples skipped, the engine was starved for over 100 ms"
+    );
+    direct::check(
+        &span_left(&domain.0, &at_input, 1, from, to),
+        &span_left(&domain.0, &pre_fader, 1, from, to),
+        from,
+        start,
+        end,
+    );
+    server.stop().await;
+}
+
 /// A bus's delay plays every output carrying it exactly that many samples
 /// late, a mono fold-down included, and a mix-minus output of the bus not
 /// late at all: both edges of a pulse land on each programme output at

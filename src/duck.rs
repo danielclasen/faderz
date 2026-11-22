@@ -187,8 +187,9 @@ pub fn key_gain(state: &Value, id: &str, tap: &str) -> f32 {
 /// interrupt ([`mix::talkback`]) has no mask, and neither has a monitor
 /// playing it. While anything solos the monitor plays the
 /// listens, no destination, and none of its columns is masked. The
-/// line-up tone's rows, which no group lowers, have none. None without
-/// duck groups.
+/// line-up tone's rows, which no group lowers, and the pre-strip rows
+/// ([`mix::pre_rows`]), which samplez ducks never, have none. None
+/// without duck groups.
 pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
     if shape.ducks.is_empty() {
         return Vec::new();
@@ -228,7 +229,7 @@ pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
         })
         .chain(std::iter::repeat_n(
             tone,
-            mix::tone_widths(shape).iter().sum(),
+            mix::tone_widths(shape).iter().sum::<usize>() + mix::pre_strip_rows(shape),
         ))
         .collect()
 }
@@ -323,6 +324,32 @@ mod tests {
         // Both groups on one coefficient.
         set_at(&mut state, "/ducks/rem/destinations/pgm", json!(true));
         assert_eq!(masks(&shape, &state)[0][..2], [3, 3]);
+    }
+
+    /// A channel's pre-strip rows, which carry its direct out at the
+    /// input tap, take no mask whatever its groups lower: samplez refuses
+    /// one there. The masks cover every matrix row, as samplez takes them.
+    #[test]
+    fn pre_strip_rows_take_no_mask() {
+        let mut v = small();
+        v["outputs"].as_array_mut().unwrap().push(
+            json!({ "id": "do1", "name": "DO 1", "source": "ch1", "width": 1, "layout": "mono" }),
+        );
+        let shape = Shape::parse(&v).unwrap();
+        let mut state = shape.initial_state();
+        with(
+            &mut state,
+            &[
+                ("/ducks/comm/channels/ch1/target", json!(true)),
+                ("/channels/ch1/directOut/tap", json!("input")),
+            ],
+        );
+        let m = masks(&shape, &state);
+        assert_eq!(m.len(), mix::matrix(&shape, &state).len());
+        assert_eq!(m[0][..2], [1, 1], "ch1's own row on pgm");
+        let pre = mix::pre_rows(&shape)[0].unwrap();
+        assert_eq!(pre, m.len() - 1);
+        assert!(m[pre].iter().all(|&k| k == 0));
     }
 
     /// Talkback is never ducked: while a mix-minus carries its interrupt

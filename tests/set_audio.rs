@@ -2222,6 +2222,112 @@ fn every_replica_delays_a_channel_alike() {
     }
 }
 
+/// A direct out's input tap is replicated state: every replica's direct
+/// out at the input tap carries the channel's input after its delay and
+/// before its strip, and at preFader after it ([`direct::check`]), the
+/// three writing the same bits.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_takes_a_direct_out_at_the_input_tap_alike() {
+    use std::sync::atomic::AtomicU64;
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let rate = direct::RATE;
+    let pulse = Arc::new([AtomicU64::new(u64::MAX), AtomicU64::new(u64::MAX)]);
+    let at = pulse.clone();
+    let (set, listeners) = Set::with(
+        "direct-input",
+        direct::shape(),
+        &direct::OUTPUTS,
+        |domain| {
+            // The pulses are read back from the outputs' history.
+            std::fs::write(
+                domain.join("options.json"),
+                r#"{"urn:x-mxl:option:history_duration/v1.0": 4000000000}"#,
+            )
+            .unwrap();
+            let src = new_id();
+            let source = Source::signal(domain, &src, 1, move |_, idx| {
+                let on =
+                    (at[0].load(Ordering::Relaxed)..at[1].load(Ordering::Relaxed)).contains(&idx);
+                if on { direct::PULSE } else { 0.0 }
+            });
+            (vec![source], direct::inputs(&src))
+        },
+    );
+    let nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    // Per output, each replica's member flow.
+    let flows: Vec<Vec<String>> = (direct::OUTPUTS.iter())
+        .map(|o| {
+            (set.outputs[*o]["flows"].as_array().unwrap().iter())
+                .map(|f| f.as_str().unwrap().to_owned())
+                .collect()
+        })
+        .collect();
+    write(&nodes, 1, &direct::changes());
+    // Samples [from, to) of every replica's member flow of each output,
+    // once all are written.
+    let spans = |from: u64, to: u64| -> Option<Vec<Vec<Vec<f32>>>> {
+        (flows.iter())
+            .map(|members| {
+                (members.iter())
+                    .map(|f| {
+                        let generation = attach_wide(&set.domain.0, f, 1)?;
+                        let input = generation.input(0).unwrap();
+                        let mut buf = vec![0.0f32; B as usize];
+                        let mut legs = Vec::new();
+                        for k in from / B..=to / B {
+                            let o = input.read(
+                                &mut SlotState::default(),
+                                k,
+                                &GroupWait::Skipped,
+                                &mut buf,
+                            );
+                            if o != Outcome::Copy {
+                                return None;
+                            }
+                            legs.extend_from_slice(&buf);
+                        }
+                        let skip = (from % B) as usize;
+                        Some(legs[skip..skip + (to - from) as usize].to_vec())
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    // A pulse of 100 ms from 0.5 s on, off the block grid: the changes
+    // have applied on every replica and the delay's crossfade ended long
+    // before.
+    let start = (Outputs::now() + 80) * B + rate / 2 + 7;
+    let end = start + rate / 10;
+    pulse[1].store(end, Ordering::Relaxed);
+    pulse[0].store(start, Ordering::Relaxed);
+    let (from, to) = (start - rate / 10, end + direct::DELAY + rate / 10);
+    let mut read = None;
+    let written = until(20, || {
+        read = spans(from, to);
+        read.is_some()
+    });
+    pulse[0].store(u64::MAX, Ordering::Relaxed);
+    assert!(written, "[{from}, {to}) never written: {}", states(&nodes));
+    let read = read.unwrap();
+    let bits = |b: &[f32]| b.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    for (output, members) in direct::OUTPUTS.iter().zip(&read) {
+        assert!(
+            members.iter().all(|r| bits(r) == bits(&members[0])),
+            "{output}: the replicas write other bits"
+        );
+    }
+    direct::check(&read[0][0], &read[1][0], from, start, end);
+}
+
 /// A bus's delay is replicated state, on a delay line of each output
 /// carrying the bus: every replica plays a pulse exactly that many
 /// samples late, and at 0 not late at all, the three writing the same

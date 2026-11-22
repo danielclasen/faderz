@@ -257,7 +257,7 @@
       ]
     },
     "Tap": {
-      "description": "Pick-up point in a channel: input is the selected input before trim, preFader follows the processing before the fader, postFader follows fader and mute, before the AFV stage. A channel meter at input reads the input before trim, filters and dynamics; a direct out at input carries the signal after them, as at preFader.",
+      "description": "Pick-up point in a channel: input is the selected input after the channel delay and before trim, filters and dynamics, preFader follows the processing before the fader, postFader follows fader and mute, before the AFV stage. A channel meter and a direct out at input both take the input there.",
       "type": "string",
       "enum": [
         "input",

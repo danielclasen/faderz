@@ -287,6 +287,11 @@ impl Shape {
         self.channels.iter().any(|c| c.id == id)
     }
 
+    /// Whether an output carries channel `id`: its direct out.
+    pub fn has_direct_out(&self, id: &str) -> bool {
+        self.outputs.iter().any(|o| o.source == id)
+    }
+
     /// Bus, aux and mix-minus ids: what the monitor listens to and tone
     /// goes to.
     pub fn is_output_bus(&self, id: &str) -> bool {

@@ -100,6 +100,14 @@ scene holds a delay past the line, shortened since the scene was stored,
 sets that channel's delay to 0 and names the channel in its answer's
 `delaysNotApplied`.
 
+A channel's direct out at the `input` tap carries its input after the
+channel delay and before trim, filters and dynamics, untrimmed and
+unprocessed; at `preFader` and `postFader` it carries the channel after
+them. A channel that an output carries, its direct out, also feeds the
+matrix before its strip, so its tap changes at run time as any other
+state write does. A direct out is an output of the shape: adding one is
+a configuration change and a restart.
+
 A bus or aux delays every output carrying it by its `delay`, in
 samples, exactly, after its EQ and dynamics and before the output's
 limiter, so such an output is late by the delay plus the limiter's
