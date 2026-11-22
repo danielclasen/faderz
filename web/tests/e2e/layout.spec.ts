@@ -277,7 +277,7 @@ test('every fader fits its box, VCA masters included', async ({ page }) => {
   expect(over).toEqual([]);
 });
 
-test('every master fader has its track and scale at the same height', async ({ page }) => {
+test('every master fader has its track and scale at the same height', async ({ page }, info) => {
   await live(page);
   // Below 1400 px the masters lie over the strips while MASTERS is lit.
   const masters = page.getByRole('button', { name: 'MASTERS' });
@@ -308,6 +308,11 @@ test('every master fader has its track and scale at the same height', async ({ p
     }
   }
   expect(off).toEqual([]);
+  // Lined up without giving up travel: where the masters sit beside the
+  // strips, no head above a fader takes from every fader's length.
+  if (info.project.name === 'desktop') {
+    expect(faders.filter((f) => f.bottom - f.top < 480).map((f) => `${f.label}: ${(f.bottom - f.top).toFixed(1)}`)).toEqual([]);
+  }
 });
 
 test('every value field of a processing panel shows its whole value', async ({ page, request }) => {
