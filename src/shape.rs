@@ -247,10 +247,13 @@ impl Shape {
         c.chain(b).chain(a).chain(m).chain(v).chain(d)
     }
 
-    /// Id, width and layout of each bus, aux, mix-minus and monitor
-    /// output no output carries at its full width, in meter frame order: the
-    /// engine's meters, computed on matrix columns of their own. An output
-    /// narrower than its source folds it down and meters only itself.
+    /// Id, width and layout of each bus, aux and mix-minus output no
+    /// output carries at its full width, then of every monitor output, in
+    /// meter frame order: the engine's meters, computed on matrix columns
+    /// of their own. An output narrower than its source folds it down and
+    /// meters only itself. A monitor output's meter reads it before its
+    /// level, dim, cut, mono and speaker mutes ([`crate::mix`]), which an
+    /// output carrying it applies.
     pub fn meter_columns(&self) -> Vec<(&str, usize, &str)> {
         let b = self.buses.iter().map(|e| (&e.id, e.width, &e.layout));
         let a = self.auxes.iter().map(|e| (&e.id, e.width, &e.layout));
@@ -261,8 +264,8 @@ impl Shape {
             .map(|e| (&e.id, e.width, &e.layout));
         b.chain(a)
             .chain(m)
-            .chain(o)
             .filter(|(id, w, _)| self.full_output(id, *w).is_none())
+            .chain(o)
             .map(|(id, w, l)| (id.as_str(), w, l.as_str()))
             .collect()
     }

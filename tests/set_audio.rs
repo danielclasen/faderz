@@ -750,7 +750,8 @@ fn values(node: &Node, skip: usize) -> Vec<i16> {
 /// silence again once muted.
 /// The faders start closed, so a replica metering at the gains it
 /// started with reads silence throughout. The monitor meter follows a
-/// PFL alike.
+/// PFL alike, and reads the monitor before its dim and cut on every
+/// replica: its source through both, and ch1's PFL while cut.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -785,21 +786,38 @@ fn every_replicas_meters_follow_the_faders() {
         ),
         (("/channels/ch1/mute", json!(true)), FLOOR, "muted"),
     ];
-    // The monitor meters what it plays: the programme, ch2's -12 dBFS
-    // sine centred at -3 dB, until ch1's PFL takes its place, centred
-    // at -3 dB before its closed fader and mute, and the programme again
-    // once every solo is off; then a VCA's AFL of ch2, which the
+    // The monitor meters what it plays before its dim and cut: the
+    // programme, ch2's -12 dBFS sine centred at -3 dB, dimmed and cut
+    // alike, until ch1's PFL takes its place, centred at -3 dB before its
+    // closed fader and mute, and the programme again once every solo is
+    // off; then, undimmed and uncut, a VCA's AFL of ch2, which the
     // programme no longer carries, plays it at its fader.
     let monitor = [
         (("/monitor/level", json!(0)), FLOOR, "on its silent source"),
         (("/channels/ch2/fader", json!(0)), -1505, "on its source"),
         (("/channels/ch1/fader", json!(-90)), -1505, "on its source"),
-        (("/channels/ch1/solo", json!("pfl")), -903, "on ch1's PFL"),
+        (
+            ("/monitor/dim", json!(true)),
+            -1505,
+            "dimmed, on its source",
+        ),
+        (("/monitor/cut", json!(true)), -1505, "cut, on its source"),
+        (
+            ("/channels/ch1/solo", json!("pfl")),
+            -903,
+            "cut, on ch1's PFL",
+        ),
         (
             ("/channels/ch1/solo", json!("off")),
             -1505,
-            "on its source again",
+            "cut, on its source again",
         ),
+        (
+            ("/monitor/cut", json!(false)),
+            -1505,
+            "dimmed, on its source",
+        ),
+        (("/monitor/dim", json!(false)), -1505, "on its source"),
         // ch2 off the programme leaves the source silent; its VCA's AFL
         // plays it after its fader again.
         (

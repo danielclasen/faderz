@@ -230,7 +230,10 @@ passed and Ls (Rs) the sum of the left (right) side and rear surround,
 each at -3 dB. A narrower output has no meter of its own: a bus is
 metered by the output carrying it at full width, and one carried only by
 narrower outputs gets an engine meter of its own, counted against the
-meters the engine allows.
+meters the engine allows. Every monitor output gets an engine meter of
+its own too, also when an output carries it: its meter reads what the
+monitor plays before its level, dim, cut, mono and speaker mutes and
+solos.
 
 ## The console
 

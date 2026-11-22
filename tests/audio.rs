@@ -655,6 +655,112 @@ async fn a_solo_reaches_the_monitor_meter() {
     server.stop().await;
 }
 
+/// MonitorMeter: an output carrying the monitor plays its level, dim,
+/// mono, speaker mutes and cut, and the monitor meter reads the monitor
+/// before them: the programme, st1 at -12 dBFS on each leg, whatever each
+/// does to the output flow. Each reading is taken once the output flow
+/// shows the change, after a meter window of its own. ch1's PFL moves the
+/// meter, at -3 dB centred, while the output is cut.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_monitor_meter_reads_before_level_dim_cut_mono_and_speaker_mutes() {
+    let domain = domain("mon-meter");
+    let data = data("mon-meter");
+    let (ch1, ch2, ch2b, st1) = (new_id(), new_id(), new_id(), new_id());
+    let (pgm_id, mm_id, mon_id) = (new_id(), new_id(), new_id());
+    let _ch1 = Source::start(&domain.0, &ch1, vec![CH1]);
+    let _st1 = Source::start(&domain.0, &st1, ST1.to_vec());
+    let mut v = shape();
+    v["outputs"].as_array_mut().unwrap().push(
+        json!({ "id": "out-mon", "name": "Mon out", "source": "mon", "width": 2, "layout": "stereo" }),
+    );
+    let inputs = json!({
+        "ch1": { "flow": ch1 },
+        "ch2": { "flow": ch2, "altFlow": ch2b },
+        "st1": { "flow": st1 },
+    });
+    let outputs = json!({
+        "out-pgm": { "flow": pgm_id },
+        "out-mm": { "flow": mm_id },
+        "out-mon": { "flow": mon_id },
+    });
+    let server = start_with(&data.0, &domain.0, v, inputs, outputs).await;
+    appears(&domain.0, &mon_id).await;
+    let mut mon = Reader::new(&domain.0, &mon_id);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    patch(
+        &server,
+        &[
+            ("/monitor/level", json!(0)),
+            ("/channels/st1/fader", json!(0)),
+        ],
+    )
+    .await;
+    mon.expect(ST1[0], ST1[1], "the source, pgm").await;
+    let near = |v: &[i16], want: i16| {
+        (v[MON_PEAK] - want).abs() <= 2 && (v[MON_PEAK + 1] - want).abs() <= 2
+    };
+    // st1's legs, 0.25 and -0.25: -12.04 dBFS.
+    let source = -1204;
+    meters_until(&server, "the monitor meter on its source", |v| {
+        near(v, source)
+    })
+    .await;
+    let g = |db: f32| 10f32.powf(db / 20.0);
+    let level = ST1[0] * g(-6.0);
+    let dimmed = ST1[0] * g(-6.0) * g(-20.0);
+    let steps = [
+        (
+            "level -6 dB",
+            vec![("/monitor/level", json!(-6))],
+            [level, -level],
+        ),
+        (
+            "dimmed",
+            vec![("/monitor/dim", json!(true))],
+            [dimmed, -dimmed],
+        ),
+        (
+            "mono, st1's legs cancelling",
+            vec![
+                ("/monitor/dim", json!(false)),
+                ("/monitor/mono", json!(true)),
+            ],
+            [0.0, 0.0],
+        ),
+        (
+            "the left speaker muted",
+            vec![
+                ("/monitor/mono", json!(false)),
+                ("/monitor/speakerMute/0", json!(true)),
+            ],
+            [0.0, -level],
+        ),
+        (
+            "cut",
+            vec![
+                ("/monitor/speakerMute/0", json!(false)),
+                ("/monitor/cut", json!(true)),
+            ],
+            [0.0, 0.0],
+        ),
+    ];
+    for (what, changes, legs) in steps {
+        patch(&server, &changes).await;
+        mon.expect(legs[0], legs[1], what).await;
+        // A whole meter window after the output played the change.
+        let v = meter_values(&server, 5).await;
+        assert!(near(&v, source), "the monitor meter {what}: {v:?}");
+    }
+    patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
+    meters_until(&server, "the monitor meter on ch1's PFL", |v| near(v, -903)).await;
+    mon.expect(0.0, 0.0, "cut with ch1's PFL").await;
+    server.stop().await;
+}
+
 /// Frames until `done` holds of the meter values, or a minute passes.
 async fn until_values(server: &Server, what: &str, done: impl Fn(&[i16]) -> bool) -> Vec<i16> {
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -860,7 +966,8 @@ async fn solos_reach_the_monitor_output_flow() {
     mon.expect(ST1[0], ST1[1], "the source, pgm").await;
     patch(&server, &[("/channels/ch1/solo", json!("pfl"))]).await;
     mon.expect(pfl, pfl, "ch1 PFL with its fader closed").await;
-    // The monitor meter reads the meters of the output carrying it.
+    // The monitor meter reads the listen sum, which the output plays at
+    // a level of 0 dB.
     let v = meter_values(&server, 5).await;
     assert!((v[MON_PEAK] + 903).abs() <= 2, "monitor peak in {v:?}");
     patch(&server, &[("/channels/ch1/solo", json!("afl"))]).await;

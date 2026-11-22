@@ -3,7 +3,9 @@
 //! tone's generators, [`tone_widths`], then the pre-strip rows of each
 //! channel with a direct out, [`pre_rows`]) and one column per output channel (the legs of
 //! each shape output in shape order), then per leg of each element the
-//! engine meters on columns of its own ([`Shape::meter_columns`]).
+//! engine meters on columns of its own ([`Shape::meter_columns`]). A
+//! monitor output's meter columns carry it before its level, dim, cut,
+//! mono and speaker mutes and solos ([`columns`]).
 //!
 //! What a matrix coefficient can carry is applied: fader, mute, VCA
 //! offsets and mutes, AFV open or closed, pan of a mono leg and the
@@ -406,13 +408,16 @@ fn gains(shape: &Shape, state: &Value, factors: &[Factors]) -> Vec<Vec<f32>> {
     let mut g = Vec::with_capacity(mix.rows * 8);
     let mut first = 0;
     let mut placed = Vec::with_capacity(columns.len());
-    for (source, width) in columns {
-        let ew = mix.element(source, &mut g);
+    for (source, width, meter) in columns {
+        let ew = mix.element(source, meter, &mut g);
         put(&mut m, &rows, first, width, ew, &g);
-        placed.push((source, width, first));
+        placed.push((source, width, first, meter));
         first += width;
     }
     put_tone(&mut m, mix.rows, shape, state, placed.iter().copied());
+    let placed = placed
+        .into_iter()
+        .map(|(id, width, first, _)| (id, width, first));
     put_pre(&mut m, shape, state, placed);
     m
 }
@@ -533,7 +538,8 @@ fn toned(state: &Value, id: &str) -> bool {
 }
 
 /// Writes the line-up tones' rows, from `tone_row` on, of each of
-/// `columns`, an element, its width and its first column. Leg `l` of the
+/// `columns`, an element, its width, its first column and whether it is
+/// an engine meter's ([`columns`]). Leg `l` of the
 /// generator as wide as an element the tone replaces ([`toned`]) is at
 /// unity in the column's leg `l`, so an output narrower than its element
 /// takes the tone's first legs; [`Mix::element`] gives such an element
@@ -545,15 +551,15 @@ fn put_tone<'c>(
     tone_row: usize,
     shape: &Shape,
     state: &Value,
-    columns: impl IntoIterator<Item = (&'c str, usize, usize)>,
+    columns: impl IntoIterator<Item = (&'c str, usize, usize, bool)>,
 ) {
     let widths = tone_widths(shape);
     let mix = Mix::of(shape, state, &[], |_| unreachable!("no channel"));
     let tones = tone_row..tone_row + widths.iter().sum::<usize>();
     let rows: Vec<usize> = tones.clone().collect();
     let mut g = Vec::new();
-    for (id, width, first) in columns {
-        let ew = mix.tone(id, &widths, &mut g);
+    for (id, width, first, meter) in columns {
+        let ew = mix.tone(id, meter, &widths, &mut g);
         if !toned(state, id) {
             put(m, &rows, first, width, ew, &g);
             continue;
@@ -567,11 +573,14 @@ fn put_tone<'c>(
     }
 }
 
-/// The element each of the matrix's columns carries and its width: the
-/// outputs, then the meter columns ([`Shape::meter_columns`]).
-pub(crate) fn columns(shape: &Shape) -> Vec<(&str, usize)> {
-    let outputs = shape.outputs.iter().map(|o| (o.source.as_str(), o.width));
-    let meters = shape.meter_columns().into_iter().map(|(id, w, _)| (id, w));
+/// The element each of the matrix's columns carries, its width and
+/// whether it is an engine meter's: the outputs, then the meter columns
+/// ([`Shape::meter_columns`]). A monitor output's meter columns carry it
+/// before its level, dim, cut, mono and speaker mutes and solos
+/// ([`Mix::monitor`]); any other element's carry what its output would.
+pub(crate) fn columns(shape: &Shape) -> Vec<(&str, usize, bool)> {
+    let outputs = (shape.outputs.iter()).map(|o| (o.source.as_str(), o.width, false));
+    let meters = (shape.meter_columns().into_iter()).map(|(id, w, _)| (id, w, true));
     outputs.chain(meters).collect()
 }
 
@@ -706,9 +715,9 @@ pub struct Derived {
     factors: Vec<Factors>,
     /// Each channel's first row.
     first: Vec<usize>,
-    /// The element each column carries ([`columns`]), its width and its
-    /// first column.
-    columns: Vec<(String, usize, usize)>,
+    /// The element each column carries ([`columns`]), its width, its
+    /// first column and whether it is an engine meter's.
+    columns: Vec<(String, usize, usize, bool)>,
     /// The line-up tone generators' first row, after every channel's.
     tone_row: usize,
 }
@@ -722,7 +731,7 @@ struct Moved {
     rows: BTreeSet<usize>,
     /// The columns of these buses, auxes and mix-minus outputs.
     elements: BTreeSet<String>,
-    /// The columns of the monitor outputs.
+    /// The columns of the monitor outputs, their meters' included.
     monitor: bool,
     /// The strips, delays, tone generators, flows and pre-strip meters of
     /// these slots.
@@ -753,9 +762,9 @@ impl Derived {
         let generators = tone_widths(shape);
         let mut col = 0;
         let columns = (columns(shape).into_iter())
-            .map(|(id, width)| {
+            .map(|(id, width, meter)| {
                 col += width;
-                (id.to_owned(), width, col - width)
+                (id.to_owned(), width, col - width, meter)
             })
             .collect();
         Derived {
@@ -823,14 +832,14 @@ impl Derived {
             let rows: Vec<usize> = (slots.iter())
                 .flat_map(|&slot| self.first[slot]..self.first[slot] + shape.channels[slot].width)
                 .collect();
-            for (id, width, first) in &self.columns {
-                let ew = mix.element(id, &mut g);
+            for (id, width, first, meter) in &self.columns {
+                let ew = mix.element(id, *meter, &mut g);
                 put(&mut self.targets.gains, &rows, *first, *width, ew, &g);
             }
         }
         let source = state["monitor"]["source"].as_str().unwrap_or_default();
         let monitor = moved.monitor || moved.elements.contains(source);
-        let moved_columns: Vec<&(String, usize, usize)> = (self.columns.iter())
+        let moved_columns: Vec<&(String, usize, usize, bool)> = (self.columns.iter())
             .filter(|(id, ..)| {
                 moved.elements.contains(id)
                     || monitor && shape.monitor_outputs.iter().any(|m| m.id == *id)
@@ -840,15 +849,16 @@ impl Derived {
             let all: Vec<usize> = (0..shape.channels.len()).collect();
             let mix = Mix::of(shape, state, &all, |slot| self.factors[slot]);
             let rows: Vec<usize> = (0..mix.rows).collect();
-            for (id, width, first) in moved_columns {
-                let ew = mix.element(id, &mut g);
+            for (id, width, first, meter) in moved_columns {
+                let ew = mix.element(id, *meter, &mut g);
                 put(&mut self.targets.gains, &rows, *first, *width, ew, &g);
             }
         }
         // The rows and columns written above hold the mix in place of the
         // tone again, and a direct out's tap moves it between the
         // channel's own rows and its pre-strip rows.
-        let placed = (self.columns.iter()).map(|(id, width, first)| (id.as_str(), *width, *first));
+        let placed = (self.columns.iter())
+            .map(|(id, width, first, meter)| (id.as_str(), *width, *first, *meter));
         put_tone(
             &mut self.targets.gains,
             self.tone_row,
@@ -856,6 +866,7 @@ impl Derived {
             state,
             placed.clone(),
         );
+        let placed = placed.map(|(id, width, first, _)| (id, width, first));
         put_pre(&mut self.targets.gains, shape, state, placed);
         for slot in moved.strips {
             let c = &shape.channels[slot];
@@ -1215,8 +1226,9 @@ impl<'a> Mix<'a> {
     }
 
     /// The gains of element `id` from every input channel into `g`, row
-    /// by row, `[input * width + leg]`; returns its width.
-    fn element(&self, id: &str, g: &mut Vec<f64>) -> usize {
+    /// by row, `[input * width + leg]`; returns its width. `meter` takes
+    /// a monitor output's meter columns ([`columns`]).
+    fn element(&self, id: &str, meter: bool, g: &mut Vec<f64>) -> usize {
         let width = width_of(self.shape, id);
         g.clear();
         g.resize(self.rows * width, 0.0);
@@ -1226,7 +1238,7 @@ impl<'a> Mix<'a> {
         }
         let kind = self.kind(id);
         if let Kind::Monitor = kind {
-            self.monitor(width, g);
+            self.monitor(width, meter, g);
             return width;
         }
         for c in &self.chans {
@@ -1261,22 +1273,23 @@ impl<'a> Mix<'a> {
     /// monitor's, folded down by `downmix` when it is wider, then level,
     /// dim (also while a mix-minus carries its talkback and `talkbackDim`
     /// is on), cut, mono (the sum of the folded legs) and the speaker
-    /// mutes and solos.
+    /// mutes and solos. Its `meter` columns take none of those five
+    /// (model `MonitorMeter`).
     ///
     /// The listen sum takes each listening channel's legs at their own
     /// width. PFL is the channel after its strip, before fader, mute and
     /// pan: [`Tap::PreFader`], centred, so a mono channel plays on every
     /// leg and a stereo one leg to leg, as its image sets them. AFL is [`Tap::PostFader`], after
     /// fader, mute and VCAs and before AFV, at the channel's pan.
-    fn monitor(&self, width: usize, g: &mut [f64]) {
-        let play = self.monitor_play(width);
+    fn monitor(&self, width: usize, meter: bool, g: &mut [f64]) {
+        let play = self.monitor_play(width, meter);
         let (soloing, pfl) = solos(self.state);
         if !soloing {
             // A source the line-up tone replaces gives every row 0
             // ([`Mix::element`]); [`Mix::tone`] plays the tone.
             let source = self.state["monitor"]["source"].as_str().unwrap_or_default();
             let mut src = Vec::new();
-            let from = self.element(source, &mut src);
+            let from = self.element(source, false, &mut src);
             for row in 0..self.rows {
                 play(
                     &src[row * from..][..from],
@@ -1314,9 +1327,10 @@ impl<'a> Mix<'a> {
     /// + leg]` as [`Mix::element`] gives the channels'; returns its width.
     /// A monitor whose source the tone replaces ([`toned`]) plays that
     /// source's generator, as wide as the source, as it plays the source,
-    /// while nothing solos; any other element has none. The columns of an
-    /// element the tone replaces are [`put_tone`]'s.
-    fn tone(&self, id: &str, widths: &[usize], g: &mut Vec<f64>) -> usize {
+    /// while nothing solos, its `meter` columns ([`columns`]) as
+    /// [`Mix::monitor`] gives them; any other element has none. The
+    /// columns of an element the tone replaces are [`put_tone`]'s.
+    fn tone(&self, id: &str, meter: bool, widths: &[usize], g: &mut Vec<f64>) -> usize {
         let width = width_of(self.shape, id);
         g.clear();
         g.resize(widths.iter().sum::<usize>() * width, 0.0);
@@ -1327,7 +1341,7 @@ impl<'a> Mix<'a> {
         }
         let from = width_of(self.shape, source);
         let first = generator_row(widths, from);
-        let play = self.monitor_play(width);
+        let play = self.monitor_play(width, meter);
         let mut legs = vec![0.0; from];
         for leg in 0..from {
             legs.fill(0.0);
@@ -1346,8 +1360,13 @@ impl<'a> Mix<'a> {
 
     /// The monitor output `width` legs wide as it plays a signal: writes
     /// into `out` its legs for the `from` legs `legs` of a signal panned
-    /// by `p` with stereo image `image` ([`Mix::monitor`]).
-    fn monitor_play(&self, width: usize) -> impl Fn(&[f64], usize, &Place, Image, &mut [f64]) {
+    /// by `p` with stereo image `image` ([`Mix::monitor`]); for its
+    /// `meter` columns, at unity on every leg and not summed to mono.
+    fn monitor_play(
+        &self,
+        width: usize,
+        meter: bool,
+    ) -> impl Fn(&[f64], usize, &Place, Image, &mut [f64]) {
         let m = &self.state["monitor"];
         let mut level = gain(num(&m["level"]));
         if on(&m["dim"]) || on(&m["talkbackDim"]) && talking(self.shape, self.state) {
@@ -1357,7 +1376,7 @@ impl<'a> Mix<'a> {
             level = 0.0;
         }
         let lr = m["downmix"] == "lr";
-        let mono = on(&m["mono"]);
+        let mono = on(&m["mono"]) && !meter;
         if mono {
             level *= gain(-num(&m["monoCompensation"]));
         }
@@ -1393,7 +1412,13 @@ impl<'a> Mix<'a> {
             .map(|j| {
                 let audible =
                     !on(&m["speakerMute"][j]) && (!speaker_solo || on(&m["speakerSolo"][j]));
-                if audible { level } else { 0.0 }
+                if meter {
+                    1.0
+                } else if audible {
+                    level
+                } else {
+                    0.0
+                }
             })
             .collect();
         move |legs: &[f64], from: usize, p: &Place, image: Image, out: &mut [f64]| {
@@ -1502,10 +1527,10 @@ mod tests {
         pub fn matrix(shape: &Shape, state: &Value) -> Vec<Vec<f32>> {
             let rows: usize = shape.channels.iter().map(|c| c.width).sum();
             let mut m = vec![Vec::new(); rows];
-            let outputs = shape.outputs.iter().map(|o| (o.source.as_str(), o.width));
-            let meters = shape.meter_columns().into_iter().map(|(id, w, _)| (id, w));
-            for (source, width) in outputs.chain(meters) {
-                let element = element(shape, state, source);
+            let outputs = (shape.outputs.iter()).map(|o| (o.source.as_str(), o.width, false));
+            let meters = (shape.meter_columns().into_iter()).map(|(id, w, _)| (id, w, true));
+            for (source, width, meter) in outputs.chain(meters) {
+                let element = element(shape, state, source, meter);
                 for leg in 0..width {
                     for (row, r) in m.iter_mut().enumerate() {
                         let g = element.get(row).and_then(|g| g.get(leg)).copied();
@@ -1516,8 +1541,9 @@ mod tests {
             m
         }
 
-        /// The gains of element `id` from every input channel: `[input][leg]`.
-        fn element(shape: &Shape, state: &Value, id: &str) -> Vec<Vec<f64>> {
+        /// The gains of element `id` from every input channel: `[input][leg]`;
+        /// a monitor output's on its `meter` columns.
+        fn element(shape: &Shape, state: &Value, id: &str, meter: bool) -> Vec<Vec<f64>> {
             let rows: usize = shape.channels.iter().map(|c| c.width).sum();
             let width = width_of(shape, id);
             let mut g = vec![vec![0.0; width]; rows];
@@ -1547,7 +1573,7 @@ mod tests {
             } else if shape.mix_minus.iter().any(|m| m.id == id) {
                 scale(&mut g, &state["mixMinus"][id], false);
             } else if shape.monitor_outputs.iter().any(|m| m.id == id) {
-                return monitor(shape, state, width);
+                return monitor(shape, state, width, meter);
             }
             g
         }
@@ -1618,8 +1644,9 @@ mod tests {
         /// The monitor output: while anything solos the listen sum, else
         /// its source; that signal's legs onto the monitor's, folded down
         /// by `downmix` when it is wider, then level, dim, cut, mono (the
-        /// sum of the folded legs) and the speaker mutes and solos.
-        fn monitor(shape: &Shape, state: &Value, width: usize) -> Vec<Vec<f64>> {
+        /// sum of the folded legs) and the speaker mutes and solos, none of
+        /// which its `meter` columns take.
+        fn monitor(shape: &Shape, state: &Value, width: usize, meter: bool) -> Vec<Vec<f64>> {
             let m = &state["monitor"];
             let mut level = gain(num(&m["level"]));
             if on(&m["dim"]) || on(&m["talkbackDim"]) && talking(shape, state) {
@@ -1629,7 +1656,7 @@ mod tests {
                 level = 0.0;
             }
             let lr = m["downmix"] == "lr";
-            let mono = on(&m["mono"]);
+            let mono = on(&m["mono"]) && !meter;
             if mono {
                 level *= gain(-num(&m["monoCompensation"]));
             }
@@ -1662,7 +1689,13 @@ mod tests {
                     .as_array()
                     .is_some_and(|s| s.iter().any(on));
                 let audible = !on(&m["speakerMute"][j]) && (!solo || on(&m["speakerSolo"][j]));
-                if audible { level } else { 0.0 }
+                if meter {
+                    1.0
+                } else if audible {
+                    level
+                } else {
+                    0.0
+                }
             };
             let play = |legs: &[f64], from: usize, p: &Place, image: Image| -> Vec<f64> {
                 (0..width)
@@ -1679,7 +1712,7 @@ mod tests {
             let (soloing, pfl) = solos(state);
             if !soloing {
                 let source = m["source"].as_str().unwrap_or_default();
-                let src = element(shape, state, source);
+                let src = element(shape, state, source, false);
                 let from = width_of(shape, source);
                 return src
                     .iter()
@@ -1736,7 +1769,8 @@ mod tests {
 
     // Rows: ch1, ch2, st1 L, st1 R, then the line-up tone's mono and
     // stereo generators' legs, then ch1's pre-strip row. Columns: o-pgm
-    // L R, o-aux, o-mm L R, o-mon L R, o-ch1, then cf L R.
+    // L R, o-aux, o-mm L R, o-mon L R, o-ch1, then the meters cf L R and
+    // mon L R.
 
     /// A fresh state is silent everywhere but the direct out, which taps
     /// before the closed faders.
@@ -1745,8 +1779,9 @@ mod tests {
         let shape = shape();
         let m = matrix(&shape, &shape.initial_state());
         assert_eq!(m.len(), 8);
-        // The outputs' 8 columns, then cf's 2, which no output carries.
-        assert!(m.iter().all(|r| r.len() == 10));
+        // The outputs' 8 columns, then cf's 2, which no output carries,
+        // and the monitor meter's 2.
+        assert!(m.iter().all(|r| r.len() == 12));
         for (row, r) in m.iter().enumerate() {
             for (col, g) in r.iter().enumerate() {
                 let want = if row == 0 && col == 7 { 1.0 } else { 0.0 };
@@ -1894,7 +1929,7 @@ mod tests {
         // Without o-ch1 the shape has no pre-strip row, m's last.
         assert_eq!(cf.len() + 1, m.len());
         for (row, (r, cf)) in m.iter().zip(&cf).enumerate() {
-            assert_eq!(r[8..], cf[..2], "row {row}");
+            assert_eq!(r[8..10], cf[..2], "row {row}");
         }
         assert!(m[0][8] > 0.3);
     }
@@ -2564,6 +2599,76 @@ mod tests {
         );
     }
 
+    /// MonitorMeter: the monitor's meter columns carry what it plays
+    /// before its level, dim, talkback dim, cut, mono and speaker mutes and
+    /// solos, each of which moves its output's columns alone, and a write
+    /// of any of them derives the bits of the whole state. The listen sum,
+    /// PFL over AFL, reaches the meter while the output is cut.
+    #[test]
+    fn the_monitor_meter_reads_before_level_dim_cut_mono_and_speaker_mutes() {
+        let shape = shape();
+        let mut s = shape.initial_state();
+        s["channels"]["st1"]["fader"] = json!(0);
+        s["monitor"]["level"] = json!(0);
+        // The channels' rows of two columns from `first` on: o-mon's from
+        // 5, the monitor meter's from 10.
+        let lr = |s: &Value, first: usize| -> Vec<[f32; 2]> {
+            let m = matrix(&shape, s);
+            m[..4].iter().map(|r| [r[first], r[first + 1]]).collect()
+        };
+        let source = lr(&s, 5);
+        assert_eq!(lr(&s, 10), source, "at 0 dB the meter is the output");
+        assert!(close(source[2][0], 1.0) && close(source[3][1], 1.0));
+        for (path, value) in [
+            ("/monitor/level", json!(-6)),
+            ("/monitor/dim", json!(true)),
+            (
+                "/mixMinus/mm1/interrupt",
+                json!({ "source": "ch1", "active": true }),
+            ),
+            ("/monitor/cut", json!(true)),
+            ("/monitor/mono", json!(true)),
+            ("/monitor/speakerMute/1", json!(true)),
+            ("/monitor/speakerSolo/0", json!(true)),
+        ] {
+            let mut s = s.clone();
+            let mut d = Derived::new(&shape, &[], &s);
+            let vcas = s["vcas"].clone();
+            crate::state::set_at(&mut s, path, value);
+            d.update(&shape, &[], &s, &vcas, [path]);
+            assert_eq!(d.targets().gains, matrix(&shape, &s), "{path}");
+            assert_ne!(lr(&s, 5), source, "the output with {path}");
+            assert_eq!(lr(&s, 10), source, "the meter with {path}");
+        }
+        s["monitor"]["cut"] = json!(true);
+        s["channels"]["ch2"]["fader"] = json!(0);
+        s["channels"]["ch2"]["solo"] = json!("afl");
+        s["channels"]["ch1"]["solo"] = json!("pfl");
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let meter = lr(&s, 10);
+        assert!(close(meter[0][0], h) && close(meter[0][1], h), "{meter:?}");
+        assert!(meter[1..].iter().flatten().all(|g| *g == 0.0), "{meter:?}");
+        assert!(lr(&s, 5).iter().flatten().all(|g| *g == 0.0), "cut");
+        // Solos, the monitor's image and its source move the meter's
+        // columns while the output is cut: a write of each derives the
+        // bits of the whole state there.
+        let mut d = Derived::new(&shape, &[], &s);
+        for (path, value) in [
+            ("/channels/ch1/solo", json!("off")),
+            ("/channels/ch2/solo", json!("off")),
+            ("/monitor/image", json!("swap")),
+            ("/monitor/source", json!("aux1")),
+            ("/channels/st1/solo", json!("pfl")),
+        ] {
+            let before = lr(&s, 10);
+            let vcas = s["vcas"].clone();
+            crate::state::set_at(&mut s, path, value);
+            d.update(&shape, &[], &s, &vcas, [path]);
+            assert_eq!(d.targets().gains, matrix(&shape, &s), "{path}");
+            assert_ne!(lr(&s, 10), before, "the meter with {path}");
+        }
+    }
+
     /// PFL listens after the strip and before the fader and pan: a
     /// channel with its fader closed is heard on the monitor, and the
     /// source is not. A hard-panned mono channel is heard centred.
@@ -3052,8 +3157,8 @@ mod tests {
     /// aux's output, which takes the mono generator, a mix-minus output
     /// and the meter columns of a bus no output carries. Every other
     /// column keeps its mix. Off, or with no targets, the tone's rows are
-    /// 0 and the mix is as without it. The monitor's columns, which play
-    /// the targeted programme, are
+    /// 0 and the mix is as without it. The monitor's columns, its output's
+    /// and its meter's, which play the targeted programme, are
     /// [`a_monitor_on_a_line_up_target_plays_its_tone`]'s.
     #[test]
     fn the_line_up_tone_replaces_the_mix_of_its_targets() {
@@ -3074,7 +3179,8 @@ mod tests {
         let replaced = |elements: &[(usize, usize, usize)], s: &Value| {
             let m = matrix(&shape, s);
             let (tone, channels) = tone_rows(&m, &shape);
-            for c in (0..mixed[0].len()).filter(|c| !(5..7).contains(c)) {
+            let monitor = |c: &usize| (5..7).contains(c) || (10..12).contains(c);
+            for c in (0..mixed[0].len()).filter(|c| !monitor(c)) {
                 let leg = (elements.iter())
                     .find(|(first, width, _)| (*first..first + width).contains(&c))
                     .map(|(first, _, generator)| generator + c - first);
@@ -3201,7 +3307,7 @@ mod tests {
         };
         let mut first = 0;
         let mut checked = Vec::new();
-        for (id, width) in columns(&shape) {
+        for (id, width, _) in columns(&shape) {
             if shape.is_output_bus(id) {
                 let row = generator(width_of(&shape, id));
                 for leg in 0..width {
@@ -3225,7 +3331,9 @@ mod tests {
     /// the element's output carries: in place of its mix the generator
     /// as wide as it, as the monitor plays a source, so its level, speaker
     /// mutes and cut apply and the mono aux's generator is panned centre
-    /// onto both legs. A source the tone does not replace plays its mix,
+    /// onto both legs. Its meter columns take the generator before the
+    /// level, speaker mutes and cut. A source the tone does not replace
+    /// plays its mix,
     /// and a solo the listen sum and no tone. A write of the source, a
     /// solo or a monitor control derives the same entries as the whole
     /// state.
@@ -3246,6 +3354,11 @@ mod tests {
             let tone: Vec<[f32; 2]> = tone.iter().map(lr).collect();
             (tone, channels.iter().map(lr).collect::<Vec<_>>())
         };
+        // The monitor meter's columns, L and R, on the tone's rows.
+        let meter = |s: &Value| -> Vec<[f32; 2]> {
+            let (tone, _) = tone_rows(&matrix(&shape, s), &shape);
+            tone.iter().map(|r| [r[10], r[11]]).collect()
+        };
         let untoned = |s: &Value| {
             let mut s = s.clone();
             s["tone"]["on"] = json!(false);
@@ -3259,9 +3372,11 @@ mod tests {
         s["monitor"]["speakerMute"] = json!([false, true]);
         let g = gain(-6.0) as f32;
         assert_eq!(mon(&s).0, [[0.0, 0.0], [g, 0.0], [0.0, 0.0]]);
+        assert_eq!(meter(&s), [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
         s["monitor"]["speakerMute"] = json!([false, false]);
         s["monitor"]["cut"] = json!(true);
         assert!(mon(&s).0.iter().flatten().all(|g| *g == 0.0), "cut");
+        assert_eq!(meter(&s), [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], "cut");
         s["monitor"]["cut"] = json!(false);
         s["monitor"]["level"] = json!(0);
         s["monitor"]["source"] = json!("aux1");

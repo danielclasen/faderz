@@ -214,7 +214,7 @@ pub fn masks(shape: &Shape, state: &Value) -> Vec<Vec<u8>> {
         carried(state["monitor"]["source"].as_str().unwrap_or_default())
     };
     let columns: Vec<u8> = (mix::columns(shape).into_iter())
-        .flat_map(|(id, width)| {
+        .flat_map(|(id, width, _)| {
             let monitor = shape.monitor_outputs.iter().any(|m| m.id == id);
             let bits = if monitor { monitored } else { carried(id) };
             std::iter::repeat_n(bits, width)
@@ -244,7 +244,7 @@ pub fn columns(shape: &Shape) -> Vec<usize> {
     }
     let mut first = 0;
     let mut ducked = Vec::new();
-    for (id, width) in mix::columns(shape) {
+    for (id, width, _) in mix::columns(shape) {
         if !shape.is_channel(id) {
             ducked.extend(first..first + width);
         }

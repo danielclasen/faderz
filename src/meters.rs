@@ -13,15 +13,16 @@
 //! gain. The tap gains are those of the state last applied, while the
 //! engine ramps a change from its index and meters in 100 ms windows, so
 //! for a window or so after a fader move the levels lead the audio. A
-//! bus, aux, mix-minus or monitor output reads the meters of the first
-//! full-width output it is the source of, or the engine meter on matrix
-//! columns of its own when no full-width output carries it. So a monitor
-//! output is metered on what it plays, the listen sum while anything
-//! solos ([`crate::mix`]), after its level, dim, cut, mono and speaker
-//! mutes rather than before them as `MonitorMeter` says. A bus, aux or
-//! mix-minus output of the stereo layout reads the engine's correlation
-//! of its L and R legs, any other null. A level of digital silence reads
-//! the floor, -120 dB; null is a value not measured.
+//! bus, aux or mix-minus output reads the meters of the first full-width
+//! output it is the source of, or the engine meter on matrix columns of
+//! its own when no full-width output carries it. A monitor output reads
+//! its engine meter, whose matrix columns carry what it plays, the listen
+//! sum while anything solos, before its level, dim, cut, mono and speaker
+//! mutes and solos ([`crate::mix`]), whether an output carries it or
+//! not. A bus, aux or mix-minus output of the stereo layout reads the
+//! engine's correlation of its L and R legs, any other null. A level of
+//! digital silence reads the floor, -120 dB; null is a value not
+//! measured.
 //!
 //! A duck group reads the engine's `DuckMeter` of its group over the
 //! last meter slice of 10 ms it was computed in: the largest key level,
@@ -102,16 +103,14 @@ pub struct Layout {
 
 impl Layout {
     pub fn of(shape: &Shape) -> Layout {
-        let output = |id: &str, width: usize| shape.full_output(id, width);
         let meters = shape.meter_columns();
-        let source = |id: &str, width: usize| match output(id, width) {
+        let meter = |id: &str| {
+            let at = meters.iter().position(|m| m.0 == id);
+            Source::Meter(at.expect("a monitor output, or an element no output carries, has one"))
+        };
+        let source = |id: &str, width: usize| match shape.full_output(id, width) {
             Some(o) => Source::Output(o),
-            None => Source::Meter(
-                meters
-                    .iter()
-                    .position(|m| m.0 == id)
-                    .expect("an element no full-width output carries has a meter"),
-            ),
+            None => meter(id),
         };
         let mut text = String::new();
         let mut elements = Vec::new();
@@ -134,7 +133,7 @@ impl Layout {
             add(Kind::Bus, "m", &m.id, m.width, source(&m.id, m.width));
         }
         for m in &shape.monitor_outputs {
-            add(Kind::Monitor, "o", &m.id, m.width, source(&m.id, m.width));
+            add(Kind::Monitor, "o", &m.id, m.width, meter(&m.id));
         }
         for d in &shape.ducks {
             text.push_str(&format!("d/{}/1;", d.id));
@@ -384,6 +383,54 @@ mod tests {
         assert!(matches!(source(&v), Source::Output(0)));
         v["outputs"].as_array_mut().unwrap().remove(0);
         assert!(matches!(source(&v), Source::Meter(0)));
+    }
+
+    /// A monitor output reads its engine meter, the monitor before its
+    /// level, also while a full-width output carries it and meters it
+    /// after: the frame takes the engine meter's peak and not the
+    /// output's, and the monitor keeps its place and width in the frame.
+    #[test]
+    fn a_monitor_reads_its_engine_meter_while_an_output_carries_it() {
+        let mut v = small();
+        v["outputs"].as_array_mut().unwrap().push(serde_json::json!(
+            { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" }
+        ));
+        let shape = Shape::parse(&v).unwrap();
+        let layout = Layout::of(&shape);
+        let uncarried = Layout::of(&Shape::parse(&small()).unwrap());
+        let ids: Vec<&str> = shape.meter_columns().iter().map(|m| m.0).collect();
+        assert_eq!(ids, ["cf", "aux1", "mm1", "mon"]);
+        let mon = (layout.elements.iter())
+            .find(|e| e.0 == Kind::Monitor)
+            .unwrap()
+            .2;
+        assert!(matches!(mon, Source::Meter(3)));
+        assert_eq!(layout.offset("mon"), uncarried.offset("mon"));
+        assert_eq!(layout.fingerprint, uncarried.fingerprint);
+        // out-mon at -12 dB after a monitor level of -6, its engine
+        // meter at -6.
+        let out_mon = OutputMeters {
+            peak: vec![0.25, 0.25],
+            ..Default::default()
+        };
+        let mon_meter = OutputMeters {
+            peak: vec![0.5, 0.5],
+            ..Default::default()
+        };
+        let none = OutputMeters::default();
+        let silent = InputMeters::default();
+        let r = Readings {
+            outputs: vec![&none, &out_mon],
+            meters: vec![&none, &none, &none, &mon_meter],
+            inputs: vec![&silent; 3],
+            pre_strip: vec![None; 3],
+            ducks: &[],
+            taps: &[TAP; 3],
+        };
+        let f = layout.frame("r1", 0, &r);
+        let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
+        let at = layout.offset("mon").unwrap();
+        assert_eq!([v(at), v(at + 1)], [-602, -602]);
     }
 
     fn input(peak: Vec<f32>, momentary: Option<f64>) -> InputMeters {

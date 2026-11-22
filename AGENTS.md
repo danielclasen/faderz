@@ -124,6 +124,12 @@ direct out's input tap on pre-strip rows and the pre-strip meters
 following `meterTap`: all ship in that one release, and no faderz
 release was cut since 11 was raised.
 
+The release that meters the monitor before its level runs at
+`DERIVATION_VERSION` 12 (from 11): every monitor output takes an engine meter on matrix columns of its own,
+whether an output carries it or not, and those columns leave out the
+monitor's level, dim, cut, mono and speaker mutes and solos. Its roll is
+a hand-over.
+
 ## Build and test
 
 `.github/workflows/ci.yml` holds the exact commands; run them as CI does.

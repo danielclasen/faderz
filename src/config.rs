@@ -1167,6 +1167,39 @@ impl Config {
         Ok(())
     }
 
+    /// Refuses a configuration whose matrix the monitor outputs' meter
+    /// columns alone take over samplez's coefficient budget
+    /// ([`samplez::config::COEFFICIENTS_PER_BLOCK_SAMPLE`], a column in
+    /// `duckColumns` counting [`samplez::config::DUCKED_TERM_COST`] times),
+    /// naming them: without them `rows` by `columns`, `ducked` of them
+    /// ducked, would fit. Every other excess is samplez's to refuse.
+    fn monitor_meters_fit(
+        &self,
+        shape: &Shape,
+        rows: usize,
+        columns: usize,
+        ducked: usize,
+    ) -> Result<(), String> {
+        use samplez::config::{COEFFICIENTS_PER_BLOCK_SAMPLE, DUCKED_TERM_COST};
+        let block = (self.engine.get("blockSize").and_then(Value::as_u64)).unwrap_or(48) as usize;
+        let cost =
+            |columns: usize, ducked: usize| rows * columns + (DUCKED_TERM_COST - 1) * rows * ducked;
+        let budget = block * COEFFICIENTS_PER_BLOCK_SAMPLE;
+        let monitor: usize = shape.monitor_outputs.iter().map(|m| m.width).sum();
+        let with = cost(columns, ducked);
+        let ducked_monitor = if shape.ducks.is_empty() { 0 } else { monitor };
+        if with <= budget || cost(columns - monitor, ducked - ducked_monitor) > budget {
+            return Ok(());
+        }
+        Err(format!(
+            "shape: the monitor meter columns ({monitor}) push the duck groups over the \
+             coefficient budget at blockSize {block}: {with} matrix coefficients, duckColumns \
+             {DUCKED_TERM_COST} times, at most {budget}; raise engine.blockSize to at least {} \
+             or remove a duck group",
+            with.div_ceil(COEFFICIENTS_PER_BLOCK_SAMPLE)
+        ))
+    }
+
     /// Sets each tone channel's `tone` in `shape` from
     /// `mxl.inputs.<id>.tone`: the frequency and level its generator
     /// starts at, samplez's where none is given, and refuses one outside
@@ -1413,8 +1446,9 @@ impl Config {
         let columns = shape.meter_columns();
         if columns.len() > samplez::config::MAX_METERS {
             return Err(format!(
-                "shape: {} buses, auxes, mix-minus and monitor outputs have no full-width output, \
-                 the engine meters at most {} of them; add outputs for the others",
+                "shape: {} engine meters, one per monitor output and per bus, aux and \
+                 mix-minus output without a full-width output, and the engine takes at most \
+                 {}; add full-width outputs for buses, auxes or mix-minus outputs",
                 columns.len(),
                 samplez::config::MAX_METERS
             ));
@@ -1444,6 +1478,8 @@ impl Config {
         let columns: usize = (shape.outputs.iter().map(|o| o.width))
             .chain(shape.meter_columns().iter().map(|m| m.1))
             .sum();
+        let ducked = crate::duck::columns(shape).len();
+        self.monitor_meters_fit(shape, rows, columns, ducked)?;
         let mut engine = self.engine.clone();
         engine
             .entry("readerMarginSamples")
@@ -2146,9 +2182,10 @@ mod tests {
         let ok = config(json!({ "flow": id(1), "altFlow": id(5) }));
         Config::parse(&ok, || unreachable!()).unwrap();
 
-        // Each bus, aux, mix-minus and monitor output no full-width output carries
-        // is an engine meter on matrix columns after the outputs', and
-        // each leg is weighted for loudness by its layout.
+        // Each bus, aux and mix-minus output no full-width output carries,
+        // and each monitor output, is an engine meter on matrix columns
+        // after the outputs', and each leg is weighted for loudness by its
+        // layout.
         let (c, ..) = Config::parse(&ok, || unreachable!()).unwrap();
         let e = c.audio.unwrap();
         let meters: Vec<_> = e
@@ -2405,6 +2442,119 @@ mod tests {
         Config::parse(&config(max - 3), || unreachable!()).unwrap();
         let e = Config::parse(&config(max - 2), || unreachable!()).unwrap_err();
         assert!(e.contains(&format!("at most {max}")), "{e}");
+    }
+
+    /// A monitor output takes an engine meter also while a full-width
+    /// output carries it, so it counts against the engine's meters: a
+    /// shape whose meters exceed them is refused at its parse, naming
+    /// their count and the limit.
+    #[test]
+    fn a_carried_monitor_output_counts_against_the_engine_meters() {
+        let id = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        let config = |auxes: usize| {
+            let mut shape = small();
+            shape["outputs"].as_array_mut().unwrap().push(json!(
+                { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" }
+            ));
+            // cf, mm1, the added auxes and mon are engine meters.
+            let aux = |i: usize| json!({ "id": format!("aux{i}"), "name": "a", "width": 1, "layout": "mono" });
+            shape["auxes"] = (1..=auxes).map(aux).collect();
+            json!({
+                "replica": { "name": "r1" },
+                "shape": shape,
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                    "inputs": {
+                        "ch1": { "flow": id(1), "altFlow": id(5) },
+                        "ch2": { "flow": id(2) },
+                        "st1": { "flow": id(3) },
+                    },
+                    "outputs": {
+                        "out-pgm": { "flow": id(4) },
+                        "out-mon": { "flow": id(6) },
+                    },
+                },
+            })
+            .to_string()
+        };
+        let max = samplez::config::MAX_METERS;
+        let (c, ..) = Config::parse(&config(max - 3), || unreachable!()).unwrap();
+        let engine = c.audio.unwrap();
+        assert_eq!(engine.meters.len(), max);
+        assert_eq!(engine.meters[max - 1].name, "mon");
+        let e = Config::parse(&config(max - 2), || unreachable!()).unwrap_err();
+        assert!(
+            e.starts_with(&format!("shape: {} engine meters", max + 1)),
+            "{e}"
+        );
+        assert!(e.contains(&format!("at most {max}")), "{e}");
+    }
+
+    /// With duck groups, the monitor's meter columns count against
+    /// samplez's coefficient budget as ducked columns. A shape whose
+    /// matrix only they take over it refuses the configuration naming
+    /// them, the block size and the block size that fits, while the same
+    /// shape without the monitor output parses; a shape that does not fit
+    /// without them either keeps the engine's own refusal.
+    #[test]
+    fn monitor_meter_columns_over_the_coefficient_budget_are_named() {
+        let id = |n: u32| format!("00000000-0000-4000-8000-{n:012}");
+        // The small shape with `extra` mono channels more, a duck group and,
+        // with `monitor`, its monitor output carried, at blockSize 16.
+        let config = |extra: u32, monitor: bool| {
+            let mut shape = small();
+            shape["ducks"] = json!([{ "id": "d1", "name": "Duck" }]);
+            let mut inputs = json!({
+                "ch1": { "flow": id(1), "altFlow": id(5) },
+                "ch2": { "flow": id(2) },
+                "st1": { "flow": id(3) },
+            });
+            for n in 0..extra {
+                let c = format!("x{n}");
+                shape["channels"].as_array_mut().unwrap().push(
+                    json!({ "id": c, "name": c, "width": 1, "layout": "mono", "altInput": false }),
+                );
+                inputs[&c] = json!({ "flow": id(100 + n) });
+            }
+            let mut outputs = json!({ "out-pgm": { "flow": id(4) } });
+            if monitor {
+                shape["outputs"].as_array_mut().unwrap().push(json!(
+                    { "id": "out-mon", "name": "Mon", "source": "mon", "width": 2, "layout": "stereo" }
+                ));
+                outputs["out-mon"] = json!({ "flow": id(6) });
+            } else {
+                shape["monitorOutputs"] = json!([]);
+            }
+            json!({
+                "replica": { "name": "r1" },
+                "shape": shape,
+                "engine": { "blockSize": 16 },
+                "mxl": {
+                    "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                    "inputs": inputs,
+                    "outputs": outputs,
+                },
+            })
+            .to_string()
+        };
+        let parse = |extra, monitor| Config::parse(&config(extra, monitor), || unreachable!());
+        let named = "shape: the monitor meter columns";
+        let extra = (0..60)
+            .find(|&n| parse(n, true).is_err_and(|e| e.starts_with(named)))
+            .expect("a channel count at which only the monitor meter columns do not fit");
+        let e = parse(extra, true).unwrap_err();
+        assert!(e.contains("at blockSize 16"), "{e}");
+        assert!(e.contains("raise engine.blockSize to at least"), "{e}");
+        parse(extra, false)
+            .unwrap_or_else(|e| panic!("{extra} channels more without the monitor: {e}"));
+        // Fewer channels fit with the monitor; more do not fit without it,
+        // and the engine refuses them in its own words.
+        parse(extra - 1, true).unwrap_or_else(|e| panic!("{} channels more: {e}", extra - 1));
+        let over = (extra..120)
+            .find(|&n| parse(n, false).is_err())
+            .expect("a channel count over the budget without the monitor");
+        let e = parse(over, true).unwrap_err();
+        assert!(!e.starts_with(named), "{over} channels more: {e}");
     }
 
     /// NMOS settings that cannot work refuse the configuration: NMOS

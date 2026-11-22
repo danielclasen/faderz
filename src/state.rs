@@ -36,7 +36,7 @@ pub fn crossfade_lead(rate: u64) -> u64 {
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
 /// change to any of them takes another version, so replicas deriving
 /// differently never run side by side.
-pub const DERIVATION_VERSION: u32 = 11;
+pub const DERIVATION_VERSION: u32 = 12;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
