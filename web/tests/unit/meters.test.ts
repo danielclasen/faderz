@@ -231,7 +231,7 @@ describe('meter store: true peak between display ticks', () => {
     expect(store.overs.size).toBe(0);
   });
 
-  it('latches the true peak of a channel direct out', () => {
+  it('latches the true peak of a channel', () => {
     const store = new MeterStore();
     store.setShape(shape);
     const flat = new Float32Array(layout.valueCount).fill(-40);
@@ -241,7 +241,7 @@ describe('meter store: true peak between display ticks', () => {
     expect([...store.overs]).toEqual(['channels/ch1']);
   });
 
-  it('shows a channel true peak only where the channel feeds a direct out', () => {
+  it('shows a true peak on every channel, with or without a direct out', () => {
     const store = new MeterStore();
     store.setShape(shape);
     const direct = new Set(shape.outputs.map((o) => o.source));
@@ -256,18 +256,18 @@ describe('meter store: true peak between display ticks', () => {
     }
     store.ingest('r1', flat, 40);
     const channelOvers = [...store.overs].filter((k) => k.startsWith('channels/')).sort();
-    expect(channelOvers).toEqual([...direct].filter((id) => layout.channels.some((c) => c.id === id)).map((id) => `channels/${id}`).sort());
+    expect(channelOvers).toEqual(layout.channels.map((c) => `channels/${c.id}`).sort());
     expect(store.hasTruePeak('channels', 'ch1')).toBe(true);
-    expect(store.hasTruePeak('channels', without.id)).toBe(false);
+    expect(store.hasTruePeak('channels', without.id)).toBe(true);
     expect(store.hasTruePeak('buses', 'pgm20')).toBe(true);
     expect(store.hasTruePeak('monitor', 'mon')).toBe(false);
     const out: number[] = [];
-    expect(store.maxSince('channels', without.id, 'truePeak', 0, out)).toBe(false);
+    expect(store.maxSince('channels', without.id, 'truePeak', 0, out)).toBe(true);
     expect(store.maxSince('channels', 'ch1', 'truePeak', 0, out)).toBe(true);
-    // A shape without the direct out drops the channel's over.
+    // A shape without the direct out keeps the channel's over.
     store.setShape({ ...shape, outputs: shape.outputs.filter((o) => o.source !== 'ch1') });
-    expect(store.overs.has('channels/ch1')).toBe(false);
-    expect(store.hasTruePeak('channels', 'ch1')).toBe(false);
+    expect(store.overs.has('channels/ch1')).toBe(true);
+    expect(store.hasTruePeak('channels', 'ch1')).toBe(true);
   });
 
   it('keeps latched overs across a snapshot of the same shape and clears them when the layout changes', () => {

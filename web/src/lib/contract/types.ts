@@ -412,7 +412,7 @@ export interface Origin {
 export interface ChannelMeter {
   /** Sample peak at the meter tap. */
   peak: number[];
-  /** True peak at the direct out tap. */
+  /** True peak at the meter tap. */
   truePeak: number[];
   /** BS.1770 momentary loudness at the meter tap, LUFS. */
   momentary: number | null;

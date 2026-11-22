@@ -36,9 +36,8 @@ const HISTORY = 16;
 export class MeterStore {
   private slots = new Map<string, MeterSlot>();
   private fingerprint: number | null = null;
-  /** Elements whose true peak is shown, with their slots: buses, auxes, mix-minus outputs and channels with a direct out. */
+  /** Elements whose true peak is shown, with their slots: channels, buses, auxes and mix-minus outputs. */
   private truePeaks: Array<[string, MeterSlot]> = [];
-  private directOuts = new Set<string>();
   private values: Float32Array | null = null;
   private readings = new Map<string, MeterReading>();
   /** The latest frames, oldest first, with the time each arrived. */
@@ -74,28 +73,22 @@ export class MeterStore {
       this.tpMax.clear();
       this.loudSeen.clear();
     }
-    this.directOuts = new Set(shape.outputs.map((o) => o.source));
-    this.truePeaks = [...this.slots].filter(([key, slot]) => this.showsTruePeak(key, slot));
+    this.truePeaks = [...this.slots].filter(([, slot]) => this.showsTruePeak(slot));
     const shown = new Set(this.truePeaks.map(([key]) => key));
     for (const key of [...this.overs]) if (!shown.has(key)) this.overs.delete(key);
     for (const key of [...this.tpMax.keys()]) if (!shown.has(key)) this.tpMax.delete(key);
     this.clear();
   }
 
-  /**
-   * A channel's true peak is measured at its direct-out tap, so it is
-   * shown only for a channel that feeds an output; a monitor output
-   * carries none.
-   */
-  private showsTruePeak(key: string, slot: MeterSlot): boolean {
-    if (slot.kind === 'monitor' || slot.kind === 'duck') return false;
-    return slot.kind !== 'channel' || this.directOuts.has(key.slice('channels/'.length));
+  /** Every channel, bus, aux and mix-minus output carries a true peak; a monitor output and a duck group none. */
+  private showsTruePeak(slot: MeterSlot): boolean {
+    return slot.kind !== 'monitor' && slot.kind !== 'duck';
   }
 
   /** The element has a true peak to show: an over lamp, a hold marker, a readout. */
   hasTruePeak(group: MeterGroup, id: string): boolean {
     const slot = this.slots.get(slotKey(group, id));
-    return slot !== undefined && this.showsTruePeak(slotKey(group, id), slot);
+    return slot !== undefined && this.showsTruePeak(slot);
   }
 
   ingest(replica: string, values: Float32Array, now: number): void {
@@ -175,7 +168,7 @@ export class MeterStore {
    */
   maxSince(group: MeterGroup, id: string, kind: 'peak' | 'truePeak', since: number, out: number[]): boolean {
     const slot = this.slots.get(slotKey(group, id));
-    if (!slot || (kind === 'truePeak' && !this.showsTruePeak(slotKey(group, id), slot))) return false;
+    if (!slot || (kind === 'truePeak' && !this.showsTruePeak(slot))) return false;
     const base = slot.offset + (kind === 'truePeak' ? slot.legs : 0);
     let any = false;
     for (let f = this.history.length - 1; f >= 0; f--) {

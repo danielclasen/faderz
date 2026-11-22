@@ -1,8 +1,9 @@
 //! A metering session the single-replica and the set audio tests both
 //! run: a 1 kHz tone hard left and a constant hard right on the
 //! programme bus, its mix-minus and an aux, each at a level of its own,
-//! and a duck group keyed by a constant on a channel of its own, with
-//! the meter frame values each step gives.
+//! a duck group keyed by a constant on a channel of its own, then the
+//! tone alone in the centre with one leg of the bus inverted, with the
+//! meter frame values each step gives.
 
 use faderz::meters::Layout;
 use faderz::shape::Shape;
@@ -51,8 +52,10 @@ pub struct Step {
 /// The session: the tone and the constant at -6 dB on the bus, unity on
 /// the mix-minus, which is before the bus master, and -12 dB on the aux
 /// sends, each element read on its peak, true peak, RMS and momentary
-/// loudness; then the duck group keyed below, above and below its
-/// threshold again.
+/// loudness, and the channels, none of which has a direct out, on their
+/// true peaks; then the duck group keyed below, above and below its
+/// threshold again, the key channel's true peak following its fader;
+/// then the correlations of the tone on both legs.
 pub fn steps() -> Vec<Step> {
     let shape = Shape::parse(&shape()).unwrap();
     let layout = Layout::of(&shape);
@@ -66,6 +69,7 @@ pub fn steps() -> Vec<Step> {
     // constant 3.01 dB above it. The K-weighting is 0 dB at 1 kHz and
     // takes out a constant: the momentary loudness is that of the tone
     // on one leg, 3.01 dB below its peak.
+    // A sine and a constant over whole periods do not correlate.
     let element = |id: &str, db: f32| {
         let (l, r) = (centi(tone + db), centi(dc + db));
         let e = at(id);
@@ -77,8 +81,12 @@ pub fn steps() -> Vec<Step> {
             (e + 4, l, 5),
             (e + 5, centi(dc + db + 3.0103), 5),
             (e + 6, centi(tone + db - 3.0103), 10),
+            (e + 12, 0, 2),
         ]
     };
+    // A true peak is never below the sample peak: from it to 0.1 dB above,
+    // read at the channel's post-fader meter tap.
+    let true_peak = |id: &str, db: f32| (at(id) + 1, centi(db) + 5, 5);
     // A constant measured from a reset taken while it held: integrated
     // and short-term loudness as the momentary, no loudness range, the
     // maxima as the present values, the integrated loudness valid and
@@ -101,7 +109,9 @@ pub fn steps() -> Vec<Step> {
     let mut buses = element("pgm", -6.0);
     buses.extend(element("mm1", 0.0));
     buses.extend(element("aux1", -12.0));
-    let key = |db: f32| centi(20.0 * KEY.log10() + db);
+    buses.extend([true_peak("tone", tone), true_peak("dc", dc)]);
+    let key_db = |db: f32| 20.0 * KEY.log10() + db;
+    let key = |db: f32| centi(key_db(db));
     vec![
         Step {
             what: "the tone and the constant on the bus, mix-minus and aux",
@@ -138,25 +148,58 @@ pub fn steps() -> Vec<Step> {
                 ("/ducks/talk/holdMs", json!(50)),
                 ("/ducks/talk/releaseMs", json!(100)),
             ],
-            values: vec![(duck, key(-24.0), 5), (duck + 1, 0, 0), (duck + 2, 0, 0)],
+            values: vec![
+                (duck, key(-24.0), 5),
+                (duck + 1, 0, 0),
+                (duck + 2, 0, 0),
+                true_peak("key", key_db(-24.0)),
+            ],
         },
         Step {
             what: "a key over the threshold",
             resets: &[],
             changes: vec![("/channels/key/fader", json!(0))],
-            values: vec![(duck, key(0.0), 5), (duck + 1, 10_000, 0), (duck + 2, 1, 0)],
+            values: vec![
+                (duck, key(0.0), 5),
+                (duck + 1, 10_000, 0),
+                (duck + 2, 1, 0),
+                true_peak("key", key_db(0.0)),
+            ],
         },
         Step {
             what: "the key under the threshold again",
             resets: &[],
             changes: vec![("/channels/key/fader", json!(-24))],
-            values: vec![(duck, key(-24.0), 5), (duck + 1, 0, 0), (duck + 2, 0, 0)],
+            values: vec![
+                (duck, key(-24.0), 5),
+                (duck + 1, 0, 0),
+                (duck + 2, 0, 0),
+                true_peak("key", key_db(-24.0)),
+            ],
         },
         Step {
             what: "the loudness measured from a reset while the signal held",
             resets: &["pgm", "mm1", "aux1"],
             changes: vec![],
             values: measured,
+        },
+        // The same tone on both legs of the mix-minus correlates fully;
+        // the bus inverts its right leg, which the mix-minus, before the
+        // bus master, does not take. The constant's closed post-fader tap
+        // reads silence on its true peak too.
+        Step {
+            what: "the tone centred and the bus's right leg inverted",
+            resets: &[],
+            changes: vec![
+                ("/channels/tone/pan/lr", json!(0)),
+                ("/channels/dc/mute", json!(true)),
+                ("/buses/pgm/polarity/1", json!(true)),
+            ],
+            values: vec![
+                (at("pgm") + 12, -100, 1),
+                (at("mm1") + 12, 100, 1),
+                (at("dc") + 1, FLOOR, 0),
+            ],
         },
     ]
 }

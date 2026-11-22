@@ -26,7 +26,8 @@ built into the binary and the control-surface bridge both speak.
   L/R fold-down and per-speaker mutes and solos
 - Peak, true-peak and loudness metering (momentary, short-term,
   integrated, LRA) against an EBU R 128, ATSC A/85 or custom target,
-  streamed as binary meter frames
+  and the phase correlation of stereo buses, streamed as binary meter
+  frames
 - Scenes with recall-safe parameter groups per element
 - Audio follows video: tally from a vision switcher over REST
   (`/api/v1/afv/tally`) opens a channel or lowers it to its off level
@@ -299,9 +300,7 @@ key shows the masters over them.
 ![The mixer on a tablet in the light theme](docs/screenshots/tablet-light.png)
 
 The screenshots are taken from the UI's dev mock with invented show data
-(`web/tests/screenshots/`). The mock's meters carry a correlation value
-(COR), which the engine does not measure: against faderz it reads
-`--.--`.
+(`web/tests/screenshots/`).
 
 ## Quick start
 

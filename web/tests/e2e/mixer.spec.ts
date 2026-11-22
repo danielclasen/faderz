@@ -977,7 +977,7 @@ test('labels every leg of a 5.1 master under its own bar', async ({ page }) => {
   });
 });
 
-test('latches a true-peak over of a channel direct out until cleared', { tag: '@meters' }, async ({ page, request }) => {
+test('latches a true-peak over of a channel until cleared', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const overs = page.getByTestId('channel-overs');
   const pres1 = /Pres 1(,|$|\.)/;
@@ -1044,19 +1044,15 @@ test('latches a true-peak over on a master until RESET, however short it was', {
   await patch(request, '/tone/targets', []);
 });
 
-test('shows a channel true peak only on channels with a direct out', { tag: '@meters' }, async ({ page, request }) => {
+test('shows a channel true peak on channels without a direct out too', { tag: '@meters' }, async ({ page, request }) => {
   await live(page);
   const { shape } = await serverState(request);
   const direct = new Set(shape.outputs.map((o) => o.source));
   const without = shape.channels.find((c) => !direct.has(c.id))!;
   const overs = page.getByTestId('channel-overs');
   await patch(request, `/channels/${without.id}/trim`, 20);
-  await patch(request, '/channels/ch1/trim', 20);
-  await expect(overs).toHaveAccessibleName(/Pres 1(,|$|\.)/);
-  await page.waitForTimeout(500);
-  expect(await overs.getAttribute('aria-label')).not.toContain(without.name);
+  await expect(overs).toHaveAccessibleName(new RegExp(`${without.name}(,|$|\\.)`));
   await patch(request, `/channels/${without.id}/trim`, 0);
-  await patch(request, '/channels/ch1/trim', 0);
 });
 
 test('reads the highest true peak since RESET, not the last tenth of a second', { tag: '@meters' }, async ({ page, request }) => {

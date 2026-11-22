@@ -3070,7 +3070,7 @@
       "maxItems": 8
     },
     "ChannelMeter": {
-      "description": "Input channel metering. peak is the sample peak and momentary the BS.1770-5 momentary loudness (K-weighted, 400 ms window, LFE excluded, in LUFS) at the channel meterTap; truePeak (4x oversampling, dBTP) is measured at the direct out tap, where the channel leaves the mixer. momentary is null until 400 ms of audio have been measured.",
+      "description": "Input channel metering. peak is the sample peak and momentary the BS.1770-5 momentary loudness (K-weighted, 400 ms window, LFE excluded, in LUFS) at the channel meterTap, as is truePeak (4x oversampling, dBTP), on every channel whether or not it has a direct out. momentary is null until 400 ms of audio have been measured.",
       "type": "object",
       "required": [
         "peak",

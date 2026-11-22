@@ -936,13 +936,11 @@ impl Moved {
     }
 }
 
-/// A channel's gains after its strip, the same on every leg.
+/// A channel's gain after its strip, the same on every leg.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeterTap {
     /// At its `meterTap`.
     pub meter: f64,
-    /// At its direct out's tap.
-    pub direct: f64,
 }
 
 /// Each channel's [`MeterTap`]: the engine meters the channel after its
@@ -960,7 +958,6 @@ pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
             let s = &state["channels"][&c.id];
             MeterTap {
                 meter: channel(state, &c.id, tap(&s["meterTap"])),
-                direct: channel(state, &c.id, tap(&s["directOut"]["tap"])),
             }
         })
         .collect()
@@ -1666,12 +1663,11 @@ mod tests {
         s["channels"]["ch2"]["fader"] = json!(-6);
         s["channels"]["ch2"]["meterTap"] = json!("postFader");
         s["channels"]["st1"]["meterTap"] = json!("postFader");
-        s["channels"]["st1"]["directOut"]["tap"] = json!("postFader");
         s["channels"]["st1"]["fader"] = json!(0);
         s["channels"]["st1"]["mute"] = json!(true);
         let t = meter_taps(&shape, &s);
-        let tap = |meter, direct| MeterTap { meter, direct };
-        assert_eq!(t, [tap(1.0, 1.0), tap(gain(-6.0), 1.0), tap(0.0, 0.0)]);
+        let tap = |meter| MeterTap { meter };
+        assert_eq!(t, [tap(1.0), tap(gain(-6.0)), tap(0.0)]);
     }
 
     #[test]

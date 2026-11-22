@@ -55,7 +55,7 @@ interface Slot {
   /** Nearest ancestor below the host that clips its content, or null; undefined until measured. */
   clipper: HTMLElement | null | undefined;
   peak: LegBallistics[];
-  /** True peak: of the bus, or of a channel with a direct out at that tap. Drawn as its hold marker. */
+  /** True peak of the bus or channel, a channel's at its meter tap. Drawn as its hold marker. */
   tp: LegBallistics[];
   /** Bus RMS legs; empty for channels. */
   rms: LegBallistics[];

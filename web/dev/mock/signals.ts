@@ -410,11 +410,9 @@ export class ReplicaMeters {
       // reads as the pre-fader one.
       const closed = st.meterTap === 'postFader' && fader <= SILENCE;
       const tapped = st.meterTap === 'postFader' ? legs.map((l) => (closed ? SILENCE : l + fader)) : legs;
-      const direct =
-        st.directOut.tap === 'input' ? input : st.directOut.tap === 'preFader' ? legs : legs.map((l) => (fader <= SILENCE ? SILENCE : l + fader));
       channels.push({
         peak: tapped.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
-        truePeak: direct.map((l) => r1(l + 9.5 + Math.random() * 3 + jitter())),
+        truePeak: tapped.map((l) => r1(l + 9.5 + Math.random() * 3 + jitter())),
         // A closed tap reads silence once the input is measured.
         momentary: closed && legLoudness(c.layout, legs) !== null ? SILENCE : legLoudness(c.layout, tapped),
       });

@@ -3381,8 +3381,10 @@ fn post_any(nodes: &[Option<Node>], first: usize, path: &str, body: &Value) -> S
 }
 
 /// Each replica of a set meters a bus, its mix-minus and an aux on the
-/// tone and constant they carry, and a duck group on its key, through
-/// every step of [`metered::steps`], each written to the next replica.
+/// tone and constant they carry, their correlations, the channels' true
+/// peaks and a duck group on its key, through every step of
+/// [`metered::steps`], each written to the next replica. Meters enter no
+/// page, so metering them leaves every replica's programme the same.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -3409,6 +3411,9 @@ fn every_replica_meters_its_elements_and_duck_groups() {
         )
     });
     let nodes = run(&set, listeners);
+    let engines = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
+    let (outputs, reader) = Outputs::read(set.domain.0.clone(), set.members.clone(), engines);
+    let from = Outputs::now() + 1;
     for (i, step) in metered::steps().iter().enumerate() {
         if !step.changes.is_empty() {
             write(&nodes, i, &step.changes);
@@ -3439,4 +3444,16 @@ fn every_replica_meters_its_elements_and_duck_groups() {
             );
         }
     }
+    for a in 0..REPLICAS {
+        for b in a + 1..REPLICAS {
+            let c = outputs.compare(a, b, from);
+            assert!(
+                c.compared >= 2_500 && c.differing.is_empty(),
+                "replicas {a} and {b}: {c:?}: {}",
+                states(&nodes)
+            );
+        }
+    }
+    outputs.stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
 }

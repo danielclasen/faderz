@@ -41,7 +41,7 @@
   let scroller: HTMLDivElement | undefined = $state();
   let scrollLeft = $state(0);
   const visibleBank = $derived(Math.floor((scrollLeft + STRIP_W / 2) / (STRIP_W * BANK)));
-  /** Channels whose direct out latched a true-peak over. */
+  /** Channels that latched a true-peak over. */
   const channelOvers = $derived(shape.channels.filter((c) => mixer.meters.overs.has(`channels/${c.id}`)));
   /** Narrow screens only: the masters lie over the strips while this is set. */
   let mastersOpen = $state(false);
@@ -173,9 +173,9 @@
         disabled={channelOvers.length === 0}
         onclick={() => mixer.meters.clearOvers('channels', shape.channels.map((c) => c.id))}
         aria-label={channelOvers.length > 0
-          ? `Clear the true-peak overs of ${channelOvers.length} channel direct outs: ${channelOvers.map((c) => c.name).join(', ')}`
-          : 'No channel direct out went over the true-peak limit'}
-        use:tip={channelOvers.length > 0 ? `Direct out above ${mixer.state!.metering.zones.truePeakMax} dBTP: ${channelOvers.map((c) => c.name).join(', ')}. Press to clear.` : ''}
+          ? `Clear the true-peak overs of ${channelOvers.length} channels: ${channelOvers.map((c) => c.name).join(', ')}`
+          : 'No channel went over the true-peak limit'}
+        use:tip={channelOvers.length > 0 ? `Channel true peak above ${mixer.state!.metering.zones.truePeakMax} dBTP: ${channelOvers.map((c) => c.name).join(', ')}. Press to clear.` : ''}
         data-testid="channel-overs"><span class="fixed">TP{fit(String(channelOvers.length), 3)}</span></button
       >
       <button

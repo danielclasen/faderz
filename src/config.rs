@@ -1209,7 +1209,9 @@ impl Config {
     /// output per output of the shape writing this replica's flow
     /// ([`Config::member_flows`]), one meter per bus, aux,
     /// mix-minus and monitor output no full-width output carries, and the columns a
-    /// duck group can lower ([`crate::duck::columns`]).
+    /// duck group can lower ([`crate::duck::columns`]). Every channel's
+    /// input meters its true peak, and every stereo output and meter the
+    /// correlation of its legs.
     fn audio(&self, shape: &Shape) -> Result<Option<samplez::Config>, String> {
         let Some(mxl) = &self.mxl else {
             return Ok(None);
@@ -1253,6 +1255,7 @@ impl Config {
                     "channels": c.width,
                     "loudnessChannels": loudness_channels(&c.layout),
                     "maxDelaySamples": c.max_delay.unwrap_or(0),
+                    "truePeak": true,
                 }));
                 continue;
             }
@@ -1274,6 +1277,7 @@ impl Config {
                 "channels": c.width,
                 "loudnessChannels": loudness_channels(&c.layout),
                 "maxDelaySamples": c.max_delay.unwrap_or(0),
+                "truePeak": true,
             });
             if let Some(legs) = &input.channels {
                 if legs.len() != c.width {
@@ -1315,6 +1319,7 @@ impl Config {
                 "channels": o.width,
                 "loudnessChannels": loudness_channels(&o.layout),
                 "limiter": shape.has_limiter(&o.source),
+                "correlation": o.layout == "stereo",
             }));
         }
         // Inputs may share a flow; an output's flow is written by this
@@ -1347,6 +1352,7 @@ impl Config {
                     "name": id,
                     "channels": width,
                     "loudnessChannels": loudness_channels(layout),
+                    "correlation": layout == "stereo",
                 })
             })
             .collect();
@@ -2513,6 +2519,60 @@ mod tests {
             "the channels' legs, then the tones'"
         );
         assert_eq!(c.wiring.len(), shape.channels.len());
+    }
+
+    /// Every channel's input, a flow's or a tone's, meters its true peak,
+    /// so a channel has one without a direct out; the line-up tones are no
+    /// channel and meter none. Every stereo output and engine meter meters
+    /// its correlation, which the contract has for the stereo layout
+    /// alone; samplez refuses one on a mono element.
+    #[test]
+    fn channels_meter_true_peak_and_stereo_elements_correlation() {
+        let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
+        let mut shape = crate::shape::tests::surround();
+        shape["outputs"].as_array_mut().unwrap().push(
+            json!({ "id": "do", "name": "d", "source": "ch1", "width": 1, "layout": "mono" }),
+        );
+        let config = json!({
+            "replica": { "name": "r1" },
+            "shape": shape,
+            "mxl": {
+                "domains": [{ "name": "d", "path": "/dev/shm/d" }],
+                "inputs": { "ch1": { "flow": id(1), "altFlow": id(5) },
+                            "ch2": { "tone": {} }, "st1": { "flow": id(3) },
+                            "sur": { "flow": id(2) } },
+                "outputs": { "out-51": { "flow": id(4) }, "out-lr": { "flow": id(6) },
+                             "do": { "flow": id(7) } },
+            },
+        });
+        let (c, _, _) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
+        let engine = c.audio.as_ref().unwrap();
+        let true_peak: Vec<(&str, bool)> = (engine.inputs.iter())
+            .map(|i| (i.name.as_str(), i.true_peak))
+            .collect();
+        assert_eq!(
+            true_peak,
+            [
+                ("ch1", true),
+                ("ch2", true),
+                ("st1", true),
+                ("sur", true),
+                ("/tone/1", false),
+                ("/tone/2", false),
+                ("/tone/6", false),
+            ]
+        );
+        let outputs: Vec<(&str, bool)> = (engine.outputs.iter())
+            .map(|o| (o.name.as_str(), o.correlation))
+            .collect();
+        assert_eq!(
+            outputs,
+            [("out-51", false), ("out-lr", true), ("do", false)]
+        );
+        let meters: Vec<(&str, bool)> = (engine.meters.iter())
+            .map(|m| (m.name.as_str(), m.correlation))
+            .collect();
+        assert_eq!(meters, [("cf", true), ("aux1", false), ("mon", true)]);
     }
 
     /// `replica.maxApplyLeadMs` is 50 unless set, and is taken from 30 to

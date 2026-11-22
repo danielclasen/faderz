@@ -6,19 +6,19 @@
 //! input after the strip, which is both the input and the pre-fader tap
 //! (the engine has no tap before the strip), times the channel's fader,
 //! mute and VCA gain when its `meterTap` is postFader. Its true peak is
-//! that of its direct out, the first output it is the source of, taken
-//! to the same tap: scaled by the meter tap's gain over the direct out
-//! tap's. It is null without a direct out, and while the direct out's
-//! gain is 0 and the meter tap's is not, as nothing measures it then.
-//! The tap gains are those of the state last applied, while the engine
-//! ramps a change from its index and meters in 100 ms windows, so for a
-//! window or so after a fader move the levels lead the audio. A bus, aux, mix-minus or monitor output reads the
-//! meters of the first full-width output it is the source of, or the engine meter
-//! on matrix columns of its own when no full-width output carries it. So a monitor
+//! the engine's true peak of the same input meter, taken to the same
+//! tap. The tap gains are those of the state last applied, while the
+//! engine ramps a change from its index and meters in 100 ms windows, so
+//! for a window or so after a fader move the levels lead the audio. A
+//! bus, aux, mix-minus or monitor output reads the meters of the first
+//! full-width output it is the source of, or the engine meter on matrix
+//! columns of its own when no full-width output carries it. So a monitor
 //! output is metered on what it plays, the listen sum while anything
 //! solos ([`crate::mix`]), after its level, dim, cut, mono and speaker
-//! mutes rather than before them as `MonitorMeter` says. A level of digital
-//! silence reads the floor, -120 dB; null is a value not measured.
+//! mutes rather than before them as `MonitorMeter` says. A bus, aux or
+//! mix-minus output of the stereo layout reads the engine's correlation
+//! of its L and R legs, any other null. A level of digital silence reads
+//! the floor, -120 dB; null is a value not measured.
 //!
 //! A duck group reads the engine's `DuckMeter` of its group over the
 //! last meter slice of 10 ms it was computed in: the largest key level,
@@ -48,11 +48,8 @@ enum Kind {
 /// Where an element's meters come from.
 #[derive(Clone, Copy)]
 enum Source {
-    /// Input slot `slot`, and the output carrying the channel.
-    Channel {
-        slot: usize,
-        direct: Option<usize>,
-    },
+    /// Input slot `slot`.
+    Channel(usize),
     Output(usize),
     /// An engine meter, numbered as the engine's `meters`.
     Meter(usize),
@@ -117,14 +114,7 @@ impl Layout {
             ids.push(id.to_owned());
         };
         for (slot, c) in shape.channels.iter().enumerate() {
-            let direct = output(&c.id, c.width);
-            add(
-                Kind::Channel,
-                "c",
-                &c.id,
-                c.width,
-                Source::Channel { slot, direct },
-            );
+            add(Kind::Channel, "c", &c.id, c.width, Source::Channel(slot));
         }
         for b in &shape.buses {
             add(Kind::Bus, "b", &b.id, b.width, source(&b.id, b.width));
@@ -197,23 +187,14 @@ impl Layout {
                 .map_or(NULL, |v| level(f64::from(*v) * g))
         };
         for &(kind, n, source) in &self.elements {
-            if let Source::Channel { slot, direct } = source {
+            if let Source::Channel(slot) = source {
                 let input = r.inputs.get(slot);
-                let tap = r.taps.get(slot).copied().unwrap_or(MeterTap {
-                    meter: 1.0,
-                    direct: 1.0,
-                });
-                let g = tap.meter;
-                let tp = direct.and_then(|o| r.outputs.get(o)).map(|m| &m.true_peak);
+                let g = r.taps.get(slot).map_or(1.0, |t| t.meter);
                 for i in 0..n {
                     put(legs(input.map(|m| &m.peak), i, g));
                 }
                 for i in 0..n {
-                    put(match (tap.direct > 0.0, g > 0.0) {
-                        (true, _) => legs(tp, i, g / tap.direct),
-                        (false, false) if tp.is_some() => FLOOR,
-                        (false, _) => NULL,
-                    });
+                    put(legs(input.map(|m| &m.true_peak), i, g));
                 }
                 // Loudness scales with the power, g squared; a tap that
                 // passes nothing reads silence, as its peak does, once the
@@ -229,7 +210,7 @@ impl Layout {
             let m = match source {
                 Source::Output(o) => r.outputs.get(o),
                 Source::Meter(m) => r.meters.get(m),
-                Source::Channel { .. } => unreachable!("handled above"),
+                Source::Channel(_) => unreachable!("handled above"),
             }
             .copied();
             for i in 0..n {
@@ -251,8 +232,7 @@ impl Layout {
             put(l(|m| m.range));
             put(l(|m| m.max_momentary));
             put(l(|m| m.max_short_term));
-            // The engine measures no correlation.
-            put(NULL);
+            put(m.and_then(|m| m.correlation).map_or(NULL, centi));
             put(m.map_or(0, flags));
         }
         for g in 0..self.ducks {
@@ -404,13 +384,18 @@ mod tests {
         }
     }
 
-    const TAP: MeterTap = MeterTap {
-        meter: 1.0,
-        direct: 1.0,
-    };
+    const TAP: MeterTap = MeterTap { meter: 1.0 };
 
-    fn tap(meter: f64, direct: f64) -> MeterTap {
-        MeterTap { meter, direct }
+    fn tap(meter: f64) -> MeterTap {
+        MeterTap { meter }
+    }
+
+    /// [`input`] with a true peak.
+    fn input_tp(peak: Vec<f32>, true_peak: Vec<f32>, momentary: Option<f64>) -> InputMeters {
+        InputMeters {
+            true_peak,
+            ..input(peak, momentary)
+        }
     }
 
     fn lin(db: f64) -> f32 {
@@ -431,6 +416,7 @@ mod tests {
             true_peak: vec![0.5, 0.0],
             rms: vec![0.5, 0.0],
             momentary: Some(-23.0),
+            correlation: Some(-0.85),
             ..Default::default()
         };
         let cf = OutputMeters {
@@ -442,7 +428,8 @@ mod tests {
             ..Default::default()
         };
         let none = OutputMeters::default();
-        let (ch1, ch2) = (input(vec![0.25], Some(-20.0)), InputMeters::default());
+        let ch1 = input_tp(vec![0.25], vec![0.5], Some(-20.0));
+        let ch2 = InputMeters::default();
         let st1 = input(vec![0.0, 0.0], None);
         let r = Readings {
             outputs: vec![&pgm],
@@ -463,8 +450,8 @@ mod tests {
         assert_eq!(&f[..4], &[MAGIC, VERSION, 2, 0]);
         assert_eq!(u32::from_le_bytes(f[4..8].try_into().unwrap()), 7);
         let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
-        // ch1 at its input meter; no direct out, so no true peak.
-        assert_eq!([v(0), v(1), v(2)], [-1204, NULL, -2000]);
+        // ch1 at its input meter, its true peak too: it has no direct out.
+        assert_eq!([v(0), v(1), v(2)], [-1204, -602, -2000]);
         // ch2 not measured yet.
         assert_eq!([v(3), v(4), v(5)], [NULL, NULL, NULL]);
         // st1 silent.
@@ -472,10 +459,11 @@ mod tests {
             [v(6), v(7), v(8), v(9), v(10)],
             [FLOOR, FLOOR, NULL, NULL, NULL]
         );
-        // pgm, from its output: peak L -6.02 dB, R silent.
-        assert_eq!([v(11), v(12), v(17)], [-602, FLOOR, -2300]);
-        // cf, from its engine meter.
-        assert_eq!([v(25), v(26)], [-1204, -1204]);
+        // pgm, from its output: peak L -6.02 dB, R silent; its
+        // correlation, the 13th value after its legs.
+        assert_eq!([v(11), v(12), v(17), v(23)], [-602, FLOOR, -2300, -85]);
+        // cf, from its engine meter, which measured no correlation.
+        assert_eq!([v(25), v(26), v(37)], [-1204, -1204, NULL]);
         // The monitor, then the duck group: key -6.02 dBFS, envelope a
         // quarter, engaged.
         assert_eq!([v(values - 5), v(values - 4)], [-602, -602]);
@@ -520,7 +508,7 @@ mod tests {
             meters: vec![&none; 4],
             inputs: vec![&ch1, &ch1, &st1],
             ducks: &[],
-            taps: &[tap(0.5, 1.0), tap(0.0, 1.0), TAP],
+            taps: &[tap(0.5), tap(0.0), TAP],
         };
         let f = layout.frame("r1", 0, &r);
         let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
@@ -538,48 +526,84 @@ mod tests {
         assert_eq!([v(6), v(7), v(10)], [-602, -1204, -2000]);
     }
 
-    /// A channel's true peak is its direct out's taken to the meter tap:
-    /// scaled by the meter tap's gain over the direct out's, the floor
-    /// when both are closed, null when only the direct out is.
+    /// A channel's true peak is its input meter's, taken to the meter tap
+    /// as its peak is: scaled by a post-fader tap's gain, the floor on a
+    /// closed one. A direct out's meter does not enter it, and a channel
+    /// without one has it too; an input with no true peak reads null.
     #[test]
-    fn a_channel_true_peak_follows_its_meter_tap() {
+    fn a_channel_true_peak_is_its_inputs_at_its_meter_tap() {
         let mut v = crate::shape::tests::small();
         v["outputs"] = serde_json::json!([
             { "id": "do", "name": "d", "source": "ch1", "width": 1, "layout": "mono" },
             { "id": "out", "name": "o", "source": "pgm", "width": 2, "layout": "stereo" },
         ]);
         let layout = Layout::of(&Shape::parse(&v).unwrap());
-        let ch1 = input(vec![0.5], Some(-20.0));
+        let ch = input_tp(vec![0.25], vec![0.5], Some(-20.0));
+        let st1 = input_tp(vec![0.25, 0.25], vec![0.5, 0.25], Some(-20.0));
         let direct = OutputMeters {
-            true_peak: vec![0.5],
+            true_peak: vec![1.0],
             ..Default::default()
         };
         let none = OutputMeters::default();
-        let frame = |t: MeterTap| {
+        let frame = |t: MeterTap, ch2: &InputMeters| {
             let r = Readings {
                 outputs: vec![&direct, &none],
                 meters: vec![&none; 4],
-                inputs: vec![&ch1, &ch1, &ch1],
+                inputs: vec![&ch, ch2, &st1],
                 ducks: &[],
-                taps: &[t, TAP, TAP],
+                taps: &[t, t, t],
             };
             let f = layout.frame("r1", 0, &r);
             let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
-            [v(0), v(1)]
+            // ch1 with its direct out, ch2 and st1 without one.
+            [v(1), v(4), v(8), v(9)]
         };
-        // Post-fader meter at -6 dB, pre-fader direct out.
-        assert_eq!(frame(tap(0.5, 1.0)), [-1204, -1204]);
-        // Pre-fader meter, direct out post-fader at -6 dB.
-        assert_eq!(frame(tap(1.0, 0.5)), [-602, 0]);
-        // Both post-fader on a closed fader.
-        assert_eq!(frame(tap(0.0, 0.0)), [FLOOR, FLOOR]);
-        // A pre-fader meter, the direct out closed: nothing measures it.
-        assert_eq!(frame(tap(1.0, 0.0)), [-602, NULL]);
+        assert_eq!(frame(TAP, &ch), [-602, -602, -602, -1204]);
+        // A post-fader meter at -6 dB.
+        assert_eq!(frame(tap(0.5), &ch), [-1204, -1204, -1204, -1806]);
+        // A closed fader.
+        assert_eq!(frame(tap(0.0), &ch), [FLOOR, FLOOR, FLOOR, FLOOR]);
+        // An input whose engine meters no true peak.
+        let without = input(vec![0.25], Some(-20.0));
+        assert_eq!(frame(TAP, &without)[1], NULL);
+    }
+
+    /// A bus's correlation in hundredths, rounded half up and within -1
+    /// to 1 (-100..100); null where the engine measured none.
+    #[test]
+    fn a_bus_correlation_is_its_meters_in_hundredths() {
+        let layout = Layout::of(&Shape::parse(&small()).unwrap());
+        let none = OutputMeters::default();
+        let ins = InputMeters::default();
+        let corr = |c: Option<f64>| {
+            let pgm = OutputMeters {
+                correlation: c,
+                ..Default::default()
+            };
+            let r = Readings {
+                outputs: vec![&pgm],
+                meters: vec![&none; 4],
+                inputs: vec![&ins; 3],
+                ducks: &[],
+                taps: &[TAP; 3],
+            };
+            let f = layout.frame("r1", 0, &r);
+            let at = layout.offset("pgm").unwrap() + 3 * 2 + 6;
+            i16::from_le_bytes([f[14 + 2 * at], f[15 + 2 * at]])
+        };
+        assert_eq!(corr(Some(0.85)), 85);
+        assert_eq!(corr(Some(1.0)), 100);
+        assert_eq!(corr(Some(-1.0)), -100);
+        assert_eq!(corr(Some(0.0)), 0);
+        assert_eq!(corr(Some(0.004_9)), 0);
+        assert_eq!(corr(Some(-0.004)), 0);
+        assert_eq!(corr(Some(-0.015_1)), -2);
+        assert_eq!(corr(None), NULL);
     }
 
     /// The example frame of server-message.schema.json `MeterFrame`,
-    /// encoded from engine meters holding its values. The engine measures
-    /// no correlation, so that value alone is null here.
+    /// encoded from engine meters holding its values. ch1's true peak is
+    /// its input's, whatever its direct out reads.
     #[test]
     fn the_contracts_example_frame() {
         let schema: serde_json::Value =
@@ -587,13 +611,10 @@ mod tests {
         let hex = schema["$defs"]["MeterFrame"]["examples"][0]
             .as_str()
             .unwrap();
-        let mut want: Vec<u8> = hex
+        let want: Vec<u8> = hex
             .split(' ')
             .map(|b| u8::from_str_radix(b, 16).unwrap())
             .collect();
-        // Correlation, the 16th value after the 16-byte header.
-        let corr = 16 + 2 * 15;
-        want[corr..corr + 2].copy_from_slice(&NULL.to_le_bytes());
 
         let shape: Shape = serde_json::from_value(serde_json::json!({
             "sampleRate": 48000,
@@ -608,9 +629,9 @@ mod tests {
             ],
         }))
         .unwrap();
-        let ch1 = input(vec![lin(-6.5)], Some(-20.0));
+        let ch1 = input_tp(vec![lin(-6.5)], vec![lin(-5.9)], Some(-20.0));
         let direct = OutputMeters {
-            true_peak: vec![lin(-5.9)],
+            true_peak: vec![lin(-1.0)],
             ..Default::default()
         };
         let pgm = OutputMeters {
@@ -623,6 +644,7 @@ mod tests {
             integrated: Some(-23.46),
             range: Some(7.25),
             max_momentary: Some(-21.5),
+            correlation: Some(0.85),
             ..Default::default()
         };
         let r = Readings {
