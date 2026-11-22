@@ -92,6 +92,8 @@ pub struct App {
     caught_up: Mutex<BTreeMap<NodeId, Instant>>,
     /// When [`replicas`](App::replicas) last heard each other replica.
     heard: Mutex<BTreeMap<NodeId, Instant>>,
+    /// The contact window, `contactWindowMs`, that contact runs with.
+    contact_window: Duration,
     /// The tallies this replica took whose transition starts before it
     /// took them, as the `counters` message's `afv_late_total`.
     pub afv_late: Counter,
@@ -237,23 +239,28 @@ pub const CHANGELOG: &str = include_str!("../CHANGELOG.md");
 
 /// Whether replica `me` hears replica `id` of its set. With contact
 /// running: contact holds a majority and has had a report from `id`
-/// within its window. Without (a set without an engine), what raft
-/// shows: a follower hears the leader it follows, for as long as raft
-/// names one (it drops the name when the election timeout passes without
-/// a heartbeat); the leader hears a follower whose matched log is within
-/// [`REPLICATION_LAG`] entries of its own and that has matched all of it
-/// within [`CAUGHT_UP_WINDOW`] (`caught_up` holds when it last did).
+/// directly within its window, `window`. Not whether contact holds `id`
+/// silent: for one window after contact is regained no peer is silent,
+/// one stopped long before included. Without (a set without an engine),
+/// what raft shows: a follower hears the leader it follows, for as long
+/// as raft names one (it drops the name when the election timeout passes
+/// without a heartbeat); the leader hears a follower whose matched log is
+/// within [`REPLICATION_LAG`] entries of its own and that has matched all
+/// of it within [`CAUGHT_UP_WINDOW`] (`caught_up` holds when it last
+/// did).
 fn hears(
     id: NodeId,
     me: NodeId,
     contact: Option<&samplez_replica::contact::Metrics>,
+    window: Duration,
     metrics: &openraft::RaftMetrics<NodeId, openraft::BasicNode>,
     caught_up: &mut BTreeMap<NodeId, Instant>,
     now: Instant,
 ) -> bool {
     if let Some(contact) = contact {
         return contact.in_contact
-            && (contact.peers.iter()).any(|p| p.node == id && p.reports > 0 && !p.silent);
+            && (contact.peers.iter())
+                .any(|p| p.node == id && p.last_report_age.is_some_and(|age| age <= window));
     }
     if metrics.current_leader == Some(me) {
         let matched = (metrics.replication.as_ref())
@@ -301,6 +308,7 @@ impl App {
         replica: Arc<Replica<Mixer>>,
         name: String,
         set: Option<&Set>,
+        contact_window: Duration,
         auth: AuthMode,
         metrics: &Metrics,
     ) -> Arc<App> {
@@ -324,6 +332,7 @@ impl App {
             engine: Mutex::default(),
             caught_up: Mutex::default(),
             heard: Mutex::default(),
+            contact_window,
             afv_late: metrics.counter(
                 "faderz_afv_late_total",
                 "Tallies taken after the sample index their transition starts at.",
@@ -392,7 +401,15 @@ impl App {
         // own commitable and so a client's failover follow, counts what is
         // heard now.
         let (up, quorum) = listing(&voters, me, info.ready, &mut heard, now, |id| {
-            hears(id, me, contact.as_ref(), &metrics, &mut caught_up, now)
+            hears(
+                id,
+                me,
+                contact.as_ref(),
+                self.contact_window,
+                &metrics,
+                &mut caught_up,
+                now,
+            )
         });
         let mut listed: Vec<(u16, Value)> = Vec::new();
         for &id in &voters {
@@ -933,10 +950,10 @@ pub(crate) mod tests {
         let mut seen = BTreeMap::new();
         let now = Instant::now();
         m.current_leader = Some(2);
-        assert!(hears(2, 1, None, &m, &mut seen, now));
-        assert!(!hears(3, 1, None, &m, &mut seen, now));
+        assert!(hears(2, 1, None, W, &m, &mut seen, now));
+        assert!(!hears(3, 1, None, W, &m, &mut seen, now));
         m.current_leader = None;
-        assert!(!hears(2, 1, None, &m, &mut seen, now));
+        assert!(!hears(2, 1, None, W, &m, &mut seen, now));
     }
 
     /// A replica the contact layer holds silent for a sample stays up, so
@@ -975,6 +992,165 @@ pub(crate) mod tests {
         assert!(!quorum && !up[&2] && !up[&3], "{up:?}");
     }
 
+    /// The contact window the tests hear with: samplez's default
+    /// `contactWindowMs`.
+    const W: Duration = Duration::from_millis(8);
+
+    /// A peer as [`contact`] takes it: its node, its report count,
+    /// whether contact holds it silent, and the age of its last direct
+    /// report.
+    type Peer = (NodeId, u64, bool, Option<Duration>);
+
+    /// Contact metrics in or out of contact, with `peers`.
+    fn contact(in_contact: bool, peers: &[Peer]) -> samplez_replica::contact::Metrics {
+        let peer = |&(node, reports, silent, last_report_age): &Peer| {
+            samplez_replica::contact::PeerMetrics {
+                node,
+                reports,
+                delay_p9999: None,
+                gap_max: Duration::ZERO,
+                gaps_over_window: 0,
+                silent_transitions: 0,
+                silent_gap_max: Duration::ZERO,
+                silent,
+                last_report_age,
+                offset_ns: None,
+            }
+        };
+        samplez_replica::contact::Metrics {
+            protocol_gate_open: true,
+            protocol_blocker: None,
+            config_hash: None,
+            versions: None,
+            build_lead: None,
+            fence: None,
+            in_contact,
+            known_committed: 0,
+            peers: peers.iter().map(peer).collect(),
+            shared_gaps: 0,
+            shared_gap_max: Duration::ZERO,
+            stagger_max: Duration::ZERO,
+            status_lag_p9999: None,
+            status_changes_lost: 0,
+            entries_refused: 0,
+            entries_filtered: 0,
+            unresolved: 0,
+            unresolved_refused: 0,
+            awaiting_overflow: 0,
+            scheduled_dropped: 0,
+            snapshot_installs: 0,
+            purge_points: 0,
+            contradicted: 0,
+            late_rebuilds: 0,
+            estimate: None,
+            counted: Vec::new(),
+            lead: 0,
+            apply_lead_capped: false,
+            decision_lead: 0,
+            apply_lead_raised_by: None,
+            e_spread_p9999: None,
+            withholding: Default::default(),
+            floor: None,
+            hold_floor_unmet: false,
+            replica: None,
+            resync: Default::default(),
+            leader: Default::default(),
+            replica_disagreement: false,
+            clock: Default::default(),
+            clock_verdicts: 0,
+            verified: true,
+            tai_offset_s: None,
+            clock_unverified: Vec::new(),
+            replica_clock_unverified: false,
+            replica_tai_offset_zero: Vec::new(),
+            horizon_held: false,
+            clock_holds: 0,
+        }
+    }
+
+    /// With contact, a peer is heard while its last direct report is
+    /// within the contact window, whether or not contact holds it silent
+    /// at that moment, and only while contact holds a majority. A peer
+    /// that never reported is not heard.
+    #[test]
+    fn a_peer_is_heard_while_its_last_report_is_within_the_window() {
+        let m = openraft::RaftMetrics::new_initial(1);
+        let mut seen = BTreeMap::new();
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        let mut heard =
+            |c: &samplez_replica::contact::Metrics| hears(2, 1, Some(c), W, &m, &mut seen, now);
+        assert!(heard(&contact(true, &[(2, 9, false, Some(ms(1)))])));
+        assert!(heard(&contact(true, &[(2, 9, false, Some(W))])));
+        // Reported since the last tick, which has not cleared the silence.
+        assert!(heard(&contact(true, &[(2, 9, true, Some(ms(1)))])));
+        assert!(!heard(&contact(true, &[(2, 9, false, Some(W + ms(1)))])));
+        assert!(!heard(&contact(true, &[(2, 0, false, None)])));
+        assert!(!heard(&contact(true, &[(3, 9, false, Some(ms(1)))])));
+        assert!(!heard(&contact(false, &[(2, 9, false, Some(ms(1)))])));
+    }
+
+    /// A peer that stopped stays down once listed down, though for one
+    /// contact window after this replica regains contact the contact
+    /// layer holds no peer silent: its last direct report is still as
+    /// old as it is. Listing it up there would show a stopped replica
+    /// healthy and commitable for [`DOWN_AFTER`] more.
+    #[test]
+    fn a_stopped_peer_stays_down_when_contact_is_regained() {
+        let m = openraft::RaftMetrics::new_initial(1);
+        let mut seen = BTreeMap::new();
+        let mut heard = BTreeMap::new();
+        let voters = [1, 2, 3];
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let mut list = |at: Instant, c: samplez_replica::contact::Metrics| {
+            let (up, quorum) = listing(&voters, 1, true, &mut heard, at, |id| {
+                hears(id, 1, Some(&c), W, &m, &mut seen, at)
+            });
+            (up[&2], quorum)
+        };
+        // 3 reports throughout; 2 stops after its report at t0.
+        let live = (3, 1000, false, Some(ms(1)));
+        assert_eq!(
+            list(t0, contact(true, &[(2, 500, false, Some(ms(1))), live])),
+            (true, true),
+            "reported 1 ms ago"
+        );
+        assert_eq!(
+            list(
+                t0 + ms(500),
+                contact(true, &[(2, 500, true, Some(ms(500))), live])
+            ),
+            (true, true),
+            "listed up within the grace"
+        );
+        let down = t0 + ms(1100);
+        assert_eq!(
+            list(down, contact(true, &[(2, 500, true, Some(ms(1100))), live])),
+            (false, true),
+            "unheard for DOWN_AFTER"
+        );
+        // This replica lost and regained contact: no peer silent, 2's
+        // report count unchanged and its last report 2 s old.
+        let regained = t0 + ms(2000);
+        assert_eq!(
+            list(
+                regained,
+                contact(true, &[(2, 500, false, Some(ms(2000))), live])
+            ),
+            (false, true),
+            "listed up after contact was regained"
+        );
+        let later = regained + ms(500);
+        assert_eq!(
+            list(
+                later,
+                contact(true, &[(2, 500, true, Some(ms(2500))), live])
+            ),
+            (false, true)
+        );
+    }
+
     /// The leader hears a follower that trails by a batch while it keeps
     /// catching up, and stops hearing one that has not matched the whole
     /// log for the window, though it still trails by little.
@@ -987,19 +1163,20 @@ pub(crate) mod tests {
         m.current_leader = Some(1);
         m.last_log_index = Some(100);
         m.replication = Some(BTreeMap::from([(2, Some(at(100))), (3, Some(at(10)))]));
-        assert!(hears(2, 1, None, &m, &mut seen, t0));
-        assert!(!hears(3, 1, None, &m, &mut seen, t0), "far behind");
+        assert!(hears(2, 1, None, W, &m, &mut seen, t0));
+        assert!(!hears(3, 1, None, W, &m, &mut seen, t0), "far behind");
         m.last_log_index = Some(105);
         m.replication = Some(BTreeMap::from([(2, Some(at(100)))]));
         assert!(hears(
             2,
             1,
             None,
+            W,
             &m,
             &mut seen,
             t0 + Duration::from_secs(1)
         ));
-        assert!(!hears(2, 1, None, &m, &mut seen, t0 + CAUGHT_UP_WINDOW));
+        assert!(!hears(2, 1, None, W, &m, &mut seen, t0 + CAUGHT_UP_WINDOW));
     }
     use crate::contract::{check, contract};
     use crate::replica;
@@ -1073,6 +1250,7 @@ pub(crate) mod tests {
             Arc::new(replica),
             "r1".into(),
             None,
+            Duration::from_millis(8),
             AuthMode::None,
             &Metrics::default(),
         );

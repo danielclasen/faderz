@@ -1184,6 +1184,63 @@ fn every_replica_lists_the_set_and_a_killed_one_as_down() {
     }
 }
 
+/// Once the two survivors of a killed leader list it down, neither lists
+/// it healthy or able to commit again, polled every millisecond or two
+/// for five seconds. A regression guard: a survivor regaining contact in
+/// that time holds no peer silent for one contact window, and a listing
+/// that followed silence alone showed the killed leader up again for a
+/// second. It fails only if a survivor regains contact during the run;
+/// `a_stopped_peer_stays_down_when_contact_is_regained` in `src/app.rs`
+/// is the deterministic proof.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn a_killed_leader_is_never_listed_up_again() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (set, listeners) = Set::new("killed-leader");
+    let mut nodes: Vec<Option<Node>> = (listeners.into_iter().enumerate())
+        .map(|(n, l)| Some(set.start(n, Some(l))))
+        .collect();
+    for n in 0..REPLICAS {
+        steady(&nodes, n);
+    }
+    let killed = leader(&nodes);
+    let name = format!("faderz-{killed}");
+    nodes[killed].take().unwrap().kill();
+    let survivors: Vec<usize> = (0..REPLICAS).filter(|&n| n != killed).collect();
+    // Whether survivor `n` lists the killed leader healthy or commitable,
+    // and its listing.
+    let listed_up = |n: usize| -> (bool, Value) {
+        let listed = node(&nodes, n).server.app.replicas();
+        let up = (listed.as_array().unwrap().iter())
+            .any(|r| r["id"] == name.as_str() && (r["healthy"] == true || r["commitable"] == true));
+        (up, listed)
+    };
+    for &n in &survivors {
+        let mut last = Value::Null;
+        let down = until(20, || {
+            let (up, listed) = listed_up(n);
+            last = listed;
+            !up
+        });
+        assert!(down, "replica {n} lists {last}: {}", states(&nodes));
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < end {
+        for &n in &survivors {
+            let (up, listed) = listed_up(n);
+            assert!(
+                !up,
+                "replica {n} lists the killed leader {name} up again: {listed}: {}",
+                states(&nodes)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 /// The replica that leads the set, as the first running one names it.
 fn leader(nodes: &[Option<Node>]) -> usize {
     let first = nodes.iter().flatten().next().expect("a running replica");

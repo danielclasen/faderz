@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use samplez::rt::ProcessStatus;
 use samplez_replica::bootstrap::{Kube, Markers};
-use samplez_replica::contact::SystemClocks;
+use samplez_replica::contact::{SystemClocks, Timing};
 use samplez_replica::net::Pool;
 use samplez_replica::peer::max_response;
 use samplez_replica::rollout::{self, Fixed, Versions};
@@ -143,10 +143,18 @@ impl Server {
             Some((_, tcp)) => Some(tcp.local_addr().map_err(|e| e.to_string())?),
             None => None,
         };
+        // The contact window contact runs with, as `audio::timing` sets
+        // it; contact runs only in a set with an engine.
+        let contact_window = (config.audio.as_ref().zip(config.set.as_ref()))
+            .map_or(Timing::defaults(replica::BLOCK), |(engine, set)| {
+                audio::timing(engine, set)
+            })
+            .contact_window;
         let app = App::new(
             state.clone(),
             name.clone(),
             config.set.as_ref(),
+            contact_window,
             config.auth.mode,
             ops_state.metrics(),
         );
