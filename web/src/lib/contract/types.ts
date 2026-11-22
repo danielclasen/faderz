@@ -611,6 +611,8 @@ export interface InputHealth {
   up: boolean;
   lateBlocks: number;
   tooLateBlocks: number;
+  /** The engine's reason the input does not read; null while none. Absent from a replica older than it, as during a rolling upgrade. */
+  error?: string | null;
 }
 /** A bus, aux or mix-minus output's loudness measurement as the replica's engine runs it (model.schema.json LoudnessHealth). */
 export interface LoudnessHealth {

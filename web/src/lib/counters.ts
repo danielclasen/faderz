@@ -98,6 +98,8 @@ export interface InputFault {
   pruned: boolean;
   /** The replica set took it down: silenced on every replica. */
   down: boolean;
+  /** The engine's reason it does not read, such as its flow not found or its head off the MXL clock; null while none. */
+  error: string | null;
   /** Its late and too-late blocks within the window. */
   late: number;
   tooLate: number;
@@ -110,6 +112,7 @@ export function inputReasons(f: InputFault): string[] {
   return [
     ...(f.pruned ? ['its flow delivers no audio in time, so it is silenced until the flow moves again'] : []),
     ...(f.down ? ['the replica set took it down, so it is silenced on every replica'] : []),
+    ...(f.error !== null ? [`the engine reports: ${f.error}`] : []),
     ...(f.tooLate > 0 ? [`${blocks(f.tooLate)} came too late to use in the last ${s} s`] : []),
     ...(f.late > 0 ? [`${blocks(f.late)} came late in the last ${s} s`] : []),
   ];
@@ -161,12 +164,13 @@ export class CounterRates {
       const tooLate = this.inputs.rise(`${i.channel}/tooLate`, i.tooLateBlocks, now);
       // A detached input is routed to no flow on purpose: silent, not at fault.
       if (i.state === 'detached') continue;
-      const f = { channel: i.channel, pruned: i.state === 'pruned', down: !i.up, late, tooLate };
-      if (f.pruned || f.down || late > 0 || tooLate > 0) faults.push(f);
+      // An older replica sends no error, during a rolling upgrade.
+      const f = { channel: i.channel, pruned: i.state === 'pruned', down: !i.up, error: i.error ?? null, late, tooLate };
+      if (f.pruned || f.down || f.error !== null || late > 0 || tooLate > 0) faults.push(f);
     }
     this.inputs.keep(keys);
     // An input that delivers nothing at all first, then one losing blocks, each in shape order.
-    const weight = (f: InputFault) => (f.pruned || f.down ? 0 : f.tooLate > 0 ? 1 : 2);
+    const weight = (f: InputFault) => (f.pruned || f.down || f.error !== null ? 0 : f.tooLate > 0 ? 1 : 2);
     faults.sort((a, b) => weight(a) - weight(b));
     return { rises, warnings, inputs: faults };
   }

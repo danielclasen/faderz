@@ -793,6 +793,7 @@ impl Audio {
                     "up": i.up,
                     "lateBlocks": i.counters.late,
                     "tooLateBlocks": i.counters.too_late,
+                    "error": i.error,
                 })
             })
             .collect();
@@ -868,9 +869,9 @@ fn channel_inputs(status: &samplez::Status) -> impl Iterator<Item = &InputStatus
 }
 
 /// The engine of `GET /status`: per channel its input's state in the
-/// engine, whether the log has it up, the flow it reads and its blocks
-/// copied, late and too late; per output whether it is enabled and
-/// realised, and why not.
+/// engine, whether the log has it up, the flow it reads, its blocks
+/// copied, late and too late and why it does not read; per output
+/// whether it is enabled and realised, and why not.
 fn engine_status(status: &samplez::Status) -> Value {
     let inputs: Vec<Value> = channel_inputs(status)
         .map(|i| {
@@ -882,6 +883,7 @@ fn engine_status(status: &samplez::Status) -> Value {
                 "copiedBlocks": i.counters.copied,
                 "lateBlocks": i.counters.late,
                 "tooLateBlocks": i.counters.too_late,
+                "error": i.error,
             })
         })
         .collect();

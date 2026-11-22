@@ -3519,6 +3519,13 @@
           "description": "Blocks of the input that arrived too late to be used, a total since the engine started.",
           "type": "integer",
           "minimum": 0
+        },
+        "error": {
+          "description": "The engine's reason the input does not read, such as its flow not found or its head off the MXL clock beyond the flow's history; null while there is none. Absent from a replica of a release before it, during a rolling upgrade.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

@@ -91,12 +91,27 @@ describe('CounterRates', () => {
     expect(engineLamp(a.warnings.length, a.inputs.map((f) => f.channel)).trim()).toBe('WARN IN st3 +3 more');
   });
 
+  it('names an input the engine reports an error for, with the error, among those that deliver nothing', () => {
+    const r = new CounterRates();
+    const off = "head 37.0 s behind the MXL clock, beyond the flow's history";
+    r.update({}, 0, 'r1', [input('ch1'), input('ch2')]);
+    // An attached input whose head is off the clock reads late every block; the error says why.
+    const a = r.update({}, 1000, 'r1', [input('ch1', { lateBlocks: 1, error: null }), input('ch2', { lateBlocks: 5, error: off })]);
+    expect(a.inputs.map((f) => f.channel)).toEqual(['ch2', 'ch1']);
+    expect(a.inputs[0]!.error).toBe(off);
+    expect(inputReasons(a.inputs[0]!)).toEqual([`the engine reports: ${off}`, '5 blocks came late in the last 10 s']);
+    // On the first reading, with no rise yet, the error alone names it; an
+    // input an older replica sends without one has none.
+    const b = new CounterRates().update({}, 0, 'r1', [input('ch1'), input('ch2', { lateBlocks: 5, error: 'flow 0f1e not found' })]);
+    expect(b.inputs).toEqual([{ channel: 'ch2', pruned: false, down: false, error: 'flow 0f1e not found', late: 0, tooLate: 0 }]);
+  });
+
   it('names an input whose late blocks rose within the window, and only then', () => {
     const r = new CounterRates();
     r.update({ input_late_blocks_total: 50 }, 0, 'r1', [input('ch1', { lateBlocks: 50 }), input('ch2', { lateBlocks: 0 })]);
     const a = r.update({ input_late_blocks_total: 53 }, 1000, 'r1', [input('ch1', { lateBlocks: 50 }), input('ch2', { lateBlocks: 2, tooLateBlocks: 1 })]);
     expect(a.warnings).toEqual(['input_late_blocks_total']);
-    expect(a.inputs).toEqual([{ channel: 'ch2', pruned: false, down: false, late: 2, tooLate: 1 }]);
+    expect(a.inputs).toEqual([{ channel: 'ch2', pruned: false, down: false, error: null, late: 2, tooLate: 1 }]);
     expect(inputReasons(a.inputs[0]!)).toEqual(['1 block came too late to use in the last 10 s', '2 blocks came late in the last 10 s']);
     expect(inputsBehind('input_late_blocks_total', a.inputs).map((f) => f.channel)).toEqual(['ch2']);
     const later = r.update({ input_late_blocks_total: 53 }, 1000 + WARN_WINDOW_MS + 1, 'r1', [input('ch1', { lateBlocks: 50 }), input('ch2', { lateBlocks: 2, tooLateBlocks: 1 })]);

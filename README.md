@@ -341,8 +341,10 @@ fault (a late output block, a lost input block, a late change) rose in
 the last 10 s. A late tally (`afv_late_total`) is the switcher's fault,
 not the replica's, and lights no lamp. An input that delivers nothing
 usable is named on the lamp and in the counters with the reason: its
-flow stopped, the set took it down, or its blocks came late. The names
-and explanations are those of `api/ws/counters.schema.json`.
+flow stopped, the set took it down, its blocks came late, or the error
+the engine reports for it, such as its flow not found or its head off
+the MXL clock beyond the flow's history. The names and explanations
+are those of `api/ws/counters.schema.json`.
 
 ![The USERS panel listing three operators, one holding the Guest 2 fader and one with Lead Vox selected, and two connected control surfaces](docs/screenshots/users.png)
 
@@ -652,7 +654,7 @@ committed.
 | `PATCH /api/v1/state` | write one or more controls atomically |
 | `GET /api/v1/replicas` | the replica set as the serving replica sees it, and the faderz version and samplez release the serving replica was built from |
 | `GET /api/v1/about` | what the serving replica was built from, and the faderz changelog of that release, embedded in the binary |
-| `GET /api/v1/status` | the serving replica's role, readiness and contact state, and its engine's inputs (state, flow, blocks copied, late and too late) and outputs |
+| `GET /api/v1/status` | the serving replica's role, readiness and contact state, and its engine's inputs (state, flow, blocks copied, late and too late, error) and outputs |
 | `POST /api/v1/scenes`, `PUT` and `DELETE /api/v1/scenes/{id}` | store, overwrite or rename, and delete scenes |
 | `POST /api/v1/scenes/{id}/recall` | recall a scene |
 | `POST /api/v1/afv/tally`, `PUT /api/v1/afv/tally` | one source's tally change, or the full tally state |

@@ -278,6 +278,8 @@ export interface ClusterOptions {
 
 /** The input the mock prunes by default: VT 2, whose clip server is gone. */
 export const FAULTY_INPUT = 'st3';
+/** The faulty input's engine error: its flow is not found. */
+export const FAULTY_ERROR = 'flow 5f0c2a9e-3b7d-4e1a-9c48-d2a6b1e07f35 not found';
 /** 10 ms slices per second: each is a gap of every measurement the faulty input feeds. */
 const SLICES_PER_S = 100;
 /** Blocks per second the faulty input has silenced. */
@@ -382,6 +384,7 @@ export class Cluster {
         up: true,
         lateBlocks: 0,
         tooLateBlocks: 0,
+        error: c.id === faulty ? FAULTY_ERROR : null,
       })),
       // No reset yet: each measures from the engine's start, and none restarted.
       loudness: new Map(

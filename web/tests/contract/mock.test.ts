@@ -9,7 +9,7 @@ import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { BUILD, Cluster, DEDUP_RETENTION_MS, FAULTY_INPUT, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, sessionKey, type ClusterOptions } from '../../dev/mock/cluster';
+import { BUILD, Cluster, DEDUP_RETENTION_MS, FAULTY_ERROR, FAULTY_INPUT, READ_INDEX_HOLD_MS, SEQ_RETENTION_MS, sessionKey, type ClusterOptions } from '../../dev/mock/cluster';
 import { Contract } from '../../dev/mock/contract';
 import { MockServer } from '../../dev/mock/server';
 import { CONSOLE_SESSIONS, DEFAULT_CHANNELS, exampleShape } from '../../dev/mock/shape';
@@ -340,13 +340,14 @@ describe('hello', () => {
     expect(row).toMatchObject({ mode: 'primary', creditsOutstanding: 0, meterFramesSent: 5 });
   });
 
-  it('sends every counter the contract names and each channel\'s input, the faulty one pruned and counting silenced blocks', async () => {
+  it('sends every counter the contract names and each channel\'s input, the faulty one pruned with its error and counting silenced blocks', async () => {
     const c = await new Client().open();
     await c.hello();
     const first = (await c.next((m) => m.type === 'counters', 0, 1500)) as CountersMessage;
     expect(Object.keys(first.values)).toEqual(Object.keys(counterSchema.properties));
     expect(first.inputs.map((i) => i.channel)).toEqual(cluster.shape.channels.map((ch) => ch.id));
-    expect(first.inputs.find((i) => i.channel === FAULTY_INPUT)).toMatchObject({ state: 'pruned', up: true });
+    expect(first.inputs.find((i) => i.channel === FAULTY_INPUT)).toMatchObject({ state: 'pruned', up: true, error: FAULTY_ERROR });
+    expect(first.inputs.find((i) => i.channel !== FAULTY_INPUT)).toMatchObject({ state: 'attached', error: null });
     const next = (await c.next((m) => m !== first && m.type === 'counters', 0, 2500)) as CountersMessage;
     expect(next.values['input_silenced_blocks_total']).toBeGreaterThan(first.values['input_silenced_blocks_total']!);
   });

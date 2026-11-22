@@ -3236,6 +3236,68 @@ async fn the_engine_counters_reach_every_connection() {
     server.stop().await;
 }
 
+/// A channel whose producer writes its flow 37 s behind libmxl's clock,
+/// beyond the flow's 1 s history, attaches but reads nothing in time:
+/// `GET /status` and the counters' inputs give the engine's error naming
+/// the gap, and a channel read on the clock has none.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_input_off_the_clock_names_the_gap_in_its_status() {
+    const OFF: &str = " s behind the MXL clock, beyond the flow's history";
+    let domain = domain("off-clock");
+    let data = data("off-clock");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let rate = shape()["sampleRate"].as_u64().unwrap();
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    let _st1 = Source::behind(&domain.0, &flows.st1, 2, 37 * rate, |ch, _| ST1[ch]);
+    let server = start(&data.0, &domain.0, &flows).await;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let inputs = loop {
+        let (code, body) = get(server.api, "/api/v1/status").await;
+        assert_eq!(code, 200, "{body}");
+        let status: Value = serde_json::from_str(&body).unwrap();
+        let inputs = status["engine"]["inputs"].clone();
+        if inputs[2]["error"]
+            .as_str()
+            .is_some_and(|e| e.ends_with(OFF))
+        {
+            break inputs;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "st1 reported off the clock: {inputs}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let error = inputs[2]["error"].as_str().unwrap();
+    let secs: f64 = error
+        .strip_prefix("head ")
+        .and_then(|e| e.strip_suffix(OFF))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("the gap in {error}"));
+    assert!((36.9..37.3).contains(&secs), "{error}");
+    assert_eq!(inputs[0]["channel"], "ch1");
+    assert_eq!(inputs[0]["error"], Value::Null, "{inputs}");
+    // The counters message gives the inputs of the same readings.
+    let session = "session-o-0123456789abcdef";
+    let url = format!("ws://{}/api/v1/ws?session={session}", server.api);
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    let hello = json!({ "type": "hello", "session": session, "kind": "ui", "mode": "primary" });
+    ws.send(Message::text(hello.to_string())).await.unwrap();
+    let (m, _) = next_of(&mut ws, "counters").await;
+    let health = &m["inputs"];
+    let off = health[2]["error"].as_str();
+    assert!(off.is_some_and(|e| e.ends_with(OFF)), "{health}");
+    assert_eq!(health[0]["error"], Value::Null, "{health}");
+    server.stop().await;
+}
+
 /// The `loudness` entry of `id` in the `counters` message a new
 /// connection to `server` gets after its hello's answer.
 async fn loudness_of(server: &Server, id: &str) -> Value {

@@ -795,7 +795,7 @@ components:
                   type: array
                   items:
                     type: object
-                    required: [channel, state, up, flowId, copiedBlocks, lateBlocks, tooLateBlocks]
+                    required: [channel, state, up, flowId, copiedBlocks, lateBlocks, tooLateBlocks, error]
                     additionalProperties: false
                     properties:
                       channel:
@@ -818,6 +818,9 @@ components:
                       tooLateBlocks:
                         type: integer
                         minimum: 0
+                      error:
+                        description: The engine's reason the input does not read, such as its flow not found or its head off the MXL clock beyond the flow's history; null while there is none.
+                        type: [string, "null"]
                 outputs:
                   description: One per output, in shape order.
                   type: array

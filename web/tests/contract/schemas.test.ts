@@ -429,7 +429,7 @@ describe('WebSocket messages', () => {
     // <replica>:<32 hex>:<n> with a 63-character replica id.
     ['owner of a long connection id', { ...delta, owners: [{ path: '/channels/ch1/fader', owner: { ...owner, connection: `${'r'.repeat(63)}:${'0f'.repeat(16)}:18446744073709551615` } }] }],
     ['503 not applied', { type: 'error', replica, code: 503, message: 'not applied', commandId: cmd, path: '/channels/ch1/fader' }],
-    ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 }, inputs: [{ channel: 'ch1', state: 'pruned', up: false, lateBlocks: 3, tooLateBlocks: 0 }], loudness: [{ id: 'pgm', gaps: 2, lost: 1, since: '2026-11-20T09:14:03.120Z', restarted: true }] }],
+    ['counters', { type: 'counters', replica, values: { deadline_miss_total: 0 }, inputs: [{ channel: 'ch1', state: 'pruned', up: false, lateBlocks: 3, tooLateBlocks: 0, error: 'flow 0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0 not found' }], loudness: [{ id: 'pgm', gaps: 2, lost: 1, since: '2026-11-20T09:14:03.120Z', restarted: true }] }],
     ['ahead', { type: 'ahead', replica, epoch, revision: 120, lastRevision: 245 }],
     ['selections', { type: 'selections', replica, selections: [{ session: owner, element: 'ch3' }, { session: { ...owner, handle: 'Rk9vYmFyLWJhei1xdXV4LT' }, element: 'pgm20' }] }],
     ['no selections', { type: 'selections', replica, selections: [] }],
@@ -566,7 +566,7 @@ describe('engine counters', () => {
     expect(new Set(names.map((n) => schema.properties[n]!.title)).size, 'titles are distinct').toBe(names.length);
   });
 
-  it('refuse a counters message with a counter they do not name, or without the inputs; take one without the loudness, as an older replica sends during a rolling upgrade', () => {
+  it('refuse a counters message with a counter they do not name, or without the inputs; take one without the loudness or an input without its error, as an older replica sends during a rolling upgrade', () => {
     const contract = new Contract();
     const replica = { id: 'r1', role: 'leader' };
     const inputs = [{ channel: 'ch1', state: 'attached', up: true, lateBlocks: 0, tooLateBlocks: 0 }];
@@ -576,6 +576,10 @@ describe('engine counters', () => {
     expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, loudness })).toThrow();
     expect(() => contract.assertServerMessage({ type: 'counters', replica, values: { deadline_miss_total: 1 }, inputs })).not.toThrow();
     expect(() => contract.assertServerMessage({ type: 'counters', replica, values: {}, inputs: [{ ...inputs[0], state: 'gone' }], loudness })).toThrow();
+    for (const error of [null, "head 37.0 s behind the MXL clock, beyond the flow's history"]) {
+      expect(() => contract.assertServerMessage({ type: 'counters', replica, values: {}, inputs: [{ ...inputs[0], error }], loudness }), String(error)).not.toThrow();
+    }
+    expect(() => contract.assertServerMessage({ type: 'counters', replica, values: {}, inputs: [{ ...inputs[0], error: 1 }], loudness })).toThrow();
   });
 
   it('take a loudness measurement with its gaps, lost slices, start and restart, and refuse one without', () => {

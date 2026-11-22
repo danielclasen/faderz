@@ -29,9 +29,9 @@ every message it sends and receives against the contract; each meter
 frame is decoded and its values validated before it is sent. A duck
 group with a trigger and a target keys from the speech of its triggers,
 with the detector, hold and envelope its settings give. Input VT 2
-(`st3`) delivers nothing: every replica's engine has it pruned, and
-every bus, aux and mix-minus it feeds counts gaps in its loudness
-measurement. Every channel has a 5 s delay line but Music (`st1`),
+(`st3`) delivers nothing: every replica's engine has it pruned, its
+flow not found, and every bus, aux and mix-minus it feeds counts gaps
+in its loudness measurement. Every channel has a 5 s delay line but Music (`st1`),
 whose line takes 100 ms, and FX (`st4`) and Line-up (`lu`), which have
 none. Line-up is a tone generator, which reads no flow. A loudness
 reset is counted in the state and starts the

@@ -145,6 +145,18 @@ impl Source {
         channels: usize,
         signal: impl Fn(usize, u64) -> f32 + Send + 'static,
     ) -> Source {
+        Source::behind(domain, id, channels, 0, signal)
+    }
+
+    /// [`Source::signal`] with its head `delay` samples behind libmxl's
+    /// clock: block `k` goes out once the clock passes `(k + 1) B + delay`.
+    pub fn behind(
+        domain: &Path,
+        id: &str,
+        channels: usize,
+        delay: u64,
+        signal: impl Fn(usize, u64) -> f32 + Send + 'static,
+    ) -> Source {
         let api = api();
         let instance = Instance::new(&api, domain).unwrap();
         let cfg = OutputConfig {
@@ -166,7 +178,7 @@ impl Source {
             let mut data = vec![0.0f32; channels * n];
             let mut next: Option<u64> = None;
             while !flag.load(Ordering::Relaxed) {
-                let idx = time::timestamp_to_index(&api, time::now(&api));
+                let idx = time::timestamp_to_index(&api, time::now(&api)).saturating_sub(delay);
                 if let Some(due) = (idx / B).checked_sub(1) {
                     for k in next.unwrap_or(due)..=due {
                         for (ch, leg) in data.chunks_exact_mut(n).enumerate() {
@@ -179,7 +191,7 @@ impl Source {
                     next = Some(due + 1);
                 }
                 let k = next.unwrap_or(0);
-                time::sleep_until(&api, time::index_to_timestamp(&api, (k + 1) * B));
+                time::sleep_until(&api, time::index_to_timestamp(&api, (k + 1) * B + delay));
             }
             drop(writer);
             drop(instance);
