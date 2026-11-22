@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.0](https://github.com/danielclasen/faderz/compare/v0.4.10...v0.5.0) (2026-11-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mix:** a direct out at the input tap carries the input before trim, filters and dynamics, where it carried the pre-fader signal.
+* **audio:** delay buses and auxes on their outputs
+* **audio:** a bus or aux delay takes a line from mxl.outputs.OUTPUT.maxDelayMs; without one only 0 is taken, and a stored one past its line loads and recalls as 0.
+
+### Features
+
+* **afv:** fade the AFV stage over its rise, hold and fall ([#155](https://github.com/danielclasen/faderz/issues/155)) ([65ed78a](https://github.com/danielclasen/faderz/commit/65ed78ada3b49271bf058ae311adf8f8286ffbc6))
+* **audio:** apply bus, aux and mix-minus EQ and dynamics ([022b3bf](https://github.com/danielclasen/faderz/commit/022b3bfe68e6776f5a8eb7cf4ca6e08c2fdfe6ce))
+* **audio:** count input switches handed over past their margin ([7f96edb](https://github.com/danielclasen/faderz/commit/7f96edb0e6b77a1eb94d3dc351f2acc5f3d58a60))
+* **audio:** delay buses and auxes on their outputs ([022b3bf](https://github.com/danielclasen/faderz/commit/022b3bfe68e6776f5a8eb7cf4ca6e08c2fdfe6ce))
+* **meters:** measure bus correlation and channel true peak ([#159](https://github.com/danielclasen/faderz/issues/159)) ([cebbc84](https://github.com/danielclasen/faderz/commit/cebbc84ff7ec93d3839f265814195dbf0ffaee27))
+* **meters:** meter a channel's input tap before its strip ([#160](https://github.com/danielclasen/faderz/issues/160)) ([5d83392](https://github.com/danielclasen/faderz/commit/5d8339264e0fab841166b34249bbff2e6be1bd16))
+* **meters:** run a pre-strip meter only at the input meter tap ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
+* **mix:** take a direct out at the input tap before the strip ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
+* **nmos:** end a failed activation disabled on every replica ([7f96edb](https://github.com/danielclasen/faderz/commit/7f96edb0e6b77a1eb94d3dc351f2acc5f3d58a60))
+* **nmos:** serve the replicated resource versions on every replica ([7f96edb](https://github.com/danielclasen/faderz/commit/7f96edb0e6b77a1eb94d3dc351f2acc5f3d58a60))
+
+
+### Bug Fixes
+
+* **deps:** take samplez 0.20.0 for joined late fades, rolled by hand-over ([7f96edb](https://github.com/danielclasen/faderz/commit/7f96edb0e6b77a1eb94d3dc351f2acc5f3d58a60))
+* **deps:** take samplez 0.22.0 to rebuild a replica diverged while every output is disabled, rolled by hand-over ([a81f0fd](https://github.com/danielclasen/faderz/commit/a81f0fd30cbf6f4f6318b612301e29f2d2428fbc))
+* **deps:** take samplez 0.23.0, so every tap follows the channel delay, rolled by hand-over ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
+* **deps:** take url 2.5.9 for RUSTSEC-2026-0592 ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
+* **nmos:** show the replicated activation on every replica's /active ([#153](https://github.com/danielclasen/faderz/issues/153)) ([1796e53](https://github.com/danielclasen/faderz/commit/1796e537c4e0e661143f8601e41f7b1074eddce8))
+* **nmos:** take a scheduled activation of the connection a port holds ([7f96edb](https://github.com/danielclasen/faderz/commit/7f96edb0e6b77a1eb94d3dc351f2acc5f3d58a60))
+
 ## [0.4.10](https://github.com/danielclasen/faderz/compare/v0.4.9...v0.4.10) (2026-11-21)
 
 
