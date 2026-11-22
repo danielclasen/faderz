@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/danielclasen/faderz/compare/v0.5.1...v0.6.0) (2026-11-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **meters:** the monitor meter reads before the monitor's level, dim, cut, mono and speaker mutes, and every monitor output takes an engine meter and two or more matrix columns more.
+
+### Features
+
+* **status:** show why an input does not read ([#168](https://github.com/danielclasen/faderz/issues/168)) ([fea3d83](https://github.com/danielclasen/faderz/commit/fea3d83bf01db79a8948982b9c717672c7ddfdbe))
+
+
+### Bug Fixes
+
+* **meters:** read the monitor meter before its level, dim and cut ([#166](https://github.com/danielclasen/faderz/issues/166)) ([2470b03](https://github.com/danielclasen/faderz/commit/2470b03f135a0f61fd709b9e6e784d74f19328de))
+
 ## [0.5.1](https://github.com/danielclasen/faderz/compare/v0.5.0...v0.5.1) (2026-11-22)
 
 
