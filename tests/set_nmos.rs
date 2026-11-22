@@ -342,13 +342,26 @@ fn a_withdrawn_replica_is_settled_only_while_no_replica_enables_an_output() {
     assert!(!settled(None, &[false, false, false]));
 }
 
+/// `enables` of each live replica, in order, for [`settled`]: every peer
+/// as well as the replica waited for, and none that is down.
+fn live_enabled<T>(nodes: &[Option<T>], enables: impl Fn(&T) -> bool) -> Vec<bool> {
+    nodes.iter().flatten().map(enables).collect()
+}
+
+/// A peer that enables an output enters the slice [`settled`] reads, so a
+/// replica withdrawn beside it has not settled; a replica that is down
+/// does not.
+#[test]
+fn the_settled_slice_holds_every_live_replica() {
+    let nodes = [Some(false), None, Some(true)];
+    assert_eq!(live_enabled(&nodes, |&enables| enables), [false, true]);
+}
+
 /// Waits until replica `n` has been [`settled`] and ready for a second.
 fn steady(nodes: &[Option<Node>], n: usize) {
     let mut since: Option<Instant> = None;
     let steady = until(60, || {
-        let enabled: Vec<bool> = (nodes.iter().flatten())
-            .map(Node::enables_an_output)
-            .collect();
+        let enabled = live_enabled(nodes, Node::enables_an_output);
         let node = node(nodes, n);
         if settled(node.state(), &enabled) && node.ops("/readyz").0 == 200 {
             since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_secs(1)

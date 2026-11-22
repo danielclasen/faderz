@@ -26,8 +26,8 @@ built into the binary and the control-surface bridge both speak.
   L/R fold-down and per-speaker mutes and solos
 - Peak, true-peak and loudness metering (momentary, short-term,
   integrated, LRA) against an EBU R 128, ATSC A/85 or custom target,
-  and the phase correlation of stereo buses, streamed as binary meter
-  frames
+  and the phase correlation of stereo buses, auxes and mix-minus
+  outputs, streamed as binary meter frames
 - Scenes with recall-safe parameter groups per element
 - Audio follows video: tally from a vision switcher over REST
   (`/api/v1/afv/tally`) opens a channel or lowers it to its off level
