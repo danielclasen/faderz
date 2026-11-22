@@ -403,7 +403,9 @@ export class ReplicaMeters {
       const st = state.channels[c.id]!;
       const raw = sources.levels.get(c.id) ?? Array<number>(c.width).fill(SILENCE);
       const input = raw;
-      const legs = input.map((l, i) => l + st.trim + (st.legTrim[i] ?? 0) + (st.comp.enabled ? st.comp.makeup - 2 : 0));
+      // The compressed share at its makeup less 2 dB of reduction, mixed with the dry share.
+      const comp = st.comp.enabled ? 20 * Math.log10(1 - st.comp.mix / 100 + (st.comp.mix / 100) * 10 ** ((st.comp.makeup - 2) / 20)) : 0;
+      const legs = input.map((l, i) => l + st.trim + (st.legTrim[i] ?? 0) + comp);
       channelLevels.set(c.id, legs);
       const fader = st.mute || vcaMuted(c.id) ? SILENCE : effectiveGainDb(st.fader, vcaOffsets(c.id));
       // The input tap reads the input before trim and the compressor.

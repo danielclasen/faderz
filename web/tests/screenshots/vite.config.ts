@@ -37,7 +37,7 @@ function show(state: State): void {
   vox.eq.bands[2] = { type: 'peak', freq: 3200, gain: 3, q: 1.2 };
   vox.eq.bands[3] = { type: 'highShelf', freq: 10000, gain: 2, q: 0.7 };
   vox.gate.enabled = true;
-  vox.comp = { enabled: true, threshold: -20, ratio: 4, attack: 5, release: 120, makeup: 4 };
+  vox.comp = { enabled: true, threshold: -20, ratio: 4, attack: 5, release: 120, makeup: 4, mix: 100 };
   vox.hpf.freq = 100;
   state.buses['pgm20']!.fader = -1;
   state.auxes['aux3']!.fader = -4;

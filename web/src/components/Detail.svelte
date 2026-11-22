@@ -262,6 +262,7 @@
       <Param path={p('comp', 'attack')} label="Att" min={0.1} max={200} log unit=" ms" />
       <Param path={p('comp', 'release')} label="Rel" min={5} max={5000} step={1} log unit=" ms" />
       <Param path={p('comp', 'makeup')} label="Gain" min={0} max={24} unit=" dB" />
+      <Param path={p('comp', 'mix')} label="Mix" min={0} max={100} step={1} unit=" %" />
       <div class="row">
         <span class="lbl">Order</span>
         <button {@attach pendingWrite(mixer, p('dynamicsBeforeEq'))}

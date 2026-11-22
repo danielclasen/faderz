@@ -151,6 +151,8 @@ export interface Comp {
   attack: number;
   release: number;
   makeup: number;
+  /** Percent of the compressed signal in the output, the rest dry. */
+  mix: number;
 }
 export interface PanState {
   lr: number;

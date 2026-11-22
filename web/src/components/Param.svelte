@@ -34,7 +34,10 @@
    */
   function commit(): void {
     if (!field) return;
-    const typed = parseEntry(field.value, min);
+    // A % unit means the model is in percent: "40 %" is 40, not
+    // parseEntry's fraction 0.4.
+    const text = unit.trim() === '%' ? field.value.replace(/%\s*$/, '') : field.value;
+    const typed = parseEntry(text, min);
     if (typed === null) {
       field.value = fit(shown, 8);
       return;

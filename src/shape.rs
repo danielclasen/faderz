@@ -160,7 +160,7 @@ pub fn initial_processing() -> Value {
             { "type": "highShelf", "freq": 8000, "gain": 0, "q": 0.7 },
         ]},
         "gate": { "enabled": false, "threshold": -50, "range": 20, "attack": 1, "release": 200 },
-        "comp": { "enabled": false, "threshold": -18, "ratio": 3, "attack": 10, "release": 150, "makeup": 0 },
+        "comp": { "enabled": false, "threshold": -18, "ratio": 3, "attack": 10, "release": 150, "makeup": 0, "mix": 100 },
         "dynamicsBeforeEq": false,
     })
 }

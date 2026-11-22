@@ -347,6 +347,12 @@
       "minimum": 0,
       "maximum": 24
     },
+    "CompMix": {
+      "description": "Share of the compressed signal in the output, percent, the rest the input unchanged and sample-aligned with it (parallel compression); the makeup applies to the compressed share alone. 100 is the compressor alone, 0 the input alone.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
     "DelaySamples": {
       "description": "Integer delay in samples at the shape sample rate, up to 5 s, for lip-sync against video processing chains. A channel's delay is applied to its input, a bus's or aux's on every output flow carrying it, after its EQ and dynamics and before the output's limiter; each takes at most its maxDelay.",
       "type": "integer",
@@ -815,7 +821,8 @@
         "ratio",
         "attack",
         "release",
-        "makeup"
+        "makeup",
+        "mix"
       ],
       "additionalProperties": false,
       "properties": {
@@ -836,6 +843,9 @@
         },
         "makeup": {
           "$ref": "#/$defs/MakeupDb"
+        },
+        "mix": {
+          "$ref": "#/$defs/CompMix"
         }
       }
     },
@@ -1804,13 +1814,13 @@
       "type": "string",
       "anyOf": [
         {
-          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|color|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe|frontRear|spread|lfeSend)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31}|tone/(frequency|level|ident))$"
+          "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(input|color|trim|legTrim/[0-7]|polarity/[0-7]|hpf/(enabled|freq)|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup|mix)|dynamicsBeforeEq|delay|pan/(lr|fr|divergence|lfe|frontRear|spread|lfeSend)|image|fader|mute|solo|meterTap|directOut/tap|sends/[a-z][a-z0-9-]{0,31}/(on|level|pan|pre)|routes/[a-z][a-z0-9-]{0,31}|tone/(frequency|level|ident))$"
         },
         {
-          "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
+          "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/(polarity/[0-7]|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup|mix)|dynamicsBeforeEq|limiter/(enabled|ceiling)|delay|fader|mute)$"
         },
         {
-          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup)|dynamicsBeforeEq|fader|mute|interrupt/(source|active))$"
+          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(exclude|eq/enabled|eq/bands/[0-3]/(type|freq|gain|q)|gate/(enabled|threshold|range|attack|release)|comp/(enabled|threshold|ratio|attack|release|makeup|mix)|dynamicsBeforeEq|fader|mute|interrupt/(source|active))$"
         },
         {
           "pattern": "^/vcas/[a-z][a-z0-9-]{0,31}/(offset|mute|members|solo)$"
@@ -1849,10 +1859,10 @@
           "pattern": "^/channels/[a-z][a-z0-9-]{0,31}/(trim|legTrim/[0-7]|hpf/freq|pan/(lr|fr|divergence|lfe|frontRear|spread|lfeSend)|sends/[a-z][a-z0-9-]{0,31}/(level|pan))$"
         },
         {
-          "pattern": "^/(channels|buses|auxes)/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup)|delay)$"
+          "pattern": "^/(channels|buses|auxes)/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup|mix)|delay)$"
         },
         {
-          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup))$"
+          "pattern": "^/mixMinus/[a-z][a-z0-9-]{0,31}/(eq/bands/[0-3]/(freq|gain|q)|gate/(threshold|range|attack|release)|comp/(threshold|ratio|attack|release|makeup|mix))$"
         },
         {
           "pattern": "^/(buses|auxes)/[a-z][a-z0-9-]{0,31}/limiter/ceiling$"
@@ -2161,6 +2171,23 @@
             "properties": {
               "value": {
                 "$ref": "#/$defs/MakeupDb"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "/comp/mix$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/CompMix"
               }
             }
           }

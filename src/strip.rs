@@ -87,6 +87,8 @@ fn processing(e: &Value) -> Vec<StripParam> {
         release_ms: num(&k["release"]),
         knee_db: KNEE_DB,
         makeup_db: num(&k["makeup"]),
+        // Percent; a state saved before the mix holds none: the compressor alone.
+        mix: (k["mix"].as_f64().unwrap_or(100.0) / 100.0) as f32,
     }));
     p.push(StripParam::DynamicsBeforeEq {
         enabled: on(&e["dynamicsBeforeEq"]),
@@ -214,7 +216,7 @@ mod tests {
         c["eq"]["enabled"] = json!(true);
         c["eq"]["bands"][3] = json!({ "type": "highShelf", "freq": 20000, "gain": -18, "q": 0.1 });
         c["gate"] = json!({ "enabled": true, "threshold": -80, "range": 80, "attack": 0.1, "release": 5000 });
-        c["comp"] = json!({ "enabled": true, "threshold": -60, "ratio": 20, "attack": 200, "release": 5, "makeup": 24 });
+        c["comp"] = json!({ "enabled": true, "threshold": -60, "ratio": 20, "attack": 200, "release": 5, "makeup": 24, "mix": 37.5 });
         c["dynamicsBeforeEq"] = json!(true);
         let p = params(c, 2);
         assert_eq!(p[0], StripParam::Trim { db: -20.0 });
@@ -286,6 +288,7 @@ mod tests {
                 release_ms: 5.0,
                 knee_db: 0.0,
                 makeup_db: 24.0,
+                mix: 0.375,
             })
         );
         assert_eq!(p[13], StripParam::DynamicsBeforeEq { enabled: true });
@@ -458,6 +461,7 @@ mod tests {
                     ("comp/attack", "AttackMs"),
                     ("comp/release", "ReleaseMs"),
                     ("comp/makeup", "MakeupDb"),
+                    ("comp/mix", "CompMix"),
                 ] {
                     leaves.push((key.to_owned(), json!(bound(def, end))));
                 }

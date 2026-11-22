@@ -36,7 +36,7 @@ pub fn crossfade_lead(rate: u64) -> u64 {
 /// ([`Product::DERIVATION_VERSION`], in samplez's compatibility key): a
 /// change to any of them takes another version, so replicas deriving
 /// differently never run side by side.
-pub const DERIVATION_VERSION: u32 = 12;
+pub const DERIVATION_VERSION: u32 = 13;
 
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
@@ -1798,7 +1798,13 @@ impl Mixer {
         for (group, elements) in data.as_object().into_iter().flatten() {
             for (element, value) in elements.as_object().into_iter().flatten() {
                 let safe = &self.state["recallSafe"][element];
-                for (path, v) in leaves(value, &format!("/{group}/{element}")) {
+                // A scene stored before the compressor's mix ran the
+                // compressor alone, and recalls it so.
+                let mut value = value.clone();
+                if let Some(comp) = value.get_mut("comp").and_then(Value::as_object_mut) {
+                    comp.entry("mix").or_insert(json!(100));
+                }
+                for (path, v) in leaves(&value, &format!("/{group}/{element}")) {
                     let Some(g) = recall_group(&path) else {
                         continue;
                     };
@@ -2416,6 +2422,7 @@ impl Product for Mixer {
             self.state = Arc::new(saved.state);
             fill_pan(Arc::make_mut(&mut self.state));
             fill_mix_minus(Arc::make_mut(&mut self.state));
+            fill_comp_mix(Arc::make_mut(&mut self.state));
             // Taken before duck groups were kept: its shape has none.
             if self.state.get("ducks").is_none() {
                 Arc::make_mut(&mut self.state)["ducks"] = json!({});
@@ -2466,6 +2473,17 @@ fn fill_mix_minus(state: &mut Value) {
     for m in elements.filter_map(|(_, m)| m.as_object_mut()) {
         for (leaf, initial) in processing.as_object().into_iter().flatten() {
             m.entry(leaf).or_insert(initial.clone());
+        }
+    }
+}
+
+/// A snapshot an older binary saved has no mix in its compressors: they
+/// ran the compressor alone, a mix of 100 %.
+fn fill_comp_mix(state: &mut Value) {
+    for group in ["channels", "buses", "auxes", "mixMinus"] {
+        let elements = state[group].as_object_mut().into_iter().flatten();
+        for comp in elements.filter_map(|(_, e)| e.get_mut("comp")?.as_object_mut()) {
+            comp.entry("mix").or_insert(json!(100));
         }
     }
 }
@@ -6072,6 +6090,84 @@ mod tests {
                         .unwrap_or_else(|e| panic!("{}: {p:?}: {e}", o.id));
                 }
             }
+        }
+    }
+
+    /// Every compressor has a mix, 100 % at first, the compressor alone,
+    /// which reaches its strip as a share of 1. A snapshot or scene an
+    /// older binary saved without it loads and recalls at 100 %, as those
+    /// compressors ran, whatever mix was set since; the mix of a scene
+    /// that has one is recalled.
+    #[test]
+    fn a_compressor_mix_is_full_unless_set() {
+        let shape = Shape::parse(&small()).unwrap();
+        let mut m = Mixer::new(shape.clone());
+        let comps = [
+            "/channels/ch1/comp",
+            "/channels/st1/comp",
+            "/buses/pgm/comp",
+            "/auxes/aux1/comp",
+            "/mixMinus/mm1/comp",
+        ];
+        for c in comps {
+            assert_eq!(*at(&m, &format!("{c}/mix")), json!(100), "{c}");
+        }
+        let mix_of = |m: &Mixer| -> f32 {
+            let p = strip::params(&m.state()["channels"]["ch1"], 1);
+            let comp = p.iter().find_map(|p| match p {
+                StripParam::Comp(c) => Some(c.mix),
+                _ => None,
+            });
+            comp.unwrap()
+        };
+        assert_eq!(mix_of(&m), 1.0);
+        set(&mut m, "a", 1, "/channels/ch1/comp/enabled", json!(true));
+        let full = store(&mut m, "c1", None, "Full");
+        set(&mut m, "a", 2, "/channels/ch1/comp/mix", json!(25));
+        assert_eq!(mix_of(&m), 0.25);
+        let quarter = store(&mut m, "c2", None, "Quarter");
+        set(&mut m, "a", 3, "/channels/ch1/comp/mix", json!(60));
+        let recall = |m: &mut Mixer, id: &str, scene: &str| {
+            rest(
+                m,
+                Command::Recall {
+                    id: id.into(),
+                    scene: scene.into(),
+                    at: "2026-11-22T00:00:00Z".into(),
+                    fade: None,
+                },
+            );
+        };
+        recall(&mut m, "r1", &quarter);
+        assert_eq!(*at(&m, "/channels/ch1/comp/mix"), json!(25));
+        // An older binary's snapshot: no mix in the state or its scenes.
+        let mut old: Value = serde_json::from_slice(&m.save()).unwrap();
+        let strip_mix = |state: &mut Value| {
+            for c in comps {
+                let comp = state.pointer_mut(c).unwrap().as_object_mut().unwrap();
+                assert!(comp.remove("mix").is_some(), "{c}");
+            }
+        };
+        strip_mix(&mut old["mixer"]["state"]);
+        for stored in old["mixer"]["scenes"].as_array_mut().unwrap() {
+            let comp = stored[1]["channels"]["ch1"]["comp"]
+                .as_object_mut()
+                .unwrap();
+            assert!(comp.remove("mix").is_some());
+        }
+        let old = serde_json::to_vec(&old).unwrap();
+        for mut loaded in [Mixer::default(), Mixer::new(shape.clone())] {
+            loaded.load(&old).unwrap();
+            for c in comps {
+                assert_eq!(*at(&loaded, &format!("{c}/mix")), json!(100), "{c}");
+            }
+            assert_eq!(mix_of(&loaded), 1.0);
+            set(&mut loaded, "b", 1, "/channels/ch1/comp/mix", json!(40));
+            recall(&mut loaded, "r2", &quarter);
+            assert_eq!(*at(&loaded, "/channels/ch1/comp/mix"), json!(100));
+            set(&mut loaded, "b", 2, "/channels/ch1/comp/mix", json!(40));
+            recall(&mut loaded, "r3", &full);
+            assert_eq!(*at(&loaded, "/channels/ch1/comp/mix"), json!(100));
         }
     }
 

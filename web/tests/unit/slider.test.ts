@@ -12,7 +12,7 @@ interface Case {
   what: string;
   path: string;
   start: number;
-  props: { min: number; max: number; step?: number; log?: boolean };
+  props: { min: number; max: number; step?: number; log?: boolean; unit?: string };
   fine?: 'shift' | 'latch';
 }
 
@@ -43,8 +43,43 @@ function param(c: Case) {
     slider.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey: c.fine === 'shift', bubbles: true }));
     flushSync();
   };
-  return { s, posted, p, press };
+  const field = target.querySelector<HTMLInputElement>('input.entry')!;
+  // Enter in the field, then the change event the browser fires after it.
+  const enter = (text?: string) => {
+    if (text !== undefined) field.value = text;
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+  };
+  return { s, posted, p, press, field, enter };
 }
+
+describe('parameter value field', () => {
+  // The compressor mix is the one parameter in percent of a 0..100 model:
+  // a typed "%" names the unit, not a fraction.
+  const mix: Case = { what: 'Mix', path: '/channels/ch1/comp/mix', start: 100, props: { min: 0, max: 100, step: 1, unit: ' %' } };
+
+  it('keeps a percent value on Enter in the unchanged field', () => {
+    const { s, posted, p, field, enter } = param(mix);
+    expect(field.value.trim()).toBe('100 %');
+    enter();
+    expect(s.value<number>(mix.path)).toBe(100);
+    expect(posted.filter((m) => m.type === 'set')).toEqual([]);
+    unmount(p);
+    document.body.replaceChildren();
+  });
+
+  for (const text of ['40', '40 %', '40%']) {
+    it(`sets a percent value typed as "${text}"`, () => {
+      const { s, p, field, enter } = param(mix);
+      enter(text);
+      expect(s.value<number>(mix.path)).toBe(40);
+      expect(field.value.trim()).toBe('40 %');
+      unmount(p);
+      document.body.replaceChildren();
+    });
+  }
+});
 
 describe('parameter slider keys', () => {
   for (const c of CASES) {

@@ -2977,6 +2977,38 @@ async fn the_strip_processes_each_channel() {
     let want = 0.5 * 10f32.powf((level + 20.0) * (0.25 - 1.0) / 20.0);
     pgm.expect_peak(want, 1e-4, "-6 dBFS into 4:1 from -20 dBFS")
         .await;
+    // Parallel compression: the input and the compressed signal, the
+    // makeup on the compressed one alone, mixed sample by sample, so a
+    // mix m reads (1 - m) x + m c of the input x and the level c read at
+    // full mix. Each change ramps from the level before.
+    patch(&server, &[("/channels/comp/comp/makeup", json!(6))]).await;
+    pgm.expect_peak(want * 10f32.powf(6.0 / 20.0), 1e-4, "4:1, 6 dB makeup")
+        .await;
+    let wet = loop {
+        if let Some((l, _)) = pgm.peaks() {
+            break l;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let mut level = wet;
+    for mix in [50, 25, 0, 100] {
+        let from = pgm.behind();
+        patch(&server, &[("/channels/comp/comp/mix", json!(mix))]).await;
+        let m = mix as f32 / 100.0;
+        let mixed = (1.0 - m) * 0.5 + m * wet;
+        let trace = pgm.trace(from, mixed).await;
+        let step = (trace.windows(2))
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            step <= (mixed - level).abs() / 100.0 + 1e-6,
+            "mix {mix} %: a step of {step} from {level} to {mixed}"
+        );
+        level = mixed;
+    }
+    patch(&server, &[("/channels/comp/comp/mix", json!(0))]).await;
+    pgm.expect(0.5, 0.0, "-6 dBFS, the compressor at no mix")
+        .await;
     patch(&server, &set(&open("comp", -90))).await;
 
     patch(&server, &[("/channels/st1/fader", json!(0))]).await;

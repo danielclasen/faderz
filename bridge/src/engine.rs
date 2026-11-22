@@ -160,7 +160,10 @@ pub fn continuous(path: &str) -> bool {
             matches!(*p, "threshold" | "range" | "attack" | "release")
         }
         ["channels" | "buses" | "auxes", _, "comp", p] => {
-            matches!(*p, "threshold" | "ratio" | "attack" | "release" | "makeup")
+            matches!(
+                *p,
+                "threshold" | "ratio" | "attack" | "release" | "makeup" | "mix"
+            )
         }
         ["buses" | "auxes", _, "delay"] => true,
         ["buses" | "auxes", _, "limiter", "ceiling"] => true,
@@ -2013,6 +2016,7 @@ pub(crate) mod tests {
             "/channels/c/sends/a1/level",
             "/auxes/a/limiter/ceiling",
             "/channels/c/eq/bands/2/gain",
+            "/buses/pgm/comp/mix",
         ] {
             assert!(continuous(p), "{p}");
         }
@@ -2021,6 +2025,7 @@ pub(crate) mod tests {
             "/channels/ch1/solo",
             "/monitor/dim",
             "/channels/c/sends/a1/on",
+            "/channels/c/comp/enabled",
         ] {
             assert!(!continuous(p), "{p}");
         }

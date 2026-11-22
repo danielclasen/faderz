@@ -262,6 +262,7 @@ describe('ContinuousPath', () => {
     '/channels/ch1/pan/lfeSend',
     '/channels/ch1/eq/bands/2/q',
     '/buses/pgm51/comp/makeup',
+    '/channels/ch1/comp/mix',
     '/auxes/aux1/delay',
     '/mixMinus/mm1/fader',
     '/vcas/vca1/offset',

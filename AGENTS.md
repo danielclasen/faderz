@@ -130,6 +130,12 @@ whether an output carries it or not, and those columns leave out the
 monitor's level, dim, cut, mono and speaker mutes and solos. Its roll is
 a hand-over.
 
+The release that takes samplez v0.25.0 runs at
+`samplez::COMPUTE_VERSION` 3, `samplez_replica::PROTOCOL` 7 (from 6) and
+`DERIVATION_VERSION` 13 (from 12): every compressor derives a mix from
+`comp.mix`, which a snapshot or scene saved before it gets as 100 %.
+Its roll is a hand-over.
+
 ## Build and test
 
 `.github/workflows/ci.yml` holds the exact commands; run them as CI does.

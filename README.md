@@ -17,7 +17,7 @@ built into the binary and the control-surface bridge both speak.
 
 - Channels of mono, stereo, 5.1 or 7.1 layout, each with an A/B input
   select, trim and leg trim, polarity, high-pass filter, four-band EQ,
-  gate and compressor before or after the EQ, pan, a scribble-strip
+  gate and compressor with a parallel mix before or after the EQ, pan, a scribble-strip
   colour, PFL and AFL, a meter tap and a direct out
 - Programme, M&E and clean-feed buses with routing per channel, auxes
   with pre or post sends, mix-minus outputs that leave chosen channels
@@ -245,6 +245,14 @@ connection handling, sign-in, keyboard control and tests.
 Selecting a strip opens its processing panel: input colour, trim,
 polarity, high-pass, delay, meter and direct-out taps, pan, the EQ with
 its curve, gate and compressor.
+
+A compressor's `comp.mix`, 0 to 100 %, is the share of the compressed
+signal in the element's output, the rest its input unchanged (parallel
+compression); the makeup gain applies to the compressed share alone.
+The two shares stay sample-aligned and the mix adds no latency. At 100 %,
+the default and what a state or scene saved before the mix existed
+holds, the output is the compressor's alone; at 0 % the input passes
+unchanged. A mix change ramps as other processing changes do.
 
 ![The processing panel of the Lead Vox channel with input settings, the EQ curve and four bands, gate and compressor](docs/screenshots/channel-processing.png)
 

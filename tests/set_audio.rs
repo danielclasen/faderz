@@ -1939,6 +1939,162 @@ fn every_replica_applies_a_bus_strip_alike() {
     settled(&nodes, "after a replica restarted");
 }
 
+/// A compressor's mix is replicated state: a bus compressor far over its
+/// threshold, its mix written to each replica in turn, and a mix-minus
+/// output's at half, and every block all replicas commit whole is the
+/// same bits on each, through each mix ramp and settled, at the level of the input
+/// and the compressed signal mixed, `|x| (1 - m + m g)`: a quarter-rate
+/// sine is `|x|` = 0.25 at every sample, so the compressor's gain `g`,
+/// makeup included, is the static curve's.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_mixes_a_compressor_alike() {
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "st", "name": "Music", "width": 2, "layout": "stereo", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [],
+        "mixMinus": [{ "id": "mm1", "name": "N-1", "bus": "pgm", "width": 2, "layout": "stereo" }],
+        "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+            { "id": "out-mm", "name": "N-1", "source": "mm1", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let amp = 0.25 * std::f32::consts::SQRT_2;
+    let (set, listeners) = Set::with("compmix", shape, &["out-pgm", "out-mm"], |domain| {
+        let src = new_id();
+        (
+            vec![Source::off_crest(domain, &src, 2, amp)],
+            json!({ "st": { "flow": src } }),
+        )
+    });
+    let nodes = run(&set, listeners);
+    let flows = |output: &str| -> Vec<String> {
+        (set.outputs[output]["flows"].as_array().unwrap().iter())
+            .map(|f| f.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (pgm, mm) = (flows("out-pgm"), flows("out-mm"));
+    let blocks = |flows: &[String], k: u64| -> Option<Vec<Vec<f32>>> {
+        (flows.iter())
+            .map(|f| {
+                let generation = attach(&set.domain.0, f)?;
+                let mut buf = vec![0.0f32; 2 * B as usize];
+                let input = generation.input(0).unwrap();
+                let o = input.read(&mut SlotState::default(), k, &GroupWait::Skipped, &mut buf);
+                (o == Outcome::Copy).then_some(buf)
+            })
+            .collect()
+    };
+    let bits = |b: &[f32]| b.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    let peak = |b: &[f32]| b.iter().fold(0.0f32, |p, v| p.max(v.abs()));
+    let same = |b: &[Vec<f32>]| b.iter().all(|r| bits(r) == bits(&b[0]));
+    // Whether every replica committed block `k` of both outputs whole.
+    let committed = |k: u64| {
+        (0..REPLICAS).all(|n| {
+            let engine = node(&nodes, n).server.audio.as_ref().unwrap().engine();
+            (0..2).all(|o| {
+                engine
+                    .block_status(o, k)
+                    .is_some_and(|s| s.kind == Kind::Committed && s.range == Range::Whole)
+            })
+        })
+    };
+    // Every block from `from` on that every replica committed and wrote
+    // to both outputs is the same bits on each, until each output's
+    // sample peak is `want` within `tol` and at least 100 blocks compared.
+    let alike = |from: u64, want: (f32, f32), tol: f32, what: &str| {
+        let (mut k, mut compared, mut last) = (from, 0, None);
+        let read = until(20, || {
+            while k <= Outputs::now() {
+                let both = (blocks(&pgm, k), blocks(&mm, k));
+                if let (Some(p), Some(m)) = both
+                    && committed(k)
+                {
+                    assert!(
+                        same(&p) && same(&m),
+                        "{what}: block {k} differs: {}",
+                        states(&nodes)
+                    );
+                    compared += 1;
+                    last = Some((peak(&p[0]), peak(&m[0])));
+                }
+                k += 1;
+            }
+            last.is_some_and(|(p, m): (f32, f32)| {
+                compared >= 100 && (p - want.0).abs() <= tol && (m - want.1).abs() <= tol
+            })
+        });
+        assert!(
+            read,
+            "{what}: wanted peaks {want:?}, read {last:?} over {compared} blocks: {}",
+            states(&nodes)
+        );
+    };
+    let x = 0.25f32;
+    write(&nodes, 0, &[("/channels/st/fader", json!(0))]);
+    alike(Outputs::now(), (x, x), 1e-4, "compressors off");
+    // 27.96 dB over -40 dBFS at 20:1 and 12 dB of makeup.
+    let g = 10f32.powf(((20.0 * x.log10() + 40.0) * (1.0 / 20.0 - 1.0) + 12.0) / 20.0);
+    let mixed = |m: f32| x * (1.0 - m + m * g);
+    let comp = |e: &str| -> Vec<(String, Value)> {
+        vec![
+            (format!("/{e}/comp/enabled"), json!(true)),
+            (format!("/{e}/comp/threshold"), json!(-40)),
+            (format!("/{e}/comp/ratio"), json!(20)),
+            (format!("/{e}/comp/attack"), json!(0.1)),
+            (format!("/{e}/comp/release"), json!(50)),
+            (format!("/{e}/comp/makeup"), json!(12)),
+        ]
+    };
+    let send = |n: usize, changes: Vec<(String, Value)>| {
+        let changes: Vec<(&str, Value)> = (changes.iter())
+            .map(|(p, v)| (p.as_str(), v.clone()))
+            .collect();
+        write(&nodes, n, &changes);
+    };
+    let from = Outputs::now();
+    send(0, comp("buses/pgm"));
+    alike(
+        from,
+        (mixed(1.0), x),
+        1e-4,
+        "the bus compressor at full mix",
+    );
+    let mut mm = comp("mixMinus/mm1");
+    mm.push(("/mixMinus/mm1/comp/mix".into(), json!(50)));
+    let from = Outputs::now();
+    send(1, mm);
+    alike(
+        from,
+        (mixed(1.0), mixed(0.5)),
+        1e-4,
+        "the mix-minus compressor at half mix",
+    );
+    for (i, mix) in [50, 0, 25, 100].into_iter().enumerate() {
+        let from = Outputs::now();
+        send(
+            i % REPLICAS,
+            vec![("/buses/pgm/comp/mix".into(), json!(mix))],
+        );
+        let m = mix as f32 / 100.0;
+        alike(
+            from,
+            (mixed(m), mixed(0.5)),
+            1e-4,
+            &format!("the bus compressor at {mix} %"),
+        );
+    }
+}
+
 /// A tone channel's generator is replicated state: through level,
 /// frequency and ident writes sent to each replica in turn, every replica
 /// writes the same bits, and each write moves the programme's level.
