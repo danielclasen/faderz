@@ -48,6 +48,16 @@ pub struct Step {
     pub resets: &'static [&'static str],
     /// Index in the frame's values, value and tolerance, centi-units.
     pub values: Vec<(usize, i16, i16)>,
+    /// The channels whose pre-strip meter runs after the changes: those
+    /// at the input meter tap.
+    pub pre_strip: &'static [&'static str],
+}
+
+/// Whether the engine meters exactly the inputs `step` names before
+/// their strip: it reports those readings only while that meter runs.
+pub fn pre_strip_runs(status: &samplez::Status, step: &Step) -> bool {
+    (status.inputs.iter())
+        .all(|i| i.pre_strip_meters.is_some() == step.pre_strip.contains(&i.name.as_str()))
 }
 
 /// The session: the tone and the constant at -6 dB on the bus, unity on
@@ -57,7 +67,8 @@ pub struct Step {
 /// true peaks; then the duck group keyed below, above and below its
 /// threshold again, the key channel's true peak following its fader;
 /// then the correlations of the tone on both legs; then the tone trimmed,
-/// read at its pre-fader and at its input meter tap.
+/// read at its pre-fader and at its input meter tap and at its pre-fader
+/// tap again. Only a channel at the input tap has its pre-strip meter on.
 pub fn steps() -> Vec<Step> {
     let shape = Shape::parse(&shape()).unwrap();
     let layout = Layout::of(&shape);
@@ -127,6 +138,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "the tone and the constant on the bus, mix-minus and aux",
             resets: &[],
+            pre_strip: &[],
             changes: vec![
                 ("/channels/tone/fader", json!(0)),
                 ("/channels/tone/pan/lr", json!(-1)),
@@ -147,6 +159,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "a key 6 dB under the threshold",
             resets: &[],
+            pre_strip: &[],
             changes: vec![
                 ("/channels/key/fader", json!(-24)),
                 ("/channels/key/routes/pgm", json!(false)),
@@ -169,6 +182,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "a key over the threshold",
             resets: &[],
+            pre_strip: &[],
             changes: vec![("/channels/key/fader", json!(0))],
             values: vec![
                 (duck, key(0.0), 5),
@@ -180,6 +194,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "the key under the threshold again",
             resets: &[],
+            pre_strip: &[],
             changes: vec![("/channels/key/fader", json!(-24))],
             values: vec![
                 (duck, key(-24.0), 5),
@@ -191,6 +206,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "the loudness measured from a reset while the signal held",
             resets: &["pgm", "mm1", "aux1"],
+            pre_strip: &[],
             changes: vec![],
             values: measured,
         },
@@ -201,6 +217,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "the tone centred and the bus's right leg inverted",
             resets: &[],
+            pre_strip: &[],
             changes: vec![
                 ("/channels/tone/pan/lr", json!(0)),
                 ("/channels/dc/mute", json!(true)),
@@ -217,6 +234,7 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "the tone trimmed by 6 dB at its pre-fader meter tap",
             resets: &[],
+            pre_strip: &[],
             changes: vec![
                 ("/channels/tone/trim", json!(-6)),
                 ("/channels/tone/meterTap", json!("preFader")),
@@ -226,8 +244,16 @@ pub fn steps() -> Vec<Step> {
         Step {
             what: "the trimmed tone at its input meter tap",
             resets: &[],
+            pre_strip: &["tone"],
             changes: vec![("/channels/tone/meterTap", json!("input"))],
             values: channel("tone", tone),
+        },
+        Step {
+            what: "the trimmed tone back at its pre-fader meter tap",
+            resets: &[],
+            pre_strip: &[],
+            changes: vec![("/channels/tone/meterTap", json!("preFader"))],
+            values: channel("tone", tone - 6.0),
         },
     ]
 }

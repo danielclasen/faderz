@@ -1273,7 +1273,9 @@ impl Config {
     /// mix-minus and monitor output no full-width output carries, and the columns a
     /// duck group can lower ([`crate::duck::columns`]). Every channel's
     /// input meters its true peak, before its strip as well as after it,
-    /// and every stereo output and meter the correlation of its legs. A
+    /// and every stereo output and meter the correlation of its legs; the
+    /// meter before the strip is reserved here, and runs while the
+    /// channel's `meterTap` is input ([`crate::mix::pre_strip_meters`]). A
     /// channel with a direct out also feeds matrix rows before its strip
     /// ([`crate::mix::pre_rows`]), so the direct out's input tap is a state
     /// change alone.

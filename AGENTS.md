@@ -118,10 +118,11 @@ hand-over.
 The release that takes samplez v0.23.0 runs at
 `samplez::COMPUTE_VERSION` 3 (from 2), `samplez_replica::PROTOCOL` 6
 (from 5) and `DERIVATION_VERSION` 11 (from 10). Its roll is a
-hand-over. 11 first came with applying bus, aux and mix-minus EQ and
-dynamics and bus and aux delay on their outputs; it covers every later
-derivation change of that release, as no faderz release was cut in
-between.
+hand-over. 11 came with applying bus, aux and mix-minus EQ and
+dynamics and bus and aux delay on their outputs, and also covers the
+direct out's input tap on pre-strip rows and the pre-strip meters
+following `meterTap`: all ship in that one release, and no faderz
+release was cut since 11 was raised.
 
 ## Build and test
 

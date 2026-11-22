@@ -1416,6 +1416,17 @@ async fn element_and_duck_meters_read_their_signals() {
                 step.what
             );
         }
+        let engine = server.audio.as_ref().unwrap().engine();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !metered::pre_strip_runs(&engine.status(), &step) {
+            assert!(
+                Instant::now() < deadline,
+                "{}: the pre-strip meters running are not {:?}",
+                step.what,
+                step.pre_strip
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
     server.stop().await;
 }

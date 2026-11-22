@@ -629,7 +629,7 @@ pub(crate) fn flow<'w>(state: &Value, id: &str, w: &'w Wiring) -> &'w str {
 
 /// Everything the engine of `shape` plays from `state`: the gain matrix
 /// ([`matrix`]), each channel's strip ([`strip::params`]) and input
-/// delay ([`strip::delay`]), each tone channel's generator ([`strip::tone`]), each output's strip ([`strip::output_strips`]), delay ([`strip::output_delays`]) and limiter ([`strip::limiters`]), the duck groups ([`duck::targets`])
+/// delay ([`strip::delay`]), each tone channel's generator ([`strip::tone`]), each channel's pre-strip meter ([`pre_strip_meters`]), each output's strip ([`strip::output_strips`]), delay ([`strip::output_delays`]) and limiter ([`strip::limiters`]), the duck groups ([`duck::targets`])
 /// and masks ([`duck::masks`]) and the flow its selected input reads
 /// ([`selected`]), one slot per channel; then a slot per line-up tone
 /// generator ([`tone_widths`]), which reads no flow, has no strip and
@@ -724,11 +724,13 @@ struct Moved {
     elements: BTreeSet<String>,
     /// The columns of the monitor outputs.
     monitor: bool,
-    /// The strips, delays, tone generators and flows of these slots.
+    /// The strips, delays, tone generators, flows and pre-strip meters of
+    /// these slots.
     strips: BTreeSet<usize>,
     delays: BTreeSet<usize>,
     tones: BTreeSet<usize>,
     flows: BTreeSet<usize>,
+    meters: BTreeSet<usize>,
     /// The line-up tone's generators ([`line_up`]).
     line_up: bool,
     /// The duck masks: a group's targets or destinations, or the
@@ -769,6 +771,7 @@ impl Derived {
                 delays: (shape.channels.iter())
                     .map(|c| strip::delay(&state["channels"][&c.id]))
                     .collect(),
+                pre_strip_meters: pre_strip_meters(shape, state),
                 tones: (shape.channels.iter())
                     .map(|c| (c.tone.is_some()).then(|| strip::tone(&state["channels"][&c.id])))
                     .chain(generators.iter().map(|_| Some(line_up(state))))
@@ -861,6 +864,10 @@ impl Derived {
         for slot in moved.delays {
             self.targets.delays[slot] = strip::delay(&state["channels"][&shape.channels[slot].id]);
         }
+        for slot in moved.meters {
+            self.targets.pre_strip_meters[slot] =
+                metered_at_input(&state["channels"][&shape.channels[slot].id]);
+        }
         for slot in moved.tones {
             let c = &shape.channels[slot];
             self.targets.tones[slot] =
@@ -937,6 +944,9 @@ impl Moved {
                         Some("delay") => {
                             moved.delays.insert(s);
                         }
+                        Some("meterTap") => {
+                            moved.meters.insert(s);
+                        }
                         Some("tone") => {
                             moved.tones.insert(s);
                         }
@@ -954,6 +964,7 @@ impl Moved {
                             moved.delays.insert(s);
                             moved.tones.insert(s);
                             moved.flows.insert(s);
+                            moved.meters.insert(s);
                             moved.monitor = true;
                             moved.masks = true;
                         }
@@ -963,6 +974,7 @@ impl Moved {
                             moved.delays.insert(s);
                             moved.tones.insert(s);
                             moved.flows.insert(s);
+                            moved.meters.insert(s);
                         }
                     }
                 }
@@ -1040,8 +1052,9 @@ pub struct MeterTap {
 }
 
 /// Each channel's [`MeterTap`]: an input tap reads the engine's meter of
-/// the input before its strip, a pre-fader tap its meter after the
-/// strip, and a post-fader tap adds the fader, mute and VCAs to that.
+/// the input before its strip, which [`pre_strip_meters`] switches on, a
+/// pre-fader tap its meter after the strip, and a post-fader tap adds the
+/// fader, mute and VCAs to that.
 pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
     let tap = |v: &Value| match v.as_str() {
         Some("input") => Tap::Input,
@@ -1059,6 +1072,22 @@ pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
             }
         })
         .collect()
+}
+
+/// Whether each channel's pre-strip meter runs, per input slot
+/// (samplez `PreStripMeter`): exactly while its `meterTap` is input, the
+/// one tap that reads it. The engine copies and meters an input before
+/// its strip only while it runs, so a desk metering after the strip pays
+/// nothing for it.
+pub fn pre_strip_meters(shape: &Shape, state: &Value) -> Vec<bool> {
+    (shape.channels.iter())
+        .map(|c| metered_at_input(&state["channels"][&c.id]))
+        .collect()
+}
+
+/// Whether a channel's `meterTap` is input.
+fn metered_at_input(channel: &Value) -> bool {
+    channel["meterTap"] == "input"
 }
 
 /// A channel's gain at [`Tap::PostFader`] and at [`Tap::Mix`]
@@ -1788,6 +1817,62 @@ mod tests {
         assert!(
             close(m[2][2], gain(-10.0)),
             "st1 post-fader on its own rows"
+        );
+    }
+
+    /// A channel's pre-strip meter runs exactly while its meterTap is
+    /// input: a desk metering at preFader and postFader runs none, so the
+    /// engine copies and meters no input before its strip and nothing is
+    /// sent, the engine starting with every one off. A meterTap write
+    /// moves it alone, to the bits of the whole state, and a diff carries
+    /// it as a PreStripMeter entry.
+    #[test]
+    fn pre_strip_meters_run_exactly_at_the_input_tap() {
+        use samplez::engine::Entry;
+        let shape = shape();
+        let mut s = shape.initial_state();
+        let off = targets(&shape, &[], &s);
+        assert_eq!(off.pre_strip_meters, [false; 3], "every channel postFader");
+        s["channels"]["ch1"]["meterTap"] = json!("preFader");
+        assert_eq!(targets(&shape, &[], &s).pre_strip_meters, [false; 3]);
+        let pre = |t: &Targets| -> Vec<Entry> {
+            (Targets::default().diff(t).into_iter())
+                .filter(|e| matches!(e, Entry::PreStripMeter { .. }))
+                .collect()
+        };
+        assert!(pre(&off).is_empty());
+        let mut d = Derived::new(&shape, &[], &s);
+        for (ch, tap, want) in [
+            ("st1", "input", [false, false, true]),
+            ("ch1", "input", [true, false, true]),
+            ("st1", "postFader", [true, false, false]),
+            ("ch1", "preFader", [false; 3]),
+        ] {
+            let path = format!("/channels/{ch}/meterTap");
+            let vcas = s["vcas"].clone();
+            crate::state::set_at(&mut s, &path, json!(tap));
+            let before = d.targets().clone();
+            d.update(&shape, &[], &s, &vcas, [path.as_str()]);
+            assert_eq!(d.targets().pre_strip_meters, want, "{ch} at {tap}");
+            assert_eq!(d.targets().pre_strip_meters, pre_strip_meters(&shape, &s));
+            let slot = ["ch1", "ch2", "st1"].iter().position(|c| *c == ch).unwrap();
+            let entries = before.diff(d.targets());
+            assert_eq!(
+                entries,
+                [Entry::PreStripMeter {
+                    slot,
+                    enabled: tap == "input"
+                }]
+            );
+        }
+        s["channels"]["st1"]["meterTap"] = json!("input");
+        let on = targets(&shape, &[], &s);
+        assert_eq!(
+            pre(&on),
+            [Entry::PreStripMeter {
+                slot: 2,
+                enabled: true
+            }]
         );
     }
 

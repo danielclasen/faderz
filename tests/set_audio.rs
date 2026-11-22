@@ -3860,6 +3860,16 @@ fn every_replica_meters_its_elements_and_duck_groups() {
                 step.what,
                 states(&nodes)
             );
+            let audio = node(&nodes, n).engine().upgrade().unwrap();
+            assert!(
+                until(10, || metered::pre_strip_runs(
+                    &audio.engine().status(),
+                    step
+                )),
+                "replica {n}, {}: the pre-strip meters running are not {:?}",
+                step.what,
+                step.pre_strip
+            );
         }
     }
     for a in 0..REPLICAS {

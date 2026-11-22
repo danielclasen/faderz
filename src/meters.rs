@@ -3,9 +3,12 @@
 //! order, the duck groups' readings last.
 //!
 //! A channel's peak, true peak and momentary loudness are an engine meter
-//! of its input at its `meterTap`: input reads the meter before the
-//! strip (samplez `preStripMeter`), so trim, filters and dynamics do not
-//! reach it, and null while there is none; preFader reads the meter after
+//! of its input at its `meterTap`: input reads the meter after the
+//! channel delay and before the strip (samplez `preStripMeter`), so trim,
+//! filters and dynamics do not reach it, and null while there is none.
+//! That meter runs only while the tap is input
+//! ([`crate::mix::pre_strip_meters`]), and measures afresh from the switch
+//! to input. preFader reads the meter after
 //! the strip; postFader that one times the channel's fader, mute and VCA
 //! gain. The tap gains are those of the state last applied, while the
 //! engine ramps a change from its index and meters in 100 ms windows, so
