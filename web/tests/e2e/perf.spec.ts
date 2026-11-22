@@ -243,6 +243,7 @@ test('another client touching and releasing a fader lays out no more than its bo
   const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   let tracing = false;
   try {
+    await page.evaluate(() => document.fonts.ready);
     await frames();
     await browser.startTracing(page, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline'] });
     tracing = true;
@@ -261,8 +262,9 @@ test('another client touching and releasing a fader lays out no more than its bo
     // Every layout says whether it started below the document: without
     // that the check below would hold of any trace.
     expect(layouts.filter((e) => typeof e.args?.beginData?.partialLayout !== 'boolean')).toEqual([]);
-    // Objects of each layout from the document down.
-    expect(layouts.filter((e) => e.args?.beginData?.partialLayout === false).map((e) => e.args?.beginData?.totalObjects)).toEqual([]);
+    // Objects and start data of each layout from the document down, so a
+    // failure says what it laid out.
+    expect(layouts.filter((e) => e.args?.beginData?.partialLayout === false).map((e) => e.args?.beginData)).toEqual([]);
   } finally {
     if (tracing) await browser.stopTracing().catch(() => undefined);
     other.close();
