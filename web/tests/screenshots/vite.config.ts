@@ -2,6 +2,7 @@
 // and talk show on the example shape, its sessions named after invented
 // operators, and no automation.
 
+import { readFileSync } from 'node:fs';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig, type Plugin } from 'vite';
 import { Cluster, type Replica } from '../../dev/mock/cluster.ts';
@@ -108,8 +109,13 @@ function showMock(): Plugin {
   };
 }
 
+// The console reads its build's version, as web/vite.config.ts defines it.
+const faderzVersion = /^version = "([^"]+)"\r?$/m.exec(readFileSync(new URL('../../../Cargo.toml', import.meta.url), 'utf8'))?.[1];
+if (!faderzVersion) throw new Error('no version in ../../../Cargo.toml');
+
 export default defineConfig({
   root: new URL('../..', import.meta.url).pathname,
+  define: { __FADERZ_VERSION__: JSON.stringify(faderzVersion) },
   plugins: [svelte(), showMock()],
   server: { fs: { allow: ['..'] } },
 });

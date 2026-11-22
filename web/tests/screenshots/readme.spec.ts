@@ -41,10 +41,13 @@ test('README screenshots', async ({ browser }) => {
   await alex.waitForTimeout(3000);
   await alex.screenshot({ path: `${OUT}/console.png` });
 
+  // Tall enough for the panel down to the compressor's last row.
+  await alex.setViewportSize({ width: 1600, height: 1250 });
   await alex.locator('[data-channel=ch7] .head').click();
   await alex.waitForTimeout(1500);
   await alex.screenshot({ path: `${OUT}/channel-processing.png` });
   await alex.keyboard.press('Escape');
+  await alex.setViewportSize({ width: 1600, height: 1000 });
 
   const users = alex.getByRole('button', { name: /^Users/ });
   await users.click();
