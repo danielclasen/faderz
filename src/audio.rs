@@ -115,6 +115,9 @@ pub struct Audio {
     /// state counts and where the last one this engine applied starts the
     /// measurement.
     resets: Mutex<BTreeMap<usize, Resets>>,
+    /// The revision [`Audio::follow`] last sent the engine the changes
+    /// of, and the index the last of them applies at ([`Audio::sent`]).
+    sent: Mutex<(u64, u64)>,
 }
 
 /// What the engine was sent: every coefficient, each input's flow, none
@@ -273,6 +276,7 @@ impl Audio {
             ),
             inputs: Mutex::new(InputHealth::new(metrics, shape)),
             resets: Mutex::default(),
+            sent: Mutex::default(),
             ops,
         }
     }
@@ -284,6 +288,16 @@ impl Audio {
 
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+
+    /// The revision whose changes [`Audio::follow`] last sent the engine,
+    /// and the index the last of them applies at: once the engine has
+    /// produced that index, each was applied or counted in
+    /// `command_late`. `(0, 0)` until the first changes are sent. Read
+    /// only by the integration tests, to wait for a write to reach the
+    /// engine.
+    pub fn sent(&self) -> (u64, u64) {
+        *self.sent.lock().expect("sent lock poisoned")
     }
 
     /// Stops the engine and releases its writers, which deletes their
@@ -356,6 +370,7 @@ impl Audio {
             (sm.product.engine_view(), sm.product.gain_fades())
         });
         let mut last = self.apply(&state, &view, &fades, &mut sent, 0, true).await;
+        *self.sent.lock().expect("sent lock poisoned") = (revision, last);
         // A resend asked for meanwhile marks it ready once done. The lock
         // is held over the check and the store, so a hold() cannot fall
         // between them and be overwritten.
@@ -409,6 +424,7 @@ impl Audio {
             last = self
                 .apply(&state, &view, &fades, &mut sent, at, false)
                 .await;
+            *self.sent.lock().expect("sent lock poisoned") = (revision, last);
             if let Some(n) = resent {
                 let asked = self.resends_asked.lock().expect("resend lock poisoned");
                 if *asked == n {

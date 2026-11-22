@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use faderz::server::Server;
 use futures_util::future::BoxFuture;
@@ -212,8 +213,9 @@ pub fn limited(enabled: bool, tp: f32, amp: f32, ceiling: f32) -> bool {
     }
 }
 
-/// Writes `changes` (path, value) in one PATCH /state.
-pub async fn patch(server: &Server, changes: &[(&str, Value)]) {
+/// Writes `changes` (path, value) in one PATCH /state: the revision it
+/// applied at.
+pub async fn patch(server: &Server, changes: &[(&str, Value)]) -> u64 {
     let changes: Vec<Value> = changes
         .iter()
         .map(|(p, v)| json!({ "path": p, "value": v }))
@@ -231,6 +233,48 @@ pub async fn patch(server: &Server, changes: &[(&str, Value)]) {
     let mut answer = String::new();
     tcp.read_to_string(&mut answer).await.unwrap();
     assert!(answer.starts_with("HTTP/1.1 200"), "{changes:?}: {answer}");
+    let body = answer.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    let revision = serde_json::from_str::<Value>(body).ok();
+    (revision.and_then(|r| r["revision"].as_u64()))
+        .unwrap_or_else(|| panic!("{changes:?}: no revision in {answer}"))
+}
+
+/// Waits until the engine of `server` has taken the changes of
+/// `revision`: the server sent it those of that revision or a later one
+/// ([`faderz::audio::Audio::sent`]) and it produced the index the last of
+/// them applies at. Each was applied at its index then, or reached the
+/// engine past it and counts in `command_late`, which the caller checks.
+/// Panics after 10 s with the engine's counts then and at the start.
+pub async fn applied(server: &Server, revision: u64) {
+    let audio = server.audio.as_ref().unwrap();
+    let c = audio.engine().counters();
+    let counts = || {
+        [
+            &c.entries_consumed,
+            &c.command_late,
+            &c.overrun_skipped_samples,
+        ]
+        .map(|n| n.load(Ordering::Relaxed))
+    };
+    let before = counts();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (sent, last) = audio.sent();
+        let produced = c.produced.load(Ordering::Relaxed);
+        if sent >= revision && produced > last {
+            return;
+        }
+        if Instant::now() >= deadline {
+            let now = counts();
+            panic!(
+                "revision {revision} not in the engine within 10 s: sent up to revision {sent}, \
+                 the last change at {last}, produced up to {produced}; entries_consumed {} -> {}, \
+                 command_late {} -> {}, overrun_skipped_samples {} -> {}",
+                before[0], now[0], before[1], now[1], before[2], now[2]
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 /// POST one source's tally change to the server.

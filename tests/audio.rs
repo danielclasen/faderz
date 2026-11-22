@@ -208,7 +208,8 @@ impl Reader {
 
     /// The left leg of every block from block `from` on, in order, until
     /// a whole block reads `left` within the rounding of an f32 gain,
-    /// within 10 s. A block not written is left out.
+    /// within 10 s. A block not written yet is waited for, and one that
+    /// cannot be read otherwise is left out.
     async fn trace(&mut self, from: u64, left: f32) -> Vec<f32> {
         let n = B as usize;
         let mut state = SlotState::default();
@@ -219,12 +220,16 @@ impl Reader {
             let last = self.behind();
             let input = self.generation.input(0).unwrap();
             while k <= last {
-                if input.read(&mut state, k, &GroupWait::Skipped, &mut self.buf) == Outcome::Copy {
-                    let block = &self.buf[..n];
-                    trace.extend_from_slice(block);
-                    if block.iter().all(|v| (v - left).abs() <= 1e-6) {
-                        return trace;
+                match input.read(&mut state, k, &GroupWait::Skipped, &mut self.buf) {
+                    Outcome::Copy => {
+                        let block = &self.buf[..n];
+                        trace.extend_from_slice(block);
+                        if block.iter().all(|v| (v - left).abs() <= 1e-6) {
+                            return trace;
+                        }
                     }
+                    Outcome::Late => break,
+                    _ => {}
                 }
                 k += 1;
             }
@@ -1000,7 +1005,9 @@ async fn the_routing_reaches_every_output_flow() {
     let near = |leg: &[f32], want: f32| leg.iter().all(|v| (v - want).abs() <= 1e-6);
     for step in routing::steps() {
         match &step.change {
-            routing::Change::Patch(changes) => patch(&server, changes).await,
+            routing::Change::Patch(changes) => {
+                patch(&server, changes).await;
+            }
             routing::Change::Tally(source, state) => tally(&server, source, state).await,
         }
         tokio::time::sleep(routing::SETTLE).await;
@@ -1155,7 +1162,29 @@ async fn a_scene_recall_crossfades_over_its_time() {
         mm: new_id(),
     };
     let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
-    let server = start(&data.0, &domain.0, &flows).await;
+    let rate = shape()["sampleRate"].as_u64().unwrap();
+    let block = 48;
+    let server = start_engine(
+        &data.0,
+        &domain.0,
+        shape(),
+        json!({
+            "ch1": { "flow": flows.ch1 },
+            "ch2": { "flow": flows.ch2, "altFlow": flows.ch2b },
+            "st1": { "flow": flows.st1 },
+        }),
+        json!({ "out-pgm": { "flow": flows.pgm }, "out-mm": { "flow": flows.mm } }),
+        // Every sample of the crossfade is read, which a debug engine on
+        // a loaded host writes whole only with time in hand, as in
+        // a_burst_ducks_the_programme_but_not_the_me: a skipped block
+        // reads as silence in the middle of the rise.
+        json!({
+            "blockSize": block,
+            "readerMarginSamples": rate / 10,
+            "maxCatchupBlocks": rate / 10 / block,
+        }),
+    )
+    .await;
     appears(&domain.0, &flows.pgm).await;
     let mut pgm = Reader::new(&domain.0, &flows.pgm);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -1163,7 +1192,6 @@ async fn a_scene_recall_crossfades_over_its_time() {
         assert!(Instant::now() < deadline, "ready");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let rate = shape()["sampleRate"].as_u64().unwrap();
     // samplez's default rampSamples: a gain change without a fade ramps
     // over it.
     let ramp = 480;
@@ -1185,15 +1213,31 @@ async fn a_scene_recall_crossfades_over_its_time() {
             .filter(|&&v| v > low + 1e-6 && v < high - 1e-6)
             .count() as u64
     };
+    let counters = server.audio.as_ref().unwrap().engine().counters();
+    let counts =
+        || [&counters.command_late, &counters.overrun_skipped_samples].map(|c| c.load(Relaxed));
     for ms in [400u64, 0] {
         patch(&server, &[("/channels/ch1/fader", json!(-20))]).await;
         pgm.expect(low, 0.0, "the fader down").await;
         let from = pgm.behind();
+        let before = counts();
         let body = json!({ "commandId": faderz::app::uuid().unwrap(), "crossfadeMs": ms });
         posted(&server, &path, &body).await;
         let trace = pgm.trace(from, high).await;
-        let rising = trace.windows(2).all(|w| w[1] >= w[0] - 1e-6);
-        assert!(rising, "crossfade {ms} ms: the level falls on its way up");
+        // A late recall goes again without its fade, a skip zero-fills.
+        let after = counts();
+        assert!(
+            after == before,
+            "crossfade {ms} ms: [command_late, overrun_skipped_samples] {before:?} -> {after:?}: \
+             the recall applied late or the engine was starved for over 100 ms"
+        );
+        let fall = trace.windows(2).position(|w| w[1] < w[0] - 1e-6);
+        assert!(
+            fall.is_none(),
+            "crossfade {ms} ms: the level falls on its way up, at sample {fall:?} of {}: {:?}",
+            trace.len(),
+            fall.map(|i| &trace[i.saturating_sub(2)..(i + 4).min(trace.len())])
+        );
         let mid = between(&trace);
         let len = ms * rate / 1000;
         if ms == 0 {
@@ -1883,13 +1927,15 @@ async fn a_direct_out_at_the_input_tap_is_delayed_but_not_processed() {
     .await;
     appears(&domain.0, &at_input).await;
     appears(&domain.0, &pre_fader).await;
-    patch(&server, &direct::changes()).await;
     let api = api();
     let engine = server.audio.as_ref().unwrap().engine();
+    let late = engine.counters().command_late.load(Relaxed);
+    let revision = patch(&server, &direct::changes()).await;
+    applied(&server, revision).await;
     let skipped = engine.counters().overrun_skipped_samples.load(Relaxed);
     let now = || time::timestamp_to_index(&api, time::now(&api));
     // A pulse of 100 ms from 0.5 s on, off the block grid: the changes
-    // have applied and the delay's crossfade ended long before.
+    // are in and the delay's crossfade ends long before.
     let start = now() + rate / 2 + 7;
     let end = start + rate / 10;
     pulse[1].store(end, Relaxed);
@@ -1900,10 +1946,17 @@ async fn a_direct_out_at_the_input_tap_is_delayed_but_not_processed() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     pulse[0].store(u64::MAX, Relaxed);
-    assert_eq!(
-        engine.counters().overrun_skipped_samples.load(Relaxed),
-        skipped,
-        "samples skipped, the engine was starved for over 100 ms"
+    let counters = engine.counters();
+    let now_skipped = counters.overrun_skipped_samples.load(Relaxed);
+    assert!(
+        now_skipped == skipped,
+        "samples skipped ({skipped} -> {now_skipped}), the engine was starved for over 100 ms"
+    );
+    let now_late = counters.command_late.load(Relaxed);
+    assert!(
+        now_late == late,
+        "changes applied late: command_late {late} -> {now_late}, they reached the engine \
+         after their index"
     );
     direct::check(
         &span_left(&domain.0, &at_input, 1, from, to),
@@ -2002,7 +2055,9 @@ async fn a_bus_delay_plays_every_output_carrying_it_exactly_that_late() {
     let steps = [0, off_grid, line, 0, off_grid].map(|d| (Some(d), d));
     for (write, delay) in steps.into_iter().chain([(None, off_grid)]) {
         match write {
-            Some(d) => patch(&server, &[("/buses/pgm/delay", json!(d))]).await,
+            Some(d) => {
+                patch(&server, &[("/buses/pgm/delay", json!(d))]).await;
+            }
             None => {
                 server.stop().await;
                 server = boot().await;
@@ -2568,12 +2623,22 @@ async fn a_diff_beyond_the_engines_queue_lands_whole() {
         .collect();
     let _c0 = Source::start(&domain.0, &ids[0], vec![CH1]);
     let _c1 = Source::start(&domain.0, &ids[1], vec![CH2B]);
-    let server = start_with(
+    let block = 48;
+    let server = start_engine(
         &data.0,
         &domain.0,
         shape,
         Value::Object(inputs),
         json!({ "out-pgm": { "flow": pgm_id } }),
+        // A debug engine of 40 channels on a loaded host keeps up only
+        // with time in hand, as in a_burst_ducks_the_programme_but_not_the_me:
+        // past the default backlog of two blocks it skips and zero-fills,
+        // and the programme read back is silence.
+        json!({
+            "blockSize": block,
+            "readerMarginSamples": 48_000 / 10,
+            "maxCatchupBlocks": 48_000 / 10 / block,
+        }),
     )
     .await;
     appears(&domain.0, &pgm_id).await;

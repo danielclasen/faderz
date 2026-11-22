@@ -85,21 +85,29 @@ pub fn check(at_input: &[f32], pre_fader: &[f32], from: u64, start: u64, end: u6
             .collect()
     };
     let input = heard(at_input);
-    let (first, last) = (input.first().map(|h| h.0), input.last().map(|h| h.0));
-    assert_eq!(
-        (first, last, input.len() as u64),
-        (Some(start + DELAY), Some(end - 1 + DELAY), end - start),
-        "at the input tap the pulse [{start}, {end}) is heard from {first:?} to {last:?}"
+    let got = (input.first().map(|h| h.0), input.last().map(|h| h.0));
+    let len = input.len() as u64;
+    let want = (Some(start + DELAY), Some(end - 1 + DELAY));
+    assert!(
+        (got, len) == (want, end - start),
+        "at the input tap the pulse [{start}, {end}) is heard from {:?} to {:?}, {len} samples, \
+         not from {:?} to {:?}, {} samples",
+        got.0,
+        got.1,
+        want.0,
+        want.1,
+        end - start
     );
     assert!(
         input.iter().all(|h| h.1 == PULSE),
         "at the input tap the pulse is trimmed or processed: {input:?}"
     );
     let pre = heard(pre_fader);
-    assert_eq!(
-        pre.first().map(|h| h.0),
-        Some(start + DELAY),
-        "at preFader the pulse starts late by the delay"
+    let first = pre.first().map(|h| h.0);
+    assert!(
+        first == Some(start + DELAY),
+        "at preFader the pulse starts at {first:?}, not {}: late by the delay",
+        start + DELAY
     );
     // Half way through the pulse the shelf has settled to its DC gain.
     let mid = pre_fader[(start + DELAY + (end - start) / 2 - from) as usize];
