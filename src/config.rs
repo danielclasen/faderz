@@ -1210,8 +1210,8 @@ impl Config {
     /// ([`Config::member_flows`]), one meter per bus, aux,
     /// mix-minus and monitor output no full-width output carries, and the columns a
     /// duck group can lower ([`crate::duck::columns`]). Every channel's
-    /// input meters its true peak, and every stereo output and meter the
-    /// correlation of its legs.
+    /// input meters its true peak, before its strip as well as after it,
+    /// and every stereo output and meter the correlation of its legs.
     fn audio(&self, shape: &Shape) -> Result<Option<samplez::Config>, String> {
         let Some(mxl) = &self.mxl else {
             return Ok(None);
@@ -1256,6 +1256,7 @@ impl Config {
                     "loudnessChannels": loudness_channels(&c.layout),
                     "maxDelaySamples": c.max_delay.unwrap_or(0),
                     "truePeak": true,
+                    "preStripMeter": true,
                 }));
                 continue;
             }
@@ -1278,6 +1279,7 @@ impl Config {
                 "loudnessChannels": loudness_channels(&c.layout),
                 "maxDelaySamples": c.max_delay.unwrap_or(0),
                 "truePeak": true,
+                "preStripMeter": true,
             });
             if let Some(legs) = &input.channels {
                 if legs.len() != c.width {
@@ -2522,12 +2524,14 @@ mod tests {
     }
 
     /// Every channel's input, a flow's or a tone's, meters its true peak,
-    /// so a channel has one without a direct out; the line-up tones are no
-    /// channel and meter none. Every stereo output and engine meter meters
-    /// its correlation, which the contract has for the stereo layout
-    /// alone; samplez refuses one on a mono element.
+    /// so a channel has one without a direct out, and meters itself
+    /// before its strip too, as `meterTap` input can change at any time;
+    /// the line-up tones are no channel and meter neither. Every stereo
+    /// output and engine meter meters its correlation, which the contract
+    /// has for the stereo layout alone; samplez refuses one on a mono
+    /// element.
     #[test]
-    fn channels_meter_true_peak_and_stereo_elements_correlation() {
+    fn channels_meter_true_peak_before_their_strip_and_stereo_correlation() {
         let id = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
         let mut shape = crate::shape::tests::surround();
         shape["outputs"].as_array_mut().unwrap().push(
@@ -2547,19 +2551,19 @@ mod tests {
         });
         let (c, _, _) = Config::parse(&config.to_string(), || unreachable!()).unwrap();
         let engine = c.audio.as_ref().unwrap();
-        let true_peak: Vec<(&str, bool)> = (engine.inputs.iter())
-            .map(|i| (i.name.as_str(), i.true_peak))
+        let inputs: Vec<(&str, bool, bool)> = (engine.inputs.iter())
+            .map(|i| (i.name.as_str(), i.true_peak, i.pre_strip_meter))
             .collect();
         assert_eq!(
-            true_peak,
+            inputs,
             [
-                ("ch1", true),
-                ("ch2", true),
-                ("st1", true),
-                ("sur", true),
-                ("/tone/1", false),
-                ("/tone/2", false),
-                ("/tone/6", false),
+                ("ch1", true, true),
+                ("ch2", true, true),
+                ("st1", true, true),
+                ("sur", true, true),
+                ("/tone/1", false, false),
+                ("/tone/2", false, false),
+                ("/tone/6", false, false),
             ]
         );
         let outputs: Vec<(&str, bool)> = (engine.outputs.iter())

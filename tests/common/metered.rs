@@ -2,8 +2,9 @@
 //! run: a 1 kHz tone hard left and a constant hard right on the
 //! programme bus, its mix-minus and an aux, each at a level of its own,
 //! a duck group keyed by a constant on a channel of its own, then the
-//! tone alone in the centre with one leg of the bus inverted, with the
-//! meter frame values each step gives.
+//! tone alone in the centre with one leg of the bus inverted, then
+//! trimmed and read before and after its strip, with the meter frame
+//! values each step gives.
 
 use faderz::meters::Layout;
 use faderz::shape::Shape;
@@ -55,7 +56,8 @@ pub struct Step {
 /// loudness, and the channels, none of which has a direct out, on their
 /// true peaks; then the duck group keyed below, above and below its
 /// threshold again, the key channel's true peak following its fader;
-/// then the correlations of the tone on both legs.
+/// then the correlations of the tone on both legs; then the tone trimmed,
+/// read at its pre-fader and at its input meter tap.
 pub fn steps() -> Vec<Step> {
     let shape = Shape::parse(&shape()).unwrap();
     let layout = Layout::of(&shape);
@@ -85,8 +87,17 @@ pub fn steps() -> Vec<Step> {
         ]
     };
     // A true peak is never below the sample peak: from it to 0.1 dB above,
-    // read at the channel's post-fader meter tap.
+    // read at the channel's meter tap.
     let true_peak = |id: &str, db: f32| (at(id) + 1, centi(db) + 5, 5);
+    // A mono channel's peak, true peak and momentary loudness at its meter
+    // tap, the tone on its one leg.
+    let channel = |id: &str, db: f32| {
+        vec![
+            (at(id), centi(db), 5),
+            true_peak(id, db),
+            (at(id) + 2, centi(db - 3.0103), 10),
+        ]
+    };
     // A constant measured from a reset taken while it held: integrated
     // and short-term loudness as the momentary, no loudness range, the
     // maxima as the present values, the integrated loudness valid and
@@ -200,6 +211,23 @@ pub fn steps() -> Vec<Step> {
                 (at("mm1") + 12, 100, 1),
                 (at("dc") + 1, FLOOR, 0),
             ],
+        },
+        // The trim is the strip's: the pre-fader tap reads it, the input
+        // tap, before the strip, does not.
+        Step {
+            what: "the tone trimmed by 6 dB at its pre-fader meter tap",
+            resets: &[],
+            changes: vec![
+                ("/channels/tone/trim", json!(-6)),
+                ("/channels/tone/meterTap", json!("preFader")),
+            ],
+            values: channel("tone", tone - 6.0),
+        },
+        Step {
+            what: "the trimmed tone at its input meter tap",
+            resets: &[],
+            changes: vec![("/channels/tone/meterTap", json!("input"))],
+            values: channel("tone", tone),
         },
     ]
 }

@@ -2,12 +2,12 @@
 //! 4): a 12-byte header, the replica id, then Int16 values in shape
 //! order, the duck groups' readings last.
 //!
-//! A channel's peak and momentary loudness are the engine's meter of its
-//! input after the strip, which is both the input and the pre-fader tap
-//! (the engine has no tap before the strip), times the channel's fader,
-//! mute and VCA gain when its `meterTap` is postFader. Its true peak is
-//! the engine's true peak of the same input meter, taken to the same
-//! tap. The tap gains are those of the state last applied, while the
+//! A channel's peak, true peak and momentary loudness are an engine meter
+//! of its input at its `meterTap`: input reads the meter before the
+//! strip (samplez `preStripMeter`), so trim, filters and dynamics do not
+//! reach it, and null while there is none; preFader reads the meter after
+//! the strip; postFader that one times the channel's fader, mute and VCA
+//! gain. The tap gains are those of the state last applied, while the
 //! engine ramps a change from its index and meters in 100 ms windows, so
 //! for a window or so after a fader move the levels lead the audio. A
 //! bus, aux, mix-minus or monitor output reads the meters of the first
@@ -60,6 +60,8 @@ pub struct Readings<'a> {
     pub outputs: Vec<&'a OutputMeters>,
     pub meters: Vec<&'a OutputMeters>,
     pub inputs: Vec<&'a InputMeters>,
+    /// Each input's meter before its strip, as `inputs`.
+    pub pre_strip: Vec<Option<&'a InputMeters>>,
     /// Each duck group's readings, numbered as the shape's ducks.
     pub ducks: &'a [DuckMeter],
     /// Each channel's tap gains ([`crate::mix::meter_taps`]).
@@ -72,6 +74,9 @@ impl<'a> Readings<'a> {
             outputs: status.outputs.iter().map(|o| &o.meters).collect(),
             meters: status.meters.iter().map(|m| &m.meters).collect(),
             inputs: status.inputs.iter().map(|i| &i.meters).collect(),
+            pre_strip: (status.inputs.iter())
+                .map(|i| i.pre_strip_meters.as_ref())
+                .collect(),
             ducks: &status.ducks,
             taps,
         }
@@ -188,8 +193,13 @@ impl Layout {
         };
         for &(kind, n, source) in &self.elements {
             if let Source::Channel(slot) = source {
-                let input = r.inputs.get(slot);
-                let g = r.taps.get(slot).map_or(1.0, |t| t.meter);
+                let tap = r.taps.get(slot);
+                let g = tap.map_or(1.0, |t| t.meter);
+                let input = if tap.is_some_and(|t| t.pre_strip) {
+                    r.pre_strip.get(slot).copied().flatten()
+                } else {
+                    r.inputs.get(slot).copied()
+                };
                 for i in 0..n {
                     put(legs(input.map(|m| &m.peak), i, g));
                 }
@@ -384,10 +394,13 @@ mod tests {
         }
     }
 
-    const TAP: MeterTap = MeterTap { meter: 1.0 };
+    const TAP: MeterTap = MeterTap {
+        meter: 1.0,
+        pre_strip: false,
+    };
 
     fn tap(meter: f64) -> MeterTap {
-        MeterTap { meter }
+        MeterTap { meter, ..TAP }
     }
 
     /// [`input`] with a true peak.
@@ -435,6 +448,7 @@ mod tests {
             outputs: vec![&pgm],
             meters: vec![&cf, &none, &none, &mon],
             inputs: vec![&ch1, &ch2, &st1],
+            pre_strip: vec![None; 3],
             ducks: &[DuckMeter {
                 slice: Some(3),
                 key: 0.5,
@@ -507,6 +521,7 @@ mod tests {
             outputs: vec![&none],
             meters: vec![&none; 4],
             inputs: vec![&ch1, &ch1, &st1],
+            pre_strip: vec![None; 3],
             ducks: &[],
             taps: &[tap(0.5), tap(0.0), TAP],
         };
@@ -550,6 +565,7 @@ mod tests {
                 outputs: vec![&direct, &none],
                 meters: vec![&none; 4],
                 inputs: vec![&ch, ch2, &st1],
+                pre_strip: vec![None; 3],
                 ducks: &[],
                 taps: &[t, t, t],
             };
@@ -568,6 +584,45 @@ mod tests {
         assert_eq!(frame(TAP, &without)[1], NULL);
     }
 
+    /// A channel at its input tap reads its input's meter before the
+    /// strip, peak, true peak and momentary loudness, at unity whatever
+    /// its fader; at its pre-fader tap the meter after the strip. An
+    /// input tap on an input with no meter before its strip reads null,
+    /// not the meter after it.
+    #[test]
+    fn an_input_meter_tap_reads_the_input_before_its_strip() {
+        let layout = Layout::of(&Shape::parse(&small()).unwrap());
+        let none = OutputMeters::default();
+        let after = input_tp(vec![lin(-12.0)], vec![lin(-11.0)], Some(-30.0));
+        let before = input_tp(vec![lin(-6.0)], vec![lin(-5.0)], Some(-24.0));
+        let st1 = input(vec![0.5, 0.5], Some(-20.0));
+        let input_tap = MeterTap {
+            meter: 1.0,
+            pre_strip: true,
+        };
+        let frame = |taps: &[MeterTap], pre: Option<&InputMeters>| {
+            let r = Readings {
+                outputs: vec![&none],
+                meters: vec![&none; 4],
+                inputs: vec![&after, &after, &st1],
+                pre_strip: vec![pre, pre, None],
+                ducks: &[],
+                taps,
+            };
+            let f = layout.frame("r1", 0, &r);
+            let v = |i: usize| i16::from_le_bytes([f[14 + 2 * i], f[15 + 2 * i]]);
+            [v(0), v(1), v(2), v(3), v(4), v(5)]
+        };
+        assert_eq!(
+            frame(&[input_tap, TAP, TAP], Some(&before)),
+            [-600, -500, -2400, -1200, -1100, -3000]
+        );
+        assert_eq!(
+            frame(&[input_tap, TAP, TAP], None),
+            [NULL, NULL, NULL, -1200, -1100, -3000]
+        );
+    }
+
     /// A bus's correlation in hundredths, rounded half up and within -1
     /// to 1 (-100..100); null where the engine measured none.
     #[test]
@@ -584,6 +639,7 @@ mod tests {
                 outputs: vec![&pgm],
                 meters: vec![&none; 4],
                 inputs: vec![&ins; 3],
+                pre_strip: vec![None; 3],
                 ducks: &[],
                 taps: &[TAP; 3],
             };
@@ -651,6 +707,7 @@ mod tests {
             outputs: vec![&direct, &pgm],
             meters: Vec::new(),
             inputs: vec![&ch1],
+            pre_strip: vec![None; 1],
             ducks: &[DuckMeter {
                 slice: Some(0),
                 key: lin(-20.0),

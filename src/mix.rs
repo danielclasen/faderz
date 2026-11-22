@@ -85,8 +85,10 @@ fn talking(shape: &Shape, state: &Value) -> bool {
 /// Where a channel's signal is taken.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tap {
-    /// The selected input; the engine has no tap before the strip, so
-    /// it is the pre-fader signal.
+    /// The selected input before its strip. A channel meter reads it
+    /// there ([`meter_taps`]); the matrix rows carry the channel after
+    /// its strip, so a direct out at this tap carries the pre-fader
+    /// signal.
     Input,
     /// After the strip: trim, leg trim, polarity and processing.
     PreFader,
@@ -99,7 +101,7 @@ enum Tap {
 /// The gain of channel `id` at `tap`, the same on every leg.
 fn channel(state: &Value, id: &str, tap: Tap) -> f64 {
     // Trim, leg trim, polarity and the processing are the input's strip,
-    // which runs before the matrix: the input tap is after it too.
+    // which runs before the matrix: a row's input tap is after it too.
     if matches!(tap, Tap::Input | Tap::PreFader) {
         return 1.0;
     }
@@ -936,18 +938,23 @@ impl Moved {
     }
 }
 
-/// A channel's gain after its strip, the same on every leg.
+/// Where a channel's meter reads: which of its input's meters, and the
+/// gain after it, the same on every leg.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeterTap {
     /// At its `meterTap`.
     pub meter: f64,
+    /// Whether it reads the input's meter before the strip rather than
+    /// the one after it.
+    pub pre_strip: bool,
 }
 
-/// Each channel's [`MeterTap`]: the engine meters the channel after its
-/// strip, which is the input and pre-fader tap; a post-fader tap adds
-/// the fader, mute and VCAs.
+/// Each channel's [`MeterTap`]: an input tap reads the engine's meter of
+/// the input before its strip, a pre-fader tap its meter after the
+/// strip, and a post-fader tap adds the fader, mute and VCAs to that.
 pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
     let tap = |v: &Value| match v.as_str() {
+        Some("input") => Tap::Input,
         Some("postFader") => Tap::PostFader,
         _ => Tap::PreFader,
     };
@@ -955,9 +962,10 @@ pub fn meter_taps(shape: &Shape, state: &Value) -> Vec<MeterTap> {
         .channels
         .iter()
         .map(|c| {
-            let s = &state["channels"][&c.id];
+            let tap = tap(&state["channels"][&c.id]["meterTap"]);
             MeterTap {
-                meter: channel(state, &c.id, tap(&s["meterTap"])),
+                meter: channel(state, &c.id, tap),
+                pre_strip: tap == Tap::Input,
             }
         })
         .collect()
@@ -1652,8 +1660,9 @@ mod tests {
         assert!(m[0][8] > 0.3);
     }
 
-    /// The engine meters a channel after its strip: a pre-fader meter tap
-    /// reads it as it is, a post-fader one adds fader, mute and VCAs.
+    /// A pre-fader meter tap reads the channel after its strip as it is,
+    /// a post-fader one adds fader, mute and VCAs, and an input tap reads
+    /// the meter before the strip, whatever the fader.
     #[test]
     fn a_post_fader_meter_tap_follows_the_fader() {
         let shape = shape();
@@ -1666,8 +1675,17 @@ mod tests {
         s["channels"]["st1"]["fader"] = json!(0);
         s["channels"]["st1"]["mute"] = json!(true);
         let t = meter_taps(&shape, &s);
-        let tap = |meter| MeterTap { meter };
+        let tap = |meter| MeterTap {
+            meter,
+            pre_strip: false,
+        };
         assert_eq!(t, [tap(1.0), tap(gain(-6.0)), tap(0.0)]);
+        s["channels"]["ch2"]["meterTap"] = json!("input");
+        let input = MeterTap {
+            meter: 1.0,
+            pre_strip: true,
+        };
+        assert_eq!(meter_taps(&shape, &s)[1], input);
     }
 
     #[test]

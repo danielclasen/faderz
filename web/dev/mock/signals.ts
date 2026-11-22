@@ -406,10 +406,10 @@ export class ReplicaMeters {
       const legs = input.map((l, i) => l + st.trim + (st.legTrim[i] ?? 0) + (st.comp.enabled ? st.comp.makeup - 2 : 0));
       channelLevels.set(c.id, legs);
       const fader = st.mute || vcaMuted(c.id) ? SILENCE : effectiveGainDb(st.fader, vcaOffsets(c.id));
-      // The engine meters a channel after its strip, so the input tap
-      // reads as the pre-fader one.
+      // The input tap reads the input before trim and the compressor.
       const closed = st.meterTap === 'postFader' && fader <= SILENCE;
-      const tapped = st.meterTap === 'postFader' ? legs.map((l) => (closed ? SILENCE : l + fader)) : legs;
+      const tapped =
+        st.meterTap === 'input' ? input : st.meterTap === 'postFader' ? legs.map((l) => (closed ? SILENCE : l + fader)) : legs;
       channels.push({
         peak: tapped.map((l) => r1(l + 9 + Math.random() * 3 + jitter())),
         truePeak: tapped.map((l) => r1(l + 9.5 + Math.random() * 3 + jitter())),
