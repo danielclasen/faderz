@@ -2417,21 +2417,29 @@ async fn the_line_up_tone_replaces_the_mix_of_its_targets() {
 /// carries the tone at sample peak `peak`, so the last window of the
 /// cycle sounds on every leg. A block is judged only when every tone
 /// index it can carry, whatever the limiter's delay, lies in one window
-/// away from the ident's fades.
-async fn idents(domain: &Path, flow: &str, legs: usize, from: u64, peak: f32, what: &str) {
+/// away from the ident's fades. The engine runs `margin` samples behind
+/// its time ([`Reader::after_margin`]).
+async fn idents(
+    domain: &Path,
+    flow: &str,
+    legs: usize,
+    from: u64,
+    peak: f32,
+    margin: u64,
+    what: &str,
+) {
     let rate = shape()["sampleRate"].as_u64().unwrap();
     let (window, edge) = (rate / 4, rate / 100);
     let late = samplez_dsp::LIMITER_DELAY as u64;
     let cycle = legs as u64 + 1;
-    let mut reader = Reader::wide(domain, flow, legs as u32);
-    let api = api();
+    let mut reader = Reader::wide(domain, flow, legs as u32).after_margin(margin);
     let n = B as usize;
     let mut seen = std::collections::BTreeSet::new();
     let deadline = Instant::now() + Duration::from_secs(30);
     while seen.len() < cycle as usize {
         assert!(Instant::now() < deadline, "{what}: windows read {seen:?}");
         tokio::time::sleep(Duration::from_millis(20)).await;
-        let k = time::timestamp_to_index(&api, time::now(&api)) / B - 100;
+        let k = reader.behind();
         let (lo, hi) = (k * B - late - edge, k * B + B + edge);
         if k * B < from || lo / window != (hi - 1) / window {
             continue;
@@ -2486,7 +2494,12 @@ async fn each_line_up_target_idents_its_own_legs() {
             output("out-mon", "mon", 2, "stereo"),
         ],
     });
-    let server = start_with(
+    // A debug engine on a loaded host keeps up only with time in hand, as
+    // in a_diff_beyond_the_engines_queue_lands_whole: past the default
+    // backlog of two blocks it skips and zero-fills, which reads as a
+    // leg that does not sound.
+    let margin = 48000 / 10;
+    let server = start_engine(
         &data.0,
         &domain.0,
         shape,
@@ -2495,6 +2508,11 @@ async fn each_line_up_target_idents_its_own_legs() {
             "out-pgm": { "flow": pgm },
             "out-51": { "flow": s51 },
             "out-mon": { "flow": mon },
+        }),
+        json!({
+            "blockSize": B,
+            "readerMarginSamples": margin,
+            "maxCatchupBlocks": margin / B,
         }),
     )
     .await;
@@ -2516,8 +2534,17 @@ async fn each_line_up_target_idents_its_own_legs() {
     .await;
     let h = std::f32::consts::FRAC_1_SQRT_2;
     Reader::new(&domain.0, &mon)
+        .after_margin(margin)
         .expect(CH1 * h, CH1 * h, "the monitor plays the programme's mix")
         .await;
+    let counters = server.audio.as_ref().unwrap().engine().counters();
+    let starved = || {
+        (
+            counters.overrun_skipped_samples.load(Relaxed),
+            counters.command_late.load(Relaxed),
+        )
+    };
+    let before = starved();
     patch(
         &server,
         &[
@@ -2532,17 +2559,33 @@ async fn each_line_up_target_idents_its_own_legs() {
     let api = api();
     let from = time::timestamp_to_index(&api, time::now(&api)) + 48000 / 2;
     let peak = 10f32.powf(-20.0 / 20.0);
-    idents(&domain.0, &pgm, 2, from, peak, "the stereo programme").await;
-    idents(&domain.0, &s51, 6, from, peak, "the 5.1 clean feed").await;
+    idents(
+        &domain.0,
+        &pgm,
+        2,
+        from,
+        peak,
+        margin,
+        "the stereo programme",
+    )
+    .await;
+    idents(&domain.0, &s51, 6, from, peak, margin, "the 5.1 clean feed").await;
     idents(
         &domain.0,
         &mon,
         2,
         from,
         peak,
+        margin,
         "the monitor on the programme",
     )
     .await;
+    let after = starved();
+    assert_eq!(
+        after, before,
+        "the engine was starved: (overrun_skipped_samples, command_late) went from \
+         {before:?} to {after:?}"
+    );
     let engine = server.audio.as_ref().unwrap().engine().status();
     let tones: Vec<&str> = (engine.inputs.iter())
         .filter(|i| i.state == samplez::InputState::Tone)
