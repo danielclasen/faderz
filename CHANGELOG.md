@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/danielclasen/faderz/compare/v0.5.0...v0.5.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **audio:** keep a diff from landing below the start's held gains ([#163](https://github.com/danielclasen/faderz/issues/163)) ([85ce5b2](https://github.com/danielclasen/faderz/commit/85ce5b266e07aa7d85d42b65ea68f0c5cb6e2f99))
+
 ## [0.5.0](https://github.com/danielclasen/faderz/compare/v0.4.10...v0.5.0) (2026-11-22)
 
 
