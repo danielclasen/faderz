@@ -68,7 +68,9 @@ pub fn pre_strip_runs(status: &samplez::Status, step: &Step) -> bool {
 /// threshold again, the key channel's true peak following its fader;
 /// then the correlations of the tone on both legs; then the tone trimmed,
 /// read at its pre-fader and at its input meter tap and at its pre-fader
-/// tap again. Only a channel at the input tap has its pre-strip meter on.
+/// tap again; then the tone muted at its post-fader tap, which reads
+/// silence in its loudness too. Only a channel at the input tap has its
+/// pre-strip meter on.
 pub fn steps() -> Vec<Step> {
     let shape = Shape::parse(&shape()).unwrap();
     let layout = Layout::of(&shape);
@@ -254,6 +256,22 @@ pub fn steps() -> Vec<Step> {
             pre_strip: &[],
             changes: vec![("/channels/tone/meterTap", json!("preFader"))],
             values: channel("tone", tone - 6.0),
+        },
+        // A closed post-fader tap passes nothing: the measured tone's
+        // peak, true peak and momentary loudness all read silence.
+        Step {
+            what: "the tone muted at its post-fader meter tap",
+            resets: &[],
+            pre_strip: &[],
+            changes: vec![
+                ("/channels/tone/meterTap", json!("postFader")),
+                ("/channels/tone/mute", json!(true)),
+            ],
+            values: vec![
+                (at("tone"), FLOOR, 0),
+                (at("tone") + 1, FLOOR, 0),
+                (at("tone") + 2, FLOOR, 0),
+            ],
         },
     ]
 }

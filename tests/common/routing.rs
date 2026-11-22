@@ -137,6 +137,27 @@ pub fn steps() -> Vec<Step> {
         ],
         l,
     );
+    // Constant power between the hard positions: ch1 a quarter of the
+    // way from the left to the right, cos and sin of pi/8; its direct out
+    // is not panned.
+    let theta = std::f64::consts::FRAC_PI_8;
+    let open = l;
+    l.pgm = [
+        (f64::from(CH1) * theta.cos()) as f32,
+        (f64::from(CH2) * f64::from(g(-6.0)) + f64::from(CH1) * theta.sin()) as f32,
+    ];
+    l.mm = l.pgm;
+    step(
+        "ch1 panned half way to the centre",
+        &[("/channels/ch1/pan/lr", json!(-0.5))],
+        l,
+    );
+    l = open;
+    step(
+        "ch1 hard left again",
+        &[("/channels/ch1/pan/lr", json!(-1))],
+        l,
+    );
 
     l.mm[1] = 0.0;
     step(

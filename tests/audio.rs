@@ -2723,8 +2723,8 @@ async fn a_diff_beyond_the_engines_queue_lands_whole() {
 
 /// Each channel's strip processes its input: the high-pass takes out a
 /// low tone, an EQ bell lifts its centre frequency, polarity inverts one
-/// leg, the gate closes below its threshold and the compressor reduces
-/// above it, each by exactly its settled gain.
+/// leg and a leg trim lowers one, the gate closes below its threshold and
+/// the compressor reduces above it, each by exactly its settled gain.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_strip_processes_each_channel() {
     let domain = domain("strip");
@@ -2876,6 +2876,11 @@ async fn the_strip_processes_each_channel() {
     pgm.expect(ST1[0], ST1[1], "st1 as it is").await;
     patch(&server, &[("/channels/st1/polarity/1", json!(true))]).await;
     pgm.expect(ST1[0], -ST1[1], "st1's right leg inverted")
+        .await;
+    // A leg trim lowers its leg alone.
+    patch(&server, &[("/channels/st1/legTrim/0", json!(-6))]).await;
+    let g6 = 10f32.powf(-6.0 / 20.0);
+    pgm.expect(ST1[0] * g6, -ST1[1], "st1's left leg trimmed by 6 dB")
         .await;
 
     server.stop().await;

@@ -2556,8 +2556,8 @@ fn every_replica_applies_a_stereo_channels_image_and_balance() {
     }
 }
 
-/// A mono channel's surround pan is replicated state: every replica
-/// writes the legs of the same place in the 5.1 field.
+/// A mono channel's surround pan and LFE send are replicated state:
+/// every replica writes the legs of the same place in the 5.1 field.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -2603,19 +2603,23 @@ fn every_replica_places_a_mono_channel_in_the_surround_field() {
     // fr, lr and the legs L R C LFE Ls Rs every replica writes.
     // A new mono channel is the L/R pair; no spread puts it in C.
     write(&nodes, 0, &[("/channels/m/pan/spread", json!(0))]);
-    let steps: [(f64, f64, [f32; 6]); 4] = [
-        (-1.0, 0.0, [0.0, 0.0, 0.5, 0.0, 0.0, 0.0]),
-        (-1.0, -1.0, [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        (1.0, 0.0, [0.0, 0.0, 0.0, 0.0, 0.5 * h, 0.5 * h]),
-        (0.0, 0.0, [0.0, 0.0, 0.5 * h, 0.0, 0.25, 0.25]),
+    // The LFE send is a gain of its own, -90 for none.
+    let lfe = 0.5 * 10f32.powf(-6.0 / 20.0);
+    let steps: [(f64, f64, f64, [f32; 6]); 5] = [
+        (-1.0, 0.0, -90.0, [0.0, 0.0, 0.5, 0.0, 0.0, 0.0]),
+        (-1.0, -1.0, -90.0, [0.5, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        (1.0, 0.0, -90.0, [0.0, 0.0, 0.0, 0.0, 0.5 * h, 0.5 * h]),
+        (0.0, 0.0, -90.0, [0.0, 0.0, 0.5 * h, 0.0, 0.25, 0.25]),
+        (-1.0, 0.0, -6.0, [0.0, 0.0, 0.5, lfe, 0.0, 0.0]),
     ];
-    for (fr, lr, want) in steps {
+    for (fr, lr, send, want) in steps {
         write(
             &nodes,
             1,
             &[
                 ("/channels/m/pan/frontRear", json!(fr)),
                 ("/channels/m/pan/lr", json!(lr)),
+                ("/channels/m/pan/lfeSend", json!(send)),
             ],
         );
         for n in 0..REPLICAS {
@@ -2629,9 +2633,142 @@ fn every_replica_places_a_mono_channel_in_the_surround_field() {
             });
             assert!(
                 read,
-                "replica {n} at fr {fr}, lr {lr}: wanted {want:?}, read {last:?}: {}",
+                "replica {n} at fr {fr}, lr {lr}, LFE send {send}: wanted {want:?}, read {last:?}: {}",
                 states(&nodes)
             );
+        }
+    }
+}
+
+/// Each replica reports its own engine: `/status` lists every channel's
+/// input in shape order, attached to its flow and copying blocks, and
+/// every output enabled and realised, and the WebSocket's `counters`
+/// message, sent under that replica's id, carries the same inputs and
+/// the engine's counters. A channel reading a flow nobody writes is not
+/// attached on any of them.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "three debug-build engines miss their deadlines on a shared host; CI runs it in release"
+)]
+fn every_replica_reports_its_engine_and_counters() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let _one = ONE_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let shape = json!({
+        "sampleRate": 48000,
+        "frameRate": { "numerator": 25, "denominator": 1 },
+        "channels": [
+            { "id": "live", "name": "Live", "width": 1, "layout": "mono", "altInput": false },
+            { "id": "dark", "name": "Dark", "width": 1, "layout": "mono", "altInput": false },
+        ],
+        "buses": [{ "id": "pgm", "name": "PGM", "kind": "program", "width": 2, "layout": "stereo" }],
+        "auxes": [], "mixMinus": [], "vcas": [], "monitorOutputs": [],
+        "outputs": [
+            { "id": "out-pgm", "name": "PGM", "source": "pgm", "width": 2, "layout": "stereo" },
+        ],
+    });
+    let (dark, live) = (new_id(), new_id());
+    let (set, listeners) = Set::with("counters", shape, &["out-pgm"], |domain| {
+        (
+            vec![Source::start(domain, &live, vec![0.5])],
+            json!({ "live": { "flow": live }, "dark": { "flow": dark } }),
+        )
+    });
+    let nodes = run(&set, listeners);
+    for n in 0..REPLICAS {
+        let node = node(&nodes, n);
+        // /status: copying blocks, read twice so the count moves.
+        let status = |node: &Node| -> Value {
+            let (code, body) = node
+                .runtime
+                .block_on(get(node.server.api, "/api/v1/status"));
+            assert_eq!(code, 200, "replica {n}: {body}");
+            serde_json::from_str(&body).unwrap()
+        };
+        let first = status(node);
+        // The replica's name, which the counters carry as their sender.
+        let id = first["replica"]["id"].clone();
+        let mut copied = None;
+        let moved = until(10, || {
+            let now = status(node);
+            copied = Some(now["engine"]["inputs"][0]["copiedBlocks"].clone());
+            now["engine"]["inputs"][0]["copiedBlocks"].as_u64()
+                > first["engine"]["inputs"][0]["copiedBlocks"].as_u64()
+        });
+        assert!(
+            moved,
+            "replica {n}: live copies no blocks: {first} then {copied:?}"
+        );
+        let inputs = first["engine"]["inputs"].as_array().unwrap();
+        let read: Vec<(&str, &str, &str)> = (inputs.iter())
+            .map(|i| {
+                (
+                    i["channel"].as_str().unwrap(),
+                    i["state"].as_str().unwrap(),
+                    i["flowId"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(read[0], ("live", "attached", live.as_str()), "replica {n}");
+        assert_eq!(read[1].0, "dark", "replica {n}");
+        assert_ne!(
+            read[1].1, "attached",
+            "replica {n}: dark reads a flow nobody writes"
+        );
+        let outputs = first["engine"]["outputs"].as_array().unwrap();
+        assert_eq!(outputs.len(), 1, "replica {n}: {outputs:?}");
+        assert_eq!(
+            (
+                &outputs[0]["output"],
+                &outputs[0]["enabled"],
+                &outputs[0]["realised"]
+            ),
+            (&json!("out-pgm"), &json!(true), &json!(true)),
+            "replica {n}"
+        );
+        // The WebSocket's counters, under this replica's id.
+        let session = format!("session-counters-{n}-0123456789abcdef");
+        let url = format!("ws://{}/api/v1/ws?session={session}", node.server.api);
+        let counters = node.runtime.block_on(async {
+            let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+            let hello =
+                json!({ "type": "hello", "session": session, "kind": "ui", "mode": "primary" });
+            ws.send(Message::text(hello.to_string())).await.unwrap();
+            loop {
+                let m = tokio::time::timeout(Duration::from_secs(5), ws.next())
+                    .await
+                    .unwrap_or_else(|_| panic!("replica {n}: a counters message within 5 s"))
+                    .expect("open until a counters message")
+                    .unwrap();
+                let Message::Text(t) = m else { continue };
+                let v: Value = serde_json::from_str(&t).unwrap();
+                if v["type"] == "ping" {
+                    let pong = json!({ "type": "pong", "t": v["t"] });
+                    ws.send(Message::text(pong.to_string())).await.unwrap();
+                } else if v["type"] == "counters" {
+                    break v;
+                }
+            }
+        });
+        assert_eq!(counters["replica"]["id"], id, "replica {n}: {counters}");
+        let ws_inputs: Vec<(&str, &str)> = (counters["inputs"].as_array().unwrap().iter())
+            .map(|i| (i["channel"].as_str().unwrap(), i["state"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            ws_inputs[0],
+            ("live", "attached"),
+            "replica {n}: {counters}"
+        );
+        assert_eq!(ws_inputs[1].0, "dark", "replica {n}: {counters}");
+        assert_ne!(ws_inputs[1].1, "attached", "replica {n}: {counters}");
+        let values = counters["values"].as_object().unwrap();
+        for name in [
+            "deadline_miss_total",
+            "input_late_blocks_total",
+            "resends_total",
+        ] {
+            assert!(values[name].is_u64(), "replica {n}: {name} in {values:?}");
         }
     }
 }
