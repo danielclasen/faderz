@@ -1215,6 +1215,71 @@ async fn a_scene_recall_crossfades_over_its_time() {
     server.stop().await;
 }
 
+/// A write right after a start lands over the gains the start sends.
+/// Those wait for the strips' ramps, and the engine applies its changes
+/// in index order, not in the order they are sent: a write placed below
+/// them would be overwritten, and the output would keep the start's mix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_right_after_a_start_lands_over_the_starts_gains() {
+    let domain = domain("after-start");
+    let data = data("after-start");
+    let flows = Flows {
+        ch1: new_id(),
+        ch2: new_id(),
+        ch2b: new_id(),
+        st1: new_id(),
+        pgm: new_id(),
+        mm: new_id(),
+    };
+    let _ch1 = Source::start(&domain.0, &flows.ch1, vec![CH1]);
+    // A ramp of 2 s puts the gains a start sends 2 s past its strips, far
+    // above the index of a write made as soon as it is ready.
+    let boot = || {
+        start_engine(
+            &data.0,
+            &domain.0,
+            shape(),
+            json!({
+                "ch1": { "flow": flows.ch1 },
+                "ch2": { "flow": flows.ch2, "altFlow": flows.ch2b },
+                "st1": { "flow": flows.st1 },
+            }),
+            json!({ "out-pgm": { "flow": flows.pgm }, "out-mm": { "flow": flows.mm } }),
+            json!({ "rampSamples": 96_000 }),
+        )
+    };
+    let server = boot().await;
+    appears(&domain.0, &flows.pgm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    patch(
+        &server,
+        &[
+            ("/channels/ch1/pan/lr", json!(-1)),
+            ("/channels/ch1/fader", json!(0)),
+        ],
+    )
+    .await;
+    pgm.expect(CH1, 0.0, "ch1 open").await;
+    server.stop().await;
+    // Started again on its data, the server sends ch1 open once the
+    // strips' ramps are over; the write comes once it has sent that.
+    drop(pgm);
+    let server = boot().await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while get(server.ops, "/readyz").await.0 != 200 {
+        assert!(Instant::now() < deadline, "ready");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    patch(&server, &[("/channels/ch1/fader", json!(-20))]).await;
+    appears(&domain.0, &flows.pgm).await;
+    let mut pgm = Reader::new(&domain.0, &flows.pgm);
+    let low = CH1 * 10f32.powf(-20.0 / 20.0);
+    // Overwritten, the write never settles: the start's gain cuts its
+    // ramp short and takes ch1 back open.
+    pgm.expect(low, 0.0, "the write after the start").await;
+    server.stop().await;
+}
+
 /// A tally closing ch1's AFV stage holds the programme from the index it
 /// names for holdMs, then lowers it to offLevel over fallMs; one opening
 /// it raises it from that index over riseMs, and transitionMs takes the
