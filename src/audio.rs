@@ -1287,6 +1287,7 @@ mod tests {
             margin_warning: warning,
             counters: Default::default(),
             meters: Default::default(),
+            pre_strip_meters: None,
         };
         assert_eq!(margin_needed(&status(None, None)), 0);
         assert_eq!(margin_needed(&status(Some(1303), None)), 1303);

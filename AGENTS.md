@@ -110,6 +110,11 @@ The release that takes samplez v0.20.0 runs at
 IS-05 port's version for the shared NMOS versions. Its roll is a
 hand-over.
 
+The release that takes samplez v0.22.0 runs at
+`samplez::COMPUTE_VERSION` 2 and `samplez_replica::PROTOCOL` 5 (from
+4), with `DERIVATION_VERSION` still 10. PROTOCOL 5 makes its roll a
+hand-over.
+
 ## Build and test
 
 `.github/workflows/ci.yml` holds the exact commands; run them as CI does.
