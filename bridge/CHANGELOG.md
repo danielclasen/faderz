@@ -3,19 +3,8 @@
 ## [0.3.0](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.2.1...faderz-bridge-v0.3.0) (2026-11-22)
 
 
-### ⚠ BREAKING CHANGES
-
-* **mix:** a direct out at the input tap carries the input before trim, filters and dynamics, where it carried the pre-fader signal.
-
-### Features
-
-* **meters:** run a pre-strip meter only at the input meter tap ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
-* **mix:** take a direct out at the input tap before the strip ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
-
-
 ### Bug Fixes
 
-* **deps:** take samplez 0.23.0, so every tap follows the channel delay, rolled by hand-over ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
 * **deps:** take url 2.5.9 for RUSTSEC-2026-0592 ([65e72e8](https://github.com/danielclasen/faderz/commit/65e72e88a4504dc656a30d72231c7e0f198014ae))
 
 ## [0.2.1](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.2.0...faderz-bridge-v0.2.1) (2026-11-19)

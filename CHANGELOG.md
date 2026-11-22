@@ -6,7 +6,7 @@
 ### ⚠ BREAKING CHANGES
 
 * **mix:** a direct out at the input tap carries the input before trim, filters and dynamics, where it carried the pre-fader signal.
-* **audio:** delay buses and auxes on their outputs
+* **audio:** stored bus and aux EQ and dynamics become audible on upgrade, and MixMinusState requires eq, gate, comp and dynamicsBeforeEq.
 * **audio:** a bus or aux delay takes a line from mxl.outputs.OUTPUT.maxDelayMs; without one only 0 is taken, and a stored one past its line loads and recalls as 0.
 
 ### Features
