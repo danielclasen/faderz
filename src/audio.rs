@@ -523,6 +523,7 @@ impl Audio {
             limiters: targets.limiters,
             delays: targets.delays,
             output_delays: targets.output_delays,
+            pre_strip_meters: targets.pre_strip_meters,
             tones: targets.tones,
             ducks: targets.ducks,
             masks: targets.masks,
@@ -546,6 +547,10 @@ impl Audio {
                 }
                 &Entry::OutputDelay { output, samples } => {
                     let set = |at| self.engine.set_output_delay(output, samples, at);
+                    self.send(&mut at, set).await
+                }
+                &Entry::PreStripMeter { slot, enabled } => {
+                    let set = |at| self.engine.set_pre_strip_meter(slot, enabled, at);
                     self.send(&mut at, set).await
                 }
                 &Entry::Tone {
@@ -582,8 +587,8 @@ impl Audio {
                 refused = true;
             }
         }
-        // After a refusal every limiter, delay, tone, setting and mask goes
-        // again on the next write.
+        // After a refusal every limiter, delay, pre-strip meter, tone,
+        // setting and mask goes again on the next write.
         sent.ducks = (!refused).then_some(held);
         // The line-up tone's slot, past the channels', reads no flow.
         let flows = targets.flows.into_iter().zip(&mut sent.routed);
@@ -863,8 +868,8 @@ fn engine_status(status: &samplez::Status) -> Value {
     json!({ "inputs": inputs, "outputs": outputs })
 }
 
-/// Notes in `held` the limiter, input or output delay, tone, duck setting or mask `entry`
-/// sent.
+/// Notes in `held` the limiter, input or output delay, pre-strip meter,
+/// tone, duck setting or mask `entry` sent.
 fn hold_entry(held: &mut Targets, entry: Entry) {
     match entry {
         Entry::Tone {
@@ -893,6 +898,12 @@ fn hold_entry(held: &mut Targets, entry: Entry) {
                 held.output_delays.resize(output + 1, 0);
             }
             held.output_delays[output] = samples;
+        }
+        Entry::PreStripMeter { slot, enabled } => {
+            if held.pre_strip_meters.len() <= slot {
+                held.pre_strip_meters.resize(slot + 1, false);
+            }
+            held.pre_strip_meters[slot] = enabled;
         }
         Entry::Limiter { output, params } => {
             if held.limiters.len() <= output {
