@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/danielclasen/faderz/compare/v0.6.0...v0.6.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **replica:** list a peer heard only while its last report is recent ([#169](https://github.com/danielclasen/faderz/issues/169)) ([542224e](https://github.com/danielclasen/faderz/commit/542224e8af338422f04ed2a9d743f50797dab704))
+
 ## [0.6.0](https://github.com/danielclasen/faderz/compare/v0.5.1...v0.6.0) (2026-11-22)
 
 
