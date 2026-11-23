@@ -277,8 +277,8 @@ test('every fader fits its box, VCA masters included', async ({ page }) => {
   expect(over).toEqual([]);
 });
 
-test('every master fader has its track and scale at the same height', async ({ page }, info) => {
-  await live(page);
+/** The masters' faders, track and marks, and the monitor's keys beside its fader, with the masters in view. */
+async function masterFaders(page: Page) {
   // Below 1400 px the masters lie over the strips while MASTERS is lit.
   const masters = page.getByRole('button', { name: 'MASTERS' });
   if (await masters.isVisible()) await masters.click();
@@ -308,12 +308,93 @@ test('every master fader has its track and scale at the same height', async ({ p
     }
   }
   expect(off).toEqual([]);
+  const keys = page.getByRole('group', { name: 'Monitor speakers' }).getByRole('button');
+  const speakers = await keys.evaluateAll((list) =>
+    list.map((k) => ({ label: k.getAttribute('aria-label')!, width: k.getBoundingClientRect().width, height: k.getBoundingClientRect().height, cut: k.scrollWidth > k.clientWidth })),
+  );
+  // From the first speaker key to the last flag key.
+  const keysEnd = await page.locator('#monitor .side .key').last().evaluate((k) => k.getBoundingClientRect().bottom);
+  return { travel: faders[0]!.bottom - faders[0]!.top, top: faders[0]!.top, bottom: faders[0]!.bottom, faders, speakers, keysEnd };
+}
+
+test('every master fader has its track and scale at the same height', async ({ page }, info) => {
+  await live(page);
+  const { faders } = await masterFaders(page);
   // Lined up without giving up travel: where the masters sit beside the
   // strips, no head above a fader takes from every fader's length.
   if (info.project.name === 'desktop') {
     expect(faders.filter((f) => f.bottom - f.top < 480).map((f) => `${f.label}: ${(f.bottom - f.top).toFixed(1)}`)).toEqual([]);
   }
 });
+
+/**
+ * Starts the sync worker with every snapshot it takes carrying a monitor
+ * output of `layout` in place of the stereo one. Each meter frame, whose
+ * layout that monitor no longer matches, arrives empty: it still counts as
+ * traffic on its link, and the worker drops it as too short. The worker
+ * runs from a module that imports it and then wraps WebSocket: the import
+ * evaluates first, and the worker opens no socket before the page's first
+ * message, which only follows that evaluation.
+ */
+async function monitorLayout(page: Page, layout: '5.1' | '7.1'): Promise<void> {
+  const width = layout === '5.1' ? 6 : 8;
+  const wrap = `{
+    const Base = self.WebSocket;
+    const widen = (e) => Object.assign(e, { width: ${width}, layout: '${layout}' });
+    self.WebSocket = class extends Base {
+      get onmessage() { return super.onmessage; }
+      set onmessage(h) {
+        super.onmessage = h && ((ev) => {
+          if (typeof ev.data !== 'string') return h({ data: new ArrayBuffer(0) });
+          const m = JSON.parse(ev.data);
+          if (m.type !== 'snapshot') return h(ev);
+          m.shape.monitorOutputs.forEach(widen);
+          const ids = m.shape.monitorOutputs.map((o) => o.id);
+          m.shape.outputs.filter((o) => ids.includes(o.source)).forEach(widen);
+          m.state.monitor.speakerMute = Array(${width}).fill(false);
+          m.state.monitor.speakerSolo = Array(${width}).fill(false);
+          h({ data: JSON.stringify(m) });
+        });
+      }
+    };
+  }`;
+  await page.addInitScript((wrap) => {
+    const Base = window.Worker;
+    window.Worker = class extends Base {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        const href = new URL(url, location.href).href;
+        if (!/\/sync\/worker\b/.test(href)) super(url, options);
+        else super(URL.createObjectURL(new Blob([`import ${JSON.stringify(href)};\n${wrap}`], { type: 'text/javascript' })), options);
+      }
+    };
+  }, wrap);
+}
+
+// A surround monitor's speaker keys fit beside its fader: no master
+// fader starts lower or ends lower than with a stereo monitor.
+for (const layout of ['5.1', '7.1'] as const) {
+  test(`a ${layout} monitor's speaker keys fit beside its fader`, { tag: '@mock' }, async ({ page }, info) => {
+    await live(page);
+    const stereo = await masterFaders(page);
+    await monitorLayout(page, layout);
+    await live(page);
+    // Where the masters are a closed overlay, their keys are hidden.
+    await expect(page.locator('[aria-label="Mute speaker LFE"]')).toBeAttached();
+    const wide = await masterFaders(page);
+    expect(wide.speakers.length).toBe(layout === '5.1' ? 12 : 16);
+    const coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
+    expect(wide.speakers.filter((k) => k.cut || Math.min(k.width, k.height) < (coarse ? 24 : 20)).map((k) => `${k.label} ${k.width.toFixed(0)}x${k.height.toFixed(0)}`)).toEqual([]);
+    const off = [
+      ...(Math.abs(wide.top - stereo.top) > 1 ? [`track top ${wide.top.toFixed(1)}, stereo ${stereo.top.toFixed(1)}`] : []),
+      // No longer: more keys than a stereo monitor's would push every
+      // master's fader row down and the overlay into scrolling.
+      ...(wide.bottom > stereo.bottom + 1 ? [`track bottom ${wide.bottom.toFixed(1)}, stereo ${stereo.bottom.toFixed(1)}`] : []),
+      ...(wide.keysEnd > wide.bottom + 1 ? [`keys end ${wide.keysEnd.toFixed(1)} below the track's bottom ${wide.bottom.toFixed(1)}`] : []),
+      ...(info.project.name === 'desktop' && wide.travel < 480 ? [`travel ${wide.travel.toFixed(1)}`] : []),
+    ];
+    expect(off, `travel ${wide.travel.toFixed(1)}, stereo ${stereo.travel.toFixed(1)}`).toEqual([]);
+  });
+}
 
 test('every value field of a processing panel shows its whole value', async ({ page, request }) => {
   // The longest value a field takes: a limiter ceiling of "-0.5 dBTP".

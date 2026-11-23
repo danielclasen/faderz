@@ -43,6 +43,14 @@
         : `Sent to ${carriers.map((o) => `${o.name} (${o.id})`).join(', ')}`,
   );
   const legs = $derived(output ? LAYOUT_LABELS[output.layout] : []);
+  /**
+   * Legs per row of speaker keys. One leg a row fits a stereo monitor's
+   * keys beside its fader; a surround monitor takes two, so its keys stay
+   * within the fader's height, and the section widens to SURROUND_W, which
+   * gives each of a row's four keys 30 px.
+   */
+  const perRow = $derived(legs.length > 4 ? 2 : 1);
+  const SURROUND_W = 210;
   const monitor = $derived(mixer.state!.monitor);
   const IMAGES: Array<{ id: StereoImage; key: string; label: string }> = [
     { id: 'leftToBoth', key: 'L>B', label: 'Monitor left to both' },
@@ -52,7 +60,7 @@
   const flag = (key: 'dim' | 'cut' | 'mono' | 'talkbackDim') => mixer.value<boolean>(monitorPath(key));
 </script>
 
-<section class="monitor" id="monitor" tabindex="-1" aria-label="Monitor output">
+<section class="monitor" id="monitor" tabindex="-1" aria-label="Monitor output" style:width={perRow > 1 ? `${SURROUND_W}px` : undefined}>
   <div class="top">
     <div class="panel-title" title={shape.monitorOutputs.map((o) => `${o.name} (${o.layout})`).join(', ')}>Monitor out</div>
     <!-- The browser plays nothing: this names the output flows the monitor
@@ -113,12 +121,13 @@
          monitor's head the tallest of the masters, and every master's
          fader shorter. -->
     <div class="side">
-      <div class="speakers" role="group" aria-label="Monitor speakers" style:grid-template-rows={`repeat(${legs.length}, auto)`}>
+      <!-- Each leg's mute with its solo beside it. -->
+      <div class="speakers" role="group" aria-label="Monitor speakers" style:grid-template-columns={`repeat(${2 * perRow}, minmax(0, 1fr))`}>
         {#each legs as leg, i (i)}
-          <button {@attach pendingWrite(mixer, pointer('monitor', 'speakerMute', i))} class="key mute" aria-disabled={mixer.locked} aria-pressed={monitor.speakerMute[i]} aria-label={`Mute speaker ${leg}`} title={`Mute speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerMute', i), !monitor.speakerMute[i])}>{leg}</button>
+          <button {@attach pendingWrite(mixer, pointer('monitor', 'speakerMute', i))} style:grid-area={`${Math.floor(i / perRow) + 1} / ${(i % perRow) * 2 + 1}`} class="key mute" aria-disabled={mixer.locked} aria-pressed={monitor.speakerMute[i]} aria-label={`Mute speaker ${leg}`} title={`Mute speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerMute', i), !monitor.speakerMute[i])}>{leg}</button>
         {/each}
         {#each legs as leg, i (i)}
-          <button {@attach pendingWrite(mixer, pointer('monitor', 'speakerSolo', i))} class="key solo" aria-disabled={mixer.locked} aria-pressed={monitor.speakerSolo[i]} aria-label={`Solo speaker ${leg}`} title={`Solo speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerSolo', i), !monitor.speakerSolo[i])}>S</button>
+          <button {@attach pendingWrite(mixer, pointer('monitor', 'speakerSolo', i))} style:grid-area={`${Math.floor(i / perRow) + 1} / ${(i % perRow) * 2 + 2}`} class="key solo" aria-disabled={mixer.locked} aria-pressed={monitor.speakerSolo[i]} aria-label={`Solo speaker ${leg}`} title={`Solo speaker ${leg}`} onclick={() => mixer.set(pointer('monitor', 'speakerSolo', i), !monitor.speakerSolo[i])}>S</button>
         {/each}
       </div>
       {#if output?.layout === 'stereo'}
@@ -234,11 +243,6 @@
   .image {
     display: grid;
     gap: 2px;
-  }
-  /* One row per leg, its mute beside its solo. */
-  .speakers {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-auto-flow: column;
   }
   .speakers .key,
   .image .key {
