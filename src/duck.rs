@@ -13,7 +13,7 @@ use samplez_dsp::{DetectorParams, DuckMode, KeyFilter};
 use serde_json::{Map, Value, json};
 
 use crate::mix;
-use crate::shape::Shape;
+use crate::shape::{DuckShape, Shape};
 
 /// Trigger channels a group takes at most: samplez-dsp `duck::MAX_KEYS`.
 pub const MAX_TRIGGERS: usize = 8;
@@ -21,34 +21,47 @@ pub const MAX_TRIGGERS: usize = 8;
 /// The duck groups of an empty start: the detector at samplez-dsp's
 /// defaults, keyed pre-fader while the channel is open, no trigger and
 /// no target, a depth of 10 dB ready for each channel made a target, and
-/// the buses of kind program as destinations.
+/// the buses of kind program as destinations. A group's shape seeds its
+/// triggers, targets, depth, threshold, attack and release in place of
+/// these.
 pub fn initial_state(shape: &Shape) -> Value {
-    let channels: Map<String, Value> = (shape.channels.iter())
-        .map(|c| {
-            let member = json!({ "trigger": false, "target": false, "depth": 10 });
-            (c.id.clone(), member)
-        })
-        .collect();
     let buses = (shape.buses.iter()).map(|b| (b.id.clone(), json!(b.kind == "program")));
     let others = (shape.auxes.iter().map(|a| &a.id))
         .chain(shape.mix_minus.iter().map(|m| &m.id))
         .map(|id| (id.clone(), json!(false)));
     let destinations: Map<String, Value> = buses.chain(others).collect();
-    let group = json!({
-        "mode": "auto",
-        "hold": false,
-        "keyTap": "preFaderOpen",
-        "threshold": -30,
-        "hysteresis": 4,
-        "keyHpf": { "enabled": true, "freq": 120 },
-        "keyLpf": { "enabled": false, "freq": 4000 },
-        "attackMs": 20,
-        "holdMs": 500,
-        "releaseMs": 1000,
-        "channels": channels,
-        "destinations": destinations,
-    });
-    let groups = shape.ducks.iter().map(|d| (d.id.clone(), group.clone()));
+    let or = |seed: &Option<serde_json::Number>, default: i64| match seed {
+        Some(n) => Value::Number(n.clone()),
+        None => json!(default),
+    };
+    let group = |d: &DuckShape| {
+        let depth = or(&d.depth, 10);
+        let channels: Map<String, Value> = (shape.channels.iter())
+            .map(|c| {
+                let member = json!({
+                    "trigger": d.triggers.contains(&c.id),
+                    "target": d.targets.contains(&c.id),
+                    "depth": depth,
+                });
+                (c.id.clone(), member)
+            })
+            .collect();
+        json!({
+            "mode": "auto",
+            "hold": false,
+            "keyTap": "preFaderOpen",
+            "threshold": or(&d.threshold, -30),
+            "hysteresis": 4,
+            "keyHpf": { "enabled": true, "freq": 120 },
+            "keyLpf": { "enabled": false, "freq": 4000 },
+            "attackMs": or(&d.attack_ms, 20),
+            "holdMs": 500,
+            "releaseMs": or(&d.release_ms, 1000),
+            "channels": channels,
+            "destinations": destinations,
+        })
+    };
+    let groups = shape.ducks.iter().map(|d| (d.id.clone(), group(d)));
     Value::Object(groups.collect())
 }
 

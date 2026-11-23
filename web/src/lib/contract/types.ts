@@ -104,6 +104,13 @@ export interface VcaShape {
 export interface DuckShape {
   id: Id;
   name: string;
+  /** Seeds of the group's initial state, absent when not configured. */
+  triggers?: Id[];
+  targets?: Id[];
+  depth?: number;
+  threshold?: number;
+  attackMs?: number;
+  releaseMs?: number;
 }
 export interface FrameRate {
   numerator: number;

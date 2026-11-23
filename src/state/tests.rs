@@ -696,6 +696,34 @@ fn a_saved_state_loads_back_whole() {
     );
 }
 
+/// A shape's duck seeds start a fresh state only: a saved state loaded
+/// under a configuration that seeds the group keeps its own triggers,
+/// targets, depths and detector.
+#[test]
+fn duck_seeds_never_overwrite_a_loaded_state() {
+    let mut m = mixer();
+    set(
+        &mut m,
+        "a",
+        1,
+        "/ducks/comm/channels/ch1/trigger",
+        json!(true),
+    );
+    let mut v = small();
+    v["ducks"][0] = json!({
+        "id": "comm", "name": "Commentary", "triggers": ["ch2"], "targets": ["ch1"],
+        "depth": 15, "threshold": -40, "attackMs": 5, "releaseMs": 2000,
+    });
+    let fresh = Mixer::new(Shape::parse(&v).unwrap());
+    let seeded = &fresh.state()["ducks"]["comm"];
+    assert_eq!(seeded["channels"]["ch2"]["trigger"], json!(true));
+    assert_eq!(seeded["channels"]["ch1"]["target"], json!(true));
+    let mut back = Mixer::new(Shape::parse(&v).unwrap());
+    back.load(&m.save()).unwrap();
+    assert_eq!(back.state()["ducks"], m.state()["ducks"]);
+    assert!(back.dropped().is_empty());
+}
+
 /// The configured shape wins: leaves of a channel it lost, a leg it
 /// lost and ids it no longer has are dropped and reported.
 #[test]

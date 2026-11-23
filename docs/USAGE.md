@@ -215,6 +215,25 @@ column costs, and the configuration samplez refuses for it, is in
 [samplez's USAGE.md](https://github.com/danielclasen/samplez/blob/main/docs/USAGE.md). The meter frames carry each group's
 key level, envelope and whether it is engaged.
 
+A group in the shape's `ducks` may seed its initial state, so a fresh
+start ducks with no operator step: `triggers` and `targets` (channel
+ids), the `depth` every channel of the group starts at (dB, 10 if
+absent), and the `threshold`, `attackMs` and `releaseMs` of its
+detector. Here the German voiceover lowers the original voice by 15 dB
+from the start:
+
+```json
+"ducks": [{ "id": "vo", "name": "Voiceover", "triggers": ["vo-de"], "targets": ["orig"], "depth": 15 }]
+```
+
+The shape is refused if a seed names no channel, makes a channel
+trigger and target of one group, or gives a group more than 8 triggers.
+A seed applies only where a group, or a channel in it, starts empty: a
+state restored from the data directory or a replica keeps its own
+triggers, targets and settings. A seed is part of the shape, so
+changing one changes the configuration hash
+([CONFIGURATION.md](CONFIGURATION.md#engines-in-a-set)).
+
 ![The DUCK view with the Commentary and Remote comm groups: mode, detector, presets, destinations, and the trigger, target and depth of every channel](screenshots/duck-view.png)
 
 ## Audio follows video

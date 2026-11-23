@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Number, Value, json};
 
 use crate::contract::{check, contract};
 use crate::duck;
@@ -110,11 +110,30 @@ pub struct VcaShape {
     pub name: String,
 }
 
+/// A duck group. The optional fields seed the group in the initial state
+/// ([`duck::initial_state`]) and nothing else; each is absent in a
+/// configuration that leaves it out and left out of a serialized shape
+/// then, so such a shape and its snapshots stay as they were.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DuckShape {
     pub id: String,
     pub name: String,
+    /// Channels the group starts keyed by.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<String>,
+    /// Channels the group starts lowering.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<String>,
+    /// The depth, dB, every channel of the group starts at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack_ms: Option<Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_ms: Option<Number>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -170,7 +189,9 @@ impl Shape {
     /// cannot say: element ids are unique among channels, buses, auxes,
     /// mix-minus outputs, VCAs, duck groups and monitor outputs
     /// (recall-safe groups and output sources name them alone) and among outputs; each width
-    /// matches its layout; a mix-minus names a bus; an output names an
+    /// matches its layout; a mix-minus names a bus; a duck group's
+    /// triggers and targets name channels, and the group it seeds keeps
+    /// [`duck::check`]'s rules; an output names an
     /// element at least as wide, which it folds down to its own width; there is a bus, aux or mix-minus output for
     /// the monitor to listen to.
     pub fn parse(value: &Value) -> Result<Shape, String> {
@@ -193,6 +214,15 @@ impl Shape {
             if !shape.buses.iter().any(|b| b.id == m.bus) {
                 return Err(format!("mix-minus {} names no bus {}", m.id, m.bus));
             }
+        }
+        for d in &shape.ducks {
+            if let Some(c) = (d.triggers.iter().chain(&d.targets)).find(|c| !shape.is_channel(c)) {
+                return Err(format!("duck {} names no channel {c}", d.id));
+            }
+        }
+        let ducks = duck::initial_state(&shape);
+        for d in &shape.ducks {
+            duck::check(&ducks, &d.id)?;
         }
         let mut outputs = HashSet::new();
         for o in &shape.outputs {
@@ -584,6 +614,131 @@ pub(crate) mod tests {
         );
         assert_eq!(comm["keyHpf"], json!({ "enabled": true, "freq": 120 }));
         assert_eq!(comm["keyLpf"], json!({ "enabled": false, "freq": 4000 }));
+    }
+
+    /// A duck group without seeds serializes and starts exactly as before
+    /// seeds existed, byte for byte, so the configuration hash and the
+    /// snapshots of such a shape do not move.
+    #[test]
+    fn a_duck_group_without_seeds_is_unchanged() {
+        let shape = Shape::parse(&small()).unwrap();
+        assert_eq!(
+            serde_json::to_string(&shape.ducks).unwrap(),
+            r#"[{"id":"comm","name":"Commentary"}]"#
+        );
+        let comm = serde_json::to_string(&shape.initial_state()["ducks"]["comm"]).unwrap();
+        let member = r#"{"depth":10,"target":false,"trigger":false}"#;
+        assert_eq!(
+            comm,
+            format!(
+                r#"{{"attackMs":20,"channels":{{"ch1":{member},"ch2":{member},"st1":{member}}},"#,
+            ) + r#""destinations":{"aux1":false,"cf":false,"mm1":false,"pgm":true},"#
+                + r#""hold":false,"holdMs":500,"hysteresis":4,"keyHpf":{"enabled":true,"freq":120},"#
+                + r#""keyLpf":{"enabled":false,"freq":4000},"keyTap":"preFaderOpen","mode":"auto","#
+                + r#""releaseMs":1000,"threshold":-30}"#
+        );
+    }
+
+    /// The small shape whose group `comm` seeds every field: ch2 keys it,
+    /// ch1 and st1 are lowered by 15 dB.
+    fn seeded() -> Value {
+        let mut v = small();
+        v["ducks"][0] = json!({
+            "id": "comm", "name": "Commentary",
+            "triggers": ["ch2"], "targets": ["ch1", "st1"], "depth": 15,
+            "threshold": -40.5, "attackMs": 5, "releaseMs": 2000,
+        });
+        v
+    }
+
+    /// A group's seeds are its initial triggers, targets, depth and
+    /// detector, which the engine targets follow; a serialized shape keeps
+    /// them as configured.
+    #[test]
+    fn a_duck_group_starts_as_its_shape_seeds_it() {
+        let shape = Shape::parse(&seeded()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&shape.ducks).unwrap()[0],
+            seeded()["ducks"][0]
+        );
+        let state = shape.initial_state();
+        check(&contract().state, &state).unwrap();
+        let comm = &state["ducks"]["comm"];
+        let member = |trigger, target| json!({ "trigger": trigger, "target": target, "depth": 15 });
+        assert_eq!(comm["channels"]["ch1"], member(false, true));
+        assert_eq!(comm["channels"]["ch2"], member(true, false));
+        assert_eq!(comm["channels"]["st1"], member(false, true));
+        assert_eq!(
+            [&comm["threshold"], &comm["attackMs"], &comm["releaseMs"]],
+            [&json!(-40.5), &json!(5), &json!(2000)]
+        );
+        assert_eq!(
+            (&comm["hysteresis"], &comm["holdMs"]),
+            (&json!(4), &json!(500))
+        );
+        let t = &duck::targets(&shape, &state)[0];
+        assert_eq!(t.keys.len(), 1);
+        assert_eq!(t.keys[0].0, 1, "ch2's slot");
+        assert_eq!(t.depths, [15.0, 0.0, 15.0]);
+        assert_eq!(
+            (
+                t.params.threshold_db,
+                t.params.attack_ms,
+                t.params.release_ms
+            ),
+            (-40.5, 5.0, 2000.0)
+        );
+    }
+
+    /// Seeds breaking a duck group's rules or ranges refuse the shape.
+    #[test]
+    fn duck_seeds_breaking_a_rule_are_refused() {
+        let broken = |edit: &dyn Fn(&mut Value), wanted: &str| {
+            let mut v = seeded();
+            edit(&mut v);
+            let e = Shape::parse(&v).unwrap_err();
+            assert!(e.contains(wanted), "{e}");
+        };
+        broken(
+            &|v| v["ducks"][0]["triggers"] = json!(["x"]),
+            "duck comm names no channel x",
+        );
+        broken(
+            &|v| v["ducks"][0]["targets"] = json!(["ch1", "pgm"]),
+            "duck comm names no channel pgm",
+        );
+        broken(
+            &|v| v["ducks"][0]["targets"] = json!(["ch2"]),
+            "channel ch2 cannot be trigger and target of duck comm",
+        );
+        broken(
+            &|v| {
+                let nine: Vec<Value> = (1..=9)
+                    .map(|n| json!({ "id": format!("c{n}"), "name": "C", "width": 1, "layout": "mono", "altInput": false }))
+                    .collect();
+                v["channels"].as_array_mut().unwrap().extend(nine);
+                v["ducks"][0]["triggers"] = (1..=9).map(|n| json!(format!("c{n}"))).collect();
+            },
+            "duck comm takes at most 8 triggers",
+        );
+        broken(
+            &|v| v["ducks"][0]["triggers"] = json!(["ch2", "ch2"]),
+            "/ducks/0/triggers",
+        );
+        broken(&|v| v["ducks"][0]["depth"] = json!(41), "/ducks/0/depth");
+        broken(
+            &|v| v["ducks"][0]["threshold"] = json!(1),
+            "/ducks/0/threshold",
+        );
+        broken(
+            &|v| v["ducks"][0]["attackMs"] = json!(0),
+            "/ducks/0/attackMs",
+        );
+        broken(
+            &|v| v["ducks"][0]["releaseMs"] = json!(5),
+            "/ducks/0/releaseMs",
+        );
+        broken(&|v| v["ducks"][0]["holdMs"] = json!(100), "holdMs");
     }
 
     /// A configuration without duck groups has none, and its serialized
