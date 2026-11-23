@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/danielclasen/faderz/compare/v0.7.0...v0.7.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **deps:** take samplez 0.27.0 ([#183](https://github.com/danielclasen/faderz/issues/183)) ([3ee76dc](https://github.com/danielclasen/faderz/commit/3ee76dca1a8c4982a2032636a80034fbfac63636))
+* **ws:** refuse a viewer's control request ([#181](https://github.com/danielclasen/faderz/issues/181)) ([938020f](https://github.com/danielclasen/faderz/commit/938020fabcfd6182af64da43f02b4f80297a0a58))
+
 ## [0.7.0](https://github.com/danielclasen/faderz/compare/v0.6.1...v0.7.0) (2026-11-23)
 
 
