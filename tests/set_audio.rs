@@ -2314,7 +2314,9 @@ fn every_replica_plays_the_line_up_tone_alike() {
 
 /// A channel's delay is replicated state: every replica plays a pulse on
 /// the input exactly that many samples late, and at 0 not late at all,
-/// the three writing the same bits.
+/// the three writing the same bits. Only a pulse every replica committed
+/// whole is judged: on a starved host a replica withholds blocks, which
+/// leaves its flow an older lap's samples there.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -2364,6 +2366,8 @@ fn every_replica_delays_a_channel_alike() {
     let flows: Vec<String> = (set.outputs["out-pgm"]["flows"].as_array().unwrap().iter())
         .map(|f| f.as_str().unwrap().to_owned())
         .collect();
+    let engines: Vec<Weak<Audio>> = (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect();
+    let (outputs, reader) = Outputs::read(set.domain.0.clone(), flows.clone(), engines);
     write(
         &nodes,
         0,
@@ -2396,6 +2400,16 @@ fn every_replica_delays_a_channel_alike() {
     };
     let line = rate / 50;
     let late = samplez_dsp::LIMITER_DELAY as u64;
+    // Whether every replica committed every block of [from, to) whole: a
+    // block a replica withheld is never written, and its flow holds an
+    // older lap's samples there, which compare as other bits. The reader
+    // records a block once it is final, a few blocks after it is written.
+    let committed = |from: u64, to: u64| {
+        until(2, || {
+            let blocks = outputs.blocks.lock().unwrap();
+            (from / B..to.div_ceil(B)).all(|k| blocks.iter().all(|b| b.contains_key(&k)))
+        })
+    };
     // 0, a delay off the block grid, the full line, and 0 again.
     for (n, delay) in [0, rate / 100 + 7, line, 0].into_iter().enumerate() {
         write(
@@ -2405,23 +2419,38 @@ fn every_replica_delays_a_channel_alike() {
         );
         // A pulse of 100 ms from 0.5 s on, off the block grid: the delay
         // has applied on every replica and its crossfade ended long before.
-        let start = (Outputs::now() + 80) * B + rate / 2 + 7;
-        let end = start + rate / 10;
-        pulse[1].store(end, Ordering::Relaxed);
-        pulse[0].store(start, Ordering::Relaxed);
-        let (from, to) = (start - rate / 10, end + line + late + rate / 10);
-        let mut read = None;
-        let written = until(20, || {
-            read = spans(from, to);
-            read.is_some()
-        });
-        pulse[0].store(u64::MAX, Ordering::Relaxed);
-        assert!(
-            written,
-            "delay {delay}: [{from}, {to}) never written: {}",
-            states(&nodes)
-        );
-        let read = read.unwrap();
+        // A pulse whose window a replica did not commit whole, which its
+        // engine's block statuses show, is played again, four times at
+        // most.
+        let mut attempts = 0;
+        let (start, end, from, read) = loop {
+            attempts += 1;
+            let start = (Outputs::now() + 80) * B + rate / 2 + 7;
+            let end = start + rate / 10;
+            pulse[1].store(end, Ordering::Relaxed);
+            pulse[0].store(start, Ordering::Relaxed);
+            let (from, to) = (start - rate / 10, end + line + late + rate / 10);
+            let mut read = None;
+            let written = until(20, || {
+                read = spans(from, to);
+                read.is_some() && Outputs::now() * B > to
+            });
+            pulse[0].store(u64::MAX, Ordering::Relaxed);
+            assert!(
+                written,
+                "delay {delay}: [{from}, {to}) never written: {}",
+                states(&nodes)
+            );
+            if committed(from, to) {
+                break (start, end, from, read.unwrap());
+            }
+            eprintln!("delay {delay}: [{from}, {to}) not committed whole on every replica, again");
+            assert!(
+                attempts < 4,
+                "delay {delay}: no pulse of four committed whole on every replica: {}",
+                states(&nodes)
+            );
+        };
         let bits = |b: &[f32]| b.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
         assert!(
             read.iter().all(|r| bits(r) == bits(&read[0])),
@@ -2442,6 +2471,8 @@ fn every_replica_delays_a_channel_alike() {
             "delay {delay}: the pulse [{start}, {end}) is heard from {first:?} to {last:?}"
         );
     }
+    outputs.stop.store(true, Ordering::Relaxed);
+    reader.join().unwrap();
 }
 
 /// A direct out's input tap is replicated state: every replica's direct
