@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.7.0](https://github.com/danielclasen/faderz/compare/v0.6.1...v0.7.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **strip:** add a parallel mix to every compressor
+* **web:** the state model's Comp requires mix, and DERIVATION_VERSION is 13 with samplez_replica::PROTOCOL 7.
+
+### Features
+
+* **strip:** add a parallel mix to every compressor ([a277afc](https://github.com/danielclasen/faderz/commit/a277afccd7021bae75c6ace295e81f9f80f850d8))
+
+
+### Bug Fixes
+
+* **deps:** take samplez 0.26.0 with contact loop and report metrics ([#176](https://github.com/danielclasen/faderz/issues/176)) ([c82bd45](https://github.com/danielclasen/faderz/commit/c82bd4551c9a4a73787f09d788acbbef7ad1aeeb))
+* **deps:** take samplez 0.26.1 with smaller peer reports ([#179](https://github.com/danielclasen/faderz/issues/179)) ([373e577](https://github.com/danielclasen/faderz/commit/373e577876ea6178241fc4ab23e276619a18a1db))
+* **web:** line up the master faders' scales ([#172](https://github.com/danielclasen/faderz/issues/172)) ([4878d65](https://github.com/danielclasen/faderz/commit/4878d65a7d13d672f9c7ff03c2d21247f844b326))
+
+
+### Tests
+
+* **web:** start the README screenshot server again ([a277afc](https://github.com/danielclasen/faderz/commit/a277afccd7021bae75c6ace295e81f9f80f850d8))
+
 ## [0.6.1](https://github.com/danielclasen/faderz/compare/v0.6.0...v0.6.1) (2026-11-22)
 
 
