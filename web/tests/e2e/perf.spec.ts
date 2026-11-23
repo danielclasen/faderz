@@ -228,7 +228,11 @@ test('three clients moving faders with meters on and duck groups firing stay und
 interface TraceEvent {
   name: string;
   ph: string;
-  args?: { beginData?: { partialLayout?: boolean; totalObjects?: number } };
+  ts?: number;
+  args?: {
+    beginData?: { partialLayout?: boolean; totalObjects?: number };
+    data?: { nodeName?: string; reason?: string };
+  };
 }
 
 // A layout from the document down walks every strip of the console, tens
@@ -245,7 +249,9 @@ test('another client touching and releasing a fader lays out no more than its bo
   try {
     await page.evaluate(() => document.fonts.ready);
     await frames();
-    await browser.startTracing(page, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline'] });
+    await browser.startTracing(page, {
+      categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.invalidationTracking'],
+    });
     tracing = true;
     for (let i = 0; i < 3; i++) {
       await other.command({ type: 'touch', path: '/channels/ch2/fader' });
@@ -262,9 +268,14 @@ test('another client touching and releasing a fader lays out no more than its bo
     // Every layout says whether it started below the document: without
     // that the check below would hold of any trace.
     expect(layouts.filter((e) => typeof e.args?.beginData?.partialLayout !== 'boolean')).toEqual([]);
-    // Objects and start data of each layout from the document down, so a
-    // failure says what it laid out.
-    expect(layouts.filter((e) => e.args?.beginData?.partialLayout === false).map((e) => e.args?.beginData)).toEqual([]);
+    // Objects and start data of each layout from the document down, and on
+    // a failure the nodes whose layout was invalidated before it and why,
+    // so a failure names what it laid out and what started it.
+    const whole = layouts.filter((e) => e.args?.beginData?.partialLayout === false);
+    const invalidated = whole.length === 0 ? [] : events
+      .filter((e) => e.name === 'LayoutInvalidationTracking' && (e.ts ?? 0) <= Math.max(...whole.map((w) => w.ts ?? 0)))
+      .map((e) => `${e.args?.data?.nodeName ?? '?'}: ${e.args?.data?.reason ?? '?'}`);
+    expect(whole.map((e) => e.args?.beginData), `layouts invalidated by: ${[...new Set(invalidated)].join('; ')}`).toEqual([]);
   } finally {
     if (tracing) await browser.stopTracing().catch(() => undefined);
     other.close();
