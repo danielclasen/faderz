@@ -2444,7 +2444,22 @@ fn every_replica_delays_a_channel_alike() {
             if committed(from, to) {
                 break (start, end, from, read.unwrap());
             }
-            eprintln!("delay {delay}: [{from}, {to}) not committed whole on every replica, again");
+            // What each replica's engine counted, so a replay leaves
+            // evidence of whether a divergence was resynced away.
+            let counts: Vec<String> = (0..REPLICAS)
+                .map(|n| {
+                    let m = node(&nodes, n).server.app.replica.contact_metrics();
+                    let divergences = m.as_ref().and_then(|m| m.replica).map(|r| r.divergences);
+                    let handovers = m.map(|m| m.resync.handovers);
+                    format!(
+                        "replica {n}: divergences {divergences:?}, resync hand-overs {handovers:?}"
+                    )
+                })
+                .collect();
+            eprintln!(
+                "delay {delay}: [{from}, {to}) not committed whole on every replica, again; {}",
+                counts.join("; ")
+            );
             assert!(
                 attempts < 4,
                 "delay {delay}: no pulse of four committed whole on every replica: {}",
