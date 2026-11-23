@@ -3272,7 +3272,9 @@ fn get_within(api: std::net::SocketAddr, route: &str) -> Option<u16> {
 /// every replica while the set commits writes and each replica's contact
 /// loop runs: one that took samplez's contact lock under the log store's
 /// lock deadlocked against that loop, which takes them the other way
-/// round, and hung the replica for good.
+/// round, and hung the replica for good. Afterwards every replica's
+/// `/metrics` carries samplez's counts of that loop and of its reports to
+/// each peer, above zero.
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -3316,6 +3318,31 @@ fn every_replica_answers_its_state_routes_while_the_set_commits() {
     }
     for reader in readers {
         assert!(reader.join().expect("a route hung or failed") > 0);
+    }
+    // samplez's counts of the contact loop and of the reports to each peer
+    // reach every replica's /metrics, and count the reports the set sent.
+    let total = |metrics: &str, series: &str| -> f64 {
+        (metrics.lines())
+            .filter(|l| l.starts_with(series) && !l.starts_with('#'))
+            .filter_map(|l| l.rsplit(' ').next()?.parse::<f64>().ok())
+            .sum()
+    };
+    for n in 0..REPLICAS {
+        let node = node(&nodes, n);
+        let (status, metrics) = node.runtime.block_on(get(node.server.ops, "/metrics"));
+        assert_eq!(status, 200, "/metrics on replica {n}");
+        for series in [
+            "samplez_replica_contact_ticks_total",
+            "samplez_replica_contact_cpu_seconds_total",
+            "samplez_replica_peer_reports_sent_total",
+            "samplez_replica_peer_report_bytes_total",
+            "samplez_replica_peer_report_encode_cpu_seconds_total",
+            "samplez_replica_peer_reports_answered_total",
+            "samplez_replica_peer_report_round_trip_seconds_total",
+        ] {
+            let v = total(&metrics, series);
+            assert!(v > 0.0, "replica {n}: {series} is {v}");
+        }
     }
 }
 
