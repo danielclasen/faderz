@@ -5,17 +5,12 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **strip:** add a parallel mix to every compressor
-* **web:** the state model's Comp requires mix, and DERIVATION_VERSION is 13 with samplez_replica::PROTOCOL 7.
+* **strip:** the state model's Comp requires mix, and DERIVATION_VERSION is 13 with samplez_replica::PROTOCOL 7.
 
 ### Features
 
 * **strip:** add a parallel mix to every compressor ([a277afc](https://github.com/danielclasen/faderz/commit/a277afccd7021bae75c6ace295e81f9f80f850d8))
 
-
-### Tests
-
-* **web:** start the README screenshot server again ([a277afc](https://github.com/danielclasen/faderz/commit/a277afccd7021bae75c6ace295e81f9f80f850d8))
 
 ## [0.3.0](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.2.1...faderz-bridge-v0.3.0) (2026-11-22)
 
