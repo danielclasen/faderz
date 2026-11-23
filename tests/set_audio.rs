@@ -1982,60 +1982,47 @@ fn every_replica_mixes_a_compressor_alike() {
             .map(|f| f.as_str().unwrap().to_owned())
             .collect()
     };
-    let (pgm, mm) = (flows("out-pgm"), flows("out-mm"));
-    let blocks = |flows: &[String], k: u64| -> Option<Vec<Vec<f32>>> {
-        (flows.iter())
-            .map(|f| {
-                let generation = attach(&set.domain.0, f)?;
-                let mut buf = vec![0.0f32; 2 * B as usize];
-                let input = generation.input(0).unwrap();
-                let o = input.read(&mut SlotState::default(), k, &GroupWait::Skipped, &mut buf);
-                (o == Outcome::Copy).then_some(buf)
-            })
-            .collect()
+    let engines =
+        || -> Vec<Weak<Audio>> { (0..REPLICAS).map(|n| node(&nodes, n).engine()).collect() };
+    let read = |output: &str| Outputs::read(set.domain.0.clone(), flows(output), engines());
+    let outputs = [read("out-pgm"), read("out-mm")];
+    // The sample peak of replica 0's newest committed block of output
+    // `o`: every sample of the quarter-rate sine has the same magnitude,
+    // under any gain the compressor holds, so it is the block's RMS.
+    let newest = |o: usize| -> Option<f32> {
+        let blocks = outputs[o].0.blocks.lock().unwrap();
+        let (_, &(_, energy)) = blocks[0].last_key_value()?;
+        Some((energy / f64::from(2 * B as u32)).sqrt() as f32)
     };
-    let bits = |b: &[f32]| b.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
-    let peak = |b: &[f32]| b.iter().fold(0.0f32, |p, v| p.max(v.abs()));
-    let same = |b: &[Vec<f32>]| b.iter().all(|r| bits(r) == bits(&b[0]));
-    // Whether every replica committed block `k` of both outputs whole.
-    let committed = |k: u64| {
-        (0..REPLICAS).all(|n| {
-            let engine = node(&nodes, n).server.audio.as_ref().unwrap().engine();
-            (0..2).all(|o| {
-                engine
-                    .block_status(o, k)
-                    .is_some_and(|s| s.kind == Kind::Committed && s.range == Range::Whole)
-            })
-        })
-    };
-    // Every block from `from` on that every replica committed and wrote
-    // to both outputs is the same bits on each, until each output's
-    // sample peak is `want` within `tol` and at least 100 blocks compared.
+    // Every block from `from` on that every pair of replicas committed
+    // whole is the same bits on both outputs, at least 100 of them, and
+    // each output's newest block reads `want` within `tol`. Each check
+    // reads what the outputs' readers collected, so it ends in time
+    // however far behind the clock the host runs.
     let alike = |from: u64, want: (f32, f32), tol: f32, what: &str| {
-        let (mut k, mut compared, mut last) = (from, 0, None);
+        let mut last = None;
         let read = until(20, || {
-            while k <= Outputs::now() {
-                let both = (blocks(&pgm, k), blocks(&mm, k));
-                if let (Some(p), Some(m)) = both
-                    && committed(k)
-                {
-                    assert!(
-                        same(&p) && same(&m),
-                        "{what}: block {k} differs: {}",
-                        states(&nodes)
-                    );
-                    compared += 1;
-                    last = Some((peak(&p[0]), peak(&m[0])));
+            let mut compared = usize::MAX;
+            for (outputs, _) in &outputs {
+                for a in 0..REPLICAS {
+                    for b in a + 1..REPLICAS {
+                        let c = outputs.compare(a, b, from);
+                        assert!(
+                            c.differing.is_empty(),
+                            "{what}: replicas {a} and {b}: {c:?}"
+                        );
+                        compared = compared.min(c.compared);
+                    }
                 }
-                k += 1;
             }
-            last.is_some_and(|(p, m): (f32, f32)| {
-                compared >= 100 && (p - want.0).abs() <= tol && (m - want.1).abs() <= tol
-            })
+            let levels = (newest(0), newest(1));
+            last = Some((levels, compared));
+            let near = |l: Option<f32>, w: f32| l.is_some_and(|l| (l - w).abs() <= tol);
+            compared >= 100 && near(levels.0, want.0) && near(levels.1, want.1)
         });
         assert!(
             read,
-            "{what}: wanted peaks {want:?}, read {last:?} over {compared} blocks: {}",
+            "{what}: wanted peaks {want:?}, read ((pgm, mm), blocks compared) {last:?}: {}",
             states(&nodes)
         );
     };
@@ -2092,6 +2079,10 @@ fn every_replica_mixes_a_compressor_alike() {
             1e-4,
             &format!("the bus compressor at {mix} %"),
         );
+    }
+    for (outputs, reader) in outputs {
+        outputs.stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
     }
 }
 
