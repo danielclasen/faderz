@@ -425,8 +425,10 @@ impl Contact {
         };
         // Before contact, so its first report carries the key: a replica
         // reporting none could leave `starting` before its key is known.
-        replica.rollout(self.rollout)?;
-        replica.contact(self.timing, Arc::new(SystemClocks), self.audio)?;
+        replica.rollout(self.rollout);
+        replica
+            .contact(self.timing, Arc::new(SystemClocks), self.audio)
+            .map_err(|e| e.to_string())?;
         if let Some((kube, statefulset, into)) = self.follow {
             tokio::spawn(rollout::follow(kube, statefulset, into, ROLLOUT_READ));
         }

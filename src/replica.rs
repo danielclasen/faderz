@@ -144,7 +144,8 @@ pub async fn start(
         Arc::new(Lone),
         estimate,
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
     let initialized = replica
         .raft()
         .is_initialized()
@@ -153,7 +154,8 @@ pub async fn start(
     if !initialized {
         replica
             .initialize([(identity.node, ADDR.to_owned())])
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
     }
     replica
         .raft()
@@ -220,7 +222,8 @@ pub async fn start_set(
         pool,
         estimate,
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
     replica.begin(Bootstrap {
         markers,
         volume,
