@@ -963,6 +963,16 @@ async fn a_viewer_cannot_write() {
         (Some(400), Some("operator role required"))
     );
     assert!(e.get("commandId").is_none(), "{e}");
+    // Nor may it ask for a control it could not use: a request is refused
+    // too, rather than ordered as a control request.
+    v.send(json!({ "type": "request", "path": "/channels/ch1/fader" }))
+        .await;
+    let e = v.next_of("error").await;
+    assert_eq!(
+        (e["code"].as_u64(), e["message"].as_str()),
+        (Some(400), Some("operator role required"))
+    );
+    assert!(e.get("commandId").is_none(), "{e}");
     server.stop().await;
 }
 

@@ -175,7 +175,7 @@
       }
     },
     "Request": {
-      "description": "Asks the session that owns a control to give it up, for example when a screen left a talkback latched or a session stopped with a control held. Not a command: it changes nothing, carries no id and is not answered. The cluster sends a control request (server-message.schema.json#/$defs/ControlRequest) to the primary connections of the session that owns path, through whichever replica serves them; a request for a control no other session owns goes nowhere. The cluster forwards at most one request per asking session and control every 3 s and drops the others without an answer; a client sends no more often.",
+      "description": "Asks the session that owns a control to give it up, for example when a screen left a talkback latched or a session stopped with a control held. Not a command: it changes nothing, carries no id and is answered only when refused: a viewer, which can use no control, gets an error without commandId (server-message.schema.json#/$defs/Error), code 400. The cluster sends a control request (server-message.schema.json#/$defs/ControlRequest) to the primary connections of the session that owns path, through whichever replica serves them; a request for a control no other session owns goes nowhere. The cluster forwards at most one request per asking session and control every 3 s and drops the others without an answer; a client sends no more often.",
       "type": "object",
       "required": [
         "type",

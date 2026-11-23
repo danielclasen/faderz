@@ -285,6 +285,11 @@ fn on_message<'a>(
             );
             Reply::Now(None)
         }
+        // A viewer can use no control, so it may ask for none: refused
+        // before anything reaches the log or the control's owner.
+        "request" if connect.require_operator().is_err() => {
+            Reply::Now(Some(error(app, 400, "operator role required", None)))
+        }
         "request" => {
             let (app, asker) = (app.clone(), owner_record(&connect.owner, &client_kind));
             let (from, path) = (
