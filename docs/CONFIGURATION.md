@@ -160,6 +160,10 @@ what faderz needs on top:
   needs `get` on `statefulsets`, and the pod's own revision from
   `FADERZ_POD_REVISION`, the pod's `controller-revision-hash` label
   through the downward API.
+- Ordinal 0 starts a set only while a majority of the voters answer, so
+  the StatefulSet starts its pods in parallel
+  (`podManagementPolicy: Parallel`).
+- Contact or the rollout failing to start exits faderz non-zero.
 - A set starts on empty volumes. The data directory of a set of one
   cannot join a set, nor that of a set run alone, so changing between
   the two needs new volumes and leaves the state behind.
@@ -174,8 +178,17 @@ what faderz needs on top:
 Each replica lists every replica of the set in `GET /api/v1/replicas`
 and the WebSocket's `replicas` message, named as the pods are,
 `<StatefulSet>-<ordinal>` (with a `name` that ends in no ordinal, the
-replica's `peers` address), with the leader raft follows, which
-replicas it hears and which can commit.
+replica's `peers` address), with the leader raft follows. Another
+replica is heard while this one is in contact with a majority and has
+had a report from it within the contact window. Every entry, this
+replica's own included, is commitable while it is healthy and a
+majority of the voters is. Without an engine there is no contact and
+only raft's view: a follower vouches for the leader alone, for as long
+as raft names one, and the leader for a follower whose matched log is
+within 16 entries of its own and that has matched all of it within the
+last 3 s. Either way another replica is listed healthy until it has
+gone unheard for 1 s, and the majority a replica's own commitable needs
+counts the replicas heard now.
 
 ### Engines in a set
 
@@ -199,8 +212,7 @@ protocol versions, faderz's derivation version
 `engine` settings and each channel's flow channel selection; the member
 flows are left out. A release that raises none of the three versions
 rolls pod by pod with no gap in the output; one that raises any rolls
-as a hand-over at the first new pod, hitless. A rollback to lower
-versions is no hand-over and stops the outputs for up to about 5 s.
+as a hand-over at the first new pod, hitless.
 
 ### Apply lead
 

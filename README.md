@@ -109,7 +109,14 @@ docker run --rm --name faderz --user "$(id -u):$(id -g)" --read-only --tmpfs /tm
   faderz:local
 ```
 
-Open <http://127.0.0.1:8080/>. The state is kept in `data/` and survives
+Open <http://127.0.0.1:8080/>, or in another shell:
+
+```sh
+curl -s http://127.0.0.1:8080/api/v1/state
+curl -s http://127.0.0.1:9090/metrics
+```
+
+Without an `mxl` section `/healthz` and `/readyz` answer 503. The state is kept in `data/` and survives
 a restart. With `auth.mode` `none` the API answers only requests whose
 `Host` is `localhost` or `127.0.0.1` and takes WebSocket upgrades only
 from those origins on the API port, so the host port above is the
