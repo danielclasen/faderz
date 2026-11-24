@@ -104,7 +104,7 @@ export interface VcaShape {
 export interface DuckShape {
   id: Id;
   name: string;
-  /** Seeds of the group's initial state, absent when not configured. */
+  /** Seeds of the group's initial state, absent when not configured; at most MAX_TRIGGERS (8) triggers. */
   triggers?: Id[];
   targets?: Id[];
   depth?: number;

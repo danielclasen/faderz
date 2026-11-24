@@ -719,7 +719,7 @@ pub(crate) mod tests {
                 v["channels"].as_array_mut().unwrap().extend(nine);
                 v["ducks"][0]["triggers"] = (1..=9).map(|n| json!(format!("c{n}"))).collect();
             },
-            "duck comm takes at most 8 triggers",
+            "/ducks/0/triggers",
         );
         broken(
             &|v| v["ducks"][0]["triggers"] = json!(["ch2", "ch2"]),
