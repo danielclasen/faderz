@@ -1,8 +1,9 @@
 # Configuring faderz
 
 One JSON file, `faderz --config <file>`; `faderz --help` lists the
-flags. Unknown keys are refused, except under `engine` and `rt`, which
-samplez checks, and only when an `mxl` section is present. How the
+flags. Unknown keys are refused, except under `rt`, which samplez
+checks; `engine` takes only the keys in the table. Both are read only
+with an `mxl` section. How the
 settings act is in [USAGE.md](USAGE.md).
 
 ## Keys
@@ -43,7 +44,7 @@ settings act is in [USAGE.md](USAGE.md).
 | `engine.maxCatchupBlocks` | `2` | overdue blocks processed in order after a late wake |
 | `engine.pruneAfterBlocks` | `50` | blocks of a frozen producer head before an input is pruned |
 | `engine.rampSamples` | `480` | the length of every gain ramp |
-| `engine.delayBudgetSamples` | `4194304` | the most delay-line history the inputs may hold together, in samples; also what a replica of a set reads from another when it resyncs |
+| `engine.delayBudgetSamples` | `4194304` | the most delay-line history the inputs and outputs may hold together, in samples; also what a replica of a set reads from another when it resyncs |
 | `rt.enabled` | `true` | `false` skips capabilities, memory locking and `SCHED_FIFO` |
 | `rt.priority` | `70` | `SCHED_FIFO` priority |
 | `rt.rtCpu` | `auto` | `auto`, `none`, `first`, `last` or an index into the allowed CPUs |
@@ -63,11 +64,39 @@ The `engine` and `rt` keys are samplez's; what they do is in
 faderz sets the defaults of `readerMarginSamples` and
 `delayBudgetSamples` above.
 
-Without an `mxl` section faderz runs no engine: the state, the API and
-the console are served, nothing is mixed, and `/healthz` and `/readyz`
-fail ([API.md](API.md#ops-endpoints)). With one, every channel and every
+Without an `mxl` section no engine runs
+([Ops endpoints](USAGE.md#ops-endpoints)). With one, every channel and every
 output needs a flow (or a tone), and an MXL domain is a directory on
 tmpfs shared with the processes that write and read its flows.
+
+## With audio
+
+Added to the configuration of the README's quick start, this `mxl`
+section names the domain and the flow each channel reads and each
+output writes. The domain is `/dev/shm/mxl/studio` on the host:
+
+```json
+"mxl": {
+  "domains": [{ "name": "studio", "path": "/mxl/studio" }],
+  "inputs": {
+    "host": { "flow": "00000000-0000-4000-8000-000000000001" },
+    "guest": { "flow": "00000000-0000-4000-8000-000000000002" },
+    "band": { "flow": "00000000-0000-4000-8000-000000000003" }
+  },
+  "outputs": {
+    "out-pgm": { "flow": "00000000-0000-4000-8000-000000000010" }
+  }
+}
+```
+
+```sh
+docker run --rm --name faderz --read-only --tmpfs /tmp \
+  --cap-drop ALL --cap-add SYS_NICE --cap-add IPC_LOCK \
+  -v /dev/shm/mxl/studio:/mxl/studio \
+  -v "$PWD/config.json:/etc/faderz/config.json:ro" -v faderz-data:/var/lib/faderz \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 \
+  faderz:local
+```
 
 ## Auth
 

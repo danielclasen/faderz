@@ -10,7 +10,11 @@ in [USAGE.md](USAGE.md).
 
 Selecting a strip opens its processing panel: input colour, trim,
 polarity, high-pass, delay, meter and direct-out taps, pan, the EQ with
-its curve, gate and compressor, and the sends. Below 1400 px of width
+its curve, gate and compressor, and the sends. A channel without a delay
+line shows its delay greyed out, marked "No delay line". A tone
+channel's head shows TONE and its frequency, with ID while its ident is
+on, in place of a source, and its panel sets the frequency, the level
+and IDENT in place of an input select. Below 1400 px of width
 the strips take the full width and the MASTERS key shows the masters
 over them.
 
@@ -40,9 +44,8 @@ While the serving replica cannot commit, the quorum reads NO QUORUM
 COMMITTING - audio continues, with the number of writes pending, and
 every key pressed meanwhile shows its state desaturated inside a dashed
 edge until its write commits or expires. REST writes are answered 503
-then and change nothing. A write still unanswered 3 s after it was
-issued is dropped with a notice, and its control shows the committed
-value again.
+then and change nothing. A write the protocol drops raises a notice,
+and its control shows the committed value again.
 
 While the link carries no commands (connecting, offline, failing over,
 ahead), every write control is disabled and the connection key shows
@@ -57,15 +60,13 @@ while the desk is locked.
 
 ### Connection handling
 
-The console keeps a primary connection and a standby on another
-replica, heartbeats both every 250 ms, and fails over to the standby
-when the primary closes, misses three beats, reports that it cannot
-commit while the standby reports that it can, or gives no state it can
-apply within 3 s of a hello, resync or promote. While neither can
-commit it looks for a third replica that can; while no replica can
-commit it stays where it is. A command answered 503 (not applied), or
-unanswered when its connection fails, is sent again with its id, which
-the cluster applies at most once.
+The console speaks the protocol in
+[USAGE.md](USAGE.md#websocket) from a Web Worker. It also fails over
+when the primary reports that it cannot commit while the standby
+reports that it can, or gives no state it can apply within 3 s of a
+hello, resync or promote. While neither can commit it lets the standby
+go to look for a third replica that can; while no replica can commit it
+stays where it is.
 
 ## Sign-in
 
@@ -84,8 +85,7 @@ the reason "signed in as a viewer".
 
 ## Other operators
 
-A gesture on a control another session holds is refused at once and
-the notice names the holder. ASK in that notice sends the holder a
+When a gesture on a held control is refused, ASK in the notice sends the holder a
 request, at most once per control every 3 s; the holder's screen shows
 it with RELEASE. The head of a strip another screen has selected
 carries that screen's initial, and its tooltip names every screen that

@@ -198,13 +198,17 @@ restart signs in with the stored refresh token while the provider still
 accepts it. It refreshes the access token a quarter of its lifetime
 before it expires, opens a new connection with it on the same session
 and closes the old one, so the session's controls are kept. A refresh
-the provider refuses starts a new sign-in. `issuer` is `https`, or
+the provider refuses starts a new sign-in. A refreshed token is in use
+before it is written to `tokens.json`, and a failed write is retried
+with backoff; tokens still unwritten when the bridge exits are lost, so
+the next start uses the previous refresh token, and a provider that
+rotates refresh tokens then asks for a new sign-in. `issuer` is `https`, or
 `http` on a loopback address; `scopes` are requested besides `openid`.
 
 The OIDC provider needs:
 
 - a public client for the bridge (`faderz-bridge` above) with the
-  device authorization grant enabled, and
+  device authorization grant enabled and no redirect URI, and
   `device_authorization_endpoint` in its discovery document. The bridge
   always sends a PKCE S256 challenge, so a provider that enforces PKCE
   works;
@@ -214,7 +218,9 @@ The OIDC provider needs:
 - an access token carrying what faderz checks on a bearer: `azp` naming
   the client, `auth.oidc.roleClaim` holding the operator role, the user
   in `preferred_username`, `email` or `sub`, and, with
-  `auth.oidc.audience`, that audience in `aud`;
+  `auth.oidc.audience`, that audience in `aud`. The role and audience
+  usually need mappers on the client to appear in the access token and
+  not only in the ID token;
 - the client in faderz's `auth.oidc.allowedClients`, next to faderz's
   own: `"allowedClients": ["faderz", "faderz-bridge"]`.
 
@@ -251,20 +257,20 @@ and ends a bypass; its key holds only once it has been down 300 ms. A
 key bound with `hold` only holds, one with `latch` only toggles the
 mode. While another session holds the group, a press does not take it,
 and line 2 reads `<group name> held by <holder>`; a tap still toggles
-the mode. A key also lights while its group ducks, from the last meter
+the mode. While a key of a bypassed group is down, line 2 reads
+`<group name> bypassed`. After messages from a network surface went
+missing, a held duck key is let go after 1.5 seconds, as a fader is. A key also lights while its group ducks, from the last meter
 frame, if it is no older than 120 ms.
 
 ## Connection
 
-The bridge follows the protocol the console follows: `hello` with kind
-`console`, `resume` from its last revision after a reconnect,
-heartbeats every 250 ms, a standby connection when there are several
-endpoints, commands sent again after a 503 or a failover and dropped
-3 s after they were issued. After every snapshot or resume on a new
-primary connection it releases every control its session owns that no
-fader holds, touches again what a held fader lost, and registers its
-consoles again. On a shape with duck groups the primary connection
-takes meter frames for the duck keys' LEDs.
+The bridge speaks the protocol in
+[USAGE.md](USAGE.md#websocket) with kind `console`. After every
+snapshot or resume on a new primary connection it releases every
+control its session owns that no fader holds, touches again what a held
+fader lost, and registers its consoles again. On a shape with duck
+groups the primary connection takes meter frames for the duck keys'
+LEDs.
 
 ## Not verified on hardware
 

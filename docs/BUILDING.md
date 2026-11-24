@@ -128,11 +128,9 @@ partitions and restores replicas. The same controls answer JSON under
 | `POST /__mock/replicas/<id>/lag?ms=<n>` | log entries reach the replica `n` ms late; `ms=0` catches up |
 | `POST /__mock/blocks/hold` | keeps the current processing block open, so every WebSocket command joins one log entry until a REST request or a hello or resync ends it |
 | `POST /__mock/blocks/flush` | ends the hold and commits the open block |
-| `GET /__mock/stats` | per live connection: meter frames sent and skipped, credits, messages; `totals` since start or reset |
-| `POST /__mock/stats/reset` | zeroes the counters |
+| `GET /__mock/stats`, `POST /__mock/stats/reset` | per live connection: meter frames sent and skipped, credits, messages, and `totals` since start or reset; reset zeroes them |
 | `GET /__mock/audit` | applied WebSocket commands in apply order, and `summary: {total, duplicates}` |
-| `GET /__mock/commands` | every command outcome, REST included |
-| `POST /__mock/audit/reset` | clears both command logs |
+| `GET /__mock/commands`, `POST /__mock/audit/reset` | every command outcome, REST included; reset clears both command logs |
 | `POST /__mock/drop-clients` | closes every socket |
 | `POST /__mock/slow-link?ms=<n>` | answers every later REST request and WebSocket upgrade `n` ms late; `ms=0` ends it |
 | `POST /__mock/consoles/<id>/bank?offset=<n>` | moves that console's bank to start at channel index `n` |
@@ -143,8 +141,12 @@ partitions and restores replicas. The same controls answer JSON under
 
 `/__mock/replicas/<id>/api/v1/ws` connects to one replica and
 `/__mock/replicas/<id>/api/v1/...` serves REST through it; `/api/v1/ws`
-picks a serving replica at random. The console takes a list of
-same-origin endpoints as `?endpoints=/__mock/replicas/r1/api/v1/ws,/__mock/replicas/r2/api/v1/ws`.
+picks a serving replica at random. A `/__mock` request whose `Host` is
+not an IP address, `localhost` or the `--host` name, and a `/__mock`
+POST from another origin, are refused with 403. The console takes a
+list of same-origin endpoints as
+`?endpoints=/__mock/replicas/r1/api/v1/ws,/__mock/replicas/r2/api/v1/ws`;
+an endpoint on another origin stops the page with an error.
 
 `window.__faderz` is a read-only view of the sync state for tests
 (`connection`, `standby`, `revision`, `outbox`, `failovers`, `replicas`,
@@ -183,12 +185,11 @@ FADERZ_BIN=../target/debug/faderz npm run test:binary
 - `test:binary` starts the binary in auth modes `none`, `token`,
   `proxy` (behind a stand-in authenticating proxy,
   `tests/binary/proxy.mjs`) and `oidc` (against a stand-in OpenID
-  provider, `tests/binary/idp.mjs`), from port 6471
-  (`FADERZ_BINARY_PORT`), loads the console from the binary and writes
-  through it within the binary's Content-Security-Policy.
-
-Before pushing a console change, run the specs it touches against the
-mock and against the binary.
+  provider, `tests/binary/idp.mjs`), on ports 6471, 6481, 6491 and 6501
+  (`FADERZ_BINARY_PORT` moves the first; ops and NMOS take the two after
+  each), with the proxy on 6495 and the provider on 6505. Each loads the
+  console from the binary and writes through it within the binary's
+  Content-Security-Policy.
 
 ### Screenshots
 

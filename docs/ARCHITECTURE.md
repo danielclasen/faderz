@@ -56,6 +56,9 @@ entry. The derivation is faderz's:
   stage, pan or fold-down, routes, sends, bus, aux and mix-minus faders
   and mutes, polarity, mix-minus exclusions, talkback interrupts and
   the monitor's source, listens and controls.
+- The line-up tone has one generator per distinct width of a bus, aux
+  or mix-minus, each an engine input of its own that is no channel and
+  has no NMOS receiver.
 - `src/strip.rs` turns a channel's processing into its input's strip,
   its delay and tone generator, and a bus's, aux's or mix-minus's
   processing into the strip and limiter of each output carrying it.
@@ -79,10 +82,8 @@ the live state.
 - In a set of more the engine follows the replicated log
   (`Engine::start_replicated`): samplez-replica hands it the entries
   each log entry derived, and faderz only meters it and reports its
-  inputs' health to the log. Each replica writes its own member flow of
-  every output.
+  inputs' health to the log.
 
-Without an `mxl` section no engine runs and the state is served alone.
 The engine's meters become meter frames (`src/meters.rs`) sent to the
 primary connections of clients that grant credit; its counters go out
 as the `counters` message.
@@ -133,11 +134,5 @@ in one task; `bridge/src/emulator.rs` is a software surface for tests.
 
 ## NMOS
 
-`src/nmos.rs` builds on samplez-nmos: one IS-04 Node for the whole set,
-a Receiver per channel (its input reader) and a Source, Flow and Sender
-per output. An activation becomes a command in the replicated log, so
-every replica's engine routes alike and connections survive restarts;
-a scheduled activation is a command when it is staged and another the
-leader orders at its time. Every replica serves the Node and Connection
-APIs under the same ids, with versions taken from the replicated state,
-and forwards staging to the leader, which alone registers the Node.
+`src/nmos.rs` builds the Node, its receivers and senders on
+samplez-nmos; how it behaves is in [USAGE.md](USAGE.md#nmos).

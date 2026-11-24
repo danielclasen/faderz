@@ -9,10 +9,13 @@ file; its state changes through a REST API and a WebSocket, which the
 web console built into the binary and the control-surface bridge speak.
 
 ![The mixer view: channel strips, VCA masters, programme, M&E and clean-feed masters with loudness readouts, and the monitor section](docs/screenshots/console.png)
+*The mixer: strips, VCAs, masters with loudness, monitor.*
 
 ![A channel's processing panel: input, EQ curve, gate and compressor](docs/screenshots/channel-processing.png)
+*A channel's processing panel.*
 
 ![The mixer on a tablet in the light theme](docs/screenshots/tablet-light.png)
+*On a tablet, in the light theme.*
 
 ## Features
 
@@ -49,16 +52,11 @@ web console built into the binary and the control-surface bridge speak.
 - A replicated state on one replica or a set of an odd number of voters,
   with clients failing over between them.
   [A replica set](docs/CONFIGURATION.md#a-replica-set)
-- NMOS IS-04 and IS-05 over MXL per AMWA BCP-007-03. [NMOS](docs/API.md#nmos)
+- NMOS IS-04 and IS-05 over MXL per AMWA BCP-007-03. [NMOS](docs/USAGE.md#nmos)
 - Mackie Control surfaces over USB-MIDI or RTP-MIDI through
   `faderz-bridge`. [SURFACES.md](docs/SURFACES.md)
 - `/healthz`, `/readyz` and Prometheus `/metrics`.
-  [Ops endpoints](docs/API.md#ops-endpoints)
-
-The API is in [docs/API.md](docs/API.md), the configuration file in
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md), how faderz is built on
-samplez in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and building,
-testing and releases in [docs/BUILDING.md](docs/BUILDING.md).
+  [Ops endpoints](docs/USAGE.md#ops-endpoints)
 
 ## Requirements
 
@@ -116,40 +114,11 @@ curl -s http://127.0.0.1:8080/api/v1/state
 curl -s http://127.0.0.1:9090/metrics
 ```
 
-Without an `mxl` section `/healthz` and `/readyz` answer 503. The state is kept in `data/` and survives
-a restart. With `auth.mode` `none` the API answers only requests whose
-`Host` is `localhost` or `127.0.0.1` and takes WebSocket upgrades only
-from those origins on the API port, so the host port above is the
-container's.
-
-### With audio
-
-The `mxl` section names the domains and the flow each channel reads and
-each output writes; every channel and every output needs one. Here the
-domain is `/dev/shm/mxl/studio` on the host:
-
-```json
-"mxl": {
-  "domains": [{ "name": "studio", "path": "/mxl/studio" }],
-  "inputs": {
-    "host": { "flow": "00000000-0000-4000-8000-000000000001" },
-    "guest": { "flow": "00000000-0000-4000-8000-000000000002" },
-    "band": { "flow": "00000000-0000-4000-8000-000000000003" }
-  },
-  "outputs": {
-    "out-pgm": { "flow": "00000000-0000-4000-8000-000000000010" }
-  }
-}
-```
-
-```sh
-docker run --rm --name faderz --read-only --tmpfs /tmp \
-  --cap-drop ALL --cap-add SYS_NICE --cap-add IPC_LOCK \
-  -v /dev/shm/mxl/studio:/mxl/studio \
-  -v "$PWD/config.json:/etc/faderz/config.json:ro" -v faderz-data:/var/lib/faderz \
-  -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 \
-  faderz:local
-```
+The state is kept in `data/` and survives a restart. Without an `mxl`
+section no engine runs ([Ops endpoints](docs/USAGE.md#ops-endpoints));
+[With audio](docs/CONFIGURATION.md#with-audio) adds one. Which hosts
+and origins `auth.mode` `none` accepts is in
+[Auth](docs/CONFIGURATION.md#auth).
 
 ## Licence
 

@@ -3,8 +3,8 @@
 Rules for working in this repository. Read them before opening a PR or
 running an automated assistant against this tree. `README.md` is the
 overview; `docs/USAGE.md` describes how the mixer behaves,
-`docs/CONFIGURATION.md` the configuration file, `docs/API.md` the REST,
-WebSocket, ops and NMOS interfaces, `docs/CONSOLE.md` the web console,
+and its REST, WebSocket, ops and NMOS interfaces,
+`docs/CONFIGURATION.md` the configuration file, `docs/CONSOLE.md` the web console,
 `docs/SURFACES.md` the bridge, `docs/ARCHITECTURE.md` how faderz is
 built on samplez, and `docs/BUILDING.md` how it is built, tested and
 released. The docs win for anything about using faderz; this file is
@@ -24,26 +24,7 @@ parallel sessions on one clone do not share an index.
 
 ## Architecture
 
-- `src/`: the server, in Rust.
-  - `state.rs`: the replicated mixer state, the `Product` faderz hands
-    samplez. Every command applies here, deterministically.
-  - `mix.rs` and `strip.rs`: derive engine targets (gains, strips, ducks)
-    from the state.
-  - `audio.rs`: drives the samplez engine with those targets, and reads
-    its meters and counters.
-  - `api.rs` and `ws.rs`: the REST routes and the WebSocket.
-  - `app.rs`: what both share: commands in flight, fan-out, the replicas
-    listing.
-  - `nmos.rs`: IS-04 registration and IS-05 connections over MXL.
-  - `meters.rs`: the binary meter frame.
-- `api/`: the contract. `openapi.yaml` for REST and `api/ws/*.schema.json`
-  for the WebSocket and the state model. The server, the web console's
-  types and its mock all follow it.
-- `web/`: the console in Svelte, with a mock server under `web/dev/mock`
-  that implements the same contract.
-- `bridge/`: the control-surface bridge, a crate of its own.
-- `tests/`: integration tests. `audio.rs` runs one server on real MXL
-  flows; `set*.rs` run a set of three replicas.
+`docs/ARCHITECTURE.md` maps the parts and the seam to samplez.
 
 The audio engine, replication and NMOS stack are
 [samplez](https://github.com/danielclasen/samplez), taken only at a
