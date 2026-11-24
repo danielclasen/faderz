@@ -8,6 +8,11 @@ use serde_json::Value;
 
 use super::{Connection, Console, ConsolePut, PortRef};
 
+#[cfg(doc)]
+use super::Mixer;
+#[cfg(doc)]
+use samplez_replica::state_machine::Product;
+
 /// A client's command as the replicated log carries it. `id` is the
 /// client's command id, under which a refusal or a stored scene is kept
 /// for the answer ([`Mixer::answer`]).

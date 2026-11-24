@@ -15,6 +15,9 @@ use super::paths::set_at;
 use super::{Action, Answer, Control, Edits, Mixer, Write};
 use crate::duck;
 
+#[cfg(doc)]
+use samplez_replica::state_machine::Product;
+
 /// The holder of a touched control.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct Holder {

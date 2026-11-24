@@ -13,6 +13,9 @@ use super::paths::{escape, tokens};
 use super::{Answer, Edits, Mixer};
 use crate::mix;
 
+#[cfg(doc)]
+use super::Command;
+
 /// An IS-05 port: the receiver of a channel or the sender of an output,
 /// by id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

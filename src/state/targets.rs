@@ -11,6 +11,9 @@ use super::paths::tokens;
 use super::{Action, Answer, Command, Crossfade, Mixer, Transition, crossfade_lead};
 use crate::mix::{self, Wiring};
 
+#[cfg(doc)]
+use samplez_replica::state_machine::Product;
+
 /// How [`Mixer::fading`] times the gain targets a command changes.
 #[derive(Clone, Copy)]
 pub(super) enum Timing {

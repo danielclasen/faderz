@@ -15,6 +15,9 @@ use super::{Answer, Mixer, PortRef, Ports};
 use crate::contract::{check, contract};
 use crate::shape::Shape;
 
+#[cfg(doc)]
+use samplez_replica::state_machine::Product;
+
 /// The layout [`Product::save`] writes. A snapshot carries it beside
 /// the state, which binaries before it read from the top level: they
 /// refuse it as missing their fields rather than load part of it. 3
