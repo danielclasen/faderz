@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.2](https://github.com/danielclasen/faderz/compare/v0.7.1...v0.7.2) (2026-11-24)
+
+
+### Features
+
+* **shape:** seed duck groups' triggers and targets from the shape ([#177](https://github.com/danielclasen/faderz/issues/177)) ([6d5b9d2](https://github.com/danielclasen/faderz/commit/6d5b9d2e3adf87aef2e3624fde4f69e46756ce75))
+
+
+### Bug Fixes
+
+* **deps:** take samplez 0.28.0 ([#187](https://github.com/danielclasen/faderz/issues/187)) ([4102bd1](https://github.com/danielclasen/faderz/commit/4102bd183148b743f96f926df5ea060fa375c140))
+
 ## [0.7.1](https://github.com/danielclasen/faderz/compare/v0.7.0...v0.7.1) (2026-11-23)
 
 
