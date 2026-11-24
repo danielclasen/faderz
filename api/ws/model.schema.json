@@ -611,7 +611,7 @@
           "maxLength": 32
         },
         "triggers": {
-          "description": "Channel ids the group starts keyed by, at most 8. Seeds the initial state of a fresh start only; a restored state keeps its own.",
+          "description": "Channel ids the group starts keyed by, at most 8. Seeds a group or channel a loaded state lacks, never a saved leaf. A seeded trigger that would take a restored group past 8 is dropped and reported.",
           "type": "array",
           "uniqueItems": true,
           "items": {
@@ -620,7 +620,7 @@
           "maxItems": 8
         },
         "targets": {
-          "description": "Channel ids the group starts lowering, none of them a trigger. Seeds the initial state of a fresh start only.",
+          "description": "Channel ids the group starts lowering, none of them a trigger. Seeds a group or channel a loaded state lacks, never a saved leaf.",
           "type": "array",
           "uniqueItems": true,
           "items": {
@@ -629,19 +629,19 @@
         },
         "depth": {
           "$ref": "#/$defs/DuckDepth",
-          "description": "Depth every channel of the group starts at, dB; 10 when absent. Seeds the initial state of a fresh start only."
+          "description": "Depth every channel of the group starts at, dB; 10 when absent. Seeds a group or channel a loaded state lacks, never a saved leaf."
         },
         "threshold": {
           "$ref": "#/$defs/DuckThreshold",
-          "description": "Threshold the group starts at, dBFS; -30 when absent. Seeds the initial state of a fresh start only."
+          "description": "Threshold the group starts at, dBFS; -30 when absent. Seeds a group a loaded state lacks, never a saved leaf."
         },
         "attackMs": {
           "$ref": "#/$defs/DuckAttackMs",
-          "description": "Attack the group starts at; 20 when absent. Seeds the initial state of a fresh start only."
+          "description": "Attack the group starts at; 20 when absent. Seeds a group a loaded state lacks, never a saved leaf."
         },
         "releaseMs": {
           "$ref": "#/$defs/DuckReleaseMs",
-          "description": "Release the group starts at; 1000 when absent. Seeds the initial state of a fresh start only."
+          "description": "Release the group starts at; 1000 when absent. Seeds a group a loaded state lacks, never a saved leaf."
         }
       }
     },
