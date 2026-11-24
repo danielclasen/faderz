@@ -17,7 +17,8 @@ in `Cargo.toml`): `samplez` (the engine), `samplez-dsp`, `samplez-mxl`,
 | Path | What it is |
 |---|---|
 | `src/config.rs`, `src/shape.rs` | the configuration file, and the shape in the contract's `Shape` form with the state an empty start begins with |
-| `src/state.rs` | the replicated mixer state, faderz's `samplez_replica::Product` |
+| `src/state.rs` | the replicated mixer state, faderz's `samplez_replica::Product`: the `Mixer`, its readers, and how a command applies |
+| `src/state/` | the state's parts: the log's commands and answers (`command.rs`), control ownership and the write path (`control.rs`), write checks (`validate.rs`), scenes, AFV, loudness and consoles (`scenes.rs`, `afv.rs`, `loudness.rs`, `consoles.rs`), IS-05 connections (`ports.rs`), engine targets, re-routes and fades (`targets.rs`), snapshots (`snapshot.rs`) and JSON pointers (`paths.rs`) |
 | `src/mix.rs`, `src/strip.rs`, `src/duck.rs` | the derivation of engine targets from the state: gain matrix, strips and delays, duck groups |
 | `src/replica.rs` | the state's log and snapshots on the data directory, as a set of one or several voters |
 | `src/audio.rs`, `src/meters.rs` | the engine under the state, its meters as binary meter frames, its inputs' health |
