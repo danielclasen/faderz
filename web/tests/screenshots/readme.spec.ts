@@ -94,11 +94,15 @@ test('README screenshots', async ({ browser }) => {
 
   await view(alex, 'SCENES');
   await alex.waitForTimeout(500);
-  await alex.screenshot({ path: `${OUT}/scenes.png`, clip: { x: 0, y: 0, width: 1160, height: 560 } });
+  // The full width, so the header's right-hand fields are whole.
+  await alex.screenshot({ path: `${OUT}/scenes.png`, clip: { x: 0, y: 0, width: 1600, height: 560 } });
 
   const tablet = await screen(browser, { ...devices['iPad Pro 11 landscape'], deviceScaleFactor: 2 });
   await tablet.getByTestId('account').click();
   await tablet.getByRole('menuitem', { name: 'Switch to light theme' }).click();
+  // The pointer is left where the menu item was, over a strip whose tooltip it would open.
+  const size = tablet.viewportSize()!;
+  await tablet.mouse.move(size.width - 4, size.height - 4);
   await tablet.waitForTimeout(3000);
   await tablet.screenshot({ path: `${OUT}/tablet-light.png` });
 
