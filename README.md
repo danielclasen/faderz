@@ -1,379 +1,79 @@
 # faderz
 
-An operated multichannel broadcast audio mixer over MXL, built on the
-[samplez](https://github.com/danielclasen/samplez) engine and written in
-Rust, with a web console in Svelte.
+An operated multichannel broadcast audio mixer over
+[MXL](https://github.com/dmf-mxl/mxl), built on the
+[samplez](https://github.com/danielclasen/samplez) engine. It reads
+48 kHz audio flows, mixes them under a replicated mixer state and writes
+every output to its own flow. The mixer's shape is fixed in one JSON
+file; its state changes through a REST API and a WebSocket, which the
+web console built into the binary and the control-surface bridge speak.
 
-faderz reads 48 kHz audio flows from MXL domains, mixes them under a
-replicated mixer state and writes every configured output to its own MXL
-flow. The mixer's shape (channels, buses, auxes, mix-minus outputs, VCAs,
-monitor and output flows) is fixed in one JSON configuration file; the
-state is changed through a REST API and a WebSocket, which the web console
-built into the binary and the control-surface bridge both speak.
+![The mixer view: channel strips, VCA masters, programme, M&E and clean-feed masters with loudness readouts, and the monitor section](docs/screenshots/console.png)
 
-![The mixer view of a music and talk show: channel strips with tally, processing chips, faders and meters, VCA masters, programme, M&E and clean-feed masters with loudness readouts, and the monitor section](docs/screenshots/console.png)
-
-## Features
-
-- Channels of mono, stereo, 5.1 or 7.1 layout, each with an A/B input
-  select, trim and leg trim, polarity, high-pass filter, four-band EQ,
-  gate and compressor with a parallel mix before or after the EQ, pan, a scribble-strip
-  colour, PFL and AFL, a meter tap and a direct out
-- Programme, M&E and clean-feed buses with routing per channel, auxes
-  with pre or post sends, mix-minus outputs that leave chosen channels
-  out of a bus, and VCAs with offsets and mutes
-- A monitor section with source select, level, dim, cut, mono, Lo/Ro or
-  L/R fold-down and per-speaker mutes and solos
-- Peak, true-peak and loudness metering (momentary, short-term,
-  integrated, LRA) against an EBU R 128, ATSC A/85 or custom target,
-  and the phase correlation of stereo buses, auxes and mix-minus
-  outputs, streamed as binary meter frames
-- Scenes with recall-safe parameter groups per element
-- Audio follows video: tally from a vision switcher over REST
-  (`/api/v1/afv/tally`) opens a channel or lowers it to its off level
-- Several operators at once: every control a session touches is held by
-  that session until it lets go, others see who holds it and can ask for
-  it, and the USERS panel lists who is connected and what they hold and
-  have selected
-- Auth modes `none`, `token`, `proxy` (behind an authenticating proxy) and
-  `oidc` (OpenID Connect sign-in in faderz itself), with operator and
-  viewer roles
-- A replicated state: one replica on a data directory, or a set of an odd
-  number of voters with a WebSocket standby on another replica and
-  failover between them
-- Hardware control surfaces through `faderz-bridge` (Mackie Control over
-  USB-MIDI or RTP-MIDI)
-- NMOS: each channel's flow input an IS-04 receiver and each output a sender,
-  connected over MXL through IS-05 per AMWA BCP-007-03
-- `/healthz`, `/readyz` and Prometheus `/metrics`; a container image and
-  a release binary
-
-The engine applies the channel strip (trim, leg trim, polarity,
-high-pass, EQ, gate, compressor), faders, mutes, VCA offsets and mutes,
-AFV open and closed with the off level and its rise, hold and fall, mono pan, surround pan (a mono channel in the field of a 5.1 or 7.1 bus), stereo balance
-and image, and the fold-down of wider channels, bus routing, sends, the bus, aux and mix-minus faders and
-mutes, bus and aux polarity, mix-minus exclusions and talkback
-interrupts, the monitor's source, channel and VCA PFL and AFL listening
-(PFL over AFL; PFL centred before the pan, AFL at the pan before the AFV
-stage), fold-down, image, level, dim, talkback dim, cut, mono and speaker mutes
-and solos, duck groups, the channel delay, the bus, aux and mix-minus EQ,
-gate and compressor on every output carrying that element, the bus and
-aux delay and true-peak limiter on every output carrying that bus or aux, and the
-scene crossfade. An output carrying a bus or aux is
-late by the limiter's look-ahead, 53 samples (about 1.1 ms at 48 kHz), whether
-the limiter is on or off, so that turning it on needs no restart; an
-output carrying a mix-minus, a direct out or the monitor is not.
-
-A bus's, aux's or mix-minus output's EQ, gate and compressor, in its
-`dynamicsBeforeEq` order, run on each output carrying it, after the
-element's fader and mute and before the output's limiter: on the mix,
-on the line-up tone while it replaces the mix, and on a mix-minus
-output's talkback while it interrupts. A bus's polarity stays in the
-mix, per leg of the bus. An output narrower than its element processes
-the fold-down, so a stereo and a mono output of one bus each compress
-on their own signal. The monitor, AFL and the mix-minus outputs of a
-bus sum the element's channels and do not hear its processing, as they
-do not hear its limiter. A bus's, aux's or mix-minus output's meter
-reads the level after its processing, delay and limiter when the element has
-an output of its full width, the first such output in `outputs`; it
-reads the element's matrix columns, before any processing, when the
-element has none. An output narrower than its element, a fold-down,
-has no meter of its own. The line-up tone runs through the strip of
-each output carrying the element, as the mix does. A mix-minus output's
-EQ and dynamics are set through `PATCH /api/v1/state` and the
-WebSocket `set` message at `/mixMinus/<id>/eq/...`, `gate/...`,
-`comp/...` and `dynamicsBeforeEq`; the console has no control for
-them. faderz 0.4.10 and earlier kept bus and aux EQ and
-dynamics without applying them: a state or scene that stored them on
-plays them from the first release that applies them, and a mix-minus
-output's processing starts off and flat.
-
-A channel delays its input by its `delay`, in samples, exactly, for lip
-sync: opt-in per channel through `mxl.inputs.<channel>.maxDelayMs`, the
-longest delay its line takes, at most 5 s at 48 kHz. A channel without a
-line takes no delay but 0, and at 0 a channel is not late at all. A write
-past the line is refused. The shape gives each channel's line as
-`maxDelay` in samples. The lines are allocated at start and together hold
-at most `engine.delayBudgetSamples` samples, a line counting once per leg;
-a longer line is a configuration change and a restart. A recall whose
-scene holds a delay past the line, shortened since the scene was stored,
-sets that channel's delay to 0 and names the channel in its answer's
-`delaysNotApplied`.
-
-A channel's direct out at the `input` tap carries its input after the
-channel delay and before trim, filters and dynamics, untrimmed and
-unprocessed; at `preFader` and `postFader` it carries the channel after
-them. A channel that an output carries, its direct out, also feeds the
-matrix before its strip, so its tap changes at run time as any other
-state write does. A direct out is an output of the shape: adding one is
-a configuration change and a restart.
-
-A bus or aux delays every output carrying it by its `delay`, in
-samples, exactly, after its EQ and dynamics and before the output's
-limiter, so such an output is late by the delay plus the limiter's
-look-ahead. A mix-minus output of the bus, the monitor and AFL are not
-delayed. The line is opt-in per output through
-`mxl.outputs.<output>.maxDelayMs`, the same on every output carrying
-one bus or aux, which is refused otherwise, as is a line on an output
-carrying anything else. The shape gives the element's line as its
-`maxDelay`; without one it takes no delay but 0, and a write past it is
-refused. Each output's line counts once per leg of the output in
-`engine.delayBudgetSamples`, beside the channels' lines. A recall sets a
-bus's or aux's delay past its line to 0 and names it in
-`delaysNotApplied`; a loaded state drops it to 0. faderz 0.4.10 and
-earlier kept a bus or aux delay without applying it and took any up to
-5 s: such a delay with no line, or past its line, is 0 from the first
-release that applies it.
-
-Once a channel, bus or aux has a line, a snapshot carries it as the
-shape's `maxDelay`, and a recall that set a delay to 0 carries its
-answer; faderz 0.4.9 and earlier read neither of a channel, and faderz
-0.4.10 and earlier neither of a bus or aux. Rolling back to such a
-release needs the data volume cleared.
-
-A channel whose input is configured `tone` in place of a `flow` plays
-samplez's line-up tone generator: a sine of whole hertz at a sample-peak
-level on every leg, which the channel's strip, delay, fader and routing
-take as any input's. It reads no flow, so it takes no `flow`, `altFlow`,
-`domain` or `channels`, its channel has no `altInput`, and it has no
-NMOS receiver. `tone: {}` starts it at 1 kHz and -18 dBFS; `frequency`,
-20 to 20000 Hz, and `level`, -60 to 0 dBFS, start it elsewhere. The
-shape gives such a channel `tone`, the values it starts at, and its
-state `tone`, written at `/channels/<channel>/tone/frequency`, `level`
-and `ident`: a level or ident change ramps over `engine.rampSamples`, a
-frequency change crossfades over as long, and a value outside its range
-is refused, never clamped. With `ident` the tone stops on one leg at a
-time in leg order, for 250 ms each, then sounds on every leg for
-250 ms. A scene recall leaves the tone as it is. A snapshot of a state
-with a tone channel carries the shape's `tone`, which faderz 0.4.9 and
-earlier do not read either.
-
-The line-up tone (`/tone`) is a 1 kHz sine at `level`, -30 to 0 dBFS
-sample peak, on every leg. While `on`, each output whose bus, aux or
-mix-minus is in `targets` carries the tone in place of its mix, after
-the element's fader and before the output's strip and limiter, so the
-fader does not scale it and the element's EQ, dynamics and limiter still
-apply; an output narrower than its
-element carries the tone's first legs. The element's meters show the
-tone, and a monitor playing the element plays the tone as it plays a
-source, through its own level, dim, downmix, mono and speaker controls;
-while a channel or VCA solos, the monitor plays the listen sum. Off, or
-for an element not in `targets`, the mix is as without it. Turning it
-on or off, a target and a level change ramp over `engine.rampSamples`
-as a gain does. With `ident` the tone stops on one of the target's legs
-at a time in layout order, for 250 ms each, then sounds on every leg
-for 250 ms: a stereo target cuts L, then R, a 5.1 target each of its
-six legs. Each distinct width of a bus, aux or mix-minus has a generator
-of that many legs, an engine input of its own that is no channel and
-has no NMOS receiver, and each target plays the one as wide as it is.
-
-A mix-minus carrying its talkback is never ducked: its duck masks, and
-those of a monitor playing it, are lifted until the interrupt is
-released.
-
-A mono channel on a 5.1 or 7.1 bus is panned in the field of the ITU-R
-BS.775 layout (L -30, C 0, R +30, Ls -110, Rs +110 degrees; 7.1 takes
-its sides at +-90 and its rear surrounds at +-135), every law at
-constant power: `pan.lr` pans pairwise between adjacent speakers at the
-front (the centre of the field is the C leg alone) and between the
-surrounds at the rear; `pan.spread` blends that with a plain pan between
-L and R, none of it at 0 and all of it at 1; `pan.frontRear` crossfades
-front and rear, -1 the front alone and 1 the rear alone; `pan.lfeSend`
-is a send of its own onto the LFE leg, silent at -90 dB. A new channel
-is at the front (`frontRear` -1) with full spread and no LFE send, the
-L/R pan a mono channel had on a surround bus before the field; lower
-`spread` to use the C leg. A send, a direct out and a PFL listen put a
-mono channel there too, as the L/R pair. The state is a function of the
-log alone: the older `pan.fr`, `pan.divergence` and `pan.lfe` are
-deprecated, stored and never read, so a snapshot, a snapshot an older
-binary saved and a log replayed from its first entry hold the same state
-and nothing sounds different after an upgrade. A stereo channel on a
-surround bus is balanced by `pan.lr` onto its L and R legs alone.
-
-A loudness reset restarts the measurement at the first 100 ms window
-starting at or after the `atIndex` of the delta that counted it, the same
-sample on every replica: the reset count in `/loudness/<id>/resets` is
-the engine's reset epoch for that meter, which reaches every replica's
-engine through the replicated targets. In a set of one, a delta applied
-after the engine's earliest index restarts it there instead; in a set,
-an entry the log stamps again restarts it at its new index on every
-replica. `/loudness/<id>/running` false pauses the measurement the same
-way, from the delta's `atIndex`: the integrated loudness, the loudness
-range and the maxima take in nothing until it runs again, while the
-momentary and short-term loudness go on.
-
-The `counters` message names each bus, aux and mix-minus measurement's
-gaps, the 10 ms slices an input taken down by the log fed it, and its
-lost slices, those this replica did not meter, such as samples an
-overrun skipped, or metered while out of step with the set, as before it
-had caught up after a start. The integrated loudness and LRA carry on
-over both, leaving them out. Gaps are identical across replicas only for
-slices every replica metered: a replica that lost slices can show fewer
-or more gaps than the others, and neither gaps nor gaps plus lost need
-match across replicas then. It
-also names when the measurement started, in UTC, and `restarted`: the
-state counts a reset of it (`/loudness/<id>/resets` above 0), and the
-measurement did not start at the last reset this replica applied, or it
-applied none. Every replica that applied a reset's delta starts there,
-at the index its engine took it at, and one started after the reset,
-which never applied it, measures from its own start. Until the first
-reset every replica measures from its own start, and none is flagged,
-however far apart they started. The console shows the gaps and "since
-HH:MM" in local time under the readout's I and LRA.
-
-An output may be narrower than the element it names as its `source`: it
-then writes the source folded down, 5.1 and 7.1 onto stereo by the ITU-R
-BS.775 Lo/Ro equations (centre and surrounds at -3 dB, LFE dropped), 7.1
-onto 5.1, and stereo or wider onto mono as a channel is folded onto a
-narrower bus. 7.1 folds onto 5.1 with L, R, C and LFE
-passed and Ls (Rs) the sum of the left (right) side and rear surround,
-each at -3 dB. A narrower output has no meter of its own: a bus is
-metered by the output carrying it at full width, and one carried only by
-narrower outputs gets an engine meter of its own, counted against the
-meters the engine allows. Every monitor output gets an engine meter of
-its own too, also when an output carries it: its meter reads what the
-monitor plays before its level, dim, cut, mono and speaker mutes and
-solos.
-
-## The console
-
-The web console has seven views: MIXER, ROUTING, AUX / N-1, AFV, DUCK,
-SCENES and SETUP. It runs in a desktop browser, on a tablet and on a phone, in a
-dark or a light theme. `web/README.md` documents it in detail: its
-connection handling, sign-in, keyboard control and tests.
-
-Selecting a strip opens its processing panel: input colour, trim,
-polarity, high-pass, delay, meter and direct-out taps, pan, the EQ with
-its curve, gate and compressor.
-
-A compressor's `comp.mix`, 0 to 100 %, is the share of the compressed
-signal in the element's output, the rest its input unchanged (parallel
-compression); the makeup gain applies to the compressed share alone.
-The two shares stay sample-aligned and the mix adds no latency. At 100 %,
-the default and what a state or scene saved before the mix existed
-holds, the output is the compressor's alone; at 0 % the input passes
-unchanged. A mix change ramps as other processing changes do.
-
-![The processing panel of the Lead Vox channel with input settings, the EQ curve and four bands, gate and compressor](docs/screenshots/channel-processing.png)
-
-Auxes and mix-minus outputs have their own masters with loudness meters,
-a talkback source per mix-minus, the send matrix and the mix-minus
-exclusions.
-
-![The AUX / N-1 view: IFB, stage, record and N-1 masters, the aux sends of every channel and the channels left out of each mix-minus](docs/screenshots/aux-mix-minus.png)
-
-The AFV view shows the tally the vision switcher reports and which
-channels follow which camera.
-
-A tally that opens a channel's AFV stage, its source on programme,
-ramps the stage's gains linearly to 0 dB over `riseMs`; one that closes
-it, its source on preview or off, holds them for `holdMs` and then
-ramps them to `offLevel` over `fallMs`. A tally carrying `transitionMs`
-takes it in place of `riseMs` and `fallMs` for every stage it moves,
-the hold kept. The replica that takes the tally writes the sample index
-the transition starts at into the replicated log: the tally's
-`atIndex`, else its `at` read as TAI, else its receipt plus the lead a
-scene crossfade takes, so every replica of a set fades alike.
-`PUT /api/v1/afv/tally` takes that lead. A tally whose index is already
-past at its receipt counts in `afv_late_total` and joins its transition
-without a step, as a late recall does. A fader move during the transition
-ends the fade of the gains it moves, and a recall fades from where the
-transition has got to, as during a crossfade. A recall during a stage's
-hold drops the rest of the hold. A tally more than 60 s ahead is
-refused.
-
-![The AFV view with CAM1 on programme and CAM2 on preview, and the channels following them](docs/screenshots/afv-tally.png)
-
-Duck groups lower ambience and music under commentary. The DUCK view
-sets up each group's triggers, targets with their depth, destinations
-and detector; a tile per group in the masters latches, holds, bypasses
-and sets the threshold on air.
-
-Each group is a samplez duck detector keyed by its trigger channels
-after their strips, at the gain its key tap gives: 1 pre-fader, 1 or 0
-pre-fader while open (fader open, not muted, no VCA mute), the fader,
-mute and VCA gain post-fader. It lowers each target channel by its depth
-in the outputs and engine meters of the group's destinations, and in
-the monitor while the monitor's source is one of them; overlapping
-groups lower a channel by the deepest. A shape with duck groups gives
-the engine every column of a bus, aux, mix-minus or monitor output as a
-`duckColumns` column. samplez counts each coefficient of such a column
-six times against 150 coefficients per sample of the block, refuses a
-configuration that exceeds that and names the `engine.blockSize` that
-takes it. The meter frames carry each group's key level, envelope and
-whether it is engaged.
-
-![The DUCK view with the Commentary and Remote comm groups: mode, detector, presets, destinations, and the trigger, target and depth of every channel](docs/screenshots/duck-view.png)
-
-![The duck tiles over the masters, Commentary held by an operator and Remote comm latched on, and beside them a line per group with what it lowers, its gain reduction and its key level](docs/screenshots/duck-tiles.png)
-
-Scenes are stored and recalled from the SCENES view; recall-safe groups
-keep chosen parameters of a channel out of every recall. The state takes
-a recalled scene at once. With a crossfade time, every gain the recall
-changes (faders, mutes as a fade to or from silence, pans, routes,
-sends, VCAs) ramps linearly from the value it has to the scene's over
-that time; with 0 the recall is a cut, each gain ramping over the
-engine's ramp length (`engine.rampSamples`) as on any other write.
-Strip settings, inputs and duck settings change as on any other write.
-The replica that takes the recall writes the sample index the fade
-starts at into the replicated log: past its receipt by the longest lead
-the log stamps a command with, the top of `replica.maxApplyLeadMs` plus
-samplez's `EXTRA_LEAD`, so the whole fade plays and every replica of a
-set fades alike.
-
-A recall whose entry applies after its fade start, such as one that
-switches inputs and waits for an engine generation, joins its fade
-without a step: each gain ramps in a straight line from the value it
-holds to the scene's, ending where the fade ends and taking at least the
-ramp length, or over the ramp length once the fade has ended. A recall
-during a running fade has a limit at the other end: each gain it
-changes still fading starts its new fade from where the running fade
-will be at the new fade's start, and holds that value from the index
-the recall applies at until then, so it steps there by the running
-fade's progress over that gap (up to the lead).
-
-During a fade, a write that moves a fading gain, such as a fader move,
-ends that gain's fade: the gain ramps from where the fade has got to,
-over the ramp length, to its new value. A new recall fades each gain it
-changes from where that gain is, over its own crossfade time, or cuts
-it with 0. A gain neither moves keeps fading.
-
-![The SCENES view with six scenes, the current one marked, and the recall-safe grid](docs/screenshots/scenes.png)
-
-Every screen is a session. The USERS panel lists the screens and
-surfaces connected to the replica, with what each holds and has
-selected. The ENGINE lamp in the status bar opens the engine's counters
-of the replica serving the screen, each under a name for people with an
-(i) that explains it, and shows WARN while a counter whose rise is a
-fault (a late output block, a lost input block, a late change) rose in
-the last 10 s. A late tally (`afv_late_total`) is the switcher's fault,
-not the replica's, and lights no lamp. An input that delivers nothing
-usable is named on the lamp and in the counters with the reason: its
-flow stopped, the set took it down, its blocks came late, or the error
-the engine reports for it, such as its flow not found or its head off
-the MXL clock beyond the flow's history. The names and explanations
-are those of `api/ws/counters.schema.json`.
-
-![The USERS panel listing three operators, one holding the Guest 2 fader and one with Lead Vox selected, and two connected control surfaces](docs/screenshots/users.png)
-
-![The engine counters by their names for people, each with an (i) that explains it: the faults first, such as late output blocks and late input blocks, then the counters expected to rise at times](docs/screenshots/engine-counters.png)
-
-Below 1400 px of width the strips take the full width and the MASTERS
-key shows the masters over them.
+![A channel's processing panel: input, EQ curve, gate and compressor](docs/screenshots/channel-processing.png)
 
 ![The mixer on a tablet in the light theme](docs/screenshots/tablet-light.png)
 
-The screenshots are taken from the UI's dev mock with invented show data
-(`web/tests/screenshots/`).
+## Features
+
+- Channels of mono, stereo, 5.1 or 7.1 layout with A/B input, trim,
+  polarity, high-pass, four-band EQ, gate and compressor with a parallel
+  mix, a sample-exact delay and a direct out.
+  [Channels](docs/USAGE.md#channels)
+- Surround panning of mono channels in the ITU-R BS.775 field, and
+  fold-down of wider sources onto narrower outputs.
+  [Panning](docs/USAGE.md#panning), [Fold-down](docs/USAGE.md#fold-down)
+- Programme, M&E and clean-feed buses, auxes with pre or post sends,
+  mix-minus outputs with talkback, and VCAs; EQ, dynamics, delay and a
+  true-peak limiter on bus and aux outputs.
+  [Buses, auxes and mix-minus outputs](docs/USAGE.md#buses-auxes-and-mix-minus-outputs)
+- A monitor section with source select, PFL and AFL, dim, cut, mono,
+  fold-down and speaker mutes and solos. [Monitor](docs/USAGE.md#monitor)
+- Line-up tone on chosen outputs, and tone generators as channel
+  inputs. [Line-up tone](docs/USAGE.md#line-up-tone)
+- Duck groups that lower ambience and music under commentary.
+  [Duck groups](docs/USAGE.md#duck-groups)
+- Audio follows video from a vision switcher's tally.
+  [Audio follows video](docs/USAGE.md#audio-follows-video)
+- Scenes with crossfades and recall-safe groups.
+  [Scenes](docs/USAGE.md#scenes)
+- Peak, true-peak and loudness metering against an EBU R 128, ATSC A/85
+  or custom target, with phase correlation.
+  [Loudness and meters](docs/USAGE.md#loudness-and-meters)
+- Several operators at once: a control one session touches is held by
+  it, and others see who holds it and can ask for it.
+  [Sessions and control ownership](docs/USAGE.md#sessions-and-control-ownership)
+- A web console for desktop, tablet and phone. [CONSOLE.md](docs/CONSOLE.md)
+- Auth modes `none`, `token`, `proxy` and `oidc`, with operator and
+  viewer roles. [Auth](docs/CONFIGURATION.md#auth)
+- A replicated state on one replica or a set of an odd number of voters,
+  with clients failing over between them.
+  [A replica set](docs/CONFIGURATION.md#a-replica-set)
+- NMOS IS-04 and IS-05 over MXL per AMWA BCP-007-03. [NMOS](docs/API.md#nmos)
+- Mackie Control surfaces over USB-MIDI or RTP-MIDI through
+  `faderz-bridge`. [SURFACES.md](docs/SURFACES.md)
+- `/healthz`, `/readyz` and Prometheus `/metrics`.
+  [Ops endpoints](docs/API.md#ops-endpoints)
+
+The API is in [docs/API.md](docs/API.md), the configuration file in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md), how faderz is built on
+samplez in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and building,
+testing and releases in [docs/BUILDING.md](docs/BUILDING.md).
+
+## Requirements
+
+- Linux on x86_64, and libmxl (`/opt/mxl/lib/libmxl.so` in the image).
+- MXL domains on tmpfs, writable by the process (uid 65532 in the
+  image).
+- For the engine's real-time thread: `CAP_SYS_NICE` and `CAP_IPC_LOCK`;
+  without them faderz starts degraded and logs so.
 
 ## Quick start
 
-This builds the image from this repository and starts it with a small
-shape and no `mxl` section: the state, the API and the console are
-served, no engine runs and nothing is mixed. Releases publish the same
-image as `ghcr.io/danielclasen/faderz:<version>`. The configuration and
-the data directory go to a directory of their own, outside the build
-context.
+Releases publish the image as `ghcr.io/danielclasen/faderz:<version>`.
+This builds it from this repository and starts it with a small shape and
+no `mxl` section: the state, the API and the console are served, no
+engine runs and nothing is mixed.
 
 ```sh
 docker build -t faderz:local .
@@ -409,28 +109,17 @@ docker run --rm --name faderz --user "$(id -u):$(id -g)" --read-only --tmpfs /tm
   faderz:local
 ```
 
-Open <http://127.0.0.1:8080/>, or in another shell:
-
-```sh
-curl -s http://127.0.0.1:8080/api/v1/state
-curl -s http://127.0.0.1:9090/metrics
-```
-
-The state is kept in `data/` and survives a restart. Without an `mxl`
-section `/healthz` and `/readyz` answer 503 (see [Health](#health)).
-With `auth.mode` `none` the API answers only requests whose `Host` is
-`localhost`, `127.0.0.1` or listed in `api.allowedHosts`, and takes
-WebSocket upgrades only from the origins `http://localhost:<api port>`
-and `http://127.0.0.1:<api port>` or those in `api.allowedOrigins`, so
-the host port above is the container's.
+Open <http://127.0.0.1:8080/>. The state is kept in `data/` and survives
+a restart. With `auth.mode` `none` the API answers only requests whose
+`Host` is `localhost` or `127.0.0.1` and takes WebSocket upgrades only
+from those origins on the API port, so the host port above is the
+container's.
 
 ### With audio
 
-The `mxl` section names the libmxl domains and the flow each channel
-reads and each output writes; every channel and every output needs one.
-An MXL domain is a directory on tmpfs shared with the processes that
-write and read its flows; here `/dev/shm/mxl/studio`, writable by the
-image's user, uid 65532.
+The `mxl` section names the domains and the flow each channel reads and
+each output writes; every channel and every output needs one. Here the
+domain is `/dev/shm/mxl/studio` on the host:
 
 ```json
 "mxl": {
@@ -454,362 +143,6 @@ docker run --rm --name faderz --read-only --tmpfs /tmp \
   -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 \
   faderz:local
 ```
-
-The image runs as uid 65532. `SYS_NICE` and `IPC_LOCK` give the engine's
-real-time thread `SCHED_FIFO` and locked memory; without them it starts
-degraded and logs so (`faderz: rt ...`).
-
-## Configuration
-
-One JSON file, `faderz --config <file>`. Unknown keys are refused,
-except under `engine` and `rt`, which are checked only when an `mxl`
-section is present. `faderz --help` lists the flags. Each `auth` setting
-below with a flag can also be given as that flag or as its environment
-variable; the flag wins over the variable, the variable over the file.
-
-| Key | Default | |
-|---|---|---|
-| `listeners.api` | `127.0.0.1:8080` | `{bind, port, tls}`: `/api/v1`, `/api/v1/ws` and the console |
-| `listeners.ops` | `0.0.0.0:9090` | `{bind, port, tls}`: `/healthz`, `/readyz`, `/metrics` |
-| `listeners.machine` | none | `{bind, port, tls}`: a bearer-only listener for machine clients; `proxy` mode only |
-| `listeners.nmos` | `127.0.0.1:8081` | `{bind, port, tls}`: the NMOS Node and Connection APIs with `nmos.enabled`, unauthenticated; bound at start, serving nothing without; `tls.mode` `none` only |
-| `listeners.*.tls` | `{"mode": "none"}` | `none`; `files` with `certFile`, `keyFile` and optional `clientCaFile`, re-read when they change; `selfSigned` with `sans`, generated at start |
-| `auth.mode` | `none` | `none`, `token`, `proxy` or `oidc`; `--auth-mode`, `FADERZ_AUTH_MODE` |
-| `auth.token.file` | | the API bearer token's file; required in `token` mode, optional in `oidc` mode |
-| `auth.machineToken.file` | | the machine listener's bearer token; `proxy` mode |
-| `auth.proxy.userHeader` | `X-Forwarded-User` | `proxy` mode: the header naming the user |
-| `auth.proxy.groupsHeader` | `X-Forwarded-Groups` | `proxy` mode: comma-separated groups |
-| `auth.proxy.groupRoles` | `{}` | `proxy` mode: group name to `operator` or `viewer` |
-| `auth.oidc.*` | | `oidc` mode; the keys, flags and variables are in `web/README.md` |
-| `api.allowedHosts` | `[]` | `Host` names accepted on requests without a bearer token, besides `localhost` and `127.0.0.1` |
-| `api.allowedOrigins` | `[]` | `Origin` values accepted on WebSocket upgrades, besides `localhost` and `127.0.0.1` on the API port |
-| `replica.name` | the host name | the replica's id towards clients |
-| `replica.dataDir` | `/var/lib/faderz` | the replicated log and snapshots |
-| `replica.replicas` | `1` | the voters of the replica set, an odd count |
-| `replica.ordinal` | from the name | this replica's ordinal in a set |
-| `replica.peers` | | every replica's peer address, `host:port`, by ordinal |
-| `replica.peer` | | `{bind, port, tls}`: the peer listener of a set |
-| `replica.marker` | | the ConfigMap a set starts from; `FADERZ_REPLICA_MARKER` when the file sets none |
-| `replica.maxApplyLeadMs` | `50` | 30 to 120: the most a set's apply lead may grow to; see [Lateness and lead](#lateness-and-lead) |
-| `shape` | required | the mixer's shape, model `Shape` in `api/ws/model.schema.json` |
-| `consoles` | `[]` | consoles known before any registers: `id`, `name`, `protocol` (`mcu`), `transport` (`bridge`), `strips` (8) |
-| `mxl.libraryPath` | `/opt/mxl/lib/libmxl.so` | libmxl, loaded at start |
-| `mxl.domains` | | `[{name, path, id}]`: the mounted MXL domains; `id`, the domain's MXL id, for NMOS when the domain has no `domain_def.json` |
-| `mxl.inputs.<channel>` | | `flow`; `altFlow` for a channel with `altInput`; `domain` with more than one domain; `channels`, the 1-based flow channel each leg reads; `maxDelayMs`, the channel's delay line, none by default; or `tone`, a line-up tone generator in place of a flow, `{}` or the `frequency` and `level` it starts at |
-| `mxl.outputs.<output>` | | `flow` in a set of one; `flows`, one member flow per replica by ordinal, in a set of more; `domain` with more than one domain; `mergedFlow`, the flow merging the member flows, which the NMOS sender names, in a set of more with `nmos.enabled`; `maxDelayMs`, the delay line of the bus or aux the output carries, none by default, the same on every output carrying it |
-| `engine.sampleRate` | `48000` | |
-| `engine.blockSize` | `48` | samples per block |
-| `engine.readerMarginSamples` | `1536` | read delay behind libmxl's clock; delays every output by as much |
-| `engine.maxCatchupBlocks` | `2` | overdue blocks processed in order after a late wake |
-| `engine.pruneAfterBlocks` | `50` | blocks of a frozen producer head before an input is pruned |
-| `engine.rampSamples` | `480` | the length of every gain ramp |
-| `engine.delayBudgetSamples` | `4194304` | the most delay-line history the inputs may hold together, in samples; also what a replica of a set reads from another when it resyncs |
-| `rt.enabled` | `true` | `false` skips capabilities, memory locking and `SCHED_FIFO` |
-| `rt.priority` | `70` | `SCHED_FIFO` priority |
-| `rt.rtCpu` | `auto` | `auto`, `none`, `first`, `last` or an index into the allowed CPUs |
-| `rt.isolateRtCpu` | `true` | With the RT thread pinned, keeps every other thread off its CPU |
-| `nmos.enabled` | `false` | register with an NMOS registry and take IS-05 connections; needs the `mxl` section |
-| `nmos.seed` | replica name | what every NMOS id derives from; the StatefulSet's name in a set of more |
-| `nmos.advertiseHost` | | host controllers reach `listeners.nmos` at; required with `nmos.enabled` |
-| `nmos.advertisePort` | `0` | port controllers reach it at; 0 is `listeners.nmos.port` |
-| `nmos.registry.url` | | Registration API, `http://host:port`; absent, DNS-SD finds one |
-| `nmos.registry.dnsSdDomain` | | unicast DNS-SD domain; absent, the resolver's search domains, then mDNS |
-| `nmos.heartbeatS` | `5` | 1 to 10: seconds between heartbeats |
-| `nmos.asset.manufacturer` | `danielclasen` | BCP-002-02 manufacturer tag |
-| `nmos.peers` | `replica.peers` hosts on `listeners.nmos.port` | `host:port` of each replica's NMOS listener by ordinal, which staging is forwarded to; in a set of more |
-
-Without an `mxl` section faderz runs no engine: the state is served,
-nothing is mixed and `/readyz` fails. In `proxy` mode faderz takes the
-user the identity headers name, so it refuses to start unless
-`listeners.api.bind` is a loopback address, where only the proxy beside
-it reaches it.
-
-### A replica set
-
-With `replica.replicas` above 1, faderz runs as one pod of a
-StatefulSet per voter, the pods reaching each other on the peer
-listener:
-
-- Leave `replica.name` and `replica.ordinal` out: each pod takes its pod
-  name and the ordinal that name ends in. A `name` given in a set needs
-  an `ordinal`.
-- `replica.peers` names every pod's peer address by ordinal, as many as
-  `replicas`, each once: `<pod>.<headless service>:<port>`.
-- `replica.peer` needs `tls.mode` `files` with a `clientCaFile` that has
-  issued every replica's certificate; each certificate names the host of
-  its `peers` address, which the others check. Port 0 is refused.
-- `replica.marker` (or `FADERZ_REPLICA_MARKER`) names a ConfigMap in the
-  pod's namespace: ordinal 0 creates it, the others read it to join, so
-  the pods' service account needs to get and create ConfigMaps there.
-- Ordinal 0 starts a set only while a majority of the voters answer, so
-  the StatefulSet starts its pods in parallel
-  (`podManagementPolicy: Parallel`).
-- A set starts on empty volumes. The data directory of a set of one
-  cannot join a set, nor that of a set run alone, so changing between
-  the two needs new volumes and leaves the state behind.
-- In `oidc` mode the replicas behind one host name share
-  `auth.oidc.sessionKey`.
-- The configuration that changes how a command applies, the shape, the
-  declared consoles and each channel's input flows and domain, is
-  equal on every replica: the leader orders no command while a replica
-  reports another, and a replica of another one exits rather than
-  install the set's snapshot. Changing it needs every replica stopped.
-- A snapshot carries its format, 3, which faderz 0.2.0 and earlier
-  cannot read. Rolling a set back to such an image needs the volumes
-  that image wrote, or empty volumes and a new set.
-- With an `mxl` section every replica runs an engine of its own
-  (below); without one the set serves the state and mixes nothing.
-- Each replica lists every replica of the set in `GET /api/v1/replicas`
-  and the WebSocket's `replicas` message, named as the pods are,
-  `<StatefulSet>-<ordinal>` (with a `name` that ends in no ordinal, the
-  replica's `peers` address, `host:port`), with the leader raft
-  follows. Another replica is heard while this one is in contact with
-  a majority and has had a report from it within the contact window.
-  Every entry, this replica's own included, is commitable while it is
-  healthy and a majority of the voters is. Without an engine there is
-  no contact and only raft's view: a follower vouches for the leader
-  alone, for as long as raft names one (it drops the name when no
-  heartbeat arrives within the election timeout), and the leader for a
-  follower whose matched log is within 16 entries of its own and that
-  has matched all of it within the last 3 s. Either way another
-  replica is listed healthy until it has gone unheard for 1 s, so a
-  report a few milliseconds late does not show a live one down; the
-  majority a replica's own commitable needs counts the replicas heard
-  now.
-
-### Engines in a set
-
-Every replica reads the same input flows and writes its own member flow
-of each output: `mxl.outputs.<output>.flows` lists one flow per replica,
-by ordinal, and replica n writes the n-th. No two outputs or replicas
-name the same flow, and none names an input's. faderz writes no flow
-that merges the members; whatever merges them lists the member flows,
-so a change of `flows` changes that list in the same change. A member
-flow's label is the output's name and its ordinal, `PGM out (replica 1)`;
-a set of one, and the NMOS sender of the output, keep the output's
-name.
-
-The engine follows the replicated log (samplez's replicated mode). Each
-log entry's engine entries are derived from the mixer state as the entry
-applies: the difference between the gains, strip parameters, duck group
-settings and masks and input flows the state sets before and after it. So every replica hands its
-engine the same entries at the same sample index. The engines hash the
-pages they compute and the set compares them; a replica whose pages
-differ is withdrawn and resynced from another replica's engine core.
-
-- A replica starts contact with the set, and its engine with it, as it
-  starts: joining, a learner or catching up. samplez promotes a learner
-  on the reports contact sends, and rebuilds the engine of a replica
-  that took entries past their deadlines from the state it applied.
-  Contact or the rollout failing to start exits faderz non-zero.
-- A replica starts with its engine idle and builds the engine's core
-  from the state it applied once its clock is verified; it commits its
-  outputs once its pages match the others'. A replica restarted on its
-  volume catches up the same way.
-- An input goes down in the log once more than half of the set's audio
-  voters read it unreadable for `engine.pruneAfterBlocks` blocks, and up
-  once more than half read it again; the leader appends the entry, so
-  every replica silences and raises it at the same index. An input late
-  on one node alone, the leader's included, goes down nowhere: that
-  replica reads silence, diverges and withholds while the others
-  serve. Without such a majority the input stays as the log has it.
-- A command that switches an input is ordered alone and stamped later
-  by the longest time a replica reports for building an input
-  generation; the commands ordered after it take effect no earlier. One
-  that would switch inputs of more than one MXL domain is refused.
-- The compatibility key a rollout hands the set over by hashes samplez's
-  compute and protocol versions, faderz's derivation version, the mixer
-  configuration, the `engine` settings and each channel's flow channel
-  selection; the member flows are left out. A release that raises none
-  of the three versions rolls pod by pod with no gap in the output; one
-  that raises any rolls as a hand-over at the first new pod, hitless.
-  The release taking samplez 0.17.0 changes the key's formula, so its
-  own roll is a hand-over. Each replica reads its StatefulSet's target revision every 5 s,
-  which needs `get` on `statefulsets`, and its own revision from
-  `FADERZ_POD_REVISION`, the pod's `controller-revision-hash` label
-  through the downward API. The StatefulSet is the pod name without its
-  `-<ordinal>`; the marker ConfigMap is owned by it, so it is deleted
-  after the StatefulSet.
-
-### Lateness and lead
-
-The leader stamps every entry with a sample index a lead ahead of the
-set's processed index. Each replica has to apply the entry before that
-index, less a guard of 20 ms at the default timing; an entry a replica
-applies later is unresolved there, its record never reaches that
-replica's engine, and the log decides it: it is applied again at a
-later index, or the replica is resynced. The leader raises the lead on
-the slack every replica reports when it hands an entry to its engine,
-up to `replica.maxApplyLeadMs`.
-
-A larger cap keeps a set whose slowest follower applies late, such as
-one whose volume syncs slowly, free of unresolved entries; it is also
-the longest a control change can take from the write to the audio. In
-samplez's tests a follower with a 20 ms fsync settles the lead near
-76 ms, above the default of 50.
-
-## API
-
-The contract is in `api/`: `openapi.yaml` for REST under `/api/v1` and
-`ws/*.schema.json` for the WebSocket at `/api/v1/ws`. Writes carry a
-client-generated command id that is applied at most once across all
-replicas; a write is answered once the log entry carrying it has
-committed.
-
-| Method and path | |
-|---|---|
-| `GET /api/v1/state` | shape, live state, owners and the revision |
-| `PATCH /api/v1/state` | write one or more controls atomically |
-| `GET /api/v1/replicas` | the replica set as the serving replica sees it, and the faderz version and samplez release the serving replica was built from |
-| `GET /api/v1/about` | what the serving replica was built from, and the faderz changelog of that release, embedded in the binary |
-| `GET /api/v1/status` | the serving replica's role, readiness and contact state, and its engine's inputs (state, flow, blocks copied, late and too late, error) and outputs |
-| `POST /api/v1/scenes`, `PUT` and `DELETE /api/v1/scenes/{id}` | store, overwrite or rename, and delete scenes |
-| `POST /api/v1/scenes/{id}/recall` | recall a scene |
-| `POST /api/v1/afv/tally`, `PUT /api/v1/afv/tally` | one source's tally change, or the full tally state |
-| `POST /api/v1/loudness/reset` | restart the loudness measurement of outputs: counts a reset in `/loudness/<id>/resets`, and every replica's engine restarts the measurement at that delta's `atIndex` |
-| `GET /api/v1/consoles`, `PUT` and `DELETE /api/v1/consoles/{id}` | the control surfaces |
-| `GET /api/v1/ws` | the WebSocket: commands, deltas, meters, counters and presence |
-| `GET /api/v1/session`, `POST /api/v1/login`, `GET /api/v1/login`, `POST /api/v1/logout` | sign-in |
-
-State-changing requests without a bearer token need the header
-`X-Samplez-Request: 1` and `Content-Type: application/json`:
-
-```sh
-curl -s -X PATCH http://127.0.0.1:8080/api/v1/state \
-  -H 'X-Samplez-Request: 1' -H 'Content-Type: application/json' \
-  -d "{\"commandId\":\"$(cat /proc/sys/kernel/random/uuid)\",\"changes\":[{\"path\":\"/channels/host/fader\",\"value\":-6}]}"
-```
-
-### Health
-
-The ops listener serves `/healthz`, `/readyz` and `/metrics`. `/healthz`
-passes while the engine's real-time thread advances its heartbeat, so it
-answers 503 whenever no engine runs. `/readyz` passes once the replica is
-ready and, in a set of one, the engine plays the state.
-
-- A set of one with an `mxl` section: both pass once the engine runs.
-- A set of one without an `mxl` section: both answer 503.
-- A set of more than one replica with an `mxl` section: `/healthz` passes
-  while the engine runs, with or without a core. `/readyz` follows
-  committing. A process that has committed since it started passes
-  while it or another audio replica commits, in any state. One that has
-  not committed since it started passes once it commits, except a pod
-  below the baseline's versions, which passes while another commits.
-  While no replica commits, every one fails, but a withdrawn replica
-  with no output enabled passes. Out of contact a replica keeps its last
-  `/readyz` value for `rollout::DEPARTED` (3 s), then passes only while
-  it commits. The first replica of a new set to commit turns ready; the
-  others each once they commit. The set's only voter passes once it has
-  caught up. A learner is never ready. In
-  a rollout, a new pod waiting for its hand-over fails `/readyz` until it
-  commits; the leader names it without reading readiness. A release
-  that never commits therefore stops the StatefulSet at its first new
-  pod.
-- A set of more than one replica without an `mxl` section: `/readyz`
-  follows the replica alone and passes once it has joined and caught up,
-  while `/healthz` answers 503. A liveness probe on `/healthz` restarts
-  such a pod over and over, so such a set takes none on `/healthz`.
-
-Besides samplez's metrics, faderz exports
-`faderz_engine_resends_total`, `faderz_engine_resend_pending` and, per
-channel input, `faderz_input_attached`,
-`faderz_input_margin_needed_samples`, `faderz_input_copied_blocks_total`,
-`faderz_input_late_blocks_total` and `faderz_input_too_late_blocks_total`.
-
-## NMOS
-
-With `nmos.enabled` faderz is one NMOS Node (IS-04 v1.3, IS-05 v1.2,
-AMWA BCP-007-03 for MXL): a Receiver per channel reading a flow, which
-is the channel's input reader, none for a tone channel, and a Source, Flow and Sender per output, all with
-transport `urn:x-nmos:transport:mxl` and 32-bit float audio at 48 kHz.
-The ids derive from `nmos.seed`, so a restart keeps them. Each domain's
-MXL id comes from its `domain_def.json`, else from `mxl.domains[].id`;
-neither, or two that differ, stops faderz at start.
-
-- A receiver's `/active` flow is the flow of the channel's selected
-  input: an activation sets the flow of input a or b, whichever the
-  channel selects, and switching between them in the console changes
-  `/active`. `master_enable` false detaches the channel; it reads
-  nothing and is silent until activated again. A flow any output of
-  the set writes or merges into is refused with 400.
-- A sender's flow is the output's (`mergedFlow` in a set of more), and
-  `master_enable` false stops the output and removes its flow on every
-  replica; `true` writes it again.
-- Activations go through the replicated log like any command, so every
-  replica of a set routes alike and a restart keeps them. An
-  activation takes effect once it is ordered and applied, no earlier
-  than its activation time and later by at least one commit and the
-  engine's lead; faderz cannot place it on a given sample. One that is
-  not applied shows the state's connection again in `/active`.
-- A scheduled activation is taken into the replicated state when it is
-  staged, and the replica leading at its time orders it, so it fires
-  after a leader change too; a cancel removes it from the state.
-- Every replica serves the Node and Connection APIs under the same ids,
-  and each shows in `/active` what is in the state, the `activation`
-  included. The other replicas forward `/staged` and `/bulk` to the
-  leader, at `nmos.peers` by ordinal (a set refuses a loopback NMOS
-  listener without them), so staging on one replica and activating on
-  another work together; while the set elects a leader they answer
-  503, and 502 or 504 when the leader cannot be reached or does not
-  answer.
-- A scheduled activation taken by an earlier leader, or before a
-  restart, shows in the leader's `/staged` as an absolute one at its
-  time and locks it (423) until it fires or a cancel, through any
-  replica, removes it; `/bulk` does not lock it. A scheduled activation
-  of the connection the port already has is not taken.
-- Staged parameters not yet activated are lost when the leader
-  changes.
-- Only the leader registers the Node, and only while a quorum of the
-  set acknowledges it; a leader cut off from the others may still post
-  for up to a second while the new one registers. A replica of a set of
-  more that stops leaves the Node registered, and the next leader
-  continues that registration under the same ids; a set of one deletes
-  it.
-- At start the engine reads and writes what the state holds: a
-  detached channel opens no reader and a disabled sender's output
-  creates no flow.
-- The listener is unauthenticated (no IS-10), and its activations
-  re-route inputs and start and stop outputs.
-
-CI runs the AMWA nmos-testing suites IS-04-01 (unicast and multicast
-DNS-SD), IS-05-01 and BCP-007-03-01 against the image
-(`tests/nmos/conformance.sh`); every result is Pass but those
-`tests/nmos/expected.json` lists, each with its reason from the tool's
-source. Among them are two Manual tests, IS-04-01 test_22 (ids kept
-across a restart) and BCP-007-03-01 test_15 (`master_enable` stops and
-starts the flow), which `tests/nmos.rs` covers.
-
-## Control surfaces
-
-`faderz-bridge` in `bridge/` drives Mackie Control surfaces, an X-Touch
-and X-Touch Extenders, over USB-MIDI or over the network by RTP-MIDI,
-and connects to faderz as a console client: fader touch and moves, motors, mute, solo, select, bank
-and the scribble strips. It signs in with a token or by the OAuth 2.0
-device grant. Its mapping follows the MCU reference and has not been
-verified on hardware. Releases publish it as a binary and as
-`ghcr.io/danielclasen/faderz-bridge:<version>`; `bridge/README.md` has
-its configuration.
-
-## Building and testing
-
-`docker build -t faderz:local .` builds the console, the binary with the
-console built into it, and the image. The Rust build needs libmxl, which
-the samplez builder image carries; CI builds and tests in it:
-
-```sh
-cd web && npm ci && npm run build && cd ..
-mkdir -p .cargo-registry .cargo-git
-docker run --rm --user "$(id -u):$(id -g)" \
-  -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
-  -v "$PWD/.cargo-git:/usr/local/cargo/git" -w /w \
-  ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba \
-  cargo test --locked
-```
-
-A build without `web/dist` serves a note in place of the console. The
-console's checks, unit, contract and end-to-end tests, and its dev server
-with a mock faderz, are described in `web/README.md`; `docker/smoke.sh
-<image>` checks an image.
 
 ## Licence
 

@@ -1,7 +1,7 @@
 // HTTP and WebSocket front of the dev-only mock: the contract's REST
 // routes under /api/v1, the WebSocket at /api/v1/ws (routed to a serving
 // replica, like a service endpoint) and at /__mock/replicas/<id>/api/v1/ws
-// (one replica), and dev and test controls under /__mock (README.md).
+// (one replica), and dev and test controls under /__mock (docs/BUILDING.md).
 
 import { SESSION_ID } from '../../src/lib/net/ids.ts';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';

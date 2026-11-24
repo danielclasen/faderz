@@ -2,8 +2,19 @@
 
 Rules for working in this repository. Read them before opening a PR or
 running an automated assistant against this tree. `README.md` is the
-human-facing document and wins for anything about using faderz; this
-file is about changing it.
+overview; `docs/USAGE.md` describes how the mixer behaves,
+`docs/CONFIGURATION.md` the configuration file, `docs/API.md` the REST,
+WebSocket, ops and NMOS interfaces, `docs/CONSOLE.md` the web console,
+`docs/SURFACES.md` the bridge, `docs/ARCHITECTURE.md` how faderz is
+built on samplez, and `docs/BUILDING.md` how it is built, tested and
+released. The docs win for anything about using faderz; this file is
+about changing it.
+
+A change to behaviour updates the docs file that describes it, a change
+to how the parts fit together `docs/ARCHITECTURE.md`, and a change to
+the build, tests, CI or releases `docs/BUILDING.md`, in the same PR.
+Engine behaviour is samplez's and documented there; the docs here link
+to it rather than restate it.
 
 ## Use a git worktree
 
@@ -139,7 +150,7 @@ Its roll is a hand-over.
 ## Build and test
 
 `.github/workflows/ci.yml` holds the exact commands; run them as CI does.
-In short:
+`docs/BUILDING.md` describes them. In short:
 
 - The server builds in the samplez builder image
   (`ghcr.io/danielclasen/samplez-builder`), with the cargo registry and
