@@ -43,9 +43,9 @@ pub const DERIVATION_VERSION: u32 = 13;
 /// refuse it as missing their fields rather than load part of it. 3
 /// adds the IS-05 connections ([`Ports`]), which a binary reading 2
 /// would drop.
-const FORMAT: u32 = 3;
+pub(super) const FORMAT: u32 = 3;
 /// The layout before [`Ports`], read as one without connections.
-const FORMAT_WITHOUT_PORTS: u32 = 2;
+pub(super) const FORMAT_WITHOUT_PORTS: u32 = 2;
 
 /// A client's command as the replicated log carries it. `id` is the
 /// client's command id, under which a refusal or a stored scene is kept
@@ -180,7 +180,7 @@ pub struct Transition {
 
 /// How [`Mixer::fading`] times the gain targets a command changes.
 #[derive(Clone, Copy)]
-enum Timing {
+pub(super) enum Timing {
     /// None fades: the engine ramps each over the ramp length.
     Cut,
     /// Every one alike, a recall's crossfade.
@@ -258,18 +258,18 @@ pub fn tai_text(nanos: u64) -> String {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ports {
-    receivers: BTreeMap<String, Connection>,
-    senders: BTreeMap<String, Connection>,
-    legs: BTreeMap<String, Legs>,
+    pub(super) receivers: BTreeMap<String, Connection>,
+    pub(super) senders: BTreeMap<String, Connection>,
+    pub(super) legs: BTreeMap<String, Legs>,
     /// The scheduled activations, one per port at most.
     #[serde(default)]
-    scheduled: Vec<Scheduled>,
+    pub(super) scheduled: Vec<Scheduled>,
     /// The change that last changed each port's `/active`, by receiver
     /// and by sender; none for a port no change has changed.
     #[serde(default)]
-    receiver_changes: BTreeMap<String, PortChange>,
+    pub(super) receiver_changes: BTreeMap<String, PortChange>,
     #[serde(default)]
-    sender_changes: BTreeMap<String, PortChange>,
+    pub(super) sender_changes: BTreeMap<String, PortChange>,
 }
 
 /// A replicated change of a port's `/active`: the port's IS-04 version
@@ -318,13 +318,13 @@ impl Scheduled {
 /// A channel's flows of input a and b that activations named.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Legs {
-    a: Option<String>,
-    b: Option<String>,
+pub(super) struct Legs {
+    pub(super) a: Option<String>,
+    pub(super) b: Option<String>,
     /// The channel's configured flows of input a and b when an activation
     /// named one: a configuration that wires others drops the legs.
     #[serde(default)]
-    wired: Option<(String, Option<String>)>,
+    pub(super) wired: Option<(String, Option<String>)>,
 }
 
 /// A console's descriptor: model `ConsoleStatus` without what the server
@@ -386,15 +386,15 @@ pub struct ConsolePut {
 /// A console the state holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Registered {
+pub(super) struct Registered {
     console: Console,
     bank_offset: u64,
-    connected: bool,
+    pub(super) connected: bool,
     /// From the configuration: never removed, named by it.
     declared: bool,
     /// The session that registered it last. Kept in the replicated state,
     /// never published: the status carries its handle.
-    session: Option<SessionKey>,
+    pub(super) session: Option<SessionKey>,
 }
 
 impl Registered {
@@ -461,19 +461,19 @@ pub enum Answer {
 /// What one command or expiry changed, for [`Product::delta`].
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Edits {
-    values: Vec<(String, Value)>,
-    owners: Vec<(String, Value)>,
+    pub(super) values: Vec<(String, Value)>,
+    pub(super) owners: Vec<(String, Value)>,
     /// The delta's `origins` entry: client commands only.
-    origin: Option<Value>,
+    pub(super) origin: Option<Value>,
     /// Control requests the replicas deliver to the holder's connection,
     /// whichever replica it is on; the server takes them out of the
     /// delta before the clients see it.
-    requests: Vec<Value>,
+    pub(super) requests: Vec<Value>,
 }
 
 /// The holder of a touched control.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct Holder {
+pub(super) struct Holder {
     principal: String,
     /// Kept in the replicated state, never published: the owner record
     /// carries its handle.
@@ -483,12 +483,12 @@ struct Holder {
 }
 
 impl Holder {
-    fn key(&self) -> SessionKey {
+    pub(super) fn key(&self) -> SessionKey {
         SessionKey::from_parts(&self.principal, &self.session)
     }
 
     /// The model's `Owner`.
-    fn public(&self) -> Value {
+    pub(super) fn public(&self) -> Value {
         json!({
             "principal": self.principal,
             "handle": OwnerHandle::of(&self.session).as_str(),
@@ -564,31 +564,31 @@ pub struct Mixer {
 
 /// A snapshot from [`FORMAT`] on.
 #[derive(Serialize, Deserialize)]
-struct Snapshot {
-    format: u32,
-    mixer: Saved,
+pub(super) struct Snapshot {
+    pub(super) format: u32,
+    pub(super) mixer: Saved,
 }
 
 /// The state as snapshots carry it.
 #[derive(Serialize, Deserialize)]
-struct Saved {
-    shape: Shape,
-    state: Value,
-    owners: Vec<(String, Holder)>,
-    seqs: Vec<(SessionKey, Vec<(String, u64)>)>,
-    answers: Vec<(SessionKey, Vec<(String, Answer)>)>,
-    scenes: Vec<(String, Value)>,
-    scenes_created: u64,
+pub(super) struct Saved {
+    pub(super) shape: Shape,
+    pub(super) state: Value,
+    pub(super) owners: Vec<(String, Holder)>,
+    pub(super) seqs: Vec<(SessionKey, Vec<(String, u64)>)>,
+    pub(super) answers: Vec<(SessionKey, Vec<(String, Answer)>)>,
+    pub(super) scenes: Vec<(String, Value)>,
+    pub(super) scenes_created: u64,
     /// Absent in snapshots taken before consoles were kept.
     #[serde(default)]
-    consoles: Vec<Registered>,
+    pub(super) consoles: Vec<Registered>,
     /// Absent before [`FORMAT`] 3.
     #[serde(default)]
-    ports: Ports,
+    pub(super) ports: Ports,
     /// [`Mixer::fading`], each fade as the bits of `from`, `start` and
     /// `len`. Absent before recalls crossfaded.
     #[serde(default)]
-    fading: Vec<Vec<Option<(u32, u64, u32)>>>,
+    pub(super) fading: Vec<Vec<Option<(u32, u64, u32)>>>,
 }
 
 impl Mixer {
@@ -622,7 +622,7 @@ impl Mixer {
     }
 
     /// Derives the engine targets of the whole state again.
-    fn derive(&mut self) {
+    pub(super) fn derive(&mut self) {
         self.derived = match (self.shape.as_deref(), self.wiring.is_empty()) {
             (Some(shape), false) => Some(mix::Derived::new(shape, &self.effective, &self.state)),
             _ => None,
@@ -646,7 +646,7 @@ impl Mixer {
 
     /// The channel slots whose selected flow `written` changes, applied to
     /// the state as it is, ascending.
-    fn rerouted(&self, written: &[(String, Value)]) -> Vec<u32> {
+    pub(super) fn rerouted(&self, written: &[(String, Value)]) -> Vec<u32> {
         let (Some(shape), false) = (self.shape.as_deref(), self.wiring.is_empty()) else {
             return Vec::new();
         };
@@ -678,7 +678,11 @@ impl Mixer {
     /// more than one MXL domain, which one engine generation cannot
     /// switch together. A command the writer did not classify
     /// (`generation` `None`) is taken as it was before.
-    fn reroute_refusal(&self, ctx: &Apply, written: &[(String, Value)]) -> Option<Answer> {
+    pub(super) fn reroute_refusal(
+        &self,
+        ctx: &Apply,
+        written: &[(String, Value)],
+    ) -> Option<Answer> {
         let generation = ctx.generation?;
         let slots = self.rerouted(written);
         if slots.is_empty() {
@@ -701,7 +705,7 @@ impl Mixer {
     }
 
     /// [`Mixer::wiring`] with the leg flows activations named.
-    fn rewire(&mut self) {
+    pub(super) fn rewire(&mut self) {
         let Some(shape) = self.shape.clone() else {
             return;
         };
@@ -723,7 +727,7 @@ impl Mixer {
 
     /// Detaches the channels whose receiver is disabled and sets each
     /// output's enable, in `t` as derived from the state.
-    fn overlay(&self, t: &mut Targets) {
+    pub(super) fn overlay(&self, t: &mut Targets) {
         let shape = self.shape();
         for (flow, c) in t.flows.iter_mut().zip(&shape.channels) {
             if self
@@ -804,7 +808,7 @@ impl Mixer {
 
     /// The slot of channel `channel` when activating its receiver as
     /// `active` changes the flow it reads.
-    fn connect_reroutes(&self, channel: &str, active: &Connection) -> Vec<u32> {
+    pub(super) fn connect_reroutes(&self, channel: &str, active: &Connection) -> Vec<u32> {
         let Some(slot) = (self.shape.as_deref())
             .filter(|_| !self.wiring.is_empty())
             .and_then(|s| s.channels.iter().position(|c| c.id == channel))
@@ -822,7 +826,7 @@ impl Mixer {
     /// Activates a port as `active`: a receiver's flow becomes the flow of
     /// its channel's selected input, and a disabled receiver detaches its
     /// channel; a sender's enable starts or stops its output.
-    fn connect(
+    pub(super) fn connect(
         &mut self,
         session: &SessionKey,
         id: &str,
@@ -880,7 +884,7 @@ impl Mixer {
 
     /// Takes a scheduled activation: checked as [`Mixer::connect`] checks
     /// it, but for the generation path, which [`Command::Fire`] takes.
-    fn schedule(
+    pub(super) fn schedule(
         &mut self,
         session: &SessionKey,
         id: &str,
@@ -901,7 +905,7 @@ impl Mixer {
         Effect::Changed(Edits::default())
     }
 
-    fn unschedule(&mut self, port: &PortRef) -> Effect<Edits> {
+    pub(super) fn unschedule(&mut self, port: &PortRef) -> Effect<Edits> {
         let before = self.ports.scheduled.len();
         self.ports.scheduled.retain(|s| s.port != *port);
         if self.ports.scheduled.len() == before {
@@ -913,7 +917,7 @@ impl Mixer {
 
     /// Fires scheduled activation `schedule` when it is still pending;
     /// refused off the generation path, it stays pending.
-    fn fire(
+    pub(super) fn fire(
         &mut self,
         session: &SessionKey,
         id: &str,
@@ -979,7 +983,7 @@ impl Mixer {
 
     /// Records command `id` as the change of each port it changed
     /// ([`PortChange`]), its entry taking effect at `at_index`.
-    fn stamp(&mut self, id: &str, at_index: Option<u64>) {
+    pub(super) fn stamp(&mut self, id: &str, at_index: Option<u64>) {
         if self.touched.is_empty() {
             return;
         }
@@ -1039,7 +1043,7 @@ impl Mixer {
 
     /// A switch between input a and b among `changed` shows in the
     /// channel's receiver: its flow becomes the newly selected input's.
-    fn follow_switches(&mut self, changed: &[(String, Value)]) {
+    pub(super) fn follow_switches(&mut self, changed: &[(String, Value)]) {
         for (path, _) in changed {
             if let [group, channel, leaf] = tokens(path).as_slice()
                 && group == "channels"
@@ -1060,7 +1064,7 @@ impl Mixer {
     /// for the writer's classification ([`Product::reroutes`]): those of a
     /// set, a patch or a recall, the only commands that write an input
     /// selection.
-    fn writes_of(&self, command: &Command) -> Vec<(String, Value)> {
+    pub(super) fn writes_of(&self, command: &Command) -> Vec<(String, Value)> {
         match command {
             Command::Control(c) if c.action == Action::Set => {
                 vec![(c.path.clone(), c.value.clone().unwrap_or(Value::Null))]
@@ -1075,7 +1079,7 @@ impl Mixer {
         }
     }
 
-    fn declared_entry(console: &Console) -> Registered {
+    pub(super) fn declared_entry(console: &Console) -> Registered {
         Registered {
             console: console.clone(),
             bank_offset: 0,
@@ -1086,7 +1090,7 @@ impl Mixer {
     }
 
     /// Model `ConsoleStatus` of every console, in published order.
-    fn console_list(&self) -> Value {
+    pub(super) fn console_list(&self) -> Value {
         self.consoles.iter().map(Registered::public).collect()
     }
 
@@ -1190,7 +1194,7 @@ impl Mixer {
     }
 
     /// Ids a value names exist in the shape.
-    fn check_references(&self, path: &str, value: &Value) -> Result<(), String> {
+    pub(super) fn check_references(&self, path: &str, value: &Value) -> Result<(), String> {
         let shape = self.shape();
         let ids = || {
             value
@@ -1245,7 +1249,7 @@ impl Mixer {
         Ok(())
     }
 
-    fn record(&mut self, session: &SessionKey, id: &str, answer: Answer) {
+    pub(super) fn record(&mut self, session: &SessionKey, id: &str, answer: Answer) {
         let kept = self.answers.entry(session.clone()).or_default();
         if kept.len() >= answers_kept() {
             kept.pop_front();
@@ -1253,7 +1257,12 @@ impl Mixer {
         kept.push_back((id.to_owned(), answer));
     }
 
-    fn refuse(&mut self, session: &SessionKey, id: &str, answer: Answer) -> Effect<Edits> {
+    pub(super) fn refuse(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        answer: Answer,
+    ) -> Effect<Edits> {
         self.record(session, id, answer);
         Effect::Unchanged
     }
@@ -1270,7 +1279,7 @@ impl Mixer {
     /// that changed: loudness target and tolerance from a preset, preset
     /// `custom` from a written target or tolerance, AFV stages from
     /// bindings and tally. The engine targets follow the leaves changed.
-    fn write(&mut self, written: Vec<(String, Value)>) -> Vec<(String, Value)> {
+    pub(super) fn write(&mut self, written: Vec<(String, Value)>) -> Vec<(String, Value)> {
         let all = derived(written);
         let vcas = (self.derived.is_some() && all.iter().any(|(p, _)| p.starts_with("/vcas")))
             .then(|| self.state["vcas"].clone());
@@ -1305,7 +1314,7 @@ impl Mixer {
 
     /// Each channel's AFV stage as bindings and tally set it: open when
     /// disabled, else open on `program` of its source, else as it was.
-    fn afv_open(&self) -> BTreeMap<String, bool> {
+    pub(super) fn afv_open(&self) -> BTreeMap<String, bool> {
         let afv = self.state["afv"].as_object().into_iter().flatten();
         afv.map(|(channel, b)| {
             let source = b["source"]
@@ -1332,7 +1341,7 @@ impl Mixer {
             .collect()
     }
 
-    fn control(&mut self, origin: &Origin, c: &Control, ctx: &Apply) -> Effect<Edits> {
+    pub(super) fn control(&mut self, origin: &Origin, c: &Control, ctx: &Apply) -> Effect<Edits> {
         let (id, action, kind, seq, path) = (
             c.id.as_str(),
             c.action,
@@ -1440,7 +1449,7 @@ impl Mixer {
             .insert(path.to_owned(), seq);
     }
 
-    fn patch(
+    pub(super) fn patch(
         &mut self,
         session: &SessionKey,
         id: &str,
@@ -1480,7 +1489,7 @@ impl Mixer {
     /// The first duck group whose triggers or targets `written` sets and
     /// that breaks its rules ([`duck::check`]) on the state the writes
     /// leave, with why.
-    fn broken_duck(&self, written: &[(String, Value)]) -> Option<(String, String)> {
+    pub(super) fn broken_duck(&self, written: &[(String, Value)]) -> Option<(String, String)> {
         let mut groups: Vec<&str> = written
             .iter()
             .filter_map(|(p, _)| duck::members_of(p))
@@ -1528,7 +1537,7 @@ impl Mixer {
         Value::Object(data)
     }
 
-    fn store_scene(
+    pub(super) fn store_scene(
         &mut self,
         session: &SessionKey,
         id: &str,
@@ -1570,7 +1579,12 @@ impl Mixer {
         changed(self.write(vec![("/scenes".into(), Value::Array(list))]))
     }
 
-    fn delete_scene(&mut self, session: &SessionKey, id: &str, scene: &str) -> Effect<Edits> {
+    pub(super) fn delete_scene(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        scene: &str,
+    ) -> Effect<Edits> {
         if self.scenes.remove(scene).is_none() {
             let message = format!("unknown scene {scene}");
             return self.refuse(session, id, Answer::NotFound { message });
@@ -1586,7 +1600,7 @@ impl Mixer {
 
     /// [`Product::expire`]: releases every control `session` holds and
     /// disconnects its consoles.
-    fn end_lease(&mut self, session: &SessionKey) -> Effect<Edits> {
+    pub(super) fn end_lease(&mut self, session: &SessionKey) -> Effect<Edits> {
         let held: Vec<String> = self
             .owners
             .iter()
@@ -1626,7 +1640,7 @@ impl Mixer {
     /// over the ramp length from the value it holds when the change
     /// applies. A gain left as it was keeps its fade. Every gain is the
     /// one the engine takes, an invalid one 0 ([`samplez_dsp::valid_gain`]).
-    fn fading<T>(&mut self, timing: Timing, f: impl FnOnce(&mut Mixer) -> T) -> T {
+    pub(super) fn fading<T>(&mut self, timing: Timing, f: impl FnOnce(&mut Mixer) -> T) -> T {
         // Fades ended by the index the recall was received at, its
         // logged start less the lead, go: no replica applies the recall
         // earlier, so their gains hold the scene's values by then, and a
@@ -1688,7 +1702,7 @@ impl Mixer {
     }
 
     /// Each channel's AFV stage open, by slot.
-    fn afv_opens(&self) -> Vec<bool> {
+    pub(super) fn afv_opens(&self) -> Vec<bool> {
         (self.shape().channels.iter())
             .map(|c| self.state["afv"][&c.id]["open"] == true)
             .collect()
@@ -1701,7 +1715,7 @@ impl Mixer {
     /// over its `fallMs`, `t.transitionMs` in place of both times. The
     /// rows of a channel whose stage stays, and the line-up tone's, get
     /// none.
-    fn afv_fades(&self, opens: &[bool], t: Transition) -> Vec<Option<Crossfade>> {
+    pub(super) fn afv_fades(&self, opens: &[bool], t: Transition) -> Vec<Option<Crossfade>> {
         let rate = u64::from(self.shape().sample_rate);
         let samples = |ms: u64| ms * rate / 1000;
         let mut rows = Vec::new();
@@ -1729,7 +1743,7 @@ impl Mixer {
     /// Recalls `scene`: every stored leaf whose recall-safe group its
     /// element does not keep, owned controls included, and
     /// `sceneRecalled`.
-    fn recall(
+    pub(super) fn recall(
         &mut self,
         session: &SessionKey,
         id: &str,
@@ -1754,7 +1768,7 @@ impl Mixer {
     /// The leaves a recall of `scene` writes, none for an unknown scene,
     /// and the channels whose stored delay their delay line no longer
     /// takes: those recall a delay of 0.
-    fn recall_writes(&self, scene: &str) -> Option<(Leaves, Vec<String>)> {
+    pub(super) fn recall_writes(&self, scene: &str) -> Option<(Leaves, Vec<String>)> {
         let data = self.scenes.get(scene)?;
         let mut written = Vec::new();
         let mut short = Vec::new();
@@ -1817,7 +1831,7 @@ impl Mixer {
         written
     }
 
-    fn tally(
+    pub(super) fn tally(
         &mut self,
         session: &SessionKey,
         id: &str,
@@ -1854,7 +1868,7 @@ impl Mixer {
     /// control's holder: nothing when nobody else holds it. Every replica
     /// applies it, and the one the holder's primary connection is on
     /// delivers it ([`crate::app::App::publish`]).
-    fn control_request(
+    pub(super) fn control_request(
         &self,
         asker: &SessionKey,
         path: &str,
@@ -1878,7 +1892,12 @@ impl Mixer {
     /// (`/loudness/<id>/resets`), the same on every replica; the engines
     /// restart the measurement at the delta's `atIndex`. An id that is no
     /// output refuses the whole command.
-    fn reset_loudness(&mut self, session: &SessionKey, id: &str, ids: &[String]) -> Effect<Edits> {
+    pub(super) fn reset_loudness(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        ids: &[String],
+    ) -> Effect<Edits> {
         let shape = self.shape();
         if let Some(bad) = ids.iter().find(|i| !shape.is_output_bus(i)) {
             let message = format!("unknown bus {bad}");
@@ -1920,7 +1939,7 @@ impl Mixer {
     /// Registers `console` as `origin`'s session's, connected, at
     /// `bank_offset`. Refused while it is connected to another session. A
     /// declared console keeps the name of the configuration.
-    fn register(
+    pub(super) fn register(
         &mut self,
         origin: &Origin,
         id: &str,
@@ -1968,7 +1987,12 @@ impl Mixer {
     /// Creates or updates the descriptor of a console, keeping who it is
     /// connected to and its bank. A declared console keeps the name of the
     /// configuration.
-    fn put_console(&mut self, session: &SessionKey, id: &str, put: &ConsolePut) -> Effect<Edits> {
+    pub(super) fn put_console(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        put: &ConsolePut,
+    ) -> Effect<Edits> {
         let i = match self.position(&put.id) {
             Some(i) => i,
             None => {
@@ -2008,7 +2032,12 @@ impl Mixer {
         self.publish_consoles()
     }
 
-    fn remove_console(&mut self, session: &SessionKey, id: &str, console: &str) -> Effect<Edits> {
+    pub(super) fn remove_console(
+        &mut self,
+        session: &SessionKey,
+        id: &str,
+        console: &str,
+    ) -> Effect<Edits> {
         let Some(i) = self.position(console) else {
             let message = format!("unknown console {console}");
             return self.refuse(session, id, Answer::NotFound { message });
@@ -2032,7 +2061,7 @@ impl Mixer {
     /// session, connection and bank it had and, once registered, what the
     /// registration said; then the saved consoles that were never
     /// declared. One declared before and no longer is dropped.
-    fn merge_consoles(&mut self, saved: Vec<Registered>) {
+    pub(super) fn merge_consoles(&mut self, saved: Vec<Registered>) {
         let mut merged: Vec<Registered> = self
             .declared
             .iter()
@@ -2066,7 +2095,7 @@ impl Mixer {
     /// Loads `saved` into this state's configured shape: leaves the shape
     /// has no place for, or whose value it does not take, are dropped;
     /// tally, scenes and the scene recalled are kept as they are.
-    fn reconcile(&mut self, saved: Saved) {
+    pub(super) fn reconcile(&mut self, saved: Saved) {
         let shape = self.shape.clone().expect("configured");
         let mut state = shape.initial_state();
         let mut dropped = Vec::new();
@@ -2145,7 +2174,7 @@ impl Mixer {
 }
 
 /// The snapshot message's `shape`, `state` and `owners`.
-fn snapshot_text(shape: &Shape, state: &Value, owners: &Value) -> String {
+pub(super) fn snapshot_text(shape: &Shape, state: &Value, owners: &Value) -> String {
     json!({ "shape": shape, "state": state, "owners": owners }).to_string()
 }
 
@@ -2454,7 +2483,7 @@ impl Product for Mixer {
 /// A snapshot an older binary saved has no surround position in the pan
 /// of its channels: the initial one fills it in, as a configured state
 /// does ([`Mixer::reconcile`]), so a write can reach it.
-fn fill_pan(state: &mut Value) {
+pub(super) fn fill_pan(state: &mut Value) {
     let channels = state["channels"].as_object_mut().into_iter().flatten();
     for pan in channels.filter_map(|(_, c)| c.get_mut("pan")?.as_object_mut()) {
         for (leaf, initial) in [("frontRear", -1), ("spread", 1), ("lfeSend", -90)] {
@@ -2467,7 +2496,7 @@ fn fill_pan(state: &mut Value) {
 /// mix-minus outputs: the initial ones fill them in, off, as a
 /// configured state does ([`Mixer::reconcile`]), so a write can reach
 /// them and every output strip has its parameters.
-fn fill_mix_minus(state: &mut Value) {
+pub(super) fn fill_mix_minus(state: &mut Value) {
     let processing = crate::shape::initial_processing();
     let elements = state["mixMinus"].as_object_mut().into_iter().flatten();
     for m in elements.filter_map(|(_, m)| m.as_object_mut()) {
@@ -2479,7 +2508,7 @@ fn fill_mix_minus(state: &mut Value) {
 
 /// A snapshot an older binary saved has no mix in its compressors: they
 /// ran the compressor alone, a mix of 100 %.
-fn fill_comp_mix(state: &mut Value) {
+pub(super) fn fill_comp_mix(state: &mut Value) {
     for group in ["channels", "buses", "auxes", "mixMinus"] {
         let elements = state[group].as_object_mut().into_iter().flatten();
         for comp in elements.filter_map(|(_, e)| e.get_mut("comp")?.as_object_mut()) {
@@ -2490,7 +2519,7 @@ fn fill_comp_mix(state: &mut Value) {
 
 /// `written` and the leaves a loudness preset or target written among
 /// them sets besides.
-fn derived(written: Vec<(String, Value)>) -> Vec<(String, Value)> {
+pub(super) fn derived(written: Vec<(String, Value)>) -> Vec<(String, Value)> {
     let mut all = written.clone();
     let preset_written = written
         .iter()
@@ -2523,7 +2552,7 @@ fn momentary(path: &str) -> bool {
 }
 
 /// A command's effect from the leaves it changed, none of them owners.
-fn changed(values: Vec<(String, Value)>) -> Effect<Edits> {
+pub(super) fn changed(values: Vec<(String, Value)>) -> Effect<Edits> {
     if values.is_empty() {
         Effect::Unchanged
     } else {
@@ -2535,10 +2564,10 @@ fn changed(values: Vec<(String, Value)>) -> Effect<Edits> {
 }
 
 /// Leaves to write, as paths and values.
-type Leaves = Vec<(String, Value)>;
+pub(super) type Leaves = Vec<(String, Value)>;
 
 /// The channel, bus or aux whose delay `path` is.
-fn delayed_element(path: &str) -> Option<String> {
+pub(super) fn delayed_element(path: &str) -> Option<String> {
     match tokens(path).as_slice() {
         [group, element, leaf]
             if matches!(group.as_str(), "channels" | "buses" | "auxes") && leaf == "delay" =>
@@ -2566,7 +2595,7 @@ fn is_uuid(v: &str) -> bool {
         })
 }
 
-fn escape(token: &str) -> String {
+pub(super) fn escape(token: &str) -> String {
     token.replace('~', "~0").replace('/', "~1")
 }
 
@@ -2603,7 +2632,7 @@ pub(crate) fn set_at(root: &mut Value, path: &str, value: Value) {
 
 /// The leaves under `value`: an array of strings (an id set or recall
 /// groups) is one leaf, other arrays split into one leaf per leg.
-fn leaves(value: &Value, base: &str) -> Vec<(String, Value)> {
+pub(super) fn leaves(value: &Value, base: &str) -> Vec<(String, Value)> {
     let mut out = Vec::new();
     collect(value, base, &mut out);
     out
