@@ -85,6 +85,7 @@ fn contact(in_contact: bool, peers: &[Peer]) -> samplez_replica::contact::Metric
             silent,
             last_report_age,
             offset_ns: None,
+            clock_best: None,
         };
     samplez_replica::contact::Metrics {
         protocol_gate_open: true,
@@ -134,6 +135,8 @@ fn contact(in_contact: bool, peers: &[Peer]) -> samplez_replica::contact::Metric
         replica_tai_offset_zero: Vec::new(),
         horizon_held: false,
         clock_holds: 0,
+        start_hold: None,
+        start_hold_warnings: 0,
     }
 }
 
