@@ -1,6 +1,7 @@
 //! Snapshots: the layout save writes and load reads, and a loaded state
 //! fitted to the configured shape.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use samplez_replica::entry::SessionKey;
@@ -9,10 +10,11 @@ use serde_json::{Value, json};
 
 use super::consoles::Registered;
 use super::control::Holder;
-use super::paths::{leaves, set_at, tokens};
+use super::paths::{escape, leaves, set_at, tokens};
 use super::validate::delayed_element;
 use super::{Answer, Mixer, PortRef, Ports};
 use crate::contract::{check, contract};
+use crate::duck;
 use crate::shape::Shape;
 
 #[cfg(doc)]
@@ -65,6 +67,7 @@ impl Mixer {
         let shape = self.shape.clone().expect("configured");
         let mut state = shape.initial_state();
         let mut dropped = Vec::new();
+        let mut laid = BTreeSet::new();
         for (path, value) in leaves(&saved.state, "") {
             let group = tokens(&path).into_iter().next().unwrap_or_default();
             if matches!(
@@ -91,11 +94,37 @@ impl Mixer {
             };
             if fits {
                 set_at(&mut state, &path, value);
+                laid.insert(path);
             } else {
                 if let Some(element) = delayed_element(&path) {
                     tracing::warn!(element, %value, "the delay line no longer takes the saved delay: 0");
                 }
                 dropped.push(path);
+            }
+        }
+        // A seed reaches only the channels the saved state lacks, so with
+        // the saved triggers it can pass a group's limit: those seeded
+        // triggers go, the last channel in shape order first, until the
+        // group keeps the rules a write is held to.
+        for d in &shape.ducks {
+            for c in shape.channels.iter().rev() {
+                if duck::check(&state["ducks"], &d.id).is_ok() {
+                    break;
+                }
+                let path = format!(
+                    "/ducks/{}/channels/{}/trigger",
+                    escape(&d.id),
+                    escape(&c.id)
+                );
+                if !laid.contains(&path) && state.pointer(&path) == Some(&json!(true)) {
+                    tracing::warn!(
+                        duck = d.id,
+                        channel = c.id,
+                        "the loaded state keeps the group's triggers: the seed goes"
+                    );
+                    set_at(&mut state, &path, json!(false));
+                    dropped.push(path);
+                }
             }
         }
         for group in ["tally", "scenes", "sceneRecalled"] {
