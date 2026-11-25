@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.3](https://github.com/danielclasen/faderz/compare/v0.7.2...v0.7.3) (2026-11-25)
+
+
+### Features
+
+* **web:** draw a minus-infinity sign at a fader's floor ([#189](https://github.com/danielclasen/faderz/issues/189)) ([bf60c87](https://github.com/danielclasen/faderz/commit/bf60c87e5dc464bdb5a59d3e148c81f30c9839e0))
+* **web:** take a typed value in the readout under a fader ([#188](https://github.com/danielclasen/faderz/issues/188)) ([57dbd16](https://github.com/danielclasen/faderz/commit/57dbd16631aa9eb57b714cf23ae253e44fc15aac))
+
+
+### Bug Fixes
+
+* **web:** take Alt+0 on macOS on faders and pans ([#190](https://github.com/danielclasen/faderz/issues/190)) ([1a3c007](https://github.com/danielclasen/faderz/commit/1a3c007c3b7fa662674dcb5d41eb2022dfe1e30c))
+
 ## [0.7.2](https://github.com/danielclasen/faderz/compare/v0.7.1...v0.7.2) (2026-11-24)
 
 
