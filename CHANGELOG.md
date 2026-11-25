@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.5](https://github.com/danielclasen/faderz/compare/v0.7.4...v0.7.5) (2026-11-25)
+
+
+### Features
+
+* **bridge:** light the strip meters and CLIP of an MCU surface ([#195](https://github.com/danielclasen/faderz/issues/195)) ([5606d02](https://github.com/danielclasen/faderz/commit/5606d02251faeca2925727b2fdd3c793cc753909))
+* share the selection between a surface and its user's screens ([#196](https://github.com/danielclasen/faderz/issues/196)) ([d2dd27f](https://github.com/danielclasen/faderz/commit/d2dd27f4d5271aeb9d10ed6fb14044aef07f13fb))
+
 ## [0.7.4](https://github.com/danielclasen/faderz/compare/v0.7.3...v0.7.4) (2026-11-25)
 
 

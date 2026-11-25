@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "faderz"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "axum",
  "futures-util",
