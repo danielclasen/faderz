@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.4.0...faderz-bridge-v0.4.1) (2026-11-25)
+
+
+### Features
+
+* **bridge:** put the V-Pots on the channels' pan ([#193](https://github.com/danielclasen/faderz/issues/193)) ([7ad4525](https://github.com/danielclasen/faderz/commit/7ad45252b4fcecda2a4494d074ab58497e86cd81))
+
 ## [0.4.0](https://github.com/danielclasen/faderz/compare/faderz-bridge-v0.3.0...faderz-bridge-v0.4.0) (2026-11-23)
 
 
