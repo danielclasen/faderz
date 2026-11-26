@@ -240,7 +240,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      RTPMIDID_DEB: https://github.com/davidmoreno/rtpmidid/releases/download/v26.01/rtpmidid-debian-trixie-amd64-26.01.deb
+      # renovate: datasource=github-release-attachments depName=davidmoreno/rtpmidid
+      RTPMIDID_VERSION: v26.01
       RTPMIDID_SHA256: 3e8066e337336a52f290548f994a81920dece66770f574b8d18716d99659bf56
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -261,7 +262,8 @@ jobs:
           restore-keys: ${{ github.ref != 'refs/heads/main' && 'cargo-bridge-' || '' }}
       - name: Fetch rtpmidid
         run: |
-          curl -fsSL --retry 5 -o rtpmidid.deb "$RTPMIDID_DEB"
+          curl -fsSL --retry 5 -o rtpmidid.deb \
+            "https://github.com/davidmoreno/rtpmidid/releases/download/$RTPMIDID_VERSION/rtpmidid-debian-trixie-amd64-${RTPMIDID_VERSION#v}.deb"
           echo "$RTPMIDID_SHA256  rtpmidid.deb" | sha256sum -c -
       - name: Run the bridge against faderz in the builder image
         run: |

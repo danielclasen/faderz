@@ -1,0 +1,298 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits"
+  ],
+  "minimumReleaseAge": "3 days",
+  "prHourlyLimit": 2,
+  "ignorePaths": [
+    "**/node_modules/**"
+  ],
+  "osvVulnerabilityAlerts": true,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on the first day of the month"
+    ],
+    "semanticCommitType": "fix",
+    "semanticCommitScope": "deps"
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "samplez docs links and prose name the samplez tag the crates build against, so they move with it",
+      "managerFilePatterns": [
+        "/^docs/.+\\.md$/",
+        "/^Cargo\\.toml$/"
+      ],
+      "matchStrings": [
+        "samplez(?:/blob/|\\s)v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "danielclasen/samplez",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "The version = \"=X.Y.Z\" beside each samplez tag: the cargo manager moves the tag and Cargo.lock but reads the tag as the version and leaves this field, which cargo then refuses",
+      "managerFilePatterns": [
+        "/^Cargo\\.toml$/"
+      ],
+      "matchStringsStrategy": "recursive",
+      "matchStrings": [
+        "samplez[\\w-]* = \\{ git = \"https://github\\.com/danielclasen/samplez\"[^\\n]*",
+        "version = \"=(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "danielclasen/samplez",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "The samplez builder image is pinned by digest alone; samplez publishes it as latest from main",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/",
+        "/(^|/)Dockerfile$/",
+        "/^docs/BUILDING\\.md$/"
+      ],
+      "matchStrings": [
+        "ghcr\\.io/danielclasen/samplez-builder@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "ghcr.io/danielclasen/samplez-builder",
+      "currentValueTemplate": "latest",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Versions pinned in workflows, scripts and Dockerfile ARGs under a renovate marker. A _SHA256 line right below is read as the digest, which only github-release-attachments can recompute",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/",
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?[ \\t]*\\n[ \\t]*(?:ARG[ \\t]+)?[\\w.-]+[ \\t]*[:=][ \\t]*[\"']?(?<currentValue>[^\"'\\s#]+)[\"']?(?:[ \\t]*\\n[ \\t]*[\\w.-]+_SHA256[ \\t]*[:=][ \\t]*[\"']?(?<currentDigest>[a-f0-9]{64}))?"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "The nmos-testing commit the conformance suites run",
+      "managerFilePatterns": [
+        "/^\\.github/nmos-testing\\.ref$/"
+      ],
+      "matchStrings": [
+        "^(?<currentDigest>[a-f0-9]{40})\\s*$"
+      ],
+      "depNameTemplate": "AMWA-TV/nmos-testing",
+      "packageNameTemplate": "https://github.com/AMWA-TV/nmos-testing",
+      "currentValueTemplate": "master",
+      "datasourceTemplate": "git-refs"
+    },
+    {
+      "customType": "regex",
+      "description": "The AMWA specification commits nmos-testing validates against, one per version branch",
+      "managerFilePatterns": [
+        "/^tests/nmos/specs\\.txt$/"
+      ],
+      "matchStrings": [
+        "(?<depName>[a-z0-9-]+) (?<currentValue>[\\w.-]+) (?<currentDigest>[a-f0-9]{40})"
+      ],
+      "depNameTemplate": "AMWA-TV/{{{depName}}}",
+      "packageNameTemplate": "https://github.com/AMWA-TV/{{{depName}}}",
+      "datasourceTemplate": "git-refs"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Actions and runner images only run CI, so ci(deps) cuts no release",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepTypes": [
+        "action",
+        "github-runner"
+      ],
+      "groupName": "GitHub Actions",
+      "semanticCommitType": "ci",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Crates compiled into the binary; fix(deps) so release-please cuts a release with them",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchFileNames": [
+        "Cargo.toml"
+      ],
+      "groupName": "Rust crates",
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "The bridge is a release-please package of its own; a group of its own releases only the bridge",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchFileNames": [
+        "bridge/Cargo.toml"
+      ],
+      "groupName": "bridge Rust crates",
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "libm stays at =0.2.16: another libm can compute other bits (AGENTS.md invariants)",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "libm"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Shipped in the console bundle (THIRD-PARTY-WEB.txt), so fix(deps) releases it",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "svelte",
+        "@fontsource/**"
+      ],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "The runtime base image ships, so fix(deps) releases it. Its tags are a Debian release and a date",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "debian"
+      ],
+      "versioning": "regex:^trixie-(?<major>\\d{4})(?<minor>\\d{2})(?<patch>\\d{2})-slim$",
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Build and test tooling of the console: nothing of it ships, so build(deps) cuts no release",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "!svelte",
+        "!@fontsource/**"
+      ],
+      "semanticCommitType": "build",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "One PR for the minor and patch bumps of the console tooling",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "!svelte",
+        "!@fontsource/**",
+        "!@playwright/test"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "web tooling"
+    },
+    {
+      "description": "The fonts the console ships move together",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@fontsource/**"
+      ],
+      "groupName": "fonts"
+    },
+    {
+      "description": "The Playwright container carries the browsers of the @playwright/test version in web/package-lock.json; the two move together",
+      "matchPackageNames": [
+        "@playwright/test",
+        "mcr.microsoft.com/playwright"
+      ],
+      "groupName": "Playwright",
+      "semanticCommitType": "build",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Node.js builds the console in CI and in the image's web stage, and @types/node follows its major; nothing of it ships",
+      "matchDepNames": [
+        "node",
+        "@types/node"
+      ],
+      "groupName": "Node.js",
+      "semanticCommitType": "build",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "rtpmidid only runs in the bridge's CI interop tests",
+      "matchPackageNames": [
+        "davidmoreno/rtpmidid"
+      ],
+      "semanticCommitType": "ci",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "cargo-about writes the licence notices at build time and is not linked in",
+      "matchPackageNames": [
+        "cargo-about"
+      ],
+      "semanticCommitType": "build",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "nmos-testing and the specifications it checks against only run in CI; one PR for all of them",
+      "matchDepNames": [
+        "AMWA-TV/**"
+      ],
+      "groupName": "nmos-testing",
+      "semanticCommitType": "ci",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Each specification commit follows its version branch; a version-like branch name is not a version to move to",
+      "matchDepNames": [
+        "AMWA-TV/**"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "samplez is pre-1.0, so a minor is usually breaking: not delayed and not grouped with anything else, it surfaces at once as its own CI-red PR. The builder image moves with it, because a samplez release can need the libmxl or Rust of a newer builder; the image's libmxl ships, so fix(deps)",
+      "matchPackageNames": [
+        "danielclasen/samplez",
+        "ghcr.io/danielclasen/samplez-builder"
+      ],
+      "groupName": "samplez",
+      "commitMessageTopic": "samplez",
+      "minimumReleaseAge": "0 days",
+      "schedule": [
+        "at any time"
+      ],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "The builder digest is the custom manager's; the dockerfile manager sees it without a tag",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/danielclasen/samplez-builder"
+      ],
+      "enabled": false
+    }
+  ]
+}

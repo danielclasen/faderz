@@ -12,6 +12,7 @@ ENV CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
+# renovate: datasource=crate depName=cargo-about
 ARG CARGO_ABOUT_VERSION=0.9.3
 # Caps cargo's parallel jobs when set.
 ARG CARGO_BUILD_JOBS
