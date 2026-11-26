@@ -34,7 +34,7 @@ mkdir -p .cargo-registry .cargo-git
 docker run --rm --user "$(id -u):$(id -g)" -e CARGO_INCREMENTAL=0 \
   -v "$PWD:/w" -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
   -v "$PWD/.cargo-git:/usr/local/cargo/git" -w /w \
-  ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba \
+  ghcr.io/danielclasen/samplez-builder:latest@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba \
   bash -euo pipefail -c '
     cargo fmt --all --check
     cargo clippy --all-targets --locked -- -D warnings

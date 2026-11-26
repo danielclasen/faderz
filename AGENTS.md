@@ -31,8 +31,7 @@ The audio engine, replication and NMOS stack are
 release tag (`tag = "vX.Y.Z"` in `Cargo.toml`). A samplez bump changes the
 `Cargo.toml` tags and the samplez entries in `Cargo.lock` and nothing
 else, apart from adapting to its API. Renovate (`renovate.json`) opens it
-as a pull request of its own, with the builder image digest when that
-moved too.
+as a pull request of its own.
 
 ## Invariants
 

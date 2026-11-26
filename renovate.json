@@ -50,17 +50,14 @@
     },
     {
       "customType": "regex",
-      "description": "The samplez builder image is pinned by digest alone; samplez publishes it as latest from main",
+      "description": "The samplez builder digest in the CI env and the build instructions, which the dockerfile manager does not read",
       "managerFilePatterns": [
         "/^\\.github/workflows/ci\\.yml$/",
-        "/(^|/)Dockerfile$/",
         "/^docs/BUILDING\\.md$/"
       ],
       "matchStrings": [
-        "ghcr\\.io/danielclasen/samplez-builder@(?<currentDigest>sha256:[a-f0-9]{64})"
+        "(?<depName>ghcr\\.io/danielclasen/samplez-builder):(?<currentValue>latest)@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
-      "depNameTemplate": "ghcr.io/danielclasen/samplez-builder",
-      "currentValueTemplate": "latest",
       "datasourceTemplate": "docker"
     },
     {
@@ -103,6 +100,14 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "docker digests, images off Docker Hub and git commits come without a release timestamp, which minimumReleaseAge would otherwise hold back for good",
+      "matchDatasources": [
+        "docker",
+        "git-refs"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
     {
       "description": "Actions and runner images only run CI, so ci(deps) cuts no release",
       "matchManagers": [
@@ -163,6 +168,22 @@
       "semanticCommitScope": "deps"
     },
     {
+      "description": "Crates only tests use ship nothing, so they cut no release. tokio and futures-util are also normal dependencies and stay with those, since both entries must name the same exact version",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchDepTypes": [
+        "dev-dependencies"
+      ],
+      "matchPackageNames": [
+        "!tokio",
+        "!futures-util"
+      ],
+      "groupName": "Rust dev crates",
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "deps"
+    },
+    {
       "description": "The runtime base image ships, so fix(deps) releases it. Its tags are a Debian release and a date",
       "matchDatasources": [
         "docker"
@@ -175,7 +196,7 @@
       "semanticCommitScope": "deps"
     },
     {
-      "description": "Build and test tooling of the console: nothing of it ships, so build(deps) cuts no release",
+      "description": "Build and test tooling of the console: nothing of it ships, so chore(deps) cuts no release",
       "matchManagers": [
         "npm"
       ],
@@ -183,7 +204,7 @@
         "!svelte",
         "!@fontsource/**"
       ],
-      "semanticCommitType": "build",
+      "semanticCommitType": "chore",
       "semanticCommitScope": "deps"
     },
     {
@@ -219,7 +240,7 @@
         "mcr.microsoft.com/playwright"
       ],
       "groupName": "Playwright",
-      "semanticCommitType": "build",
+      "semanticCommitType": "chore",
       "semanticCommitScope": "deps"
     },
     {
@@ -270,10 +291,9 @@
       "enabled": false
     },
     {
-      "description": "samplez is pre-1.0, so a minor is usually breaking: not delayed and not grouped with anything else, it surfaces at once as its own CI-red PR. The builder image moves with it, because a samplez release can need the libmxl or Rust of a newer builder; the image's libmxl ships, so fix(deps)",
+      "description": "samplez is pre-1.0, so a minor is usually breaking: not delayed and not grouped with anything else, it surfaces at once as its own CI-red PR",
       "matchPackageNames": [
-        "danielclasen/samplez",
-        "ghcr.io/danielclasen/samplez-builder"
+        "danielclasen/samplez"
       ],
       "groupName": "samplez",
       "commitMessageTopic": "samplez",
@@ -285,14 +305,13 @@
       "semanticCommitScope": "deps"
     },
     {
-      "description": "The builder digest is the custom manager's; the dockerfile manager sees it without a tag",
-      "matchManagers": [
-        "dockerfile"
-      ],
+      "description": "The samplez builder compiles the binary and its libmxl is copied into the runtime image, so a move changes what ships and cuts a release. It is published from samplez main apart from samplez releases, so it moves in a PR of its own; every file that pins it moves in that PR",
       "matchPackageNames": [
         "ghcr.io/danielclasen/samplez-builder"
       ],
-      "enabled": false
+      "groupName": "samplez builder",
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
     }
   ]
 }

@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  BUILDER: ghcr.io/danielclasen/samplez-builder@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba
+  BUILDER: ghcr.io/danielclasen/samplez-builder:latest@sha256:92ece4452be98fff177b49fb201c8c693130c08845c42725dd5b1173d4863fba
 
 # Every job's timeout is about twice its longest normal run, a run on
 # main that builds its cargo cache from nothing included, so a hung job
