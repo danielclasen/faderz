@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.6](https://github.com/danielclasen/faderz/compare/v0.7.5...v0.7.6) (2026-11-26)
+
+
+### Features
+
+* **web:** tint a coloured channel's scribble strip and fader cap ([#198](https://github.com/danielclasen/faderz/issues/198)) ([aeb8e1f](https://github.com/danielclasen/faderz/commit/aeb8e1f55d2d6d6cae5fc9967d987a46a366d04f))
+
 ## [0.7.5](https://github.com/danielclasen/faderz/compare/v0.7.4...v0.7.5) (2026-11-25)
 
 
