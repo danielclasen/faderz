@@ -195,7 +195,7 @@
     background: var(--meter-low);
   }
   .keymeter .key.over {
-    background: var(--duck);
+    background: var(--well-duck);
   }
   .keymeter .marker {
     position: absolute;

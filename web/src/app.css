@@ -10,11 +10,19 @@
   --strip-alt: #11151a;
   --strip-sel: #1c2430;
   --well: #07090b;
-  /* Marks drawn on a well, dark in both themes: a level, an idle level
-     and a duck reduction, each at least 3:1 against it. */
+  /* Marks and text drawn on a well, dark in both themes: a level or
+     bright text, an idle level or dim text, a duck reduction, a warning,
+     ownership and an AFL fill. Marks at 3:1 or more against it, text at
+     4.5:1 or more. */
   --well-mark: #dfe5ec;
   --well-dim: #8b96a4;
   --well-duck: #f472b6;
+  --well-warn: #ffb000;
+  --well-owned: #c77dff;
+  --well-afl: #3fd0e0;
+  /* The face of a text field: the well in this theme, white in the
+     light one. */
+  --field: #07090b;
   --line: #232a33;
   --line-strong: #323c48;
   --text: #dfe5ec;
@@ -95,6 +103,10 @@
   --well-mark: #dfe5ec;
   --well-dim: #8b96a4;
   --well-duck: #f472b6;
+  --well-warn: #ffb000;
+  --well-owned: #c77dff;
+  --well-afl: #3fd0e0;
+  --field: #ffffff;
   --line: #c4cbd4;
   --line-strong: #a7b0bb;
   --text: #11151a;
@@ -320,16 +332,12 @@ select {
 
 input[type='text'],
 input[type='number'] {
-  background: var(--well);
+  background: var(--field);
   color: var(--text);
   border: 1px solid var(--line-strong);
   border-radius: 3px;
   height: 26px;
   padding: 0 6px;
-}
-:root[data-theme='light'] input[type='text'],
-:root[data-theme='light'] input[type='number'] {
-  background: #fff;
 }
 
 ::-webkit-scrollbar {

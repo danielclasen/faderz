@@ -290,7 +290,7 @@
     line-height: var(--h, 24px);
     text-align: center;
     border-radius: 0 3px 3px 0;
-    color: var(--text-dim);
+    color: var(--well-dim);
     cursor: pointer;
   }
   /* A lost quorum on a phone: the words on two lines in the 18 px key. */
@@ -309,8 +309,8 @@
   }
   /* Quorum held without every replica: amber, before it is lost. */
   .quorum.degraded {
-    color: var(--warn);
-    box-shadow: inset 0 0 0 1px var(--warn);
+    color: var(--well-warn);
+    box-shadow: inset 0 0 0 1px var(--well-warn);
   }
   .quorum.lost {
     background: var(--err);

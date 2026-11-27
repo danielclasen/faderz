@@ -128,7 +128,7 @@
   .entry:focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: 0;
-    background: var(--well);
+    background: var(--field);
   }
   .foreign .entry {
     color: var(--owned);

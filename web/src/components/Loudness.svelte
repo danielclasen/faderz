@@ -291,7 +291,7 @@
   /* The count first: the start gives way, cut with an ellipsis. */
   .note .gaps {
     flex: none;
-    color: var(--warn);
+    color: var(--well-warn);
   }
   .note .since {
     min-width: 0;
@@ -316,7 +316,7 @@
   }
   /* Held by a paused integration: a dashed amber edge, which takes no room. */
   .held span {
-    outline: 1px dashed var(--warn);
+    outline: 1px dashed var(--well-warn);
     outline-offset: -1px;
   }
   .key.pause[aria-pressed='true'] {

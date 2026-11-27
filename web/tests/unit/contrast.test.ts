@@ -1,7 +1,8 @@
 // The theme tokens meet WCAG 2.2 AA where an operator reads them: text
 // at 4.5:1 on the surfaces it sits on, key edges at 3:1 (1.4.11).
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { parse } from 'svelte/compiler';
 import { describe, expect, it } from 'vitest';
 import { SCRIBBLE_COLORS } from '../../src/lib/contract/types';
 
@@ -51,7 +52,7 @@ function resolve(value: string, t: Record<string, string>): string {
 describe.each([
   ['dark', dark],
   ['light', light],
-])('%s theme', (theme, t) => {
+])('%s theme', (_theme, t) => {
   it.each(['strip', 'strip-alt', 'panel', 'panel-2'])('faint text reads on --%s', (surface) => {
     expect(contrast(t['text-faint']!, t[surface]!)).toBeGreaterThanOrEqual(4.5);
   });
@@ -63,7 +64,7 @@ describe.each([
     expect(contrast('#ffffff', t['pgm']!)).toBeGreaterThanOrEqual(4.5);
     expect(contrast(t['afl-ink']!, t['afl']!)).toBeGreaterThanOrEqual(4.5);
   });
-  it.each(['well-mark', 'well-dim', 'well-duck'])('a mark of --%s shows on a well (3:1)', (mark) => {
+  it.each(['well-mark', 'well-dim', 'well-duck', 'well-warn', 'well-owned', 'well-afl'])('a mark of --%s shows on a well (3:1)', (mark) => {
     expect(contrast(t[mark]!, t['well']!)).toBeGreaterThanOrEqual(3);
   });
   it('a lit PAUSED loudness key carries readable ink', () => {
@@ -76,9 +77,7 @@ describe.each([
     expect(contrast(t['on']!, t['switch-off']!)).toBeGreaterThanOrEqual(3);
   });
   it('a typed number entry reads on the field it sits in', () => {
-    // The light theme gives every text field a white face (app.css), over the component's own.
-    const field = theme === 'light' ? /:root\[data-theme='light'\] input\[type='text'\],[^{]*\{\s*background:\s*#([0-9a-f]{3})\b/.exec(css)![1]!.replace(/./g, '$&$&').replace(/^/, '#') : resolve(entry.background!, t);
-    expect(contrast(resolve(entry.color!, t), field)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(resolve(entry.color!, t), resolve(entry.background!, t))).toBeGreaterThanOrEqual(4.5);
   });
   it.each(['thead th', '.setup th', '.idx'])('the Duck view labels of %s read on the page', (rule) => {
     // Every cell of the Duck view table sits on --bg.
@@ -88,6 +87,12 @@ describe.each([
     expect(contrast(t['duck-ink']!, t['duck']!)).toBeGreaterThanOrEqual(4.5);
     for (const surface of ['panel', 'panel-2']) expect(contrast(t['duck']!, t[surface]!)).toBeGreaterThanOrEqual(3);
   });
+});
+
+it('leaves a text field the face its component gives it in the light theme', () => {
+  // A global light-theme rule on inputs outranks a component's own and
+  // painted the fader readouts, which sit on a well, white under light text.
+  expect(css).not.toMatch(/:root\[data-theme='light'\][^{]*\binput\b/);
 });
 
 it('separates alternate strips in the light theme', () => {
@@ -152,5 +157,119 @@ describe('channel colours', () => {
       const face = mix(colour, tint, t['cap']!);
       expect(contrast(capLine, face)).toBeGreaterThanOrEqual(Math.min(3, contrast(capLine, t['cap']!)));
     });
+  });
+});
+
+// A well stays dark in both themes, so text drawn on one takes a colour
+// that reads on it in both (a --well-* token or a literal), never a theme
+// text token that turns dark in the light theme. An element a rule gives
+// the well's background is on the well, and so is everything inside it;
+// every text colour a rule gives one of them, short of a background of its
+// own, reads at 4.5:1 there. Combinators count as descendant ones. Mixes
+// of the well (the scribble strip head) are pinned under channel colours.
+describe('text on a well', () => {
+  type Node = { type: string; [key: string]: unknown };
+  type Element = { name: string; classes: Set<string>; parent: Element | undefined; node: Node };
+  /** A compound selector: its type, if any, and its classes. */
+  type Compound = { type: string | undefined; classes: string[] };
+  type Rule = { selectors: Compound[][]; decls: Record<string, string>; text: string };
+
+  /** The rules of a stylesheet, media blocks included. */
+  function* rules(node: unknown, src: string): Generator<Rule> {
+    if (Array.isArray(node)) for (const n of node) yield* rules(n, src);
+    else if (node && typeof node === 'object') {
+      const n = node as Node;
+      if (n.type === 'Rule') {
+        const prelude = n['prelude'] as Node;
+        const selectors = (prelude['children'] as Node[]).map((complex) =>
+          (complex['children'] as Node[]).map(({ selectors: s }) => ({
+            type: (s as Node[]).find((x) => x.type === 'TypeSelector')?.['name'] as string | undefined,
+            classes: (s as Node[]).filter((x) => x.type === 'ClassSelector').map((x) => x['name'] as string),
+          })),
+        );
+        const decls = (n['block'] as { children: Node[] }).children.filter((d) => d.type === 'Declaration');
+        yield { selectors, decls: Object.fromEntries(decls.map((d) => [d['property'], d['value']])), text: src.slice(n['start'] as number, prelude['end'] as number) };
+      }
+      for (const [key, value] of Object.entries(n)) if (key !== 'metadata' && key !== 'prelude') yield* rules(value, src);
+    }
+  }
+
+  /** The elements of a template, each with its static and directive classes and the element around it. */
+  function elements(node: unknown, parent?: Element, out: Element[] = []): Element[] {
+    if (Array.isArray(node)) for (const n of node) elements(n, parent, out);
+    else if (node && typeof node === 'object') {
+      const n = node as Node;
+      let inner = parent;
+      if (n.type === 'RegularElement') {
+        const classes = new Set<string>();
+        for (const a of n['attributes'] as Node[]) {
+          if (a.type === 'ClassDirective') classes.add(a['name'] as string);
+          if (a.type === 'Attribute' && a['name'] === 'class' && Array.isArray(a['value']))
+            for (const part of a['value'] as Node[]) if (part.type === 'Text') for (const c of (part['data'] as string).split(/\s+/)) if (c) classes.add(c);
+        }
+        inner = { name: n['name'] as string, classes, parent, node: n };
+        out.push(inner);
+      }
+      for (const [key, value] of Object.entries(n)) if (key !== 'metadata') elements(value, inner, out);
+    }
+    return out;
+  }
+
+  const fits = (c: Compound, e: Element) => (c.type === undefined || c.type === e.name) && c.classes.every((x) => e.classes.has(x));
+
+  /** Whether a selector can match the element: its subject does, and each compound before it an element around it. */
+  function matches(selector: Compound[], e: Element): boolean {
+    const subject = selector.at(-1)!;
+    if ((subject.type === undefined && subject.classes.length === 0) || !fits(subject, e)) return false;
+    let at = e.parent;
+    for (const c of selector.slice(0, -1).reverse()) {
+      while (at && !fits(c, at)) at = at.parent;
+      if (!at) return false;
+      at = at.parent;
+    }
+    return true;
+  }
+
+  /** A colour as written in a rule, in a theme: a token, #rgb or #rrggbb; undefined for inherit, transparent or currentColor. */
+  function colour(value: string, t: Record<string, string>): string | undefined {
+    if (/^(inherit|transparent|currentColor)$/i.test(value)) return undefined;
+    const hex = resolve(value, t);
+    if (/^#[0-9a-f]{3}$/i.test(hex)) return hex.replace(/[0-9a-f]/gi, '$&$&');
+    if (!/^#[0-9a-f]{6}$/i.test(hex)) throw new Error(`cannot resolve ${value}`);
+    return hex;
+  }
+
+  const isWell = (background: string | undefined) => background === 'var(--well)';
+  const dir = new URL('../../src/components/', import.meta.url);
+
+  /** Every rule that colours text on a well: its file, selector and colour. */
+  const onWells = readdirSync(dir)
+    .filter((f) => f.endsWith('.svelte'))
+    .flatMap((file) => {
+      const src = readFileSync(new URL(file, dir), 'utf8');
+      const ast = parse(src, { modern: true });
+      const all = [...rules(ast.css, src)];
+      const els = elements(ast.fragment);
+      const wells = new Set(els.filter((e) => all.some((r) => (isWell(r.decls['background']) || isWell(r.decls['background-color'])) && r.selectors.some((s) => matches(s, e)))));
+      const onWell = (e: Element | undefined): boolean => e !== undefined && (wells.has(e) || onWell(e.parent));
+      return all
+        .filter((r) => r.decls['color'] !== undefined && [r.decls['background'], r.decls['background-color']].every((b) => b === undefined || b === 'transparent' || isWell(b)))
+        .filter((r) => els.some((e) => onWell(e) && r.selectors.some((s) => matches(s, e))))
+        .map((r) => ({ at: `${file} ${r.text.trim().replace(/\s+/g, ' ')}`, color: r.decls['color']! }));
+    });
+
+  it('finds the text on the wells it guards', () => {
+    expect(onWells.map((r) => r.at)).toEqual(expect.arrayContaining(['ConnectionKey.svelte .quorum', 'ConnectionKey.svelte .quorum.degraded', 'VcaMaster.svelte .kind']));
+  });
+
+  it.each([
+    ['dark', dark],
+    ['light', light],
+  ])('reads at 4.5:1 on the well in the %s theme', (_theme, t) => {
+    const low = onWells.flatMap(({ at, color }) => {
+      const c = colour(color, t);
+      return c !== undefined && contrast(c, t['well']!) < 4.5 ? [`${at}: ${color} at ${contrast(c, t['well']!).toFixed(2)}:1`] : [];
+    });
+    expect(low).toEqual([]);
   });
 });

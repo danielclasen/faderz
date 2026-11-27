@@ -168,8 +168,8 @@
     background-image: linear-gradient(
       to right,
       transparent var(--a),
-      color-mix(in srgb, var(--afl) 55%, transparent) var(--a),
-      color-mix(in srgb, var(--afl) 55%, transparent) var(--b),
+      color-mix(in srgb, var(--well-afl) 55%, transparent) var(--a),
+      color-mix(in srgb, var(--well-afl) 55%, transparent) var(--b),
       transparent var(--b)
     );
     background-clip: padding-box;

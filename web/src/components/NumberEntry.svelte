@@ -95,7 +95,7 @@
     height: 24px;
     text-align: right;
     font-size: 12px;
-    background: var(--well);
+    background: var(--field);
     color: var(--text);
     border: 1px solid var(--line-strong);
     border-radius: 3px;

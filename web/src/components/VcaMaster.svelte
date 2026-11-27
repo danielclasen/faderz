@@ -76,7 +76,7 @@
   .kind {
     display: block;
     font-size: 10px;
-    color: var(--owned);
+    color: var(--well-owned);
     font-weight: 600;
     letter-spacing: 0.1em;
   }

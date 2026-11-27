@@ -108,7 +108,7 @@
     padding: 6px 8px;
     border: 1px solid var(--line-strong);
     border-radius: 3px;
-    background: var(--well);
+    background: var(--field);
     color: var(--text);
     font: inherit;
   }
