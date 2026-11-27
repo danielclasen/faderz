@@ -191,22 +191,28 @@ grant (RFC 8628):
 }
 ```
 
-On start the bridge prints a verification URL and a user code, and shows
-them on the first unit's scribble strip; the user opens the URL in any
-browser, enters the code and signs in. A sign-in asked for while the
-bridge runs replaces the first unit's strips until it is done, so what
-the bridge sends again keeps it up. The bridge keeps the access and
-refresh tokens in `<stateDir>/tokens.json`, mode 0600, and a restart
-signs in with the stored refresh token while the provider still accepts
-it. It refreshes the access token a quarter of its lifetime before it
-expires, opens a new connection with it on the same session and closes
-the old one, so the session's controls are kept. A refresh the provider
-refuses starts a new sign-in. A refreshed token is in use before it is
-written to `tokens.json`, and a failed write is retried with backoff;
-tokens still unwritten when the bridge exits are lost, so the next start
-uses the previous refresh token, and a provider that rotates refresh
-tokens then asks for a new sign-in. `issuer` is `https`, or `http` on a
-loopback address; `scopes` are requested besides `openid`.
+On start the bridge prints the verification URL and the user code, and
+the provider's `verification_uri_complete` when it sends one. It shows
+the URL and code on the scribble strip of the first configured unit, one
+7-character cell per strip: the code on the first two strips, split at
+its hyphen, "Sign in" on the third, and the URL without `https://` over
+both lines of the last five, broken after a slash where the rest then
+fits. Text past the cells is cut; the log always has the full URL and
+code. The user opens the URL in any browser, enters the code and signs
+in. A sign-in asked for while the bridge runs replaces the first unit's
+strips, on white, until it is done, so what the bridge sends again keeps
+it up. The bridge keeps the access and refresh tokens in
+`<stateDir>/tokens.json`, mode 0600, and a restart signs in with the
+stored refresh token while the provider still accepts it. It refreshes
+the access token a quarter of its lifetime before it expires, opens a
+new connection with it on the same session and closes the old one, so
+the session's controls are kept. A refresh the provider refuses starts a
+new sign-in. A refreshed token is in use before it is written to
+`tokens.json`, and a failed write is retried with backoff; tokens still
+unwritten when the bridge exits are lost, so the next start uses the
+previous refresh token, and a provider that rotates refresh tokens then
+asks for a new sign-in. `issuer` is `https`, or `http` on a loopback
+address; `scopes` are requested besides `openid`.
 
 The OIDC provider needs:
 
