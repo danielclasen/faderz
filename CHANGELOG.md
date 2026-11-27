@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.7](https://github.com/danielclasen/faderz/compare/v0.7.6...v0.7.7) (2026-11-27)
+
+
+### Features
+
+* **bridge:** colour an X-Touch's scribble strips from the channels ([#212](https://github.com/danielclasen/faderz/issues/212)) ([6762e8a](https://github.com/danielclasen/faderz/commit/6762e8a1129549c212c0bb75c48ecd8d94dbd6f7))
+* **bridge:** show the time of day on the X-Touch's timecode display ([#218](https://github.com/danielclasen/faderz/issues/218)) ([d02242b](https://github.com/danielclasen/faderz/commit/d02242be0f26ed529854b3533282778ae6a2abe8))
+
+
+### Bug Fixes
+
+* **bridge:** lay the sign-in out on the scribble strip's 7-character cells ([#217](https://github.com/danielclasen/faderz/issues/217)) ([e4a0518](https://github.com/danielclasen/faderz/commit/e4a05183bb0b13530a5f12a8d4b58c78a570148a))
+* **bridge:** send a surface its state again, a little at a time ([#216](https://github.com/danielclasen/faderz/issues/216)) ([0d08c4d](https://github.com/danielclasen/faderz/commit/0d08c4d3bd89cf1dae61ab9c3533f25b42ad9642))
+* **bridge:** send RTP-MIDI packets of at most 64 octets ([#208](https://github.com/danielclasen/faderz/issues/208)) ([d5d0f6d](https://github.com/danielclasen/faderz/commit/d5d0f6d47cd0299cbe2252b823e7ff4a25b52abd))
+* **web:** read the text on dark display wells in the light theme ([#213](https://github.com/danielclasen/faderz/issues/213)) ([1c23012](https://github.com/danielclasen/faderz/commit/1c23012e568757deefdada9323d8a7d758a56748))
+
 ## [0.7.6](https://github.com/danielclasen/faderz/compare/v0.7.5...v0.7.6) (2026-11-26)
 
 
