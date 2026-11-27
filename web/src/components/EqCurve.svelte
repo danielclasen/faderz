@@ -63,11 +63,11 @@
   }
   polyline {
     fill: none;
-    stroke: var(--text-faint);
+    stroke: var(--well-dim);
     stroke-width: 1.2;
     stroke-linejoin: round;
   }
   .active polyline {
-    stroke: var(--afl);
+    stroke: var(--well-afl);
   }
 </style>

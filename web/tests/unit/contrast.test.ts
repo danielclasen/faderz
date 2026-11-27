@@ -165,8 +165,10 @@ describe('channel colours', () => {
 // text token that turns dark in the light theme. An element a rule gives
 // the well's background is on the well, and so is everything inside it;
 // every text colour a rule gives one of them, short of a background of its
-// own, reads at 4.5:1 there. Combinators count as descendant ones. Mixes
-// of the well (the scribble strip head) are pinned under channel colours.
+// own, reads at 4.5:1 there. Combinators count as descendant ones. This
+// checks text colour only: marks on a well (strokes, fills, outlines) take
+// --well-* tokens, which the 3:1 checks above cover. Mixes of the well
+// (the scribble strip head) are pinned under channel colours.
 describe('text on a well', () => {
   type Node = { type: string; [key: string]: unknown };
   type Element = { name: string; classes: Set<string>; parent: Element | undefined; node: Node };
