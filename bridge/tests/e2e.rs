@@ -364,6 +364,7 @@ impl Bridge {
             units,
             master: None,
             keys: None,
+            clock_offset: None,
             renewed,
             sign_in: None,
         };

@@ -42,9 +42,9 @@ pub const POT_STEP: f64 = 0.02;
 pub const REFRESH_CYCLE_MS: u64 = 5000;
 /// Per strip its fader, its key LEDs, its ring and meter, and each of its
 /// two cells; then the master fader with the duck key LEDs and the strip
-/// colours. Each step fits one packet.
+/// colours; then the timecode display. Each step fits one packet.
 const STRIP_PARTS: usize = 5;
-pub const REFRESH_STEPS: usize = mcu::STRIPS as usize * STRIP_PARTS + 1;
+pub const REFRESH_STEPS: usize = mcu::STRIPS as usize * STRIP_PARTS + 2;
 pub const REFRESH_STEP_MS: u64 = REFRESH_CYCLE_MS / REFRESH_STEPS as u64;
 /// After a unit's session starts, or the unit is heard again after a
 /// silence, it is sent all it shows again this long after the first full
@@ -158,6 +158,7 @@ struct Shown {
     /// 16 cells: 8 per line.
     cells: [Option<String>; 16],
     colours: Option<[u8; 8]>,
+    timecode: [Option<(u8, bool)>; mcu::TIMECODE_DIGITS],
 }
 
 impl Shown {
@@ -183,6 +184,10 @@ impl Shown {
                 3 => self.cells[strip] = None,
                 _ => self.cells[strips + strip] = None,
             }
+            return;
+        }
+        if step > strips * STRIP_PARTS {
+            self.timecode = [None; mcu::TIMECODE_DIGITS];
             return;
         }
         self.faders[usize::from(mcu::MASTER)] = None;
@@ -225,6 +230,11 @@ pub struct Surface {
     /// The next refresh step, and when.
     refresh_step: usize,
     refresh_at: u64,
+    /// Minutes east of UTC of the time of day on the timecode display,
+    /// which stays dark without it.
+    clock_offset: Option<i32>,
+    /// The wall clock, Unix seconds, once the driver has set it.
+    time: Option<u64>,
 }
 
 /// A short name for the holder of a control: its principal, or its kind
@@ -265,7 +275,21 @@ impl Surface {
             sign_in: None,
             refresh_step: 0,
             refresh_at: 0,
+            clock_offset: None,
+            time: None,
         }
+    }
+
+    /// Shows the time of day `offset` minutes east of UTC on the X-Touch's
+    /// timecode display; `None` leaves it dark.
+    pub fn with_clock(mut self, offset: Option<i32>) -> Surface {
+        self.clock_offset = offset;
+        self
+    }
+
+    /// The wall clock, Unix seconds, for the timecode display.
+    pub fn set_time(&mut self, unix: u64) {
+        self.time = Some(unix);
     }
 
     /// Shows `lines` on the first unit's scribble strip in place of the
@@ -961,6 +985,18 @@ impl Surface {
             if u.shown.colours != Some(colours) {
                 out.push((i, mcu::colours(u.spec.device, colours)));
                 u.shown.colours = Some(colours);
+            }
+            if u.spec.device == Device::Main
+                && let Some(unix) = self.time
+                && let Some(offset) = self.clock_offset
+            {
+                let digits = mcu::clock_digits(unix, offset);
+                for (p, &(ch, dot)) in digits.iter().enumerate() {
+                    if u.shown.timecode[p] != Some((ch, dot)) {
+                        out.push((i, mcu::timecode_digit(p as u8, ch, dot)));
+                        u.shown.timecode[p] = Some((ch, dot));
+                    }
+                }
             }
             for (note, led) in duck_leds {
                 if u.shown.leds.get(&note) != Some(&led) {

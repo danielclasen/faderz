@@ -205,6 +205,42 @@ pub fn meter_clip(strip: u8, on: bool) -> Vec<u8> {
     meter(strip, if on { 14 } else { 15 })
 }
 
+/// Digits of the timecode display, position 0 the rightmost.
+pub const TIMECODE_DIGITS: usize = 10;
+
+/// Sets timecode display digit `position` (0 the rightmost) to `ch`, an
+/// ASCII digit or space, with its dot lit when `dot`: control change
+/// 0x40 + position, the character's low six bits, 0x40 for the dot.
+pub fn timecode_digit(position: u8, ch: u8, dot: bool) -> Vec<u8> {
+    vec![
+        0xb0,
+        0x40 + position,
+        ch & 0x3f | if dot { 0x40 } else { 0 },
+    ]
+}
+
+/// The timecode display showing the time of day of `unix` seconds at
+/// `offset` minutes east of UTC, `HH.MM.SS` on the hours, minutes and
+/// seconds digits: the digit and dot of each position, rightmost first.
+pub fn clock_digits(unix: u64, offset: i32) -> [(u8, bool); TIMECODE_DIGITS] {
+    let day = (unix as i64 + i64::from(offset) * 60).rem_euclid(86_400);
+    let (h, m, s) = (day / 3600, day / 60 % 60, day % 60);
+    let d = |n: i64| b'0' + n as u8;
+    let blank = (b' ', false);
+    [
+        blank,
+        blank,
+        blank,
+        (d(s % 10), false),
+        (d(s / 10), false),
+        (d(m % 10), true),
+        (d(m / 10), false),
+        (d(h % 10), true),
+        (d(h / 10), false),
+        blank,
+    ]
+}
+
 /// Moves a motor fader to a 14-bit value.
 pub fn fader(strip: u8, value: u16) -> Vec<u8> {
     let value = value.min(crate::taper::FADER_MAX);
@@ -433,6 +469,27 @@ mod tests {
         assert_eq!(ring_value(Some(0.3)), 0x18);
         assert_eq!(ring(0, 0x11), vec![0xb0, 48, 0x11]);
         assert_eq!(ring(7, 0), vec![0xb0, 55, 0]);
+    }
+
+    #[test]
+    fn the_timecode_display_shows_the_time_of_day_at_an_offset() {
+        // 2026-11-26 09:05:07 UTC.
+        let unix = 1_795_683_907;
+        let shown = |d: [(u8, bool); TIMECODE_DIGITS]| -> String {
+            d.iter()
+                .rev()
+                .map(|&(c, dot)| format!("{}{}", c as char, if dot { "." } else { "" }))
+                .collect()
+        };
+        assert_eq!(shown(clock_digits(unix, 0)), " 09.05.07   ");
+        assert_eq!(shown(clock_digits(unix, 60)), " 10.05.07   ");
+        assert_eq!(
+            shown(clock_digits(unix, -600)),
+            " 23.05.07   ",
+            "the day before"
+        );
+        assert_eq!(timecode_digit(7, b'9', true), vec![0xb0, 0x47, 0x79]);
+        assert_eq!(timecode_digit(9, b' ', false), vec![0xb0, 0x49, 0x20]);
     }
 
     #[test]

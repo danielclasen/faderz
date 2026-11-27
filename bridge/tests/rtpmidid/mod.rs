@@ -226,6 +226,7 @@ fn bridge(f: &Faderz, rtp: rtpmidi::Options) -> (String, oneshot::Sender<()>) {
         }],
         master: None,
         keys: None,
+        clock_offset: None,
         renewed: None,
         sign_in: None,
     };

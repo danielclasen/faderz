@@ -1,8 +1,8 @@
 //! Paces what goes to a network surface: a byte rate with bursts of one
-//! packet, and a queue in which a newer motor position, LED or V-Pot
-//! ring or a unit's strip colours replace the queued ones they
-//! supersede, a newer meter message
-//! goes last in place of it, and a scribble strip
+//! packet, and a queue in which a newer motor position, LED, V-Pot
+//! ring, timecode digit or a unit's strip colours replace the queued
+//! ones they supersede, a newer meter message goes last in place of
+//! it, and a scribble strip
 //! write drops the queued ones it overwrites whole.
 
 use std::collections::VecDeque;
@@ -23,6 +23,8 @@ enum Key {
     Led(u8, u8),
     /// A V-Pot ring: control change 48 to 55 per channel.
     Ring(u8, u8),
+    /// A timecode display digit: control change 0x40 to 0x49.
+    Timecode(u8),
     /// A meter level: channel pressure carries the strip in its high
     /// nibble. The overload (14 and 15 in the low nibble) is a key of its
     /// own, so a level sent after it never takes its place.
@@ -38,6 +40,7 @@ fn key(m: &[u8]) -> Option<Key> {
         [s, _, _] if s & 0xf0 == 0xe0 => Some(Key::Fader(*s)),
         [s, note, _] if s & 0xf0 == 0x90 => Some(Key::Led(*s, *note)),
         [s, cc @ 48..=55, _] if s & 0xf0 == 0xb0 => Some(Key::Ring(*s, *cc)),
+        [0xb0, cc @ 0x40..=0x49, _] => Some(Key::Timecode(*cc)),
         [s, level] if s & 0xf0 == 0xd0 => Some(Key::Meter(*s, level >> 4, level & 0x0f >= 14)),
         [0xf0, 0, 0, 0x66, device, 0x12, offset, text @ .., 0xf7] if !text.is_empty() => {
             let first = usize::from(*offset);
@@ -238,6 +241,21 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_timecode_digit_replaces_the_queued_one() {
+        let mut p = Pacer::new(1_000_000);
+        p.push(mcu::timecode_digit(0, b'7', false));
+        p.push(mcu::timecode_digit(1, b'0', false));
+        p.push(mcu::timecode_digit(0, b'8', false));
+        assert_eq!(
+            p.take(0).unwrap(),
+            vec![
+                mcu::timecode_digit(0, b'8', false),
+                mcu::timecode_digit(1, b'0', false),
+            ]
+        );
+    }
+
+    #[test]
     fn a_meter_level_never_takes_the_place_of_the_overload_before_it() {
         let mut p = Pacer::new(1_000_000);
         p.push(mcu::meter(2, 11));
@@ -314,6 +332,7 @@ mod tests {
             mcu::ring(7, 0x16),
             mcu::led(McuKey::Mute(7), Led::On),
             mcu::colours(Device::Main, [mcu::WHITE; 8]),
+            mcu::timecode_digit(9, b'2', false),
         ] {
             let mut p = Pacer::new(1_000_000);
             p.push(message.clone());

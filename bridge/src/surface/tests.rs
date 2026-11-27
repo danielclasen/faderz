@@ -1395,8 +1395,15 @@ fn select_waits_for_the_principal() {
 #[test]
 fn everything_is_sent_again_a_little_at_a_time_so_a_surface_that_lost_it_recovers() {
     let mut e = live(1);
-    let mut s = Surface::new(units(1), None);
+    // With the clock on and the time fixed, the digits are part of what
+    // goes again.
+    let mut s = Surface::new(units(1), None).with_clock(Some(60));
+    s.set_time(1_795_683_907);
     let full = s.render(&e, 0);
+    assert!(
+        full.iter()
+            .any(|(_, m)| m[0] == 0xb0 && (0x40..0x4a).contains(&m[1]))
+    );
     assert!(s.render(&e, 1).is_empty(), "only what changed");
     // A step sends one part again: first strip 1's fader, nothing else.
     s.tick(&mut e, 100);
@@ -1676,5 +1683,48 @@ fn a_bank_move_sends_the_new_banks_colours() {
     assert_eq!(
         sysex(s.render(&e, 20)),
         vec![mcu::colours(Device::Main, [1, 7, 7, 7, 7, 7, 7, 7])]
+    );
+}
+
+#[test]
+fn the_x_touch_shows_the_time_of_day_and_sends_only_the_digits_that_change() {
+    let e = live(1);
+    let mut s = Surface::new(units(2), None).with_clock(Some(60));
+    let timecode = |out: &[(usize, Vec<u8>)], unit: usize| -> Vec<Vec<u8>> {
+        (out.iter())
+            .filter(|(u, m)| *u == unit && m[0] == 0xb0 && (0x40..0x4a).contains(&m[1]))
+            .map(|(_, m)| m.clone())
+            .collect()
+    };
+    assert!(
+        timecode(&s.render(&e, 0), 0).is_empty(),
+        "no clock before the time is set"
+    );
+    // 09:05:07 UTC, 10:05:07 at +01:00.
+    s.set_time(1_795_683_907);
+    let out = s.render(&e, 1);
+    assert_eq!(timecode(&out, 0).len(), mcu::TIMECODE_DIGITS);
+    assert!(
+        timecode(&out, 1).is_empty(),
+        "an Extender has no timecode display"
+    );
+    assert!(out.contains(&(0, mcu::timecode_digit(8, b'1', false))));
+    assert!(out.contains(&(0, mcu::timecode_digit(7, b'0', true))));
+    s.set_time(1_795_683_908);
+    assert_eq!(
+        timecode(&s.render(&e, 2), 0),
+        vec![mcu::timecode_digit(3, b'8', false)]
+    );
+    s.resend(0);
+    assert_eq!(
+        timecode(&s.render(&e, 3), 0).len(),
+        mcu::TIMECODE_DIGITS,
+        "a unit shown everything again gets the clock again"
+    );
+    let mut dark = Surface::new(units(1), None);
+    dark.set_time(1_795_683_907);
+    assert!(
+        timecode(&dark.render(&e, 0), 0).is_empty(),
+        "no clock unless one is configured"
     );
 }

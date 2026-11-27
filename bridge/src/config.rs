@@ -31,6 +31,44 @@ pub struct Config {
     /// groups in order when absent.
     #[serde(default, deserialize_with = "duck_keys")]
     pub keys: Option<DuckKeys>,
+    /// The time of day on the X-Touch's timecode display; dark when absent.
+    #[serde(default)]
+    pub clock: Option<Clock>,
+}
+
+/// The time of day an X-Touch shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Clock {
+    /// Minutes east of UTC, written `+01:00` or `-05:30`; UTC when absent.
+    /// A fixed offset: daylight saving time is not followed.
+    #[serde(default, deserialize_with = "utc_offset")]
+    pub utc_offset: i32,
+}
+
+/// An offset `+HH:MM` or `-HH:MM`, at most 14 hours, as minutes.
+fn utc_offset<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+    let text = String::deserialize(d)?;
+    parse_offset(&text).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "clock.utcOffset: {text:?} is no offset like +01:00"
+        ))
+    })
+}
+
+fn parse_offset(text: &str) -> Option<i32> {
+    let (sign, rest) = match text.as_bytes().first()? {
+        b'+' => (1, &text[1..]),
+        b'-' => (-1, &text[1..]),
+        _ => return None,
+    };
+    let (h, m) = rest.split_once(':')?;
+    // i32::parse takes a sign of its own, so "+-1:00" would pass.
+    if h.len() != 2 || m.len() != 2 || !h.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+    (m < 60 && h * 60 + m <= 14 * 60).then_some(sign * (h * 60 + m))
 }
 
 /// The `keys` map, its notes written in decimal; a note named twice
@@ -356,12 +394,14 @@ impl Config {
     /// What the configuration asks for that cannot take effect.
     pub fn warnings(&self) -> Vec<String> {
         let x_touch = self.units.iter().any(|u| u.model == Model::XTouch);
-        match &self.keys {
-            Some(keys) if !keys.is_empty() && !x_touch => {
-                vec!["keys: no unit is an x-touch, which has the duck keys".into()]
-            }
-            _ => Vec::new(),
+        let mut warnings = Vec::new();
+        if self.keys.as_ref().is_some_and(|k| !k.is_empty()) && !x_touch {
+            warnings.push("keys: no unit is an x-touch, which has the duck keys".into());
         }
+        if self.clock.is_some() && !x_touch {
+            warnings.push("clock: no unit is an x-touch, which has the timecode display".into());
+        }
+        warnings
     }
 
     pub fn session_file(&self) -> PathBuf {
@@ -378,6 +418,58 @@ impl Config {
 mod tests {
     use super::*;
     use crate::surface::KeyAction;
+
+    #[test]
+    fn a_clock_without_an_x_touch_is_warned_about() {
+        let c = Config::parse(
+            r#"{ "endpoints": ["ws://x"],
+                 "units": [{ "id": "xe", "name": "X", "model": "x-touch-extender", "midiIn": "X" }],
+                 "clock": { "utcOffset": "+01:00" } }"#,
+        )
+        .unwrap();
+        assert_eq!(c.warnings().len(), 1, "{:?}", c.warnings());
+        assert!(c.warnings()[0].starts_with("clock:"));
+        let c = Config::parse(
+            r#"{ "endpoints": ["ws://x"], "units": [{ "id": "xt", "name": "X", "midiIn": "X" }],
+                 "clock": { "utcOffset": "+01:00" } }"#,
+        )
+        .unwrap();
+        assert!(c.warnings().is_empty());
+    }
+
+    #[test]
+    fn the_clock_takes_a_fixed_utc_offset() {
+        assert_eq!(parse_offset("+01:00"), Some(60));
+        assert_eq!(parse_offset("-05:30"), Some(-330));
+        assert_eq!(parse_offset("+14:00"), Some(840));
+        for bad in [
+            "01:00", "+1:00", "+01", "+15:00", "+01:60", "+aa:00", "+-1:00", "++1:00", "+01:-1",
+            "-+1:00", "",
+        ] {
+            assert_eq!(parse_offset(bad), None, "{bad}");
+        }
+        let unit = r#"{ "id": "xt", "name": "X", "model": "x-touch", "midiIn": "X" }"#;
+        let c = Config::parse(&format!(
+            r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "clock": {{ "utcOffset": "+02:00" }} }}"#
+        ))
+        .unwrap();
+        assert_eq!(c.clock, Some(Clock { utc_offset: 120 }));
+        let c = Config::parse(&format!(
+            r#"{{ "endpoints": ["ws://x"], "units": [{unit}] }}"#
+        ))
+        .unwrap();
+        assert_eq!(c.clock, None, "dark when absent");
+        let c = Config::parse(&format!(
+            r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "clock": {{}} }}"#
+        ))
+        .unwrap();
+        assert_eq!(c.clock, Some(Clock { utc_offset: 0 }), "UTC by default");
+        let err = Config::parse(&format!(
+            r#"{{ "endpoints": ["ws://x"], "units": [{unit}], "clock": {{ "utcOffset": "+2" }} }}"#
+        ))
+        .unwrap_err();
+        assert!(err.contains("clock.utcOffset"), "{err}");
+    }
 
     #[test]
     fn a_configuration_names_endpoints_units_and_auth() {
